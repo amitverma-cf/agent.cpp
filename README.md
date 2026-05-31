@@ -2,10 +2,6 @@
 
 A modular, lightweight C/C++ AI agent library for edge devices and ultra-low latency
 
-## Recent changes
-
-- See [CHANGELOG.md](CHANGELOG.md) for the latest updates and project history.
-
 ## Description
 
 The main goal of this project is to enable lightweight, ultra-low latency AI agent orchestration with minimal setup and zero-cost abstractions on a wide range of hardware — from edge devices to high-end servers.
