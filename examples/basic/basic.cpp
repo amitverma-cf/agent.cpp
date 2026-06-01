@@ -2,8 +2,8 @@
 #include <iostream>
 
 int main() {
-    auto session = agent::init();
-    auto result = agent::run(session, "hello");
+    agent::Session session = agent::init({.provider = agent::Provider::Mock});
+    std::string result = agent::run(session, "hello");
     std::cout << result << '\n';
 
     return 0;
