@@ -2,14 +2,24 @@
 
 namespace agent {
 
-Session init() {
-    return {};
+Session init(const Config &config) {
+    return {.config = config};
 }
 
 std::string run(Session &session, std::string_view prompt) {
-    (void) session;
+    switch (session.config.provider) {
+    case Provider::Mock:
+        return "Mock Response";
 
-    return std::string(prompt);
+    case Provider::LlamaCpp:
+        return "not implemented";
+
+    case Provider::OpenAICompatible:
+        return "not implemented";
+
+    default:
+        return std::string(prompt);
+    }
 }
 
 } // namespace agent
