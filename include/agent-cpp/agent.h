@@ -5,14 +5,14 @@
 
 namespace agent {
 
-enum Provider {
+enum class Provider {
     Mock,
     LlamaCpp,
     OpenAICompatible,
 };
 
 struct Config {
-    Provider provider = Provider::Mock;
+    Provider provider;
     std::string base_url;
     std::string api_key;
     std::string model;
