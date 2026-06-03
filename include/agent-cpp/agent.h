@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include <functional>
 
 namespace agent {
 
@@ -24,6 +25,7 @@ struct Session {
 
 Session init(const Config &config);
 
-std::string run(Session &session, std::string_view prompt);
+std::string generate_text(Session &session, std::string_view prompt);
+void stream_text(Session &session, std::string_view prompt, const std::function<void(std::string_view)> &on_token);
 
 } // namespace agent
