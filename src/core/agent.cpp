@@ -1,70 +1,34 @@
 #include <agent-cpp/agent.h>
-#include <httplib.h>
-#include <json.hpp>
+#include <filesystem>
 
 namespace agent {
 
-Session init(const Config &config) {
-    return {.config = config};
-}
+#ifdef AGENT_HAS_LLAMACPP
+void init_llama_cpp(Session &session);
+std::string generate_text_llama_cpp(Session &session, std::string_view prompt);
+void stream_text_llama_cpp(Session &session, std::string_view prompt,
+                           const std::function<void(std::string_view)> &on_token);
+#endif
 
-static std::string generate_text_openai_compatible(Session &session, std::string_view prompt) {
-    httplib::Client client(session.config.base_url);
-    nlohmann::json request = {{"model", session.config.model}, {"messages", {{{"role", "user"}, {"content", prompt}}}}};
-    httplib::Headers headers;
-    if (!session.config.api_key.empty()) {
-        headers.emplace("Authorization", "Bearer " + session.config.api_key);
-    }
-    auto response = client.Post("/v1/chat/completions", headers, request.dump(), "application/json");
-    if (!response) {
-        return "Error: Internal HTTP Client request failed completely.";
-    }
-    if (response->status != 200) {
-        return "HTTP Error " + std::to_string(response->status) + ": " + response->body;
-    }
-    auto parsed = nlohmann::json::parse(response->body);
-    return parsed["choices"][0]["message"]["content"];
-}
-
+#ifdef AGENT_HAS_OPENAICOMPATIBLE
+std::string generate_text_openai_compatible(Session &session, std::string_view prompt);
 void stream_text_openai_compatible(Session &session, std::string_view prompt,
-                                   const std::function<void(std::string_view)> &on_token) {
-    httplib::Client client(session.config.base_url);
-    nlohmann::json request = {
-        {"model", session.config.model}, {"stream", true}, {"messages", {{{"role", "user"}, {"content", prompt}}}}};
-    httplib::Headers headers = {{"Authorization", "Bearer " + session.config.api_key}};
-    std::string buffer;
-    auto response = client.Post("/v1/chat/completions", headers, request.dump(), "application/json",
-                                [&](const char *data, size_t len) {
-                                    buffer.append(data, len);
-                                    size_t pos;
-                                    while ((pos = buffer.find("\n")) != std::string::npos) {
-                                        std::string line = buffer.substr(0, pos);
-                                        buffer.erase(0, pos + 1);
-                                        if (!line.starts_with("data: "))
-                                            continue;
-                                        std::string payload = line.substr(6);
-                                        if (payload == "[DONE]")
-                                            return false;
-                                        auto json = nlohmann::json::parse(payload, nullptr, false);
-                                        if (json.is_discarded())
-                                            continue;
-                                        auto &delta = json["choices"][0]["delta"]["content"];
-                                        if (delta.is_string()) {
-                                            on_token(delta.get<std::string>());
-                                        }
-                                    }
-                                    return true;
-                                });
-    if (!response) {
-        if (response.error() == httplib::Error::Canceled) {
-            return;
-        }
-        std::cout << "Error: Internal HTTP Client request failed completely.\n";
-        return;
+                                   const std::function<void(std::string_view)> &on_token);
+#endif
+
+Session init(const Config &config) {
+    if (!config.workspace_dir.empty()) {
+        std::filesystem::create_directories(std::filesystem::path(config.workspace_dir) / "");
     }
-    if (response->status != 200) {
-        std::cout << "HTTP Error " + std::to_string(response->status) + ": " + response->body + "\n";
+    Session session{.config = config, .state = nullptr};
+    if (config.provider == Provider::LlamaCpp) {
+#ifdef AGENT_HAS_LLAMACPP
+        init_llama_cpp(session);
+#else
+        std::cerr << "Error: LlamaCpp provider requested but not compiled." << "\n";
+#endif
     }
+    return session;
 }
 
 std::string generate_text(Session &session, std::string_view prompt) {
@@ -73,10 +37,18 @@ std::string generate_text(Session &session, std::string_view prompt) {
         return "Mock Response";
 
     case Provider::LlamaCpp:
-        return "not implemented";
+#ifdef AGENT_HAS_LLAMACPP
+        return generate_text_llama_cpp(session, prompt);
+#else
+        return "Error: Rebuild with AGENT_LLAMA_DIR pointing to binaries.";
+#endif
 
     case Provider::OpenAICompatible:
+#ifdef AGENT_HAS_OPENAICOMPATIBLE
         return generate_text_openai_compatible(session, prompt);
+#else
+        return "Error: Rebuild with AGENT_HAS_OPENAICOMPATIBLE pointing to binaries.";
+#endif
 
     default:
         return std::string(prompt);
@@ -86,16 +58,27 @@ std::string generate_text(Session &session, std::string_view prompt) {
 void stream_text(Session &session, std::string_view prompt, const std::function<void(std::string_view)> &on_token) {
     switch (session.config.provider) {
     case Provider::Mock:
+        on_token("Mock Response Streamed");
         break;
 
     case Provider::LlamaCpp:
+#ifdef AGENT_HAS_LLAMACPP
+        stream_text_llama_cpp(session, prompt, on_token);
+#else
+        on_token("Error: Rebuild with AGENT_LLAMA_DIR pointing to binaries.");
+#endif
         break;
 
     case Provider::OpenAICompatible:
+#ifdef AGENT_HAS_OPENAICOMPATIBLE
         stream_text_openai_compatible(session, prompt, on_token);
+#else
+        on_token("Error: Rebuild with AGENT_HAS_OPENAICOMPATIBLE pointing to binaries.");
+#endif
         break;
 
     default:
+        on_token(std::string(prompt));
         break;
     }
 }
