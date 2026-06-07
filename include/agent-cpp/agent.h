@@ -1,8 +1,9 @@
 #pragma once
 
+#include <functional>
 #include <string>
 #include <string_view>
-#include <functional>
+#include <memory>
 
 namespace agent {
 
@@ -17,10 +18,12 @@ struct Config {
     std::string base_url;
     std::string api_key;
     std::string model;
+    std::string workspace_dir;
 };
 
 struct Session {
     Config config;
+    std::shared_ptr<void> state;
 };
 
 Session init(const Config &config);
