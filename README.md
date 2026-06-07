@@ -11,6 +11,16 @@ The main goal of this project is to enable lightweight, ultra-low latency AI age
 - **Universal Portability**: Self-contained core designed for everything from high-end servers to resource-constrained environments (WASM, RISC-V, ESP32, etc.).
 - **Stable Binary Interface**: Flat C-ABI boundary for seamless integration with Python, Rust, Go, and other ecosystems.
 
+## Quick Start
+- Compile and Run Example:
+```bash
+cmake -B build -G Ninja
+
+cmake --build build
+
+./build/basic
+```
+
 ## Contributing
 
 - Contributions that align with the core philosophy of performance and portability are welcome!
