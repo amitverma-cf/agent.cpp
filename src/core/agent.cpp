@@ -1,86 +1,60 @@
+#include "providers/provider_ops.h"
+#include "utils/utils.h"
+
 #include <agent-cpp/agent.h>
 #include <filesystem>
+#include <system_error>
 
 namespace agent {
 
-#ifdef AGENT_HAS_LLAMACPP
-void init_llama_cpp(Session &session);
-std::string generate_text_llama_cpp(Session &session, std::string_view prompt);
-void stream_text_llama_cpp(Session &session, std::string_view prompt,
-                           const std::function<void(std::string_view)> &on_token);
-#endif
+void init_backend() {
+    providers::init_global_backends();
+}
 
-#ifdef AGENT_HAS_OPENAICOMPATIBLE
-std::string generate_text_openai_compatible(Session &session, std::string_view prompt);
-void stream_text_openai_compatible(Session &session, std::string_view prompt,
-                                   const std::function<void(std::string_view)> &on_token);
-#endif
+void free_backend() {
+    providers::free_global_backends();
+}
 
-Session init(const Config &config) {
+Result<Session> init(const Config &config) {
     if (!config.workspace_dir.empty()) {
-        std::filesystem::create_directories(std::filesystem::path(config.workspace_dir) / "");
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(config.workspace_dir), ec);
+        if (ec) {
+            return fail<Session>(ErrorCode::FilesystemError, "Failed to create workspace directory: " + ec.message());
+        }
     }
+
     Session session{.config = config, .state = nullptr};
-    if (config.provider == Provider::LlamaCpp) {
-#ifdef AGENT_HAS_LLAMACPP
-        init_llama_cpp(session);
-#else
-        std::cerr << "Error: LlamaCpp provider requested but not compiled." << "\n";
-#endif
+    const providers::ProviderOps *ops = providers::find_provider_ops(config.provider);
+    if (!ops || !ops->init || !ops->generate || !ops->stream) {
+        return fail<Session>(ErrorCode::UnsupportedProvider, "Requested provider is not compiled into this build.");
     }
-    return session;
+
+    Result<void> init_result = ops->init(session);
+    if (!init_result.ok) {
+        return fail<Session>(init_result.error.code, init_result.error.message);
+    }
+    return ok(session);
 }
 
-std::string generate_text(Session &session, std::string_view prompt) {
-    switch (session.config.provider) {
-    case Provider::Mock:
-        return "Mock Response";
-
-    case Provider::LlamaCpp:
-#ifdef AGENT_HAS_LLAMACPP
-        return generate_text_llama_cpp(session, prompt);
-#else
-        return "Error: Rebuild with AGENT_LLAMA_DIR pointing to binaries.";
-#endif
-
-    case Provider::OpenAICompatible:
-#ifdef AGENT_HAS_OPENAICOMPATIBLE
-        return generate_text_openai_compatible(session, prompt);
-#else
-        return "Error: Rebuild with AGENT_HAS_OPENAICOMPATIBLE pointing to binaries.";
-#endif
-
-    default:
-        return std::string(prompt);
+Result<std::string> generate_text(Session &session, std::string_view prompt) {
+    const providers::ProviderOps *ops = providers::find_provider_ops(session.config.provider);
+    if (!ops || !ops->generate) {
+        return fail<std::string>(ErrorCode::UnsupportedProvider, "Requested provider is not compiled into this build.");
     }
+    return ops->generate(session, prompt);
 }
 
-void stream_text(Session &session, std::string_view prompt, const std::function<void(std::string_view)> &on_token) {
-    switch (session.config.provider) {
-    case Provider::Mock:
-        on_token("Mock Response Streamed");
-        break;
-
-    case Provider::LlamaCpp:
-#ifdef AGENT_HAS_LLAMACPP
-        stream_text_llama_cpp(session, prompt, on_token);
-#else
-        on_token("Error: Rebuild with AGENT_LLAMA_DIR pointing to binaries.");
-#endif
-        break;
-
-    case Provider::OpenAICompatible:
-#ifdef AGENT_HAS_OPENAICOMPATIBLE
-        stream_text_openai_compatible(session, prompt, on_token);
-#else
-        on_token("Error: Rebuild with AGENT_HAS_OPENAICOMPATIBLE pointing to binaries.");
-#endif
-        break;
-
-    default:
-        on_token(std::string(prompt));
-        break;
+Result<void> stream_text(Session &session, std::string_view prompt, TokenCallback on_token, void *user_data) {
+    if (!on_token) {
+        return fail(ErrorCode::InvalidConfig, "stream_text requires a token callback.");
     }
+    const providers::ProviderOps *ops = providers::find_provider_ops(session.config.provider);
+    if (!ops || !ops->stream) {
+        return fail(ErrorCode::UnsupportedProvider, "Requested provider is not compiled into this build.");
+    }
+    utils::log(session, LogLevel::Debug, "Starting provider stream.");
+    return ops->stream(session, prompt, on_token, user_data);
 }
 
 } // namespace agent

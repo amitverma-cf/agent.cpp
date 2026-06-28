@@ -11,6 +11,13 @@ The main goal of this project is to enable lightweight, ultra-low latency AI age
 - **Universal Portability**: Self-contained core designed for everything from high-end servers to resource-constrained environments (WASM, RISC-V, ESP32, etc.).
 - **Stable Binary Interface**: Flat C-ABI boundary for seamless integration with Python, Rust, Go, and other ecosystems.
 
+## Build Configuration
+You can toggle features using CMake flags during build:
+- -DAGENT_ENABLE_LLAMACPP=ON : Enable local Llama.cpp inference. (default: ON)
+- -DAGENT_ENABLE_OPENAI=ON : Enable OpenAI-compatible API support. (default: ON)
+- -DAGENT_ENABLE_NETWORKING=ON : Enable Network capabilities to support HTTP/HTTPS. (default: ON)
+- Example: ``cmake -B build -DAGENT_ENABLE_LLAMACPP=OFF``
+
 ## Quick Start
 - Compile and Run Example:
 ```bash
