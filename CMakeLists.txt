@@ -7,8 +7,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(agent
     src/core/agent.cpp
+    src/core/providers/provider_ops.cpp
     src/core/providers/llama_provider.cpp
     src/core/providers/openai_compatible_provider.cpp
+    src/core/utils/utils.cpp
 )
 target_include_directories(agent PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
