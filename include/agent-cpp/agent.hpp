@@ -4,12 +4,21 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace agent {
 
 enum class LogLevel { Debug, Info, Warning, Error };
 
 enum class Provider { Mock, LlamaCpp, OpenAICompatible };
+
+enum class MemoryProvider { InMemory, Sqlite, Postgres, CloudSql };
+
+struct MemoryConfig {
+    MemoryProvider provider = MemoryProvider::InMemory;
+    std::string connection_string;
+    std::string table_name = "agent_memory";
+};
 
 enum class ErrorCode {
     Ok,
@@ -22,7 +31,8 @@ enum class ErrorCode {
     NetworkError,
     HttpError,
     ParseError,
-    Cancelled
+    Cancelled,
+    KeyNotFound
 };
 
 struct Error {
@@ -65,12 +75,30 @@ using LogCallback = void (*)(LogLevel level, std::string_view message, void *use
 
 using TokenCallback = void (*)(std::string_view token, void *user_data);
 
+struct Usage {
+    int prompt_tokens = 0;
+    int completion_tokens = 0;
+    int total_tokens = 0;
+};
+
+struct GenerationResult {
+    std::string text;
+    Usage usage;
+};
+
 struct Config {
     Provider provider = Provider::Mock;
     std::string base_url;
     std::string api_key;
     std::string model;
     std::string workspace_dir;
+    MemoryConfig memory;
+
+    // Hyperparameters
+    int context_window = 2048;
+    int max_tokens = 512;
+    float temperature = 0.7f;
+
     LogCallback logger = nullptr;
     void *logger_user_data = nullptr;
 };
@@ -80,14 +108,49 @@ struct Config {
  */
 struct Session {
     Config config;
-    std::shared_ptr<void> state;
+    std::shared_ptr<void> provider_state;
+    std::shared_ptr<void> memory_state;
+
+    Session() = default;
+    ~Session() = default;
+    Session(const Session&) = delete;
+    Session& operator=(const Session&) = delete;
+    Session(Session&&) = default;
+    Session& operator=(Session&&) = default;
+};
+
+struct Message {
+    std::string role;
+    std::string content;
+};
+
+struct Conversation {
+    Session &session;
 };
 
 void init_backend();
 void free_backend();
 
+struct AgentRuntime {
+    AgentRuntime() { init_backend(); }
+    ~AgentRuntime() { free_backend(); }
+    AgentRuntime(const AgentRuntime&) = delete;
+    AgentRuntime& operator=(const AgentRuntime&) = delete;
+    AgentRuntime(AgentRuntime&&) = delete;
+    AgentRuntime& operator=(AgentRuntime&&) = delete;
+};
+
 Result<Session> init(const Config &config);
-Result<std::string> generate_text(Session &session, std::string_view prompt);
+Result<GenerationResult> generate_text(Session &session, std::string_view prompt);
 Result<void> stream_text(Session &session, std::string_view prompt, TokenCallback on_token, void *user_data = nullptr);
+
+Result<void> init_memory(Session &session);
+Result<void> store_memory(Session &session, std::string_view key, std::string_view value);
+Result<std::string> retrieve_memory(Session &session, std::string_view key);
+Result<void> clear_memory(Session &session);
+
+Result<void> add_message(Conversation &conv, std::string role, std::string content);
+Result<std::string> complete_conversation(Conversation &conv);
+Result<std::vector<Message>> get_conversation_history(Conversation &conv);
 
 } // namespace agent
