@@ -1,0 +1,11 @@
+#pragma once
+#include <iostream>
+#include <cstdlib>
+
+#define TEST_ASSERT(cond) \
+    do { \
+        if (!(cond)) { \
+            std::cerr << "Assertion failed: " << #cond << " at " << __FILE__ << ":" << __LINE__ << "\n"; \
+            std::exit(1); \
+        } \
+    } while (0)

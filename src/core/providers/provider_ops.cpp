@@ -1,4 +1,4 @@
-#include "provider_ops.h"
+#include "provider_ops.hpp"
 
 #ifdef AGENT_HAS_LLAMACPP
 #include <llama.h>
@@ -8,13 +8,13 @@ namespace agent::providers {
 
 #ifdef AGENT_HAS_LLAMACPP
 Result<void> init_llama_cpp(Session &session);
-Result<std::string> generate_text_llama_cpp(Session &session, std::string_view prompt);
+Result<GenerationResult> generate_text_llama_cpp(Session &session, std::string_view prompt);
 Result<void> stream_text_llama_cpp(Session &session, std::string_view prompt, TokenCallback on_token, void *user_data);
 #endif
 
 #ifdef AGENT_HAS_OPENAICOMPATIBLE
 Result<void> init_openai_compatible(Session &session);
-Result<std::string> generate_text_openai_compatible(Session &session, std::string_view prompt);
+Result<GenerationResult> generate_text_openai_compatible(Session &session, std::string_view prompt);
 Result<void> stream_text_openai_compatible(Session &session, std::string_view prompt, TokenCallback on_token,
                                            void *user_data);
 #endif
@@ -25,8 +25,8 @@ Result<void> init_mock(Session &) {
     return ok();
 }
 
-Result<std::string> generate_mock(Session &, std::string_view) {
-    return ok(std::string("Mock Response"));
+Result<GenerationResult> generate_mock(Session &, std::string_view) {
+    return ok(GenerationResult{.text = "Mock Response", .usage = Usage{.prompt_tokens = 2, .completion_tokens = 2, .total_tokens = 4}});
 }
 
 Result<void> stream_mock(Session &, std::string_view, TokenCallback on_token, void *user_data) {
