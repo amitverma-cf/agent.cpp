@@ -1,7 +1,7 @@
-#include "../utils/utils.h"
-#include "provider_ops.h"
+#include "../utils/utils.hpp"
+#include "provider_ops.hpp"
 
-#include <agent-cpp/agent.h>
+#include <agent-cpp/agent.hpp>
 #include <filesystem>
 #include <functional>
 #include <limits>
@@ -40,67 +40,56 @@ Result<void> init_llama_cpp(Session &session) {
         return fail(ErrorCode::InvalidConfig, "LlamaCpp provider requires model.");
     }
 
+    auto state = std::make_shared<LlamaState>();
+
     llama_model_params model_params = llama_model_default_params();
     std::filesystem::path target_model = resolve_path(session.config.model, session.config.workspace_dir);
 
-    llama_model *model = llama_model_load_from_file(target_model.string().c_str(), model_params);
-    if (!model) {
+    state->model = llama_model_load_from_file(target_model.string().c_str(), model_params);
+    if (!state->model) {
         std::string message = "Failed to load Llama model from: " + target_model.string();
         utils::log(session, LogLevel::Error, message);
         return fail(ErrorCode::ModelLoadFailed, std::move(message));
     }
 
     llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = 2048;
+    ctx_params.n_ctx = static_cast<uint32_t>(session.config.context_window);
 
-    llama_context *ctx = llama_init_from_model(model, ctx_params);
-    if (!ctx) {
-        llama_model_free(model);
+    state->ctx = llama_init_from_model(state->model, ctx_params);
+    if (!state->ctx) {
         utils::log(session, LogLevel::Error, "Failed to instantiate Llama execution context.");
         return fail(ErrorCode::ProviderInitFailed, "Failed to instantiate Llama execution context.");
     }
 
-    llama_sampler *smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
-    if (!smpl) {
-        llama_free(ctx);
-        llama_model_free(model);
+    state->smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
+    if (!state->smpl) {
         utils::log(session, LogLevel::Error, "Failed to create Llama sampler.");
         return fail(ErrorCode::ProviderInitFailed, "Failed to create Llama sampler.");
     }
 
-    llama_sampler *temp_sampler = llama_sampler_init_temp(0.7f);
+    llama_sampler *temp_sampler = llama_sampler_init_temp(session.config.temperature);
     if (!temp_sampler) {
-        llama_sampler_free(smpl);
-        llama_free(ctx);
-        llama_model_free(model);
         utils::log(session, LogLevel::Error, "Failed to create Llama temperature sampler.");
         return fail(ErrorCode::ProviderInitFailed, "Failed to create Llama temperature sampler.");
     }
-    llama_sampler_chain_add(smpl, temp_sampler);
+    llama_sampler_chain_add(state->smpl, temp_sampler);
 
     llama_sampler *dist_sampler = llama_sampler_init_dist(LLAMA_DEFAULT_SEED);
     if (!dist_sampler) {
-        llama_sampler_free(smpl);
-        llama_free(ctx);
-        llama_model_free(model);
         utils::log(session, LogLevel::Error, "Failed to create Llama distribution sampler.");
         return fail(ErrorCode::ProviderInitFailed, "Failed to create Llama distribution sampler.");
     }
-    llama_sampler_chain_add(smpl, dist_sampler);
+    llama_sampler_chain_add(state->smpl, dist_sampler);
 
-    auto state = std::make_shared<LlamaState>();
-    state->model = model;
-    state->ctx = ctx;
-    state->smpl = smpl;
-
-    session.state = state;
+    session.provider_state = std::move(state);
     utils::log(session, LogLevel::Info, "LlamaCpp provider initialized.");
     return ok();
 }
 
 static Result<void> run_llama_inference(Session &session, std::string_view prompt,
+                                        Usage &usage,
                                         const std::function<void(std::string_view)> &on_piece) {
-    auto state = std::static_pointer_cast<LlamaState>(session.state);
+    auto state = std::static_pointer_cast<LlamaState>(session.provider_state);
     if (!state || !state->ctx) {
         return fail(ErrorCode::ProviderInitFailed, "Llama context not initialized.");
     }
@@ -116,18 +105,24 @@ static Result<void> run_llama_inference(Session &session, std::string_view promp
     llama_memory_clear(llama_get_memory(state->ctx), true);
 
     std::vector<llama_token> tokens(prompt.length() + 2);
-    int n_tokens = llama_tokenize(vocab, prompt.data(), prompt.length(), tokens.data(), tokens.size(), true, true);
+    int n_tokens = llama_tokenize(vocab, prompt.data(), static_cast<int>(prompt.length()), tokens.data(), static_cast<int>(tokens.size()), true, true);
     if (n_tokens < 0) {
-        tokens.resize(-n_tokens);
-        n_tokens = llama_tokenize(vocab, prompt.data(), prompt.length(), tokens.data(), tokens.size(), true, true);
+        tokens.resize(static_cast<size_t>(-n_tokens));
+        n_tokens = llama_tokenize(vocab, prompt.data(), static_cast<int>(prompt.length()), tokens.data(), static_cast<int>(tokens.size()), true, true);
     }
     if (n_tokens < 0) {
         return fail(ErrorCode::ParseError, "Failed to tokenize prompt.");
     }
-    tokens.resize(n_tokens);
+    tokens.resize(static_cast<size_t>(n_tokens));
 
-    llama_batch batch = llama_batch_get_one(tokens.data(), tokens.size());
-    const int max_tokens_to_generate = 512;
+    if (tokens.size() > static_cast<size_t>(session.config.context_window)) {
+        return fail(ErrorCode::DecodeFailed, "Tokenized prompt length exceeds configured context_window limit.");
+    }
+
+    usage.prompt_tokens = static_cast<int>(tokens.size());
+
+    llama_batch batch = llama_batch_get_one(tokens.data(), static_cast<int>(tokens.size()));
+    const int max_tokens_to_generate = session.config.max_tokens;
 
     if (llama_decode(state->ctx, batch)) {
         return fail(ErrorCode::DecodeFailed, "Initial prompt decode failed.");
@@ -144,7 +139,15 @@ static Result<void> run_llama_inference(Session &session, std::string_view promp
         int n = llama_token_to_piece(vocab, new_token_id, buf, sizeof(buf), 0, true);
         if (n >= 0) {
             on_piece(std::string_view(buf, n)); // Dispatch the text chunk
+        } else {
+            std::vector<char> dynamic_buf(static_cast<size_t>(-n));
+            int n2 = llama_token_to_piece(vocab, new_token_id, dynamic_buf.data(), static_cast<int>(dynamic_buf.size()), 0, true);
+            if (n2 >= 0) {
+                on_piece(std::string_view(dynamic_buf.data(), static_cast<size_t>(n2)));
+            }
         }
+
+        usage.completion_tokens++;
 
         batch = llama_batch_get_one(&new_token_id, 1);
         if (llama_decode(state->ctx, batch)) {
@@ -152,21 +155,24 @@ static Result<void> run_llama_inference(Session &session, std::string_view promp
         }
         new_token_id = llama_sampler_sample(state->smpl, state->ctx, -1);
     }
+    usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
     return ok();
 }
 
-Result<std::string> generate_text_llama_cpp(Session &session, std::string_view prompt) {
+Result<GenerationResult> generate_text_llama_cpp(Session &session, std::string_view prompt) {
     std::string response;
+    Usage usage;
 
-    auto res = run_llama_inference(session, prompt, [&](std::string_view piece) { response += piece; });
+    auto res = run_llama_inference(session, prompt, usage, [&](std::string_view piece) { response += piece; });
 
     if (!res.ok)
-        return fail<std::string>(res.error.code, res.error.message);
-    return ok(response);
+        return fail<GenerationResult>(res.error.code, res.error.message);
+    return ok(GenerationResult{.text = std::move(response), .usage = usage});
 }
 
 Result<void> stream_text_llama_cpp(Session &session, std::string_view prompt, TokenCallback on_token, void *user_data) {
-    return run_llama_inference(session, prompt, [&](std::string_view piece) { on_token(piece, user_data); });
+    Usage dummy;
+    return run_llama_inference(session, prompt, dummy, [&](std::string_view piece) { on_token(piece, user_data); });
 }
 
 } // namespace agent::providers

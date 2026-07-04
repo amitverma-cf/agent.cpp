@@ -1,4 +1,4 @@
-#include <agent-cpp/agent.h>
+#include <agent-cpp/agent.hpp>
 #include <iostream>
 
 namespace {
@@ -33,21 +33,13 @@ void print_error(const agent::Error &error) {
 } // namespace
 
 int main() {
-    agent::init_backend();
+    agent::AgentRuntime runtime;
     auto session_result =
-        // agent::init({.provider = agent::Provider::OpenAICompatible,
-        //              .base_url = "http://127.0.0.1",
-        //              .api_key = "api_key",
-        //              .model = "model-name",
-        //              .workspace_dir = ".workspace",
-        //              .logger = log_message});
-        agent::init({.provider = agent::Provider::LlamaCpp,
-                     .model = "models/LFM2.5-350M-Q4_K_M.gguf",
+        agent::init({.provider = agent::Provider::Mock,
                      .workspace_dir = ".workspace",
                      .logger = log_message});
     if (!session_result.ok) {
         print_error(session_result.error);
-        agent::free_backend();
         return 1;
     }
 
@@ -57,7 +49,7 @@ int main() {
         print_error(result.error);
         return 1;
     }
-    std::cout << result.value << "\n";
+    std::cout << result.value.text << "\n";
 
     auto stream_result = agent::stream_text(session, "hello", print_token);
     if (!stream_result.ok) {
@@ -65,6 +57,33 @@ int main() {
         return 1;
     }
 
-    agent::free_backend();
+    // Conversation
+    std::cout << "\nConversations:\n";
+    agent::Conversation chat{session};
+    auto add_res1 = agent::add_message(chat, "user", "Hello, how are you?");
+    if (!add_res1.ok) {
+        print_error(add_res1.error);
+        return 1;
+    }
+    auto reply = agent::complete_conversation(chat);
+    if (reply.ok) {
+        std::cout << "Agent replied: " << reply.value << "\n";
+    } else {
+        print_error(reply.error);
+        return 1;
+    }
+    auto add_res2 = agent::add_message(chat, "user", "What was my first question?");
+    if (!add_res2.ok) {
+        print_error(add_res2.error);
+        return 1;
+    }
+    auto reply2 = agent::complete_conversation(chat);
+    if (reply2.ok) {
+        std::cout << "Agent replied: " << reply2.value << "\n";
+    } else {
+        print_error(reply2.error);
+        return 1;
+    }
+
     return 0;
 }

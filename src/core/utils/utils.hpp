@@ -1,6 +1,6 @@
 #pragma once
 
-#include <agent-cpp/agent.h>
+#include <agent-cpp/agent.hpp>
 #include <string_view>
 
 namespace agent::utils {
