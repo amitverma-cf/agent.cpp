@@ -3,7 +3,7 @@
 #include <iostream>
 
 void test_conversation_flow() {
-    auto session_result = agent::init({.provider = agent::Provider::Mock,
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
                                        .memory = {.provider = agent::MemoryProvider::InMemory}});
     TEST_ASSERT(session_result.ok);
     agent::Session session = std::move(session_result.value);
@@ -40,9 +40,9 @@ void test_conversation_flow() {
 
 void test_conversation_sliding_window() {
     auto session_result = agent::init({
-        .provider = agent::Provider::Mock,
+        .provider = agent::AiProvider::Mock,
         .memory = {.provider = agent::MemoryProvider::InMemory},
-        .context_window = 300,
+        .context_window = 400,
         .max_tokens = 50
     });
     TEST_ASSERT(session_result.ok);

@@ -10,7 +10,7 @@ static void test_logger(agent::LogLevel, std::string_view, void*) {
 void test_utils_logging() {
     g_log_count = 0;
     auto session_result = agent::init({
-        .provider = agent::Provider::Mock,
+        .provider = agent::AiProvider::Mock,
         .logger = test_logger
     });
     TEST_ASSERT(session_result.ok);

@@ -175,5 +175,22 @@ Result<void> stream_text_llama_cpp(Session &session, std::string_view prompt, To
     return run_llama_inference(session, prompt, dummy, [&](std::string_view piece) { on_token(piece, user_data); });
 }
 
+Result<int> count_tokens_llama_cpp(Session &session, std::string_view text) {
+    auto state = std::static_pointer_cast<LlamaState>(session.provider_state);
+    if (!state || !state->ctx || !state->model) {
+        return fail<int>(ErrorCode::ProviderInitFailed, "Llama context not initialized.");
+    }
+    const llama_vocab *vocab = llama_model_get_vocab(state->model);
+    if (!vocab) {
+        return fail<int>(ErrorCode::ProviderInitFailed, "Llama vocabulary not initialized.");
+    }
+    if (text.empty()) {
+        return ok(0);
+    }
+    int n_tokens = llama_tokenize(vocab, text.data(), static_cast<int>(text.length()), nullptr, 0, true, true);
+    int count = n_tokens < 0 ? -n_tokens : n_tokens;
+    return ok(count);
+}
+
 } // namespace agent::providers
 #endif

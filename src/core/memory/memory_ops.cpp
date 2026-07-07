@@ -7,6 +7,13 @@ Result<void> store_in_memory(Session &session, std::string_view key, std::string
 Result<std::string> retrieve_in_memory(Session &session, std::string_view key);
 Result<void> clear_in_memory(Session &session);
 
+#ifdef AGENT_HAS_ROCKSDB
+Result<void> init_rocksdb(Session &session);
+Result<void> store_rocksdb(Session &session, std::string_view key, std::string_view value);
+Result<std::string> retrieve_rocksdb(Session &session, std::string_view key);
+Result<void> clear_rocksdb(Session &session);
+#endif
+
 namespace {
 constexpr MemoryOps kMemoryOps[] = {
     MemoryOps{
@@ -15,7 +22,16 @@ constexpr MemoryOps kMemoryOps[] = {
         .store = store_in_memory,
         .retrieve = retrieve_in_memory,
         .clear = clear_in_memory
+    },
+#ifdef AGENT_HAS_ROCKSDB
+    MemoryOps{
+        .provider = MemoryProvider::RocksDB,
+        .init = init_rocksdb,
+        .store = store_rocksdb,
+        .retrieve = retrieve_rocksdb,
+        .clear = clear_rocksdb
     }
+#endif
 };
 } // namespace
 

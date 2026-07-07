@@ -9,7 +9,7 @@ static void test_token_callback(std::string_view token, void *) {
 }
 
 void test_provider_mock_generation() {
-    auto session_result = agent::init({.provider = agent::Provider::Mock});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock});
     TEST_ASSERT(session_result.ok && "Mock initialization failed");
     agent::Session session = std::move(session_result.value);
 
@@ -25,7 +25,7 @@ void test_provider_mock_generation() {
 
 void test_provider_mock_streaming() {
     g_stream_buffer.clear();
-    auto session_result = agent::init({.provider = agent::Provider::Mock});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock});
     TEST_ASSERT(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
