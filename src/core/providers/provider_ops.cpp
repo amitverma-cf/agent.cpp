@@ -10,6 +10,7 @@ namespace agent::providers {
 Result<void> init_llama_cpp(Session &session);
 Result<GenerationResult> generate_text_llama_cpp(Session &session, std::string_view prompt);
 Result<void> stream_text_llama_cpp(Session &session, std::string_view prompt, TokenCallback on_token, void *user_data);
+Result<int> count_tokens_llama_cpp(Session &session, std::string_view text);
 #endif
 
 #ifdef AGENT_HAS_OPENAICOMPATIBLE
@@ -35,15 +36,16 @@ Result<void> stream_mock(Session &, std::string_view, TokenCallback on_token, vo
 }
 
 constexpr ProviderOps kProviderOps[] = {
-    ProviderOps{.provider = Provider::Mock, .init = init_mock, .generate = generate_mock, .stream = stream_mock},
+    ProviderOps{.provider = AiProvider::Mock, .init = init_mock, .generate = generate_mock, .stream = stream_mock, .count_tokens = nullptr},
 #ifdef AGENT_HAS_LLAMACPP
-    ProviderOps{.provider = Provider::LlamaCpp,
+    ProviderOps{.provider = AiProvider::LlamaCpp,
                 .init = init_llama_cpp,
                 .generate = generate_text_llama_cpp,
-                .stream = stream_text_llama_cpp},
+                .stream = stream_text_llama_cpp,
+                .count_tokens = count_tokens_llama_cpp},
 #endif
 #ifdef AGENT_HAS_OPENAICOMPATIBLE
-    ProviderOps{.provider = Provider::OpenAICompatible,
+    ProviderOps{.provider = AiProvider::OpenAICompatible,
                 .init = init_openai_compatible,
                 .generate = generate_text_openai_compatible,
                 .stream = stream_text_openai_compatible},
@@ -64,7 +66,7 @@ void free_global_backends() {
     #endif
 }
 
-const ProviderOps *find_provider_ops(Provider provider) {
+const ProviderOps *find_provider_ops(AiProvider provider) {
     for (const ProviderOps &ops : kProviderOps) {
         if (ops.provider == provider) {
             return &ops;

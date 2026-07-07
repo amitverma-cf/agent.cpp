@@ -30,6 +30,7 @@ CMake options:
 - `AGENT_ENABLE_LLAMACPP=ON`: enable local llama.cpp provider. Default: `ON`.
 - `AGENT_ENABLE_NETWORKING=ON`: enable HTTP/HTTPS support. Default: `ON`.
 - `AGENT_ENABLE_OPENAI=ON`: enable OpenAI-compatible provider when networking is enabled. Default: `ON`.
+- `AGENT_ENABLE_ROCKSDB=ON`: enable RocksDB local key-value store memory provider. Default: `ON`.
 
 Example build:
 
@@ -76,7 +77,7 @@ Planned but not implemented:
 - Deterministic FSM executor.
 - Tool registry and tool-call parser.
 - HAL boundaries for filesystem, networking, time, and concurrency.
-- SQLite / Postgres memory provider adapters.
+- Vector search / semantic memory provider.
 
 ## Contributing
 

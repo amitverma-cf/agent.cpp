@@ -10,14 +10,13 @@ namespace agent {
 
 enum class LogLevel { Debug, Info, Warning, Error };
 
-enum class Provider { Mock, LlamaCpp, OpenAICompatible };
+enum class AiProvider { Mock, LlamaCpp, OpenAICompatible };
 
-enum class MemoryProvider { InMemory, Sqlite, Postgres, CloudSql };
+enum class MemoryProvider { InMemory, RocksDB };
 
 struct MemoryConfig {
     MemoryProvider provider = MemoryProvider::InMemory;
-    std::string connection_string;
-    std::string table_name = "agent_memory";
+    std::string db_path = ".workspace/agent_db";
 };
 
 enum class ErrorCode {
@@ -87,7 +86,7 @@ struct GenerationResult {
 };
 
 struct Config {
-    Provider provider = Provider::Mock;
+    AiProvider provider = AiProvider::Mock;
     std::string base_url;
     std::string api_key;
     std::string model;
@@ -126,6 +125,9 @@ struct Message {
 
 struct Conversation {
     Session &session;
+    std::vector<Message> history;
+
+    Conversation(Session &sess);
 };
 
 void init_backend();
@@ -152,5 +154,6 @@ Result<void> clear_memory(Session &session);
 Result<void> add_message(Conversation &conv, std::string role, std::string content);
 Result<std::string> complete_conversation(Conversation &conv);
 Result<std::vector<Message>> get_conversation_history(Conversation &conv);
+Result<void> sync_conversation(Conversation &conv);
 
 } // namespace agent
