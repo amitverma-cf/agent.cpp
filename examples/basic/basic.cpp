@@ -35,7 +35,7 @@ void print_error(const agent::Error &error) {
 int main() {
     agent::AgentRuntime runtime;
     auto session_result =
-        agent::init({.provider = agent::Provider::Mock,
+        agent::init({.provider = agent::AiProvider::Mock,
                      .workspace_dir = ".workspace",
                      .logger = log_message});
     if (!session_result.ok) {
