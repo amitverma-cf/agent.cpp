@@ -27,6 +27,7 @@ add_library(agent
     src/core/utils/utils.cpp
     src/core/memory/memory_ops.cpp
     src/core/memory/in_memory_provider.cpp
+    src/core/memory/rocksdb_provider.cpp
 )
 target_include_directories(agent PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -40,6 +41,7 @@ target_compile_options(agent PRIVATE ${AGENT_WARNINGS})
 option(AGENT_ENABLE_NETWORKING "use network capabilities to support HTTP/HTTPS" ON)
 option(AGENT_ENABLE_LLAMACPP "use llama.cpp (local LLM provider)" ON)
 option(AGENT_ENABLE_OPENAI "use OpenAI-compatible (LLM API Provider)" ON)
+option(AGENT_ENABLE_ROCKSDB "use RocksDB for LSM-Tree memory" ON)
 
 if(AGENT_ENABLE_NETWORKING)
     target_include_directories(agent SYSTEM PRIVATE
@@ -67,6 +69,28 @@ if(AGENT_ENABLE_LLAMACPP)
     if(TARGET ggml)
         set_target_properties(ggml PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "$<TARGET_PROPERTY:ggml,INTERFACE_INCLUDE_DIRECTORIES>")
     endif()
+endif()
+
+if(AGENT_ENABLE_ROCKSDB)
+    set(ROCKSDB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    set(WITH_TESTS OFF CACHE BOOL "" FORCE)
+    set(WITH_BENCHMARK_TOOLS OFF CACHE BOOL "" FORCE)
+    set(WITH_TOOLS OFF CACHE BOOL "" FORCE)
+    set(WITH_CORE_TOOLS OFF CACHE BOOL "" FORCE)
+    set(FAIL_ON_WARNINGS OFF CACHE BOOL "" FORCE)
+    set(WITH_GFLAGS OFF CACHE BOOL "" FORCE)
+    set(WITH_SNAPPY OFF CACHE BOOL "" FORCE)
+    set(WITH_ZLIB OFF CACHE BOOL "" FORCE)
+    set(WITH_LZ4 OFF CACHE BOOL "" FORCE)
+    set(WITH_ZSTD OFF CACHE BOOL "" FORCE)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON CACHE BOOL "" FORCE)
+
+    add_subdirectory(vendor/rocksdb)
+    target_link_libraries(agent PRIVATE rocksdb)
+    target_compile_definitions(agent PRIVATE AGENT_HAS_ROCKSDB)
+    target_include_directories(agent SYSTEM PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/vendor/rocksdb/include
+    )
 endif()
 
 add_executable(basic examples/basic/basic.cpp)
