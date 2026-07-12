@@ -6,8 +6,11 @@
 namespace agent::memory {
 
 using MemoryInitFn = Result<void> (*)(Session &session);
+
 using MemoryStoreFn = Result<void> (*)(Session &session, std::string_view key, std::string_view value);
+
 using MemoryRetrieveFn = Result<std::string> (*)(Session &session, std::string_view key);
+
 using MemoryClearFn = Result<void> (*)(Session &session);
 
 struct MemoryOps {
