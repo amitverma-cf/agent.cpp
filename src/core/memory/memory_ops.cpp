@@ -1,5 +1,7 @@
 #include "memory_ops.hpp"
 
+#include <agent-cpp/agent.hpp>
+
 namespace agent::memory {
 
 Result<void> init_in_memory(Session &session);
@@ -15,22 +17,17 @@ Result<void> clear_rocksdb(Session &session);
 #endif
 
 namespace {
-constexpr MemoryOps kMemoryOps[] = {
-    MemoryOps{
-        .provider = MemoryProvider::InMemory,
-        .init = init_in_memory,
-        .store = store_in_memory,
-        .retrieve = retrieve_in_memory,
-        .clear = clear_in_memory
-    },
+constexpr MemoryOps kMemoryOps[] = {MemoryOps{.provider = MemoryProvider::InMemory,
+                                              .init = init_in_memory,
+                                              .store = store_in_memory,
+                                              .retrieve = retrieve_in_memory,
+                                              .clear = clear_in_memory},
 #ifdef AGENT_HAS_ROCKSDB
-    MemoryOps{
-        .provider = MemoryProvider::RocksDB,
-        .init = init_rocksdb,
-        .store = store_rocksdb,
-        .retrieve = retrieve_rocksdb,
-        .clear = clear_rocksdb
-    }
+                                    MemoryOps{.provider = MemoryProvider::RocksDB,
+                                              .init = init_rocksdb,
+                                              .store = store_rocksdb,
+                                              .retrieve = retrieve_rocksdb,
+                                              .clear = clear_rocksdb}
 #endif
 };
 } // namespace

@@ -1,10 +1,12 @@
-#include <agent-cpp/agent.hpp>
 #include "../test_assert.hpp"
+
+#include <agent-cpp/agent.hpp>
+#include <filesystem>
 #include <iostream>
 
 void test_memory_in_memory() {
-    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
-                                       .memory = {.provider = agent::MemoryProvider::InMemory}});
+    auto session_result =
+        agent::init({.provider = agent::AiProvider::Mock, .memory = {.provider = agent::MemoryProvider::InMemory}});
     TEST_ASSERT(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
@@ -21,19 +23,13 @@ void test_memory_in_memory() {
     std::cout << "  [PASS] Unit: InMemory Provider\n";
 }
 
-#include <filesystem>
 void test_memory_rocksdb() {
     const std::string db_path = "test_rocksdb_db";
     std::error_code ec;
     std::filesystem::remove_all(db_path, ec);
 
-    auto session_result = agent::init({
-        .provider = agent::AiProvider::Mock,
-        .memory = {
-            .provider = agent::MemoryProvider::RocksDB,
-            .db_path = db_path
-        }
-    });
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
+                                       .memory = {.provider = agent::MemoryProvider::RocksDB, .db_path = db_path}});
 
     if (!session_result.ok && session_result.error.code == agent::ErrorCode::UnsupportedProvider) {
         std::cout << "  [SKIP] Unit: RocksDB Provider (not compiled in)\n";
@@ -53,7 +49,6 @@ void test_memory_rocksdb() {
     auto res2 = agent::retrieve_memory(session, "test_key");
     TEST_ASSERT(!res2.ok);
 
-    // Explicitly destroy session to close the DB before deleting the folder
     session = {};
     std::filesystem::remove_all(db_path, ec);
 
