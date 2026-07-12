@@ -1,6 +1,8 @@
 #include "memory_ops.hpp"
-#include <unordered_map>
+
+#include <agent-cpp/agent.hpp>
 #include <mutex>
+#include <unordered_map>
 
 namespace agent::memory {
 
@@ -16,7 +18,8 @@ Result<void> init_in_memory(Session &session) {
 
 Result<void> store_in_memory(Session &session, std::string_view key, std::string_view value) {
     auto state = std::static_pointer_cast<InMemoryState>(session.memory_state);
-    if (!state) return fail(ErrorCode::ProviderInitFailed, "Memory state not initialized");
+    if (!state)
+        return fail(ErrorCode::ProviderInitFailed, "Memory state not initialized");
 
     std::lock_guard<std::mutex> lock(state->mutex);
     state->db[std::string(key)] = std::string(value);
@@ -25,7 +28,8 @@ Result<void> store_in_memory(Session &session, std::string_view key, std::string
 
 Result<std::string> retrieve_in_memory(Session &session, std::string_view key) {
     auto state = std::static_pointer_cast<InMemoryState>(session.memory_state);
-    if (!state) return fail<std::string>(ErrorCode::ProviderInitFailed, "Memory state not initialized");
+    if (!state)
+        return fail<std::string>(ErrorCode::ProviderInitFailed, "Memory state not initialized");
 
     std::lock_guard<std::mutex> lock(state->mutex);
     auto it = state->db.find(std::string(key));
@@ -37,7 +41,8 @@ Result<std::string> retrieve_in_memory(Session &session, std::string_view key) {
 
 Result<void> clear_in_memory(Session &session) {
     auto state = std::static_pointer_cast<InMemoryState>(session.memory_state);
-    if (!state) return fail(ErrorCode::ProviderInitFailed, "Memory state not initialized");
+    if (!state)
+        return fail(ErrorCode::ProviderInitFailed, "Memory state not initialized");
 
     std::lock_guard<std::mutex> lock(state->mutex);
     state->db.clear();
