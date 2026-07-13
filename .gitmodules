@@ -1,9 +1,6 @@
 [submodule "vendor/llama.cpp"]
 	path = vendor/llama.cpp
 	url = https://github.com/ggml-org/llama.cpp.git
-[submodule "vendor/rocksdb"]
-	path = vendor/rocksdb
-	url = https://github.com/facebook/rocksdb.git
 [submodule "vendor/simdjson"]
 	path = vendor/simdjson
 	url = https://github.com/simdjson/simdjson.git
