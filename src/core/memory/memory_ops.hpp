@@ -14,7 +14,7 @@ using MemoryRetrieveFn = Result<std::string> (*)(Session &session, std::string_v
 using MemoryClearFn = Result<void> (*)(Session &session);
 
 struct MemoryOps {
-    MemoryProvider provider = MemoryProvider::InMemory;
+    MemoryProvider provider = MemoryProvider::Sqlite;
     MemoryInitFn init = nullptr;
     MemoryStoreFn store = nullptr;
     MemoryRetrieveFn retrieve = nullptr;
@@ -23,4 +23,4 @@ struct MemoryOps {
 
 const MemoryOps *find_memory_ops(MemoryProvider provider);
 
-} // namespace agent::memory
+}
