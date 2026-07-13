@@ -1,4 +1,5 @@
 #include "provider_ops.hpp"
+#include "../executor/ambient_turn.hpp"
 
 #include <agent-cpp/agent.hpp>
 
@@ -65,24 +66,24 @@ static size_t dtype_bytes(DType dtype) {
     return 4;
 }
 
-#define ORT_CHECK(api, expr)                                                                                           \
-    do {                                                                                                               \
-        OrtStatus *_s = (expr);                                                                                        \
-        if (_s) {                                                                                                      \
-            std::string _msg((api)->GetErrorMessage(_s));                                                              \
-            (api)->ReleaseStatus(_s);                                                                                  \
-            return fail<ChatResponse>(ErrorCode::DecodeFailed, _msg);                                                  \
-        }                                                                                                              \
+#define ORT_CHECK(api, expr)                                                                                         
+    do {                                                                                                             
+        OrtStatus *_s = (expr);                                                                                      
+        if (_s) {                                                                                                    
+            std::string _msg((api)->GetErrorMessage(_s));                                                            
+            (api)->ReleaseStatus(_s);                                                                                
+            return fail<InferResponse>(ErrorCode::DecodeFailed, _msg);                                                
+        }                                                                                                            
     } while (0)
 
-#define ORT_CHECK_INIT(api, expr)                                                                                      \
-    do {                                                                                                               \
-        OrtStatus *_s = (expr);                                                                                        \
-        if (_s) {                                                                                                      \
-            std::string _msg((api)->GetErrorMessage(_s));                                                              \
-            (api)->ReleaseStatus(_s);                                                                                  \
-            return fail(ErrorCode::ModelLoadFailed, _msg);                                                             \
-        }                                                                                                              \
+#define ORT_CHECK_INIT(api, expr)                                                                                    
+    do {                                                                                                             
+        OrtStatus *_s = (expr);                                                                                      
+        if (_s) {                                                                                                    
+            std::string _msg((api)->GetErrorMessage(_s));                                                            
+            (api)->ReleaseStatus(_s);                                                                                
+            return fail(ErrorCode::ModelLoadFailed, _msg);                                                           
+        }                                                                                                            
     } while (0)
 
 struct OnnxState {
@@ -132,10 +133,10 @@ Result<void> init_onnx(Session &session) {
     return ok();
 }
 
-Result<ChatResponse> execute_turn_onnx(Session &session, const ChatRequest &request) {
+Result<InferResponse> infer_onnx(Session &session, const InferRequest &request) {
     auto state = std::static_pointer_cast<OnnxState>(session.provider_state);
     if (!state || !state->ort_session) {
-        return fail<ChatResponse>(ErrorCode::ProviderInitFailed, "ONNX session not initialized.");
+        return fail<InferResponse>(ErrorCode::ProviderInitFailed, "ONNX session not initialized.");
     }
 
     const OrtApi *api = state->api;
@@ -198,7 +199,7 @@ Result<ChatResponse> execute_turn_onnx(Session &session, const ChatRequest &requ
             api->ReleaseValue(input_values[i]);
     }
 
-    std::span<TensorView> out_views = session.arena.allocate_span<TensorView>(output_count);
+    std::span<TensorView> out_views = ambient::current_arena(session).allocate_span<TensorView>(output_count);
 
     for (size_t i = 0; i < output_count; ++i) {
         OrtValue *oval = output_values[i];
@@ -209,7 +210,7 @@ Result<ChatResponse> execute_turn_onnx(Session &session, const ChatRequest &requ
         size_t ndim = 0;
         api->GetDimensionsCount(info, &ndim);
 
-        std::span<int64_t> shape_span = session.arena.allocate_span<int64_t>(ndim);
+        std::span<int64_t> shape_span = ambient::current_arena(session).allocate_span<int64_t>(ndim);
         api->GetDimensions(info, shape_span.data(), ndim);
 
         ONNXTensorElementDataType ort_type;
@@ -226,10 +227,10 @@ Result<ChatResponse> execute_turn_onnx(Session &session, const ChatRequest &requ
         void *raw_data = nullptr;
         api->GetTensorMutableData(oval, &raw_data);
 
-        std::span<uint8_t> data_span = session.arena.allocate_span<uint8_t>(byte_count);
+        std::span<uint8_t> data_span = ambient::current_arena(session).allocate_span<uint8_t>(byte_count);
         std::memcpy(data_span.data(), raw_data, byte_count);
 
-        std::string_view name_view = session.arena.allocate_string(std::string_view(raw_output_names[i]));
+        std::string_view name_view = ambient::current_arena(session).allocate_string(std::string_view(raw_output_names[i]));
 
         out_views[i] = TensorView{.name = name_view, .dtype = dtype, .shape = shape_span, .data = data_span};
 
@@ -238,14 +239,14 @@ Result<ChatResponse> execute_turn_onnx(Session &session, const ChatRequest &requ
     }
 
     MessageView msg;
-    msg.role = session.arena.allocate_string("assistant");
-    msg.content = session.arena.allocate_string("");
+    msg.role = ambient::current_arena(session).allocate_string("assistant");
+    msg.content = ambient::current_arena(session).allocate_string("");
     msg.tool_calls = {};
     msg.tool_call_id = {};
     msg.tensors = out_views;
 
-    return ok(ChatResponse{.message = msg, .usage = Usage{}, .output_tensors = out_views});
+    return ok(InferResponse{.message = msg, .usage = Usage{}, .output_tensors = out_views});
 }
 
-} // namespace agent::providers
+}
 #endif

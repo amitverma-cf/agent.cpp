@@ -1,4 +1,5 @@
 #include "../utils/utils.hpp"
+#include "hal/path.hpp"
 
 #include <agent-cpp/agent.hpp>
 #include <filesystem>
@@ -8,13 +9,11 @@
 
 namespace agent::tools {
 
-static std::filesystem::path resolve_path(const std::string &ws, std::string_view rel) {
-    std::filesystem::path p(rel);
-    return p.is_absolute() ? p : std::filesystem::path(ws) / p;
-}
+namespace {
 
-static bool parse_obj(std::string_view args, simdjson::ondemand::parser &parser, simdjson::padded_string &json,
-                      simdjson::ondemand::document &doc, simdjson::ondemand::object &obj) {
+bool parse_obj(std::string_view args, simdjson::ondemand::parser &parser,
+               simdjson::padded_string &json, simdjson::ondemand::document &doc,
+               simdjson::ondemand::object &obj) {
     json = simdjson::padded_string(args.data(), args.size());
     if (parser.iterate(json).get(doc))
         return false;
@@ -23,8 +22,16 @@ static bool parse_obj(std::string_view args, simdjson::ondemand::parser &parser,
     return true;
 }
 
+Result<std::filesystem::path> resolve_path(const WorkspaceContext &ctx, std::string_view rel) {
+    if (!ctx.workspace_dir)
+        return fail<std::filesystem::path>(ErrorCode::InvalidConfig, "workspace_dir is null.");
+    return hal::resolve_under_workspace(*ctx.workspace_dir, rel, ctx.sandbox);
+}
+
+} // namespace
+
 static Result<std::string> read_file_cb(std::string_view args, void *ud) {
-    const std::string &ws = *static_cast<const std::string *>(ud);
+    const auto &ctx = *static_cast<const WorkspaceContext *>(ud);
     simdjson::ondemand::parser parser;
     simdjson::padded_string json;
     simdjson::ondemand::document doc;
@@ -33,23 +40,27 @@ static Result<std::string> read_file_cb(std::string_view args, void *ud) {
         return fail<std::string>(ErrorCode::ParseError, "Invalid JSON");
 
     std::string_view path_sv;
-    size_t max_bytes = 16384;
+    int64_t max_bytes_i = 16384;
     for (auto field : obj) {
         auto k = field.unescaped_key();
         if (k.error())
             continue;
         if (k.value() == "path") {
-            field.value().get_string().get(path_sv);
+            (void)field.value().get_string().get(path_sv);
         } else if (k.value() == "max_bytes") {
             int64_t v;
-            if (!field.value().get_int64().get(v))
-                max_bytes = static_cast<size_t>(v);
+            if (!field.value().get_int64().get(v) && v >= 0)
+                max_bytes_i = v;
         }
     }
     if (path_sv.empty())
         return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'path'");
 
-    auto full = resolve_path(ws, path_sv);
+    auto full_res = resolve_path(ctx, path_sv);
+    if (!full_res.ok)
+        return fail<std::string>(full_res.error.code, full_res.error.message);
+    auto full = std::move(full_res.value);
+
     std::error_code ec;
     if (!std::filesystem::exists(full, ec))
         return fail<std::string>(ErrorCode::KeyNotFound, "Not found: " + full.string());
@@ -58,6 +69,7 @@ static Result<std::string> read_file_cb(std::string_view args, void *ud) {
     if (!f)
         return fail<std::string>(ErrorCode::FilesystemError, "Cannot open: " + full.string());
 
+    size_t max_bytes = static_cast<size_t>(max_bytes_i);
     std::string content(max_bytes, '\0');
     f.read(content.data(), static_cast<std::streamsize>(max_bytes));
     content.resize(static_cast<size_t>(f.gcount()));
@@ -68,7 +80,7 @@ static Result<std::string> read_file_cb(std::string_view args, void *ud) {
 }
 
 static Result<std::string> write_file_cb(std::string_view args, void *ud) {
-    const std::string &ws = *static_cast<const std::string *>(ud);
+    const auto &ctx = *static_cast<const WorkspaceContext *>(ud);
     simdjson::ondemand::parser parser;
     simdjson::padded_string json;
     simdjson::ondemand::document doc;
@@ -83,11 +95,11 @@ static Result<std::string> write_file_cb(std::string_view args, void *ud) {
         if (k.error())
             continue;
         auto kv = k.value();
-        if (kv == "path") {
-            field.value().get_string().get(path_sv);
-        } else if (kv == "content") {
-            field.value().get_string().get(content_sv);
-        } else if (kv == "create_dirs") {
+        if (kv == "path")
+            (void)field.value().get_string().get(path_sv);
+        else if (kv == "content")
+            (void)field.value().get_string().get(content_sv);
+        else if (kv == "create_dirs") {
             bool b;
             if (!field.value().get_bool().get(b))
                 create_dirs = b;
@@ -96,7 +108,11 @@ static Result<std::string> write_file_cb(std::string_view args, void *ud) {
     if (path_sv.empty())
         return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'path'");
 
-    auto full = resolve_path(ws, path_sv);
+    auto full_res = resolve_path(ctx, path_sv);
+    if (!full_res.ok)
+        return fail<std::string>(full_res.error.code, full_res.error.message);
+    auto full = std::move(full_res.value);
+
     if (create_dirs) {
         std::error_code ec;
         std::filesystem::create_directories(full.parent_path(), ec);
@@ -106,12 +122,11 @@ static Result<std::string> write_file_cb(std::string_view args, void *ud) {
     if (!f)
         return fail<std::string>(ErrorCode::FilesystemError, "Cannot write: " + full.string());
     f.write(content_sv.data(), static_cast<std::streamsize>(content_sv.size()));
-
     return ok("wrote " + std::to_string(content_sv.size()) + " bytes to " + full.string());
 }
 
 static Result<std::string> append_file_cb(std::string_view args, void *ud) {
-    const std::string &ws = *static_cast<const std::string *>(ud);
+    const auto &ctx = *static_cast<const WorkspaceContext *>(ud);
     simdjson::ondemand::parser parser;
     simdjson::padded_string json;
     simdjson::ondemand::document doc;
@@ -124,16 +139,19 @@ static Result<std::string> append_file_cb(std::string_view args, void *ud) {
         auto k = field.unescaped_key();
         if (k.error())
             continue;
-        if (k.value() == "path") {
-            field.value().get_string().get(path_sv);
-        } else if (k.value() == "content") {
-            field.value().get_string().get(content_sv);
-        }
+        if (k.value() == "path")
+            (void)field.value().get_string().get(path_sv);
+        else if (k.value() == "content")
+            (void)field.value().get_string().get(content_sv);
     }
     if (path_sv.empty())
         return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'path'");
 
-    auto full = resolve_path(ws, path_sv);
+    auto full_res = resolve_path(ctx, path_sv);
+    if (!full_res.ok)
+        return fail<std::string>(full_res.error.code, full_res.error.message);
+    auto full = std::move(full_res.value);
+
     std::error_code ec;
     std::filesystem::create_directories(full.parent_path(), ec);
 
@@ -141,12 +159,11 @@ static Result<std::string> append_file_cb(std::string_view args, void *ud) {
     if (!f)
         return fail<std::string>(ErrorCode::FilesystemError, "Cannot open: " + full.string());
     f.write(content_sv.data(), static_cast<std::streamsize>(content_sv.size()));
-
     return ok("appended " + std::to_string(content_sv.size()) + " bytes to " + full.string());
 }
 
 static Result<std::string> list_dir_cb(std::string_view args, void *ud) {
-    const std::string &ws = *static_cast<const std::string *>(ud);
+    const auto &ctx = *static_cast<const WorkspaceContext *>(ud);
     std::string path_str;
 
     if (!args.empty()) {
@@ -166,7 +183,11 @@ static Result<std::string> list_dir_cb(std::string_view args, void *ud) {
         }
     }
 
-    auto dir = path_str.empty() ? std::filesystem::path(ws) : resolve_path(ws, path_str);
+    auto full_res = resolve_path(ctx, path_str.empty() ? "." : path_str);
+    if (!full_res.ok)
+        return fail<std::string>(full_res.error.code, full_res.error.message);
+    auto dir = std::move(full_res.value);
+
     std::error_code ec;
     if (!std::filesystem::is_directory(dir, ec))
         return fail<std::string>(ErrorCode::KeyNotFound, "Not a directory: " + dir.string());
@@ -198,7 +219,7 @@ static Result<std::string> list_dir_cb(std::string_view args, void *ud) {
 }
 
 static Result<std::string> create_dir_cb(std::string_view args, void *ud) {
-    const std::string &ws = *static_cast<const std::string *>(ud);
+    const auto &ctx = *static_cast<const WorkspaceContext *>(ud);
     simdjson::ondemand::parser parser;
     simdjson::padded_string json;
     simdjson::ondemand::document doc;
@@ -210,22 +231,25 @@ static Result<std::string> create_dir_cb(std::string_view args, void *ud) {
     for (auto field : obj) {
         auto k = field.unescaped_key();
         if (!k.error() && k.value() == "path")
-            field.value().get_string().get(path_sv);
+            (void)field.value().get_string().get(path_sv);
     }
     if (path_sv.empty())
         return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'path'");
 
-    auto full = resolve_path(ws, path_sv);
+    auto full_res = resolve_path(ctx, path_sv);
+    if (!full_res.ok)
+        return fail<std::string>(full_res.error.code, full_res.error.message);
+    auto full = std::move(full_res.value);
+
     std::error_code ec;
     std::filesystem::create_directories(full, ec);
     if (ec)
         return fail<std::string>(ErrorCode::FilesystemError, "Failed: " + ec.message());
-
     return ok("created " + full.string());
 }
 
 static Result<std::string> delete_path_cb(std::string_view args, void *ud) {
-    const std::string &ws = *static_cast<const std::string *>(ud);
+    const auto &ctx = *static_cast<const WorkspaceContext *>(ud);
     simdjson::ondemand::parser parser;
     simdjson::padded_string json;
     simdjson::ondemand::document doc;
@@ -237,22 +261,30 @@ static Result<std::string> delete_path_cb(std::string_view args, void *ud) {
     for (auto field : obj) {
         auto k = field.unescaped_key();
         if (!k.error() && k.value() == "path")
-            field.value().get_string().get(path_sv);
+            (void)field.value().get_string().get(path_sv);
     }
     if (path_sv.empty())
         return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'path'");
 
-    auto full = resolve_path(ws, path_sv);
+    auto full_res = resolve_path(ctx, path_sv);
+    if (!full_res.ok)
+        return fail<std::string>(full_res.error.code, full_res.error.message);
+    auto full = std::move(full_res.value);
+
+    if (ctx.workspace_dir &&
+        hal::is_workspace_root(*ctx.workspace_dir, full))
+        return fail<std::string>(ErrorCode::SandboxViolation,
+                                 "Cannot delete the workspace root directory.");
+
     std::error_code ec;
     auto count = std::filesystem::remove_all(full, ec);
     if (ec)
         return fail<std::string>(ErrorCode::FilesystemError, "Failed: " + ec.message());
-
     return ok("deleted " + std::to_string(count) + " entries at " + full.string());
 }
 
 static Result<std::string> move_path_cb(std::string_view args, void *ud) {
-    const std::string &ws = *static_cast<const std::string *>(ud);
+    const auto &ctx = *static_cast<const WorkspaceContext *>(ud);
     simdjson::ondemand::parser parser;
     simdjson::padded_string json;
     simdjson::ondemand::document doc;
@@ -266,26 +298,30 @@ static Result<std::string> move_path_cb(std::string_view args, void *ud) {
         if (k.error())
             continue;
         if (k.value() == "from")
-            field.value().get_string().get(from_sv);
+            (void)field.value().get_string().get(from_sv);
         else if (k.value() == "to")
-            field.value().get_string().get(to_sv);
+            (void)field.value().get_string().get(to_sv);
     }
     if (from_sv.empty() || to_sv.empty())
         return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'from' or 'to'");
 
-    auto src = resolve_path(ws, from_sv);
-    auto dst = resolve_path(ws, to_sv);
+    auto src_res = resolve_path(ctx, from_sv);
+    if (!src_res.ok)
+        return fail<std::string>(src_res.error.code, src_res.error.message);
+    auto dst_res = resolve_path(ctx, to_sv);
+    if (!dst_res.ok)
+        return fail<std::string>(dst_res.error.code, dst_res.error.message);
+
     std::error_code ec;
-    std::filesystem::create_directories(dst.parent_path(), ec);
-    std::filesystem::rename(src, dst, ec);
+    std::filesystem::create_directories(dst_res.value.parent_path(), ec);
+    std::filesystem::rename(src_res.value, dst_res.value, ec);
     if (ec)
         return fail<std::string>(ErrorCode::FilesystemError, "Failed: " + ec.message());
-
-    return ok("moved " + src.string() + " -> " + dst.string());
+    return ok("moved " + src_res.value.string() + " -> " + dst_res.value.string());
 }
 
 static Result<std::string> file_info_cb(std::string_view args, void *ud) {
-    const std::string &ws = *static_cast<const std::string *>(ud);
+    const auto &ctx = *static_cast<const WorkspaceContext *>(ud);
     simdjson::ondemand::parser parser;
     simdjson::padded_string json;
     simdjson::ondemand::document doc;
@@ -297,15 +333,18 @@ static Result<std::string> file_info_cb(std::string_view args, void *ud) {
     for (auto field : obj) {
         auto k = field.unescaped_key();
         if (!k.error() && k.value() == "path")
-            field.value().get_string().get(path_sv);
+            (void)field.value().get_string().get(path_sv);
     }
     if (path_sv.empty())
         return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'path'");
 
-    auto full = resolve_path(ws, path_sv);
+    auto full_res = resolve_path(ctx, path_sv);
+    if (!full_res.ok)
+        return fail<std::string>(full_res.error.code, full_res.error.message);
+    auto full = std::move(full_res.value);
+
     std::error_code ec;
     auto st = std::filesystem::status(full, ec);
-
     if (ec || st.type() == std::filesystem::file_type::not_found)
         return ok(std::string(R"({"exists":false})"));
 
@@ -326,55 +365,56 @@ static Result<std::string> file_info_cb(std::string_view args, void *ud) {
     return ok(std::move(result));
 }
 
-std::vector<Tool> get_filesystem_tools(const std::string *workspace_dir) {
-    void *ud = const_cast<void *>(static_cast<const void *>(workspace_dir));
+std::vector<Tool> get_filesystem_tools(std::shared_ptr<WorkspaceContext> ctx) {
+    void *ud = ctx.get();
     return {
-        Tool{
-            .name = "read_file",
-            .description = "Read a file. Relative paths are resolved inside workspace_dir.",
-            .parameter_schema =
-                R"({"type":"object","properties":{"path":{"type":"string"},"max_bytes":{"type":"integer","description":"max bytes to read, default 16384"}},"required":["path"]})",
-            .callback = read_file_cb,
-            .user_data = ud},
-        Tool{
-            .name = "write_file",
-            .description = "Write (overwrite) a file. Parent dirs auto-created by default.",
-            .parameter_schema =
-                R"({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"create_dirs":{"type":"boolean"}},"required":["path","content"]})",
-            .callback = write_file_cb,
-            .user_data = ud},
-        Tool{
-            .name = "append_file",
-            .description = "Append text to a file. Creates the file if it does not exist.",
-            .parameter_schema =
-                R"({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]})",
-            .callback = append_file_cb,
-            .user_data = ud},
+        Tool{.name = "read_file",
+             .description = "Read a file. Relative paths are resolved inside workspace_dir.",
+             .parameter_schema =
+                 R"({"type":"object","properties":{"path":{"type":"string"},"max_bytes":{"type":"integer","description":"max bytes to read, default 16384"}},"required":["path"]})",
+             .callback = read_file_cb,
+             .user_data = ud},
+        Tool{.name = "write_file",
+             .description = "Write (overwrite) a file. Parent dirs auto-created by default.",
+             .parameter_schema =
+                 R"({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"create_dirs":{"type":"boolean"}},"required":["path","content"]})",
+             .callback = write_file_cb,
+             .user_data = ud},
+        Tool{.name = "append_file",
+             .description = "Append text to a file. Creates the file if it does not exist.",
+             .parameter_schema =
+                 R"({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]})",
+             .callback = append_file_cb,
+             .user_data = ud},
         Tool{.name = "list_dir",
-             .description = "List directory contents. Empty path = workspace root. Returns JSON array.",
-             .parameter_schema = R"({"type":"object","properties":{"path":{"type":"string"}},"required":[]})",
+             .description =
+                 "List directory contents. Empty path = workspace root. Returns JSON array.",
+             .parameter_schema =
+                 R"({"type":"object","properties":{"path":{"type":"string"}},"required":[]})",
              .callback = list_dir_cb,
              .user_data = ud},
         Tool{.name = "create_dir",
              .description = "Create a directory and all parents.",
-             .parameter_schema = R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
+             .parameter_schema =
+                 R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
              .callback = create_dir_cb,
              .user_data = ud},
         Tool{.name = "delete_path",
-             .description = "Delete a file or directory (recursive). Use with care.",
-             .parameter_schema = R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
+             .description = "Delete a file or directory (recursive). Cannot delete workspace root.",
+             .parameter_schema =
+                 R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
              .callback = delete_path_cb,
              .user_data = ud},
-        Tool{
-            .name = "move_path",
-            .description = "Move or rename a file or directory.",
-            .parameter_schema =
-                R"({"type":"object","properties":{"from":{"type":"string"},"to":{"type":"string"}},"required":["from","to"]})",
-            .callback = move_path_cb,
-            .user_data = ud},
+        Tool{.name = "move_path",
+             .description = "Move or rename a file or directory.",
+             .parameter_schema =
+                 R"({"type":"object","properties":{"from":{"type":"string"},"to":{"type":"string"}},"required":["from","to"]})",
+             .callback = move_path_cb,
+             .user_data = ud},
         Tool{.name = "file_info",
              .description = "Get metadata for a path. Returns JSON: {exists, type, size, path}.",
-             .parameter_schema = R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
+             .parameter_schema =
+                 R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
              .callback = file_info_cb,
              .user_data = ud},
     };
