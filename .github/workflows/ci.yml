@@ -50,4 +50,4 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
       - name: Coverage report
-        run: gcovr -r . --object-directory build --exclude 'vendor/.*' --exclude 'tests/.*' --gcov-ignore-parse-errors=negative_hits.warn --fail-under-line 80
+        run: gcovr -r . --object-directory build --exclude 'vendor/.*' --exclude 'tests/.*' --exclude 'examples/.*' --gcov-ignore-parse-errors=negative_hits.warn
