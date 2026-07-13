@@ -29,11 +29,12 @@ If AI is used to generate any portion of the code, contributors must adhere to t
 Before submitting your PR:
 - Search for existing PRs to prevent duplicating efforts.
 - **Understand the Architecture**: This is a zero-cost abstraction framework. Familiarize yourself with the project's core philosophies and design patterns.
-- **Memory Standards**: No heap allocations (`new`/`malloc`) are permitted in the hot-path (ReAct loop). All session memory must be managed via the `ArenaAllocator`.
+- **Memory Standards**: No heap allocations (`new`/`malloc`) are permitted in the hot-path. All per-turn memory must be managed via the `Arena` allocator (`Session::arena` / `Session::worker_arenas`).
 - **Test your changes**:
-  - Run all unit and integration tests.
-  - Test with sanitizers (ASAN, TSAN, MSAN) if possible.
-  - Verify portability by cross-compiling for at least one restricted target (e.g., WASM or ARM) if your changes affect the core.
+  - Run all unit and integration tests: tests are written with [Catch2](https://github.com/catchorg/Catch2) (`tests/`), built as the `test_agent` executable, and registered individually with CTest via `catch_discover_tests`. Run all of them with `ctest --test-dir build --output-on-failure`, or filter to a subsystem with Catch2 tags, e.g. `./build/test_agent "[memory]"`.
+  - Build with `-DAGENT_ENABLE_SANITIZERS=ON` (AddressSanitizer + UBSan) and run `ctest`.
+  - For changes touching concurrency (scheduler, memory backend), also run under valgrind `--tool=helgrind`.
+  - Check coverage on changes touching `src/`: build with `-DAGENT_ENABLE_COVERAGE=ON`, run `ctest`, then `gcovr -r . --object-directory build --exclude 'vendor/.*' --exclude 'tests/.*' --exclude 'examples/.*' --gcov-ignore-parse-errors=negative_hits.warn`. The `--gcov-ignore-parse-errors` flag works around a long-standing `gcov` bug ([GCC #68080](https://gcc.gnu.org/bugzilla/show_bug.cgi?id=68080)) that emits a bogus negative branch-hit count on some files; it's not something in this codebase.
 - **Atomic Changes**: Create separate PRs for each feature or fix.
 
 After submitting your PR:
@@ -45,15 +46,15 @@ After submitting your PR:
 - **Simplicity**: Avoid complex template metaprogramming or deep inheritance. Prefer C++20 Concepts and composition.
 - **No Hot-Path Allocations**: Use `std::string_view` and `std::span` to refer to memory in the Arena.
 - **Error Handling**: Do not use C++ exceptions. Use monadic error handling (e.g., `std::expected` or status codes).
-- **C-ABI Boundary**: Any changes to the public API must maintain compatibility with the flat C-ABI.
+- **Public API**: `include/agent-cpp/agent.hpp` is a single-header C++ library. Avoid breaking existing signatures/fields where practical.
 - **Formatting**:
     - Use 4 spaces for indentation.
     - Brackets on the same line.
     - Pointer/reference alignment: `void * ptr`, `int & a`.
     - Use code formatting tools to ensure consistency.
 - **Naming**:
-    - Use `snake_case` for functions, variables, and type names.
-    - Class methods follow `<class>_<action>_<noun>` pattern in the C-ABI (e.g., `agent_ctx_run_step`).
+    - Use `snake_case` for functions and variables; `PascalCase` for types/structs (`Session`, `Config`, `FlowMemory`, ...).
+    - Free functions take the object as the first parameter, e.g. `run_turn(session, ...)`, `init(config)`, `infer(session, request)`.
     - Use sized integer types (e.g., `int32_t`, `uint64_t`).
 
 # Documentation

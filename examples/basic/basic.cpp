@@ -32,7 +32,7 @@ void print_error(const agent::Error &e) {
     std::fprintf(stderr, "agent error [%d]: %s\n", static_cast<int>(e.code), e.message.c_str());
 }
 
-} // namespace
+}
 
 int main() {
     agent::AgentRuntime runtime;
@@ -42,8 +42,8 @@ int main() {
     cfg.workspace_dir = ".workspace";
     cfg.logger = log_message;
     cfg.memory = {
-        .provider = agent::MemoryProvider::InMemory,
-        .db_path = "memory/",
+        .provider = agent::MemoryProvider::Sqlite,
+        .db_path = ":memory:",
     };
 
     auto sess_res = agent::init(cfg);
@@ -58,10 +58,10 @@ int main() {
         msg.role = "user";
         msg.content = "hello";
 
-        agent::ChatRequest req;
+        agent::InferRequest req;
         req.messages = std::span<const agent::MessageView>(&msg, 1);
 
-        auto res = agent::execute_turn(session, req);
+        auto res = agent::infer(session, req);
         if (!res.ok) {
             print_error(res.error);
             return 1;
@@ -74,13 +74,13 @@ int main() {
         msg.role = "user";
         msg.content = "hello streaming";
 
-        agent::ChatRequest req;
+        agent::InferRequest req;
         req.messages = std::span<const agent::MessageView>(&msg, 1);
         req.stream = true;
         req.on_token = print_token;
         req.token_user_data = nullptr;
 
-        auto res = agent::execute_turn(session, req);
+        auto res = agent::infer(session, req);
         if (!res.ok) {
             print_error(res.error);
             return 1;
@@ -89,17 +89,17 @@ int main() {
     }
 
     {
-        agent::ConversationState state;
+        agent::FlowMemory state;
         state.id = "basic_demo";
 
-        auto r1 = agent::run_conversation_turn(session, state, "What is 2 + 2?");
+        auto r1 = agent::run_turn(session, state, "What is 2 + 2?");
         if (!r1.ok) {
             print_error(r1.error);
             return 1;
         }
         std::cout << "turn 1: " << r1.value << "\n";
 
-        auto r2 = agent::run_conversation_turn(session, state, "And what was my first question?");
+        auto r2 = agent::run_turn(session, state, "And what was my first question?");
         if (!r2.ok) {
             print_error(r2.error);
             return 1;
