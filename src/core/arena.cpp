@@ -59,4 +59,4 @@ std::string_view Arena::allocate_string(std::string_view src) {
     return std::string_view(static_cast<const char *>(mem), src.size());
 }
 
-} // namespace agent
+}
