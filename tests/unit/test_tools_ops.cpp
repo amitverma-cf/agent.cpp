@@ -1,6 +1,5 @@
-#include <catch_amalgamated.hpp>
-
 #include <agent-cpp/agent.hpp>
+#include <catch_amalgamated.hpp>
 
 TEST_CASE("execute_tool dispatches a registered tool by name", "[tools_ops]") {
     auto session_result = agent::init({.provider = agent::AiProvider::Mock, .workspace_dir = "/tmp/agent_test_ws"});
@@ -36,9 +35,7 @@ TEST_CASE("rebuild_tool_index picks up tools added after init", "[tools_ops]") {
     echo_tool.name = "custom_echo";
     echo_tool.description = "echoes back a constant";
     echo_tool.parameter_schema = "{}";
-    echo_tool.callback = [](std::string_view, void *) -> agent::Result<std::string> {
-        return agent::ok(std::string("echo"));
-    };
+    echo_tool.callback = [](std::string_view, void *) -> agent::Result<std::string> { return agent::ok(std::string("echo")); };
     session.config.tools.push_back(echo_tool);
     agent::rebuild_tool_index(session);
 
@@ -48,22 +45,20 @@ TEST_CASE("rebuild_tool_index picks up tools added after init", "[tools_ops]") {
 }
 
 TEST_CASE("init_tools registers default tools when auto_default_tools is true", "[tools_ops]") {
-    auto session_result = agent::init(
-        {.provider = agent::AiProvider::Mock, .workspace_dir = "/tmp/agent_test_ws", .auto_default_tools = true});
+    auto session_result =
+        agent::init({.provider = agent::AiProvider::Mock, .workspace_dir = "/tmp/agent_test_ws", .auto_default_tools = true});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
     bool found_run_command = false;
     for (const auto &t : session.config.tools)
-        if (t.name == "run_command")
-            found_run_command = true;
+        if (t.name == "run_command") found_run_command = true;
     REQUIRE(found_run_command);
 }
 
 TEST_CASE("Disabling auto_default_tools registers no built-in tools", "[tools_ops]") {
-    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
-                                       .workspace_dir = "/tmp/agent_test_ws",
-                                       .auto_default_tools = false});
+    auto session_result =
+        agent::init({.provider = agent::AiProvider::Mock, .workspace_dir = "/tmp/agent_test_ws", .auto_default_tools = false});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 

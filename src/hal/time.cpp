@@ -1,5 +1,6 @@
-#include "hal/platform.hpp"
 #include "hal/time.hpp"
+
+#include "hal/platform.hpp"
 
 #include <chrono>
 
@@ -15,11 +16,9 @@ bool utc_tm(std::time_t t, std::tm &out) {
 
 std::string format_utc(std::time_t t, const char *fmt) {
     std::tm tm_buf{};
-    if (!utc_tm(t, tm_buf))
-        return {};
+    if (!utc_tm(t, tm_buf)) return {};
     char buf[64];
-    if (std::strftime(buf, sizeof(buf), fmt, &tm_buf) == 0)
-        return {};
+    if (std::strftime(buf, sizeof(buf), fmt, &tm_buf) == 0) return {};
     return std::string(buf);
 }
 

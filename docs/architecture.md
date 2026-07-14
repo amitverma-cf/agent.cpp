@@ -29,13 +29,15 @@ agent.cpp is structured around three core principles that inform every design de
 |     Provider Layer       |         |       Tools Layer            |
 |  ProviderOps[]           |         |  ToolsOps  tool_by_name      |
 |  Mock  LlamaCpp  OpenAI  |         |  filesystem  terminal        |
-|  OnnxRuntime             |         |  compressor                  |
-+--------------------------+         +------------------------------+
+|  OnnxRuntime             |         |  compressor  skills          |
++--------------------------+         |  permission gate (Allow/     |
+                                     |  Ask/Deny, checked pre-call) |
+                                     +------------------------------+
          |                                        |
 +--------v----------------------------------------v------------------+
 |                           Session                                    |
 |  Config  worker_arenas  provider_state  memory_state  data_sources   |
-|  tool_by_name  tools_system_prompt  log_file  stats                  |
+|  tool_by_name  tools_system_prompt  skills  log_file  stats          |
 +---------------------------------------------------------------------+
 ```
 
@@ -133,7 +135,9 @@ run_turn(session, memory, user_prompt)
       |    +-- for each tool call:
       |         +-- trigger_event(OnToolCall)
       |         +-- fire FlowHook::Pre callbacks
-      |         +-- execute_tool()  -->  O(1) tool_by_name lookup  -->  callback
+      |         +-- execute_tool()  -->  O(1) tool_by_name lookup
+      |         |     -->  permission_check (Allow/Ask/Deny), if Config::permission_check is set
+      |         |     -->  callback
       |         +-- fire FlowHook::Post callbacks
       |         +-- trigger_event(OnToolResult)
       |         +-- push tool Message to history
@@ -303,6 +307,12 @@ The workspace root itself is additionally protected: `delete_path` compares cano
 `workspace_dir` is validated at `init()` against a set of shell metacharacters: `"`, `'`, `&`, `|`, `;`, `` ` ``, `$`, `\n`, `\r`. If any are present, `init()` returns `InvalidConfig` without creating any workspace directories.
 
 On POSIX, the terminal tool embeds `workspace_dir` inside single-quotes with proper escape for embedded single-quotes (`'` → `'\''`). On Windows it embeds in double-quotes (safe because `"` is blocked by the metacharacter check).
+
+### Permission gate
+
+`tools_ops.cpp`'s `default_execute` checks `Config::permission_check` immediately before invoking any `Tool::callback` — native tools, `bind_data_source_tool`-backed tools, and the `use_skill` tool alike. A `Deny`, or an `Ask` that's declined (or has no `Config::permission_prompt` set to resolve it), returns `ErrorCode::PermissionDenied` without the callback ever running. `permission_check = nullptr` (the default) allows everything, unchanged from before this existed.
+
+This is a policy gate, not sandboxing: it decides whether a call is *attempted*, and composes with the filesystem sandbox above (which constrains *what paths* a filesystem tool can touch once it runs). Neither mechanism can stop a tool's own native code from doing something outside either check's view — a `Tool::callback` is a plain function pointer with the full privileges of the host process. There is no additional runtime isolation layer beneath the permission gate; if a tool's code isn't fully trusted, the gate (and reviewing that code before registering it) is the mitigation this library provides.
 
 ---
 

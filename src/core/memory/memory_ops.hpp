@@ -23,4 +23,4 @@ struct MemoryOps {
 
 const MemoryOps *find_memory_ops(MemoryProvider provider);
 
-}
+} // namespace agent::memory

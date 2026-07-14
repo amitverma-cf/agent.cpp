@@ -1,6 +1,5 @@
-#include <catch_amalgamated.hpp>
-
 #include <agent-cpp/agent.hpp>
+#include <catch_amalgamated.hpp>
 #include <string>
 
 namespace {
@@ -58,12 +57,9 @@ TEST_CASE("Custom tool registers and dispatches", "[providers][tools]") {
     mock_tool.name = "get_weather";
     mock_tool.description = "Get the current weather";
     mock_tool.parameter_schema = "{\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\"}}}";
-    mock_tool.callback = [](std::string_view, void *) -> agent::Result<std::string> {
-        return agent::ok(std::string("Sunny, 22C"));
-    };
+    mock_tool.callback = [](std::string_view, void *) -> agent::Result<std::string> { return agent::ok(std::string("Sunny, 22C")); };
 
-    auto session_result = agent::init(
-        {.provider = agent::AiProvider::Mock, .workspace_dir = "/tmp/agent_test_ws", .tools = {mock_tool}});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock, .workspace_dir = "/tmp/agent_test_ws", .tools = {mock_tool}});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 

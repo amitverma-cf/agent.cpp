@@ -1,6 +1,5 @@
-#include <catch_amalgamated.hpp>
-
 #include <agent-cpp/agent.hpp>
+#include <catch_amalgamated.hpp>
 #include <string>
 
 namespace {
@@ -13,26 +12,23 @@ struct FakeStore {
 
 agent::Result<std::string> fake_query(void *state, std::string_view query, void *) {
     auto *store = static_cast<FakeStore *>(state);
-    if (query.empty())
-        return agent::fail<std::string>(agent::ErrorCode::InvalidConfig, "empty query");
+    if (query.empty()) return agent::fail<std::string>(agent::ErrorCode::InvalidConfig, "empty query");
     return agent::ok(store->canned_response);
 }
 
 } // namespace
 
 TEST_CASE("register_data_source and query_data_source", "[data_sources]") {
-    auto session_result =
-        agent::init({.provider = agent::AiProvider::Mock,
-                     .workspace_dir = kWorkspace,
-                     .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
+                                       .workspace_dir = kWorkspace,
+                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
     auto store = std::make_shared<FakeStore>();
     store->canned_response = "installation steps: run cmake -B build";
 
-    auto reg_res = agent::register_data_source(
-        session, agent::DataSource{.name = "docs", .state = store, .query = fake_query});
+    auto reg_res = agent::register_data_source(session, agent::DataSource{.name = "docs", .state = store, .query = fake_query});
     REQUIRE(reg_res.ok);
 
     auto q_res = agent::query_data_source(session, "docs", "how to install");
@@ -45,21 +41,18 @@ TEST_CASE("register_data_source and query_data_source", "[data_sources]") {
 }
 
 TEST_CASE("bind_data_source_tool wraps a DataSource as a Tool", "[data_sources][tools]") {
-    auto session_result =
-        agent::init({.provider = agent::AiProvider::Mock,
-                     .workspace_dir = kWorkspace,
-                     .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
+                                       .workspace_dir = kWorkspace,
+                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
     auto store = std::make_shared<FakeStore>();
     store->canned_response = "42";
 
-    auto source = std::make_shared<agent::DataSource>(
-        agent::DataSource{.name = "calc_store", .state = store, .query = fake_query});
+    auto source = std::make_shared<agent::DataSource>(agent::DataSource{.name = "calc_store", .state = store, .query = fake_query});
 
-    agent::Tool tool =
-        agent::bind_data_source_tool(session, source, "test data source tool", R"({"type":"object"})");
+    agent::Tool tool = agent::bind_data_source_tool(session, source, "test data source tool", R"({"type":"object"})");
     REQUIRE(tool.name == "calc_store");
     REQUIRE(tool.callback != nullptr);
 

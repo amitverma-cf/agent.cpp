@@ -1,6 +1,5 @@
-#include <catch_amalgamated.hpp>
-
 #include <agent-cpp/agent.hpp>
+#include <catch_amalgamated.hpp>
 #include <chrono>
 #include <thread>
 
@@ -10,18 +9,16 @@ const char *kWorkspace = "/tmp/agent_test_workspace";
 
 agent::Result<std::string_view> single_shot_transition(agent::Session &session, agent::FlowMemory &conv, void *) {
     auto r = agent::run_turn(session, conv, "go");
-    if (!r.ok)
-        return agent::fail<std::string_view>(r.error.code, r.error.message);
+    if (!r.ok) return agent::fail<std::string_view>(r.error.code, r.error.message);
     return agent::ok(std::string_view("exit"));
 }
 
 } // namespace
 
 TEST_CASE("add_cron fires a one-shot task exactly once", "[scheduler][cron]") {
-    auto session_result =
-        agent::init({.provider = agent::AiProvider::Mock,
-                     .workspace_dir = kWorkspace,
-                     .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
+                                       .workspace_dir = kWorkspace,
+                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
@@ -44,10 +41,9 @@ TEST_CASE("add_cron fires a one-shot task exactly once", "[scheduler][cron]") {
 }
 
 TEST_CASE("add_cron fires a recurring task more than once", "[scheduler][cron]") {
-    auto session_result =
-        agent::init({.provider = agent::AiProvider::Mock,
-                     .workspace_dir = kWorkspace,
-                     .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
+                                       .workspace_dir = kWorkspace,
+                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
@@ -71,10 +67,9 @@ TEST_CASE("add_cron fires a recurring task more than once", "[scheduler][cron]")
 }
 
 TEST_CASE("cancel_cron prevents a scheduled task from firing", "[scheduler][cron]") {
-    auto session_result =
-        agent::init({.provider = agent::AiProvider::Mock,
-                     .workspace_dir = kWorkspace,
-                     .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
+                                       .workspace_dir = kWorkspace,
+                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
@@ -102,48 +97,43 @@ TEST_CASE("cancel_cron prevents a scheduled task from firing", "[scheduler][cron
 }
 
 TEST_CASE("add_cron rejects a duplicate id", "[scheduler][cron]") {
-    auto session_result =
-        agent::init({.provider = agent::AiProvider::Mock,
-                     .workspace_dir = kWorkspace,
-                     .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
+                                       .workspace_dir = kWorkspace,
+                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
     (void)session;
 
     agent::AgentScheduler scheduler;
     auto ok1 = scheduler.add_cron(
-        "dup", [](agent::Session &, void *) -> agent::Result<void> { return agent::ok(); }, nullptr,
-        std::chrono::milliseconds(1000));
+        "dup", [](agent::Session &, void *) -> agent::Result<void> { return agent::ok(); }, nullptr, std::chrono::milliseconds(1000));
     REQUIRE(ok1.ok);
 
     auto ok2 = scheduler.add_cron(
-        "dup", [](agent::Session &, void *) -> agent::Result<void> { return agent::ok(); }, nullptr,
-        std::chrono::milliseconds(1000));
+        "dup", [](agent::Session &, void *) -> agent::Result<void> { return agent::ok(); }, nullptr, std::chrono::milliseconds(1000));
     REQUIRE_FALSE(ok2.ok);
     REQUIRE(ok2.error.code == agent::ErrorCode::InvalidConfig);
 }
 
 TEST_CASE("OnCronFire and OnSubAgentComplete events fire during scheduling", "[scheduler][cron][events]") {
-    auto session_result =
-        agent::init({.provider = agent::AiProvider::Mock,
-                     .workspace_dir = kWorkspace,
-                     .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
+                                       .workspace_dir = kWorkspace,
+                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
     int cron_fires = 0, subagent_completes = 0;
     agent::register_event_hook(
-        session, agent::EventType::OnCronFire,
-        [](const agent::Event &, void *ud) { *static_cast<int *>(ud) += 1; }, &cron_fires);
+        session, agent::EventType::OnCronFire, [](const agent::Event &, void *ud) { *static_cast<int *>(ud) += 1; }, &cron_fires);
     agent::register_event_hook(
-        session, agent::EventType::OnSubAgentComplete,
-        [](const agent::Event &, void *ud) { *static_cast<int *>(ud) += 1; }, &subagent_completes);
+        session, agent::EventType::OnSubAgentComplete, [](const agent::Event &, void *ud) { *static_cast<int *>(ud) += 1; },
+        &subagent_completes);
 
     agent::AgentScheduler scheduler;
     REQUIRE(scheduler
                 .add_cron(
-                    "noop", [](agent::Session &, void *) -> agent::Result<void> { return agent::ok(); },
-                    nullptr, std::chrono::milliseconds(0), std::chrono::milliseconds(0))
+                    "noop", [](agent::Session &, void *) -> agent::Result<void> { return agent::ok(); }, nullptr,
+                    std::chrono::milliseconds(0), std::chrono::milliseconds(0))
                 .ok);
 
     static const agent::FlowState kStates[] = {

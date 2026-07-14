@@ -1,8 +1,8 @@
 #include "provider_ops.hpp"
 
-#include <agent-cpp/agent.hpp>
-
 #include "../executor/ambient_turn.hpp"
+
+#include <agent-cpp/agent.hpp>
 
 #ifdef AGENT_HAS_LLAMACPP
 #include <llama.h>
@@ -32,11 +32,9 @@ namespace {
 Result<void> init_mock(Session &) { return ok(); }
 
 Result<InferResponse> infer_mock(Session &session, const InferRequest &request) {
-    if (request.stream && request.on_token)
-        request.on_token("Mock Response Streamed", request.token_user_data);
+    if (request.stream && request.on_token) request.on_token("Mock Response Streamed", request.token_user_data);
 
-    std::string_view response_text =
-        ambient::current_arena(session).allocate_string("Mock Response");
+    std::string_view response_text = ambient::current_arena(session).allocate_string("Mock Response");
 
     MessageView msg;
     msg.role = "assistant";
@@ -44,17 +42,11 @@ Result<InferResponse> infer_mock(Session &session, const InferRequest &request) 
     msg.tool_calls = {};
     msg.tool_call_id = "";
 
-    return ok(InferResponse{
-        .message = msg,
-        .usage = TokenUsage{.prompt_tokens = 2, .completion_tokens = 2, .total_tokens = 4}});
+    return ok(InferResponse{.message = msg, .usage = TokenUsage{.prompt_tokens = 2, .completion_tokens = 2, .total_tokens = 4}});
 }
 
 constexpr ProviderOps kProviderOps[] = {
-    ProviderOps{.provider = AiProvider::Mock,
-                .init = init_mock,
-                .infer = infer_mock,
-                .count_tokens = nullptr,
-                .clear_kv_cache = nullptr},
+    ProviderOps{.provider = AiProvider::Mock, .init = init_mock, .infer = infer_mock, .count_tokens = nullptr, .clear_kv_cache = nullptr},
 #ifdef AGENT_HAS_LLAMACPP
     ProviderOps{.provider = AiProvider::LlamaCpp,
                 .init = init_llama_cpp,
@@ -70,11 +62,8 @@ constexpr ProviderOps kProviderOps[] = {
                 .clear_kv_cache = nullptr},
 #endif
 #ifdef AGENT_HAS_ONNX
-    ProviderOps{.provider = AiProvider::OnnxRuntime,
-                .init = init_onnx,
-                .infer = infer_onnx,
-                .count_tokens = nullptr,
-                .clear_kv_cache = nullptr},
+    ProviderOps{
+        .provider = AiProvider::OnnxRuntime, .init = init_onnx, .infer = infer_onnx, .count_tokens = nullptr, .clear_kv_cache = nullptr},
 #endif
 };
 
@@ -94,8 +83,7 @@ void free_global_backends() {
 
 const ProviderOps *find_provider_ops(AiProvider provider) {
     for (const ProviderOps &ops : kProviderOps) {
-        if (ops.provider == provider)
-            return &ops;
+        if (ops.provider == provider) return &ops;
     }
     return nullptr;
 }

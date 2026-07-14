@@ -66,6 +66,7 @@ enum class ErrorCode {
     KeyNotFound,          // memory key missing, or tool name not registered
     ToolCallLimitExceeded,// max_tool_call_rounds limit reached in one turn
     SandboxViolation,     // path escapes workspace_dir in sandbox mode
+    PermissionDenied,     // permission_check returned Deny, or an Ask was declined
 };
 ```
 
@@ -80,6 +81,7 @@ enum class ErrorCode {
 | OpenAI API key wrong | `HttpError` |
 | Tool argument missing required field | `ParseError` |
 | Filesystem path outside workspace | `SandboxViolation` |
+| `permission_check` denied a tool, or an `Ask` was declined | `PermissionDenied` |
 | LLM stuck calling tools in a loop | `ToolCallLimitExceeded` |
 | Memory key not found | `KeyNotFound` |
 
