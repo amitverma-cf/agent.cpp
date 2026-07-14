@@ -1,16 +1,14 @@
-#include <catch_amalgamated.hpp>
-
 #include <agent-cpp/agent.hpp>
+#include <catch_amalgamated.hpp>
 
 namespace {
 const char *kWorkspace = "/tmp/agent_test_workspace";
 }
 
 TEST_CASE("run_turn updates history and persists to memory", "[flow]") {
-    auto session_result =
-        agent::init({.provider = agent::AiProvider::Mock,
-                     .workspace_dir = kWorkspace,
-                     .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
+                                       .workspace_dir = kWorkspace,
+                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
@@ -34,12 +32,11 @@ TEST_CASE("run_turn updates history and persists to memory", "[flow]") {
 }
 
 TEST_CASE("Sliding window pruning drops oldest turns while preserving system + recent", "[flow][pruning]") {
-    auto session_result =
-        agent::init({.provider = agent::AiProvider::Mock,
-                     .workspace_dir = kWorkspace,
-                     .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"},
-                     .context_window = 400,
-                     .max_tokens = 50});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
+                                       .workspace_dir = kWorkspace,
+                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"},
+                                       .context_window = 400,
+                                       .max_tokens = 50});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
@@ -61,18 +58,15 @@ TEST_CASE("Sliding window pruning drops oldest turns while preserving system + r
     REQUIRE(state.history[0].role == "system");
 
     for (const auto &msg : state.history) {
-        if (msg.role == "system")
-            continue;
+        if (msg.role == "system") continue;
         INFO("Turn 1 should have been pruned: " << msg.content);
         REQUIRE(msg.content.find('a') == std::string::npos);
     }
 
     bool found_b = false, found_c = false;
     for (const auto &msg : state.history) {
-        if (msg.content.find('b') != std::string::npos)
-            found_b = true;
-        if (msg.content.find('c') != std::string::npos)
-            found_c = true;
+        if (msg.content.find('b') != std::string::npos) found_b = true;
+        if (msg.content.find('c') != std::string::npos) found_c = true;
     }
     REQUIRE(found_b);
     REQUIRE(found_c);
@@ -92,8 +86,7 @@ agent::Result<std::string_view> state_a_transition(agent::Session &session, agen
     }
 
     auto turn_res = agent::run_turn(session, conv, "");
-    if (!turn_res.ok)
-        return agent::fail<std::string_view>(turn_res.error.code, turn_res.error.message);
+    if (!turn_res.ok) return agent::fail<std::string_view>(turn_res.error.code, turn_res.error.message);
     return agent::ok(std::string_view("state_B"));
 }
 
@@ -109,18 +102,16 @@ agent::Result<std::string_view> state_b_transition(agent::Session &session, agen
     }
 
     auto turn_res = agent::run_turn(session, conv, "");
-    if (!turn_res.ok)
-        return agent::fail<std::string_view>(turn_res.error.code, turn_res.error.message);
+    if (!turn_res.ok) return agent::fail<std::string_view>(turn_res.error.code, turn_res.error.message);
     return agent::ok(std::string_view("exit"));
 }
 
 } // namespace
 
 TEST_CASE("Flow transitions between states and mutates system prompt per state", "[flow][fsm]") {
-    auto session_result =
-        agent::init({.provider = agent::AiProvider::Mock,
-                     .workspace_dir = kWorkspace,
-                     .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
+                                       .workspace_dir = kWorkspace,
+                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
@@ -146,18 +137,16 @@ namespace {
 
 agent::Result<std::string_view> scheduler_single_shot(agent::Session &session, agent::FlowMemory &conv, void *) {
     auto r = agent::run_turn(session, conv, "go");
-    if (!r.ok)
-        return agent::fail<std::string_view>(r.error.code, r.error.message);
+    if (!r.ok) return agent::fail<std::string_view>(r.error.code, r.error.message);
     return agent::ok(std::string_view("exit"));
 }
 
 } // namespace
 
 TEST_CASE("AgentScheduler runs multiple Flows in parallel to completion", "[scheduler][flow]") {
-    auto session_result =
-        agent::init({.provider = agent::AiProvider::Mock,
-                     .workspace_dir = kWorkspace,
-                     .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
+                                       .workspace_dir = kWorkspace,
+                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 

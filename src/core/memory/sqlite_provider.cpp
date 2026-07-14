@@ -1,15 +1,13 @@
 #include "memory_ops.hpp"
 
 #include <agent-cpp/agent.hpp>
-
-#include <sqlite3.h>
-#include <sqlite-vec.h>
-
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
 #include <list>
 #include <mutex>
+#include <sqlite-vec.h>
+#include <sqlite3.h>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -36,7 +34,7 @@ Result<void> exec_simple(sqlite3 *db, const char *sql) {
     return ok();
 }
 
-}
+} // namespace
 
 struct SqliteMemoryState {
     sqlite3 *write_conn = nullptr;
@@ -68,21 +66,16 @@ struct SqliteMemoryState {
             stop_requested = true;
             cv.notify_all();
         }
-        if (writer_thread.joinable())
-            writer_thread.join();
+        if (writer_thread.joinable()) writer_thread.join();
 
-        if (write_conn)
-            sqlite3_close(write_conn);
-        if (read_conn)
-            sqlite3_close(read_conn);
+        if (write_conn) sqlite3_close(write_conn);
+        if (read_conn) sqlite3_close(read_conn);
     }
 };
 
 namespace {
 
-std::shared_ptr<SqliteMemoryState> get_state(Session &session) {
-    return std::static_pointer_cast<SqliteMemoryState>(session.memory_state);
-}
+std::shared_ptr<SqliteMemoryState> get_state(Session &session) { return std::static_pointer_cast<SqliteMemoryState>(session.memory_state); }
 
 void evict_if_needed_locked(SqliteMemoryState &state) {
     while (state.cache_bytes > state.max_cache_bytes && !state.lru.empty()) {
@@ -98,8 +91,7 @@ void evict_if_needed_locked(SqliteMemoryState &state) {
                 break;
             }
         }
-        if (!evicted_any)
-            break;
+        if (!evicted_any) break;
     }
 }
 
@@ -108,27 +100,22 @@ void flush_dirty(SqliteMemoryState &state) {
     {
         std::lock_guard<std::mutex> lk(state.cache_mutex);
         for (auto &[key, entry] : state.cache) {
-            if (entry.dirty)
-                batch.emplace_back(key, entry.value);
+            if (entry.dirty) batch.emplace_back(key, entry.value);
         }
     }
-    if (batch.empty())
-        return;
+    if (batch.empty()) return;
 
     auto begin = exec_simple(state.write_conn, "BEGIN;");
-    if (!begin.ok)
-        return;
+    if (!begin.ok) return;
 
     bool write_ok = true;
     sqlite3_stmt *stmt = nullptr;
-    if (sqlite3_prepare_v2(state.write_conn, "INSERT OR REPLACE INTO kv(key,value) VALUES(?,?);",
-                           -1, &stmt, nullptr) != SQLITE_OK) {
+    if (sqlite3_prepare_v2(state.write_conn, "INSERT OR REPLACE INTO kv(key,value) VALUES(?,?);", -1, &stmt, nullptr) != SQLITE_OK) {
         write_ok = false;
     } else {
         for (const auto &[key, value] : batch) {
             sqlite3_bind_text(stmt, 1, key.data(), static_cast<int>(key.size()), SQLITE_TRANSIENT);
-            sqlite3_bind_text(stmt, 2, value.data(), static_cast<int>(value.size()),
-                              SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 2, value.data(), static_cast<int>(value.size()), SQLITE_TRANSIENT);
             int rc = sqlite3_step(stmt);
             if (rc != SQLITE_DONE) {
                 write_ok = false;
@@ -154,15 +141,12 @@ void flush_dirty(SqliteMemoryState &state) {
         std::lock_guard<std::mutex> lk(state.cache_mutex);
         for (const auto &[key, value] : batch) {
             auto it = state.cache.find(key);
-            if (it == state.cache.end())
-                continue;
+            if (it == state.cache.end()) continue;
             if (it->second.dirty && it->second.value == value) {
                 it->second.dirty = false;
                 size_t sz = key.size() + value.size();
-                if (state.dirty_bytes >= sz)
-                    state.dirty_bytes -= sz;
-                else
-                    state.dirty_bytes = 0;
+                if (state.dirty_bytes >= sz) state.dirty_bytes -= sz;
+                else state.dirty_bytes = 0;
             }
         }
         evict_if_needed_locked(state);
@@ -172,9 +156,8 @@ void flush_dirty(SqliteMemoryState &state) {
 void writer_loop(SqliteMemoryState *state) {
     while (true) {
         std::unique_lock<std::mutex> lk(state->signal_mutex);
-        state->cv.wait_for(lk, state->flush_interval, [&] {
-            return state->wake_requested || state->stop_requested || state->clear_requested;
-        });
+        state->cv.wait_for(lk, state->flush_interval,
+                           [&] { return state->wake_requested || state->stop_requested || state->clear_requested; });
         bool do_stop = state->stop_requested;
         bool do_clear = state->clear_requested;
         state->wake_requested = false;
@@ -191,17 +174,15 @@ void writer_loop(SqliteMemoryState *state) {
 
         flush_dirty(*state);
 
-        if (do_stop)
-            break;
+        if (do_stop) break;
     }
 }
 
-}
+} // namespace
 
 Result<void> init_sqlite(Session &session) {
     const std::string &db_path = session.config.memory.db_path;
-    if (db_path.empty())
-        return fail(ErrorCode::InvalidConfig, "SQLite memory requires a non-empty db_path.");
+    if (db_path.empty()) return fail(ErrorCode::InvalidConfig, "SQLite memory requires a non-empty db_path.");
 
     std::string open_uri = db_path;
     int open_flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
@@ -213,9 +194,7 @@ Result<void> init_sqlite(Session &session) {
         if (p.has_parent_path()) {
             std::error_code ec;
             std::filesystem::create_directories(p.parent_path(), ec);
-            if (ec)
-                return fail(ErrorCode::FilesystemError,
-                           "Failed to create memory directory: " + ec.message());
+            if (ec) return fail(ErrorCode::FilesystemError, "Failed to create memory directory: " + ec.message());
         }
     }
 
@@ -230,14 +209,9 @@ Result<void> init_sqlite(Session &session) {
     }
     sqlite3_vec_init(state->write_conn, nullptr, nullptr);
 
-    if (auto r = exec_simple(state->write_conn, "PRAGMA journal_mode=WAL;"); !r.ok)
-        return r;
-    if (auto r = exec_simple(state->write_conn, "PRAGMA synchronous=NORMAL;"); !r.ok)
-        return r;
-    if (auto r = exec_simple(state->write_conn,
-                             "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);");
-        !r.ok)
-        return r;
+    if (auto r = exec_simple(state->write_conn, "PRAGMA journal_mode=WAL;"); !r.ok) return r;
+    if (auto r = exec_simple(state->write_conn, "PRAGMA synchronous=NORMAL;"); !r.ok) return r;
+    if (auto r = exec_simple(state->write_conn, "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);"); !r.ok) return r;
 
     if (sqlite3_open_v2(open_uri.c_str(), &state->read_conn, open_flags, nullptr) != SQLITE_OK) {
         std::string err = state->read_conn ? sqlite3_errmsg(state->read_conn) : "unknown error";
@@ -253,8 +227,7 @@ Result<void> init_sqlite(Session &session) {
 
 Result<void> store_sqlite(Session &session, std::string_view key, std::string_view value) {
     auto state = get_state(session);
-    if (!state)
-        return fail(ErrorCode::ProviderInitFailed, "SQLite memory not initialized.");
+    if (!state) return fail(ErrorCode::ProviderInitFailed, "SQLite memory not initialized.");
 
     std::string k(key);
     bool need_wake = false;
@@ -264,10 +237,8 @@ Result<void> store_sqlite(Session &session, std::string_view key, std::string_vi
         if (it != state->cache.end()) {
             size_t old_size = k.size() + it->second.value.size();
             size_t new_size = k.size() + value.size();
-            if (it->second.dirty)
-                state->dirty_bytes = state->dirty_bytes - old_size + new_size;
-            else
-                state->dirty_bytes += new_size;
+            if (it->second.dirty) state->dirty_bytes = state->dirty_bytes - old_size + new_size;
+            else state->dirty_bytes += new_size;
             state->cache_bytes = state->cache_bytes - old_size + new_size;
             it->second.value.assign(value);
             it->second.dirty = true;
@@ -285,8 +256,7 @@ Result<void> store_sqlite(Session &session, std::string_view key, std::string_vi
             state->dirty_bytes += sz;
             state->cache.emplace(std::move(k), std::move(entry));
         }
-        if (state->dirty_bytes >= state->flush_dirty_threshold_bytes)
-            need_wake = true;
+        if (state->dirty_bytes >= state->flush_dirty_threshold_bytes) need_wake = true;
     }
 
     if (need_wake) {
@@ -300,8 +270,7 @@ Result<void> store_sqlite(Session &session, std::string_view key, std::string_vi
 
 Result<std::string> retrieve_sqlite(Session &session, std::string_view key) {
     auto state = get_state(session);
-    if (!state)
-        return fail<std::string>(ErrorCode::ProviderInitFailed, "SQLite memory not initialized.");
+    if (!state) return fail<std::string>(ErrorCode::ProviderInitFailed, "SQLite memory not initialized.");
 
     std::string k(key);
     {
@@ -316,8 +285,7 @@ Result<std::string> retrieve_sqlite(Session &session, std::string_view key) {
     }
 
     sqlite3_stmt *stmt = nullptr;
-    if (sqlite3_prepare_v2(state->read_conn, "SELECT value FROM kv WHERE key = ?;", -1, &stmt,
-                           nullptr) != SQLITE_OK)
+    if (sqlite3_prepare_v2(state->read_conn, "SELECT value FROM kv WHERE key = ?;", -1, &stmt, nullptr) != SQLITE_OK)
         return fail<std::string>(ErrorCode::FilesystemError, "SQLite prepare failed.");
     sqlite3_bind_text(stmt, 1, k.data(), static_cast<int>(k.size()), SQLITE_TRANSIENT);
 
@@ -350,8 +318,7 @@ Result<std::string> retrieve_sqlite(Session &session, std::string_view key) {
 
 Result<void> clear_sqlite(Session &session) {
     auto state = get_state(session);
-    if (!state)
-        return fail(ErrorCode::ProviderInitFailed, "SQLite memory not initialized.");
+    if (!state) return fail(ErrorCode::ProviderInitFailed, "SQLite memory not initialized.");
 
     {
         std::lock_guard<std::mutex> lk(state->cache_mutex);
@@ -372,4 +339,4 @@ Result<void> clear_sqlite(Session &session) {
     return result;
 }
 
-}
+} // namespace agent::memory

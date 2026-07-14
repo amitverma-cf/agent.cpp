@@ -1,6 +1,5 @@
-#include <catch_amalgamated.hpp>
-
 #include <agent-cpp/agent.hpp>
+#include <catch_amalgamated.hpp>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -15,8 +14,7 @@ void test_logger(agent::LogLevel, std::string_view, void *) { g_log_count++; }
 
 TEST_CASE("Logger callback fires during inference", "[utils][logging]") {
     g_log_count = 0;
-    auto session_result = agent::init(
-        {.provider = agent::AiProvider::Mock, .workspace_dir = "/tmp/agent_test_ws", .logger = test_logger});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock, .workspace_dir = "/tmp/agent_test_ws", .logger = test_logger});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
@@ -41,8 +39,7 @@ TEST_CASE("File logging writes timestamped entries to workspace_dir/logs", "[uti
     std::error_code ec;
     std::filesystem::remove_all(ws, ec);
 
-    auto session_result =
-        agent::init({.provider = agent::AiProvider::Mock, .workspace_dir = ws, .enable_file_logging = true});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock, .workspace_dir = ws, .enable_file_logging = true});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
@@ -55,8 +52,7 @@ TEST_CASE("File logging writes timestamped entries to workspace_dir/logs", "[uti
 
     std::filesystem::path log_file;
     for (const auto &entry : std::filesystem::directory_iterator(logs_dir)) {
-        if (entry.path().extension() == ".log")
-            log_file = entry.path();
+        if (entry.path().extension() == ".log") log_file = entry.path();
     }
     REQUIRE_FALSE(log_file.empty());
 

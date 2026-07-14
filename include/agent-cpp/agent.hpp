@@ -14,10 +14,7 @@
 
 namespace agent {
 
-// ---------------------------------------------------------------------------
-// Errors
-// ---------------------------------------------------------------------------
-
+// -------------------------- Errors --------------------------
 enum class ErrorCode {
     Ok,
     InvalidConfig,
@@ -33,6 +30,7 @@ enum class ErrorCode {
     KeyNotFound,
     ToolCallLimitExceeded,
     SandboxViolation,
+    PermissionDenied,
 };
 
 struct Error {
@@ -51,13 +49,9 @@ template <> struct Result<void> {
     Error error{};
 };
 
-inline Error make_error(ErrorCode code, std::string message) {
-    return Error{.code = code, .message = std::move(message)};
-}
+inline Error make_error(ErrorCode code, std::string message) { return Error{.code = code, .message = std::move(message)}; }
 
-template <typename T> inline Result<T> ok(T value) {
-    return Result<T>{.ok = true, .value = std::move(value), .error = {}};
-}
+template <typename T> inline Result<T> ok(T value) { return Result<T>{.ok = true, .value = std::move(value), .error = {}}; }
 
 inline Result<void> ok() { return Result<void>{.ok = true, .error = {}}; }
 
@@ -69,13 +63,10 @@ inline Result<void> fail(ErrorCode code, std::string message) {
     return Result<void>{.ok = false, .error = make_error(code, std::move(message))};
 }
 
-// ---------------------------------------------------------------------------
-// Per-turn bump allocator
-// ---------------------------------------------------------------------------
-
+// -------------------------- Per-turn bump allocator --------------------------
 class Arena {
   public:
-    explicit Arena(size_t capacity = 1024 * 1024);
+    explicit Arena(size_t capacity = 0);
     ~Arena();
     Arena(const Arena &) = delete;
     Arena &operator=(const Arena &) = delete;
@@ -87,11 +78,9 @@ class Arena {
     std::string_view allocate_string(std::string_view src);
 
     template <typename T> std::span<T> allocate_span(size_t count) {
-        if (count == 0)
-            return {};
+        if (count == 0) return {};
         void *mem = allocate(sizeof(T) * count, alignof(T));
-        if (!mem)
-            return {};
+        if (!mem) return {};
         return std::span<T>(static_cast<T *>(mem), count);
     }
 
@@ -101,10 +90,7 @@ class Arena {
     size_t offset_ = 0;
 };
 
-// ---------------------------------------------------------------------------
-// Model I/O views (arena-backed; live only for the current infer() call)
-// ---------------------------------------------------------------------------
-
+// -------------------------- Model I/O views (arena-backed; live only for the current infer() call) --------------------------
 using TokenStreamFn = void (*)(std::string_view token, void *user_data);
 
 struct TokenUsage {
@@ -149,9 +135,21 @@ struct Tool {
     std::string_view description;
     std::string_view parameter_schema;
     using CallbackFn = Result<std::string> (*)(std::string_view arguments, void *user_data);
+    // Always invoke via agent::execute_tool, never call this function pointer directly. Some
+    // built-in tools (e.g. use_skill, compress_context) close over a Session* cell that
+    // execute_tool refreshes right before dispatch; calling callback() directly can run against
+    // a stale or dangling Session pointer if the Session has since moved.
     CallbackFn callback = nullptr;
     void *user_data = nullptr;
 };
+
+// Per-call tool dispatch policy, checked by execute_tool before a Tool::callback runs.
+enum class PermissionDecision { Allow, Ask, Deny };
+
+// Decide whether a tool call should proceed. Called with the raw JSON arguments string.
+using PermissionCheckFn = PermissionDecision (*)(std::string_view tool_name, std::string_view arguments, void *user_data);
+// Resolves an Ask decision; returns true to approve the call.
+using PermissionPromptFn = bool (*)(std::string_view tool_name, std::string_view arguments, void *user_data);
 
 namespace tools {
 
@@ -163,7 +161,11 @@ struct WorkspaceContext {
 std::vector<Tool> get_filesystem_tools(std::shared_ptr<WorkspaceContext> ctx);
 Tool get_terminal_tool(const std::string *workspace_dir);
 
-}
+// Opt-in example policy: Ask before run_command/delete_path/move_path, Allow everything else.
+// Not wired in automatically -- set Config::permission_check to it explicitly if wanted.
+PermissionDecision default_permission_policy(std::string_view tool_name, std::string_view arguments, void *user_data);
+
+} // namespace tools
 
 struct MessageView {
     std::string_view role;
@@ -267,8 +269,8 @@ struct FlowHook {
     When when = When::Pre;
     std::string_view tool_name;
 
-    using HookFn = void (*)(Session &session, FlowMemory &memory, std::string_view tool_name,
-                            std::string_view args, std::string_view result, void *user_data);
+    using HookFn = void (*)(Session &session, FlowMemory &memory, std::string_view tool_name, std::string_view args,
+                            std::string_view result, void *user_data);
     HookFn callback = nullptr;
     void *user_data = nullptr;
 };
@@ -281,12 +283,10 @@ struct FlowState {
 
     bool isolated_memory = false;
 
-    using ContextProviderFn = std::string_view (*)(Session &session, FlowMemory &memory,
-                                                   void *context);
+    using ContextProviderFn = std::string_view (*)(Session &session, FlowMemory &memory, void *context);
     ContextProviderFn context_provider = nullptr;
 
-    using TransitionFn = Result<std::string_view> (*)(Session &session, FlowMemory &memory,
-                                                      void *context);
+    using TransitionFn = Result<std::string_view> (*)(Session &session, FlowMemory &memory, void *context);
     TransitionFn on_transition = nullptr;
 };
 
@@ -328,6 +328,16 @@ struct Config {
 
     LogFn logger = nullptr;
     void *logger_user_data = nullptr;
+
+    // Directory of skill subdirectories (each containing a SKILL.md). Empty = feature inert.
+    std::string skills_dir;
+
+    // Per-call tool permission gate. nullptr = Allow everything (default, backward compatible).
+    PermissionCheckFn permission_check = nullptr;
+    // Resolves an Ask decision from permission_check. Only consulted when permission_check
+    // returns PermissionDecision::Ask; if nullptr, Ask is treated as Deny.
+    PermissionPromptFn permission_prompt = nullptr;
+    void *permission_user_data = nullptr;
 };
 
 struct DataSource {
@@ -336,6 +346,14 @@ struct DataSource {
     using QueryFn = Result<std::string> (*)(void *state, std::string_view query, void *user_data);
     QueryFn query = nullptr;
     void *user_data = nullptr;
+};
+
+// A SKILL.md-based capability package (https://agentskills.io). Only name/description are kept
+// in context by default; the full body is loaded on demand via read_skill_body/get_skill_loader_tool.
+struct Skill {
+    std::string name;
+    std::string description;
+    std::string path; // directory containing this skill's SKILL.md
 };
 
 struct Session {
@@ -364,6 +382,7 @@ struct Session {
     std::string tools_system_prompt;
 
     std::unordered_map<std::string, DataSource> data_sources;
+    std::unordered_map<std::string, Skill> skills;
 
     std::shared_ptr<FILE> log_file;
 
@@ -406,8 +425,7 @@ class AgentScheduler {
   public:
     Result<void> spawn(std::string id, Flow flow, void *context = nullptr);
 
-    Result<void> add_cron(std::string id, CronTask::TaskFn fn, void *user_data,
-                          std::chrono::milliseconds delay,
+    Result<void> add_cron(std::string id, CronTask::TaskFn fn, void *user_data, std::chrono::milliseconds delay,
                           std::chrono::milliseconds interval = std::chrono::milliseconds{0});
     Result<void> cancel_cron(std::string_view id);
 
@@ -434,9 +452,7 @@ class AgentScheduler {
     std::vector<CronJob> cron_jobs_;
 };
 
-// ---------------------------------------------------------------------------
-// Lifecycle
-// ---------------------------------------------------------------------------
+// -------------------------- Lifecycle --------------------------
 
 void init_backend();
 void free_backend();
@@ -450,26 +466,26 @@ Result<std::string> retrieve_memory(Session &session, std::string_view key);
 Result<void> clear_memory(Session &session);
 
 Result<void> register_data_source(Session &session, DataSource ds);
-Result<std::string> query_data_source(Session &session, std::string_view name,
-                                      std::string_view query);
+Result<std::string> query_data_source(Session &session, std::string_view name, std::string_view query);
 
-Tool bind_data_source_tool(Session &session, std::shared_ptr<DataSource> source,
-                           std::string_view description, std::string_view parameter_schema);
+Tool bind_data_source_tool(Session &session, std::shared_ptr<DataSource> source, std::string_view description,
+                           std::string_view parameter_schema);
 
-Result<std::shared_ptr<DataSource>> make_sqlite_vec_data_source(std::string name,
-                                                                std::string db_path,
-                                                                int dimensions);
+Result<std::shared_ptr<DataSource>> make_sqlite_vec_data_source(std::string name, std::string db_path, int dimensions);
 
-Result<void> sqlite_vec_insert(DataSource &source, std::string_view text,
-                               std::span<const float> embedding);
+Result<void> sqlite_vec_insert(DataSource &source, std::string_view text, std::span<const float> embedding);
 
-void register_event_hook(Session &session, EventType type, EventHookFn callback,
-                         void *user_data = nullptr);
+// Scans skills_dir for one subdirectory per skill (each containing a SKILL.md), populates
+// session.skills, and folds each skill's name+description into the tools system prompt.
+Result<void> load_skills_dir(Session &session, std::string_view skills_dir);
+// Full SKILL.md content for a loaded skill, read on demand (not kept in context otherwise).
+Result<std::string> read_skill_body(Session &session, std::string_view name);
+
+void register_event_hook(Session &session, EventType type, EventHookFn callback, void *user_data = nullptr);
 void trigger_event(Session &session, EventType type, std::span<const uint8_t> payload);
 
-Result<std::string> run_turn(Session &session, FlowMemory &memory, std::string_view user_prompt,
-                             bool stream = false, TokenStreamFn on_token = nullptr,
-                             void *token_user_data = nullptr);
+Result<std::string> run_turn(Session &session, FlowMemory &memory, std::string_view user_prompt, bool stream = false,
+                             TokenStreamFn on_token = nullptr, void *token_user_data = nullptr);
 
 Result<void> run_flow(Session &session, void *context, Flow &flow);
 Result<bool> step_flow(Session &session, void *context, Flow &flow);
@@ -480,8 +496,7 @@ Result<void> save_flow_memory(Session &session, const FlowMemory &memory);
 Result<void> load_flow_memory(Session &session, FlowMemory &memory);
 
 Result<void> init_tools(Session &session);
-Result<std::string> execute_tool(Session &session, std::string_view name,
-                                 std::string_view arguments);
+Result<std::string> execute_tool(Session &session, std::string_view name, std::string_view arguments);
 
 void rebuild_tool_index(Session &session);
 

@@ -1,6 +1,5 @@
-#include <catch_amalgamated.hpp>
-
 #include <agent-cpp/agent.hpp>
+#include <catch_amalgamated.hpp>
 #include <cstdint>
 
 TEST_CASE("Arena allocate returns distinct, non-overlapping regions", "[arena]") {
@@ -67,8 +66,7 @@ TEST_CASE("Arena::allocate_span provides a typed span backed by the arena", "[ar
 
     auto span = arena.allocate_span<int>(4);
     REQUIRE(span.size() == 4);
-    for (int i = 0; i < 4; ++i)
-        span[i] = i * i;
+    for (int i = 0; i < 4; ++i) span[i] = i * i;
     REQUIRE(span[2] == 4);
 
     REQUIRE(arena.allocate_span<int>(0).empty());

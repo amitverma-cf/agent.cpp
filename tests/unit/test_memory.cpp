@@ -1,6 +1,5 @@
-#include <catch_amalgamated.hpp>
-
 #include <agent-cpp/agent.hpp>
+#include <catch_amalgamated.hpp>
 #include <chrono>
 #include <filesystem>
 #include <string>
@@ -32,10 +31,9 @@ TEST_CASE("SQLite memory provider persists across reopen", "[memory][sqlite]") {
     std::filesystem::remove(db_path + "-shm", ec);
 
     {
-        auto session_result =
-            agent::init({.provider = agent::AiProvider::Mock,
-                        .workspace_dir = "/tmp/agent_test_ws",
-                        .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = db_path}});
+        auto session_result = agent::init({.provider = agent::AiProvider::Mock,
+                                           .workspace_dir = "/tmp/agent_test_ws",
+                                           .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = db_path}});
         REQUIRE(session_result.ok);
         agent::Session session = std::move(session_result.value);
 
@@ -43,10 +41,9 @@ TEST_CASE("SQLite memory provider persists across reopen", "[memory][sqlite]") {
         REQUIRE(store_res.ok);
     }
 
-    auto session_result2 =
-        agent::init({.provider = agent::AiProvider::Mock,
-                    .workspace_dir = "/tmp/agent_test_ws",
-                    .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = db_path}});
+    auto session_result2 = agent::init({.provider = agent::AiProvider::Mock,
+                                        .workspace_dir = "/tmp/agent_test_ws",
+                                        .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = db_path}});
     REQUIRE(session_result2.ok);
     agent::Session session2 = std::move(session_result2.value);
 
@@ -67,14 +64,13 @@ TEST_CASE("SQLite memory provider bounded cache evicts and reads through", "[mem
     std::filesystem::remove(db_path + "-wal", ec);
     std::filesystem::remove(db_path + "-shm", ec);
 
-    auto session_result =
-        agent::init({.provider = agent::AiProvider::Mock,
-                    .workspace_dir = "/tmp/agent_test_ws",
-                    .memory = {.provider = agent::MemoryProvider::Sqlite,
-                              .db_path = db_path,
-                              .max_cache_bytes = 256,
-                              .flush_dirty_threshold_bytes = 64,
-                              .flush_interval_ms = 20}});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
+                                       .workspace_dir = "/tmp/agent_test_ws",
+                                       .memory = {.provider = agent::MemoryProvider::Sqlite,
+                                                  .db_path = db_path,
+                                                  .max_cache_bytes = 256,
+                                                  .flush_dirty_threshold_bytes = 64,
+                                                  .flush_interval_ms = 20}});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
@@ -108,10 +104,9 @@ TEST_CASE("SQLite memory provider handles concurrent writes from multiple thread
     std::filesystem::remove(db_path + "-wal", ec);
     std::filesystem::remove(db_path + "-shm", ec);
 
-    auto session_result =
-        agent::init({.provider = agent::AiProvider::Mock,
-                    .workspace_dir = "/tmp/agent_test_ws",
-                    .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = db_path}});
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
+                                       .workspace_dir = "/tmp/agent_test_ws",
+                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = db_path}});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
@@ -128,8 +123,7 @@ TEST_CASE("SQLite memory provider handles concurrent writes from multiple thread
             }
         });
     }
-    for (auto &w : workers)
-        w.join();
+    for (auto &w : workers) w.join();
 
     for (int t = 0; t < kThreads; ++t) {
         for (int i = 0; i < kPerThread; ++i) {

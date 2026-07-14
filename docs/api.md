@@ -24,6 +24,7 @@ enum class ErrorCode {
     KeyNotFound,          // memory key missing, or tool not registered
     ToolCallLimitExceeded,// max_tool_call_rounds reached
     SandboxViolation,     // path escapes workspace_dir (sandbox mode)
+    PermissionDenied,     // permission_check returned Deny, or an Ask was declined
 };
 ```
 
@@ -196,6 +197,23 @@ struct Tool {
 ```
 
 The `callback` receives raw JSON arguments and returns either a success string or an error. Tool results are inserted back into the conversation history as `role = "tool"` messages.
+
+### Permission gate
+
+Checked by `execute_tool` immediately before every `Tool::callback` invocation — native tools, `bind_data_source_tool`-backed tools, and the `use_skill` tool alike.
+
+```cpp
+enum class PermissionDecision { Allow, Ask, Deny };
+
+using PermissionCheckFn = PermissionDecision (*)(std::string_view tool_name,
+                                                 std::string_view arguments, void *user_data);
+using PermissionPromptFn = bool (*)(std::string_view tool_name, std::string_view arguments,
+                                    void *user_data);  // true = approved
+```
+
+`Config::permission_check` defaults to `nullptr` (Allow everything — no behavior change from before this existed). `Deny` or a declined `Ask` returns `ErrorCode::PermissionDenied` and the tool's callback never runs. `Ask` with no `Config::permission_prompt` set is treated as `Deny`, not Allow.
+
+`agent::tools::default_permission_policy` ships as a ready-made example (`PermissionCheckFn`-shaped, assign it directly to `Config::permission_check`) — Ask before `run_command`/`delete_path`/`move_path`, Allow the rest. Not wired in automatically.
 
 ---
 
@@ -524,6 +542,28 @@ Result<void> sqlite_vec_insert(DataSource &source, std::string_view text,
 
 ---
 
+## Skills
+
+[SKILL.md](https://agentskills.io)-format capability packages. See [Skills](guide.md#skills) in the guide for a walkthrough.
+
+```cpp
+struct Skill {
+    std::string name;         // from SKILL.md frontmatter
+    std::string description;  // from SKILL.md frontmatter -- the only thing kept in context by default
+    std::string path;         // directory containing this skill's SKILL.md
+};
+
+// Scans skills_dir for one subdirectory per skill (each containing a SKILL.md), populates
+// session.skills, registers a "use_skill" tool, and folds each skill's name+description into
+// the tools system prompt. Called automatically at init() when Config::skills_dir is set.
+Result<void> load_skills_dir(Session &session, std::string_view skills_dir);
+
+// Full SKILL.md content for a loaded skill, read on demand (not kept in context otherwise).
+Result<std::string> read_skill_body(Session &session, std::string_view name);
+```
+
+---
+
 ## Configuration
 
 ### `Config`
@@ -548,8 +588,16 @@ struct Config {
     int  max_tool_call_rounds = 10;     // tool call iterations per turn before ToolCallLimitExceeded
     bool sandbox_filesystem   = true;   // reject filesystem paths outside workspace_dir
 
+    // Per-call tool permission gate (see "Permission gate" above); nullptr = Allow everything
+    PermissionCheckFn  permission_check     = nullptr;
+    PermissionPromptFn permission_prompt    = nullptr;  // resolves Ask; nullptr => Ask is Deny
+    void              *permission_user_data = nullptr;
+
     // Default tool auto-registration
     bool auto_default_tools   = true;   // filesystem + terminal + compressor
+
+    // Skills (see "Skills" section above); empty = feature inert
+    std::string skills_dir;
 
     // File logging
     bool enable_file_logging  = false;  // write timestamped log to workspace_dir/logs/

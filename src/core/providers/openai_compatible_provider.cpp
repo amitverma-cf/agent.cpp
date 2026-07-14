@@ -18,16 +18,13 @@ namespace {
 
 httplib::Headers make_headers(const Config &config) {
     httplib::Headers headers;
-    if (!config.api_key.empty())
-        headers.emplace("Authorization", "Bearer " + config.api_key);
+    if (!config.api_key.empty()) headers.emplace("Authorization", "Bearer " + config.api_key);
     return headers;
 }
 
 Result<InferResponse> extract_response(Session &session, simdjson::ondemand::document &doc) {
     simdjson::ondemand::array choices;
-    if (doc["choices"].get_array().get(choices))
-        return fail<InferResponse>(ErrorCode::ParseError,
-                                   "OpenAI response missing 'choices'.");
+    if (doc["choices"].get_array().get(choices)) return fail<InferResponse>(ErrorCode::ParseError, "OpenAI response missing 'choices'.");
 
     simdjson::ondemand::object first_choice;
     if (choices.at(0).get_object().get(first_choice))
@@ -46,48 +43,38 @@ Result<InferResponse> extract_response(Session &session, simdjson::ondemand::doc
 
     for (auto field : message) {
         auto key_res = field.unescaped_key();
-        if (key_res.error())
-            continue;
+        if (key_res.error()) continue;
         std::string_view key = key_res.value();
 
         if (key == "role") {
             std::string_view v;
-            if (!field.value().get_string().get(v))
-                role = v;
+            if (!field.value().get_string().get(v)) role = v;
         } else if (key == "content") {
             std::string_view v;
-            if (!field.value().get_string().get(v))
-                content_view = v;
+            if (!field.value().get_string().get(v)) content_view = v;
         } else if (key == "tool_call_id") {
             std::string_view v;
-            if (!field.value().get_string().get(v))
-                tool_call_id = v;
+            if (!field.value().get_string().get(v)) tool_call_id = v;
         } else if (key == "tool_calls") {
             simdjson::ondemand::array tcs_json;
-            if (field.value().get_array().get(tcs_json))
-                continue;
+            if (field.value().get_array().get(tcs_json)) continue;
 
             std::vector<ToolCallView> tmp;
             for (auto tc_item : tcs_json) {
                 simdjson::ondemand::object tc;
-                if (tc_item.get_object().get(tc))
-                    continue;
+                if (tc_item.get_object().get(tc)) continue;
 
                 std::string_view id_val;
-                if (tc["id"].get_string().get(id_val))
-                    continue;
+                if (tc["id"].get_string().get(id_val)) continue;
 
                 simdjson::ondemand::object func;
-                if (tc["function"].get_object().get(func))
-                    continue;
+                if (tc["function"].get_object().get(func)) continue;
 
                 std::string_view name_val;
-                if (func["name"].get_string().get(name_val))
-                    continue;
+                if (func["name"].get_string().get(name_val)) continue;
 
                 std::string_view args_val;
-                if (func["arguments"].get_string().get(args_val))
-                    continue;
+                if (func["arguments"].get_string().get(args_val)) continue;
 
                 tmp.push_back(ToolCallView{id_val, name_val, args_val});
             }
@@ -102,14 +89,11 @@ Result<InferResponse> extract_response(Session &session, simdjson::ondemand::doc
     simdjson::ondemand::object u;
     if (!doc["usage"].get_object().get(u)) {
         int64_t v = 0;
-        if (!u["prompt_tokens"].get_int64().get(v))
-            usage.prompt_tokens = static_cast<int>(v);
+        if (!u["prompt_tokens"].get_int64().get(v)) usage.prompt_tokens = static_cast<int>(v);
         v = 0;
-        if (!u["completion_tokens"].get_int64().get(v))
-            usage.completion_tokens = static_cast<int>(v);
+        if (!u["completion_tokens"].get_int64().get(v)) usage.completion_tokens = static_cast<int>(v);
         v = 0;
-        if (!u["total_tokens"].get_int64().get(v))
-            usage.total_tokens = static_cast<int>(v);
+        if (!u["total_tokens"].get_int64().get(v)) usage.total_tokens = static_cast<int>(v);
     }
 
     MessageView mv;
@@ -121,10 +105,8 @@ Result<InferResponse> extract_response(Session &session, simdjson::ondemand::doc
 }
 
 bool is_retriable(int http_status, httplib::Error http_err) {
-    if (http_err != httplib::Error::Success && http_err != httplib::Error::Canceled)
-        return true;
-    return http_status == 429 || http_status == 500 || http_status == 502 ||
-           http_status == 503 || http_status == 504;
+    if (http_err != httplib::Error::Success && http_err != httplib::Error::Canceled) return true;
+    return http_status == 429 || http_status == 500 || http_status == 502 || http_status == 503 || http_status == 504;
 }
 
 struct StreamedToolCall {
@@ -133,24 +115,19 @@ struct StreamedToolCall {
     std::string arguments;
 };
 
-}
+} // namespace
 
 Result<void> init_openai_compatible(Session &session) {
-    if (session.config.base_url.empty())
-        return fail(ErrorCode::InvalidConfig, "OpenAI-compatible provider requires base_url.");
-    if (session.config.model.empty())
-        return fail(ErrorCode::InvalidConfig, "OpenAI-compatible provider requires model.");
+    if (session.config.base_url.empty()) return fail(ErrorCode::InvalidConfig, "OpenAI-compatible provider requires base_url.");
+    if (session.config.model.empty()) return fail(ErrorCode::InvalidConfig, "OpenAI-compatible provider requires model.");
     utils::log(session, LogLevel::Debug, "OpenAI-compatible provider configured.");
     return ok();
 }
 
 Result<InferResponse> infer_openai_compatible(Session &session, const InferRequest &request) {
     if (session.config.base_url.empty())
-        return fail<InferResponse>(ErrorCode::InvalidConfig,
-                                   "OpenAI-compatible provider requires base_url.");
-    if (session.config.model.empty())
-        return fail<InferResponse>(ErrorCode::InvalidConfig,
-                                   "OpenAI-compatible provider requires model.");
+        return fail<InferResponse>(ErrorCode::InvalidConfig, "OpenAI-compatible provider requires base_url.");
+    if (session.config.model.empty()) return fail<InferResponse>(ErrorCode::InvalidConfig, "OpenAI-compatible provider requires model.");
 
     httplib::Client client(session.config.base_url);
     client.set_connection_timeout(30);
@@ -165,16 +142,14 @@ Result<InferResponse> infer_openai_compatible(Session &session, const InferReque
     body += "\"temperature\":" + std::to_string(eff_temp) + ",";
     body += "\"messages\":[";
     for (size_t i = 0; i < request.messages.size(); ++i) {
-        if (i > 0)
-            body += ",";
+        if (i > 0) body += ",";
         const auto &msg = request.messages[i];
         body += "{\"role\":\"" + utils::escape_json_string(msg.role) + "\",";
         body += "\"content\":\"" + utils::escape_json_string(msg.content) + "\"";
         if (!msg.tool_calls.empty()) {
             body += ",\"tool_calls\":[";
             for (size_t j = 0; j < msg.tool_calls.size(); ++j) {
-                if (j > 0)
-                    body += ",";
+                if (j > 0) body += ",";
                 const auto &tc = msg.tool_calls[j];
                 body += "{\"id\":\"" + utils::escape_json_string(tc.id) + "\",";
                 body += "\"type\":\"function\",\"function\":{";
@@ -183,22 +158,19 @@ Result<InferResponse> infer_openai_compatible(Session &session, const InferReque
             }
             body += "]";
         }
-        if (!msg.tool_call_id.empty())
-            body += ",\"tool_call_id\":\"" + utils::escape_json_string(msg.tool_call_id) + "\"";
+        if (!msg.tool_call_id.empty()) body += ",\"tool_call_id\":\"" + utils::escape_json_string(msg.tool_call_id) + "\"";
         body += "}";
     }
     body += "]";
     if (!session.config.tools.empty()) {
         body += ",\"tools\":[";
         for (size_t i = 0; i < session.config.tools.size(); ++i) {
-            if (i > 0)
-                body += ",";
+            if (i > 0) body += ",";
             const auto &t = session.config.tools[i];
             body += "{\"type\":\"function\",\"function\":{";
             body += "\"name\":\"" + utils::escape_json_string(t.name) + "\",";
             body += "\"description\":\"" + utils::escape_json_string(t.description) + "\"";
-            if (!t.parameter_schema.empty())
-                body += ",\"parameters\":" + std::string(t.parameter_schema);
+            if (!t.parameter_schema.empty()) body += ",\"parameters\":" + std::string(t.parameter_schema);
             body += "}}";
         }
         body += "]";
@@ -219,77 +191,63 @@ Result<InferResponse> infer_openai_compatible(Session &session, const InferReque
         ErrorCode err_code = ErrorCode::Ok;
         std::string err_msg;
 
-        auto resp = client.Post(
-            "/v1/chat/completions", headers, stream_body, "application/json",
-            [&](const char *data, size_t len) {
-                buf.append(data, len);
-                size_t pos;
-                while ((pos = buf.find('\n')) != std::string::npos) {
-                    std::string line = buf.substr(0, pos);
-                    buf.erase(0, pos + 1);
-                    if (!line.starts_with("data: "))
-                        continue;
-                    std::string payload = line.substr(6);
-                    if (!payload.empty() && payload.back() == '\r')
-                        payload.pop_back();
-                    if (payload == "[DONE]")
-                        return false;
+        auto resp = client.Post("/v1/chat/completions", headers, stream_body, "application/json", [&](const char *data, size_t len) {
+            buf.append(data, len);
+            size_t pos;
+            while ((pos = buf.find('\n')) != std::string::npos) {
+                std::string line = buf.substr(0, pos);
+                buf.erase(0, pos + 1);
+                if (!line.starts_with("data: ")) continue;
+                std::string payload = line.substr(6);
+                if (!payload.empty() && payload.back() == '\r') payload.pop_back();
+                if (payload == "[DONE]") return false;
 
-                    size_t orig = payload.size();
-                    payload.append(simdjson::SIMDJSON_PADDING, '\0');
-                    simdjson::padded_string_view pv(payload.data(), orig, payload.size());
-                    simdjson::ondemand::parser p;
-                    simdjson::ondemand::document chunk;
-                    if (p.iterate(pv).get(chunk)) {
-                        err_code = ErrorCode::ParseError;
-                        err_msg = "Malformed JSON in stream chunk.";
-                        return false;
-                    }
-                    simdjson::ondemand::array choices;
-                    if (!chunk["choices"].get_array().get(choices)) {
-                        simdjson::ondemand::object fc;
-                        if (!choices.at(0).get_object().get(fc)) {
-                            simdjson::ondemand::object delta;
-                            if (!fc["delta"].get_object().get(delta)) {
-                                for (auto field : delta) {
-                                    auto key_res = field.unescaped_key();
-                                    if (key_res.error())
-                                        continue;
-                                    std::string_view key = key_res.value();
+                size_t orig = payload.size();
+                payload.append(simdjson::SIMDJSON_PADDING, '\0');
+                simdjson::padded_string_view pv(payload.data(), orig, payload.size());
+                simdjson::ondemand::parser p;
+                simdjson::ondemand::document chunk;
+                if (p.iterate(pv).get(chunk)) {
+                    err_code = ErrorCode::ParseError;
+                    err_msg = "Malformed JSON in stream chunk.";
+                    return false;
+                }
+                simdjson::ondemand::array choices;
+                if (!chunk["choices"].get_array().get(choices)) {
+                    simdjson::ondemand::object fc;
+                    if (!choices.at(0).get_object().get(fc)) {
+                        simdjson::ondemand::object delta;
+                        if (!fc["delta"].get_object().get(delta)) {
+                            for (auto field : delta) {
+                                auto key_res = field.unescaped_key();
+                                if (key_res.error()) continue;
+                                std::string_view key = key_res.value();
 
-                                    if (key == "content") {
-                                        std::string_view tok;
-                                        if (!field.value().get_string().get(tok)) {
-                                            accumulated += tok;
-                                            if (request.on_token)
-                                                request.on_token(tok, request.token_user_data);
-                                        }
-                                    } else if (key == "tool_calls") {
-                                        simdjson::ondemand::array tcs;
-                                        if (field.value().get_array().get(tcs))
-                                            continue;
-                                        for (auto tc_item : tcs) {
-                                            simdjson::ondemand::object tc;
-                                            if (tc_item.get_object().get(tc))
-                                                continue;
-                                            int64_t idx = 0;
-                                            if (tc["index"].get_int64().get(idx))
-                                                continue;
-                                            auto &acc = tool_calls_by_index[idx];
+                                if (key == "content") {
+                                    std::string_view tok;
+                                    if (!field.value().get_string().get(tok)) {
+                                        accumulated += tok;
+                                        if (request.on_token) request.on_token(tok, request.token_user_data);
+                                    }
+                                } else if (key == "tool_calls") {
+                                    simdjson::ondemand::array tcs;
+                                    if (field.value().get_array().get(tcs)) continue;
+                                    for (auto tc_item : tcs) {
+                                        simdjson::ondemand::object tc;
+                                        if (tc_item.get_object().get(tc)) continue;
+                                        int64_t idx = 0;
+                                        if (tc["index"].get_int64().get(idx)) continue;
+                                        auto &acc = tool_calls_by_index[idx];
 
-                                            std::string_view id_val;
-                                            if (!tc["id"].get_string().get(id_val))
-                                                acc.id = id_val;
+                                        std::string_view id_val;
+                                        if (!tc["id"].get_string().get(id_val)) acc.id = id_val;
 
-                                            simdjson::ondemand::object func;
-                                            if (!tc["function"].get_object().get(func)) {
-                                                std::string_view name_val;
-                                                if (!func["name"].get_string().get(name_val))
-                                                    acc.name = name_val;
-                                                std::string_view args_frag;
-                                                if (!func["arguments"].get_string().get(args_frag))
-                                                    acc.arguments += args_frag;
-                                            }
+                                        simdjson::ondemand::object func;
+                                        if (!tc["function"].get_object().get(func)) {
+                                            std::string_view name_val;
+                                            if (!func["name"].get_string().get(name_val)) acc.name = name_val;
+                                            std::string_view args_frag;
+                                            if (!func["arguments"].get_string().get(args_frag)) acc.arguments += args_frag;
                                         }
                                     }
                                 }
@@ -297,14 +255,13 @@ Result<InferResponse> infer_openai_compatible(Session &session, const InferReque
                         }
                     }
                 }
-                return true;
-            });
+            }
+            return true;
+        });
 
-        if (err_code != ErrorCode::Ok)
-            return fail<InferResponse>(err_code, std::move(err_msg));
+        if (err_code != ErrorCode::Ok) return fail<InferResponse>(err_code, std::move(err_msg));
         if (!resp && resp.error() != httplib::Error::Canceled) {
-            return fail<InferResponse>(ErrorCode::NetworkError,
-                                       "Stream request failed: " + httplib::to_string(resp.error()));
+            return fail<InferResponse>(ErrorCode::NetworkError, "Stream request failed: " + httplib::to_string(resp.error()));
         }
 
         Arena &arena = ambient::current_arena(session);
@@ -341,13 +298,11 @@ Result<InferResponse> infer_openai_compatible(Session &session, const InferReque
             Arena &arena = ambient::current_arena(session);
             size_t rsz = resp->body.size();
             void *arena_mem = arena.allocate(rsz + simdjson::SIMDJSON_PADDING);
-            if (!arena_mem)
-                return fail<InferResponse>(ErrorCode::DecodeFailed, "Arena OOM for response.");
+            if (!arena_mem) return fail<InferResponse>(ErrorCode::DecodeFailed, "Arena OOM for response.");
             std::memcpy(arena_mem, resp->body.data(), rsz);
             std::memset(static_cast<char *>(arena_mem) + rsz, 0, simdjson::SIMDJSON_PADDING);
 
-            simdjson::padded_string_view pv(static_cast<const char *>(arena_mem), rsz,
-                                            rsz + simdjson::SIMDJSON_PADDING);
+            simdjson::padded_string_view pv(static_cast<const char *>(arena_mem), rsz, rsz + simdjson::SIMDJSON_PADDING);
             simdjson::ondemand::document doc;
             if (ambient::json_parser.iterate(pv).get(doc))
                 return fail<InferResponse>(ErrorCode::ParseError, "Failed to parse response JSON.");
@@ -356,24 +311,20 @@ Result<InferResponse> infer_openai_compatible(Session &session, const InferReque
         }
 
         if (attempt + 1 < max_attempts && is_retriable(status, herr)) {
-            std::string warn = "OpenAI request failed (attempt " + std::to_string(attempt + 1) +
-                               "/" + std::to_string(max_attempts) + "), retrying in " +
-                               std::to_string(delay_ms) + "ms.";
+            std::string warn = "OpenAI request failed (attempt " + std::to_string(attempt + 1) + "/" + std::to_string(max_attempts) +
+                               "), retrying in " + std::to_string(delay_ms) + "ms.";
             utils::log(session, LogLevel::Warning, warn);
             std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
             delay_ms *= 2;
             continue;
         }
 
-        if (net_fail)
-            return fail<InferResponse>(ErrorCode::NetworkError,
-                                       "HTTP request failed: " + httplib::to_string(herr));
-        return fail<InferResponse>(ErrorCode::HttpError,
-                                   "HTTP " + std::to_string(status) + ": " + resp->body);
+        if (net_fail) return fail<InferResponse>(ErrorCode::NetworkError, "HTTP request failed: " + httplib::to_string(herr));
+        return fail<InferResponse>(ErrorCode::HttpError, "HTTP " + std::to_string(status) + ": " + resp->body);
     }
 
     return fail<InferResponse>(ErrorCode::NetworkError, "All retry attempts exhausted.");
 }
 
-}
+} // namespace agent::providers
 #endif

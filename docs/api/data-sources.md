@@ -50,6 +50,8 @@ Result<std::string> query_data_source(Session &session, std::string_view name, s
 
 `register_data_source` stores a `DataSource` in `session.data_sources`, keyed by `ds.name`. `query_data_source` looks it up by name and calls its `query` function. Use these directly when you want to query a data source from your own application code (e.g. from a `FlowState::context_provider`, see [fsm.md](fsm.md#context_provider)).
 
+Like `session.config.tools`, `session.data_sources` isn't mutex-guarded: call `register_data_source` during single-threaded setup, not concurrently with an active turn or scheduler `pump()` on another thread. `query_data_source` (read-only) is safe to call from any thread once registration is done.
+
 ```cpp
 struct FakeVectorStore {
     std::vector<std::pair<std::string, std::string>> docs; // (text, embedding-ish key)

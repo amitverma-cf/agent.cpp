@@ -12,16 +12,14 @@ Result<void> compress_context(Session &session, FlowMemory &state, size_t keep_r
     size_t start = has_system ? 1 : 0;
 
     if (state.history.size() <= start + keep_recent + 2) {
-        utils::log(session, LogLevel::Debug,
-                   "compress_context: history too short to compress, skipping.");
+        utils::log(session, LogLevel::Debug, "compress_context: history too short to compress, skipping.");
         return ok();
     }
 
     size_t compress_end = state.history.size() - keep_recent;
 
-    std::string prompt =
-        "Summarize the following conversation concisely. "
-        "Preserve all key facts, decisions, code snippets, and tool outputs:\n\n";
+    std::string prompt = "Summarize the following conversation concisely. "
+                         "Preserve all key facts, decisions, code snippets, and tool outputs:\n\n";
     for (size_t i = start; i < compress_end; ++i) {
         const auto &msg = state.history[i];
         prompt += msg.role;
@@ -71,8 +69,7 @@ Result<void> compress_context(Session &session, FlowMemory &state, size_t keep_r
     auto it_start = state.history.begin() + static_cast<ptrdiff_t>(start);
     auto it_end = state.history.begin() + static_cast<ptrdiff_t>(compress_end);
     state.history.erase(it_start, it_end);
-    state.history.insert(state.history.begin() + static_cast<ptrdiff_t>(start),
-                         std::move(summary_msg));
+    state.history.insert(state.history.begin() + static_cast<ptrdiff_t>(start), std::move(summary_msg));
 
     state.stats.compressions++;
     {
@@ -91,12 +88,8 @@ namespace {
 Result<std::string> context_compressor_callback(std::string_view arguments, void *user_data) {
     auto *session_cell = static_cast<Session **>(user_data);
     Session *session = (session_cell && *session_cell) ? *session_cell : nullptr;
-    if (!session)
-        return fail<std::string>(ErrorCode::InvalidConfig,
-                                 "compress_context: session reference is null");
-    if (!ambient::active_memory)
-        return fail<std::string>(ErrorCode::InvalidConfig,
-                                 "compress_context: no active conversation");
+    if (!session) return fail<std::string>(ErrorCode::InvalidConfig, "compress_context: session reference is null");
+    if (!ambient::active_memory) return fail<std::string>(ErrorCode::InvalidConfig, "compress_context: no active conversation");
 
     size_t keep_recent = 6;
     if (!arguments.empty()) {
@@ -108,12 +101,10 @@ Result<std::string> context_compressor_callback(std::string_view arguments, void
             if (!doc.get_object().get(obj)) {
                 for (auto field : obj) {
                     auto k = field.unescaped_key();
-                    if (k.error())
-                        continue;
+                    if (k.error()) continue;
                     if (k.value() == "keep_recent") {
                         int64_t v;
-                        if (!field.value().get_int64().get(v) && v >= 0)
-                            keep_recent = static_cast<size_t>(v);
+                        if (!field.value().get_int64().get(v) && v >= 0) keep_recent = static_cast<size_t>(v);
                     }
                 }
             }
@@ -121,8 +112,7 @@ Result<std::string> context_compressor_callback(std::string_view arguments, void
     }
 
     auto res = compress_context(*session, *ambient::active_memory, keep_recent);
-    if (!res.ok)
-        return fail<std::string>(res.error.code, res.error.message);
+    if (!res.ok) return fail<std::string>(res.error.code, res.error.message);
     return ok(std::string("Context compressed."));
 }
 
@@ -131,10 +121,9 @@ Result<std::string> context_compressor_callback(std::string_view arguments, void
 Tool get_context_compressor_tool(Session **session_cell) {
     return Tool{
         .name = "compress_context",
-        .description =
-            "Summarize and compress the active conversation's older history to free context "
-            "window space. Optional: keep_recent (integer, number of most recent messages to "
-            "keep uncompressed, default 6).",
+        .description = "Summarize and compress the active conversation's older history to free context "
+                       "window space. Optional: keep_recent (integer, number of most recent messages to "
+                       "keep uncompressed, default 6).",
         .parameter_schema =
             R"({"type":"object","properties":{"keep_recent":{"type":"integer","description":"messages to keep uncompressed, default 6"}}})",
         .callback = context_compressor_callback,

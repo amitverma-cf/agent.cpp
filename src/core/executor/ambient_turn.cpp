@@ -9,8 +9,7 @@ thread_local size_t worker_arena_index = 0;
 thread_local simdjson::ondemand::parser json_parser;
 
 Arena &current_arena(Session &session) {
-    if (!session.worker_arenas.empty() &&
-        worker_arena_index < session.worker_arenas.size()) {
+    if (!session.worker_arenas.empty() && worker_arena_index < session.worker_arenas.size()) {
         return session.worker_arenas[worker_arena_index];
     }
     return session.arena;
