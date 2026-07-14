@@ -1,6 +1,5 @@
-#include <catch_amalgamated.hpp>
-
 #include <agent-cpp/agent.hpp>
+#include <catch_amalgamated.hpp>
 
 TEST_CASE("ONNX missing model path returns error", "[onnx]") {
     auto result = agent::init({.provider = agent::AiProvider::OnnxRuntime,
@@ -17,8 +16,8 @@ TEST_CASE("ONNX missing model path returns error", "[onnx]") {
 TEST_CASE("ONNX bad model path returns ModelLoadFailed", "[onnx]") {
 #ifdef AGENT_HAS_ONNX
     auto result = agent::init({.provider = agent::AiProvider::OnnxRuntime,
-                               .workspace_dir = "/tmp/agent_test_ws",
                                .model = "/nonexistent/model.onnx",
+                               .workspace_dir = "/tmp/agent_test_ws",
                                .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
     REQUIRE_FALSE(result.ok);
     REQUIRE(result.error.code == agent::ErrorCode::ModelLoadFailed);

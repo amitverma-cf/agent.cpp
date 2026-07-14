@@ -20,6 +20,8 @@ agent.cpp provides a complete runtime for building AI agents on any LLM backend 
 - **Cooperative multi-agent scheduler.** Run parallel FSM subagents interleaved round-robin with cron tasks — no threads required.
 - **Automatic context management.** Sliding-window pruning and LLM-based compression keep conversations within the context budget automatically.
 - **Built-in tools.** Filesystem (8 tools), terminal, and context compressor — registered by default.
+- **Skills.** Load [SKILL.md](https://agentskills.io)-format capability packages from a directory; only name/description sit in context until the model calls `use_skill` to load the rest.
+- **Permission gate.** Optional per-call Allow/Ask/Deny policy checked before any tool dispatch — native tools, data-source tools, and `use_skill` alike.
 - **Sandbox enforcement.** Filesystem tools block paths outside `workspace_dir` when sandbox mode is on.
 - **Retry with backoff.** OpenAI provider retries on network errors and HTTP 429/5xx.
 - **File logging.** Structured timestamped log files written to `workspace_dir/logs/` when enabled.
@@ -87,6 +89,7 @@ ctest --test-dir build --output-on-failure
 | `AGENT_ENABLE_OPENAI` | `ON` | OpenAI-compatible provider |
 | `AGENT_ENABLE_ONNX` | `OFF` | ONNX Runtime multimodal inference |
 | `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UBSan |
+| `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |
 
 ---
 
@@ -136,6 +139,8 @@ src/core/
   data/
     data_source_registry.cpp   -- register_data_source, query_data_source, bind_data_source_tool
     sqlite_vec_data_source.cpp -- sqlite-vec RAG/vector search DataSource
+  skills/
+    skills_registry.cpp        -- load_skills_dir, read_skill_body, use_skill tool
   scheduler/
     scheduler.cpp              -- AgentScheduler, cron
   providers/
@@ -143,6 +148,7 @@ src/core/
   memory/
     sqlite_provider.cpp        -- bounded write-back cache in front of SQLite
   tools/
+    tools_ops.cpp              -- dispatch table, permission gate (Allow/Ask/Deny)
     filesystem_tools.cpp       -- read_file, write_file, ...
     terminal_tools.cpp         -- run_command
     context_compressor.cpp     -- compress_context tool
@@ -154,14 +160,11 @@ src/hal/                       -- hardware/OS abstraction layer
   path.cpp                     -- sandboxed path resolution (symlink/.. escape hardened)
   process.cpp                  -- shell command execution (CreateProcess / posix_spawn)
   log_file.cpp                 -- session log file open/write
-examples/
-  basic/basic.cpp              -- minimal example
-  agent_cli/agent_cli.cpp      -- interactive CLI
 tests/
-  unit/                        -- provider, memory, utils, onnx, sqlite-vec tests
+  unit/                        -- Catch2 tests: providers, memory, tools, hal, skills, permissions, ...
   integration/                 -- session lifecycle, conversation, FSM tests
 vendor/
-  llama.cpp / simdjson / cpp-httplib / sqlite / sqlite-vec / onnxruntime
+  llama.cpp / simdjson / cpp-httplib / sqlite / sqlite-vec / onnxruntime / catch2
 ```
 
 ---

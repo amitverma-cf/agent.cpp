@@ -19,15 +19,13 @@ static void encode_history_json(const FlowMemory &state, std::string &json) {
     size_t estimated = 2;
     for (const auto &msg : state.history) {
         estimated += msg.role.size() + msg.content.size() + msg.tool_call_id.size() + 128;
-        for (const auto &tc : msg.tool_calls)
-            estimated += tc.id.size() + tc.name.size() + tc.arguments.size() + 64;
+        for (const auto &tc : msg.tool_calls) estimated += tc.id.size() + tc.name.size() + tc.arguments.size() + 64;
     }
     json.reserve(estimated);
 
     json += '[';
     for (size_t i = 0; i < state.history.size(); ++i) {
-        if (i > 0)
-            json += ',';
+        if (i > 0) json += ',';
         const auto &msg = state.history[i];
         json += "{\"role\":\"";
         utils::escape_json_string(msg.role, json);
@@ -37,8 +35,7 @@ static void encode_history_json(const FlowMemory &state, std::string &json) {
         utils::escape_json_string(msg.tool_call_id, json);
         json += "\",\"tool_calls\":[";
         for (size_t j = 0; j < msg.tool_calls.size(); ++j) {
-            if (j > 0)
-                json += ',';
+            if (j > 0) json += ',';
             const auto &tc = msg.tool_calls[j];
             json += "{\"id\":\"";
             utils::escape_json_string(tc.id, json);
@@ -54,18 +51,15 @@ static void encode_history_json(const FlowMemory &state, std::string &json) {
 }
 
 static int count_message_tokens(Session &session, const Message &msg) {
-    if (msg.token_count >= 0)
-        return msg.token_count;
+    if (msg.token_count >= 0) return msg.token_count;
 
     int tokens = 0;
     const auto *ops = providers::find_provider_ops(session.config.provider);
     if (ops && ops->count_tokens) {
         auto add = [&](std::string_view part) {
-            if (part.empty())
-                return;
+            if (part.empty()) return;
             auto res = ops->count_tokens(session, part);
-            if (res.ok)
-                tokens += res.value;
+            if (res.ok) tokens += res.value;
         };
         add(msg.role);
         add(msg.content);
@@ -77,8 +71,7 @@ static int count_message_tokens(Session &session, const Message &msg) {
 
     if (tokens == 0) {
         size_t len = msg.role.size() + 2 + msg.content.size() + 1;
-        for (const auto &tc : msg.tool_calls)
-            len += tc.name.size() + tc.arguments.size();
+        for (const auto &tc : msg.tool_calls) len += tc.name.size() + tc.arguments.size();
         tokens = static_cast<int>((len + 3) / 4);
     }
 
@@ -86,56 +79,58 @@ static int count_message_tokens(Session &session, const Message &msg) {
     return tokens;
 }
 
-static Result<void> prune_history_state(Session &session, FlowMemory &state) {
-    const int max_allowed =
-        std::max(200, session.config.context_window - session.config.max_tokens - 100);
+static int count_text_tokens(Session &session, std::string_view text) {
+    if (text.empty()) return 0;
+    const auto *ops = providers::find_provider_ops(session.config.provider);
+    if (ops && ops->count_tokens) {
+        auto res = ops->count_tokens(session, text);
+        if (res.ok) return res.value;
+    }
+    return static_cast<int>((text.size() + 3) / 4);
+}
 
-    if (state.history.empty())
-        return ok();
+static Result<void> prune_history_state(Session &session, FlowMemory &state) {
+    // The llama.cpp path injects session.tools_system_prompt as an extra prompt segment (see
+    // run_turn's need_tools_prefix/combined_system logic) that isn't part of state.history, so
+    // reserve budget for it here or pruning can leave the real prompt over context_window.
+    int tools_prefix_tokens = 0;
+    if (session.config.provider == AiProvider::LlamaCpp) tools_prefix_tokens = count_text_tokens(session, session.tools_system_prompt);
+
+    const int max_allowed = std::max(200, session.config.context_window - session.config.max_tokens - 100 - tools_prefix_tokens);
+
+    if (state.history.empty()) return ok();
 
     const bool has_system = (state.history[0].role == "system");
     const size_t fixed_start = has_system ? 1 : 0;
     const size_t min_keep = fixed_start + 1;
 
     int total = 0;
-    for (const auto &msg : state.history)
-        total += count_message_tokens(session, msg);
+    for (const auto &msg : state.history) total += count_message_tokens(session, msg);
 
     size_t drop_from = fixed_start;
     size_t drop_to = fixed_start;
 
     while (total > max_allowed) {
-        if (drop_to >= state.history.size())
-            break;
-        if ((state.history.size() - (drop_to - drop_from)) <= min_keep)
-            break;
+        if (drop_to >= state.history.size()) break;
+        if ((state.history.size() - (drop_to - drop_from)) <= min_keep) break;
 
         if (state.history[drop_to].role == "tool") {
             size_t group = 1;
-            while (drop_to + group < state.history.size() &&
-                   state.history[drop_to + group].role == "tool")
-                ++group;
-            if ((state.history.size() - (drop_to - drop_from) - group) < min_keep)
-                break;
-            for (size_t i = drop_to; i < drop_to + group; ++i)
-                total -= count_message_tokens(session, state.history[i]);
+            while (drop_to + group < state.history.size() && state.history[drop_to + group].role == "tool") ++group;
+            if ((state.history.size() - (drop_to - drop_from) - group) < min_keep) break;
+            for (size_t i = drop_to; i < drop_to + group; ++i) total -= count_message_tokens(session, state.history[i]);
             drop_to += group;
             continue;
         }
 
         size_t group = 1;
-        if (state.history[drop_to].role == "assistant" &&
-            !state.history[drop_to].tool_calls.empty()) {
-            while (drop_to + group < state.history.size() &&
-                   state.history[drop_to + group].role == "tool")
-                ++group;
+        if (state.history[drop_to].role == "assistant" && !state.history[drop_to].tool_calls.empty()) {
+            while (drop_to + group < state.history.size() && state.history[drop_to + group].role == "tool") ++group;
         }
 
-        if ((state.history.size() - (drop_to - drop_from) - group) < min_keep)
-            break;
+        if ((state.history.size() - (drop_to - drop_from) - group) < min_keep) break;
 
-        for (size_t i = drop_to; i < drop_to + group; ++i)
-            total -= count_message_tokens(session, state.history[i]);
+        for (size_t i = drop_to; i < drop_to + group; ++i) total -= count_message_tokens(session, state.history[i]);
 
         drop_to += group;
     }
@@ -146,92 +141,72 @@ static Result<void> prune_history_state(Session &session, FlowMemory &state) {
         state.stats.prune_cycles++;
 
         trigger_event(session, EventType::OnPrune, std::span<const uint8_t>());
-        utils::log(session, LogLevel::Debug,
-                   "Pruned " + std::to_string(drop_to - drop_from) + " messages from history.");
+        utils::log(session, LogLevel::Debug, "Pruned " + std::to_string(drop_to - drop_from) + " messages from history.");
     }
 
     return ok();
 }
 
-static void fire_tool_hooks(Session &session, FlowMemory &state, FlowHook::When when,
-                            std::string_view tool_name, std::string_view args,
+static void fire_tool_hooks(Session &session, FlowMemory &state, FlowHook::When when, std::string_view tool_name, std::string_view args,
                             std::string_view result) {
     for (const auto &hook : ambient::active_hooks) {
-        if (hook.when != when)
-            continue;
-        if (!hook.tool_name.empty() && hook.tool_name != tool_name)
-            continue;
-        if (hook.callback)
-            hook.callback(session, state, tool_name, args, result, hook.user_data);
+        if (hook.when != when) continue;
+        if (!hook.tool_name.empty() && hook.tool_name != tool_name) continue;
+        if (hook.callback) hook.callback(session, state, tool_name, args, result, hook.user_data);
     }
 }
 
 } // namespace
 
 Result<void> save_flow_memory(Session &session, const FlowMemory &memory) {
-    if (memory.id.empty())
-        return fail(ErrorCode::InvalidConfig, "FlowMemory.id is required to save history.");
+    if (memory.id.empty()) return fail(ErrorCode::InvalidConfig, "FlowMemory.id is required to save history.");
     std::string json;
     encode_history_json(memory, json);
     auto store = store_memory(session, "history:" + memory.id, json);
-    if (!store.ok)
-        return store;
-    std::string stats = "{\"prompt_tokens\":" + std::to_string(memory.stats.prompt_tokens) +
-                        ",\"completion_tokens\":" + std::to_string(memory.stats.completion_tokens) +
-                        ",\"tool_calls\":" + std::to_string(memory.stats.tool_calls) +
-                        ",\"compressions\":" + std::to_string(memory.stats.compressions) +
-                        ",\"prune_cycles\":" + std::to_string(memory.stats.prune_cycles) +
-                        ",\"turns\":" + std::to_string(memory.stats.turns) + "}";
+    if (!store.ok) return store;
+    std::string stats =
+        "{\"prompt_tokens\":" + std::to_string(memory.stats.prompt_tokens) +
+        ",\"completion_tokens\":" + std::to_string(memory.stats.completion_tokens) +
+        ",\"tool_calls\":" + std::to_string(memory.stats.tool_calls) + ",\"compressions\":" + std::to_string(memory.stats.compressions) +
+        ",\"prune_cycles\":" + std::to_string(memory.stats.prune_cycles) + ",\"turns\":" + std::to_string(memory.stats.turns) + "}";
     return store_memory(session, "history_stats:" + memory.id, stats);
 }
 
 Result<void> load_flow_memory(Session &session, FlowMemory &memory) {
-    if (memory.id.empty())
-        return fail(ErrorCode::InvalidConfig, "FlowMemory.id is required to load history.");
+    if (memory.id.empty()) return fail(ErrorCode::InvalidConfig, "FlowMemory.id is required to load history.");
 
     auto hist = retrieve_memory(session, "history:" + memory.id);
-    if (!hist.ok)
-        return fail(hist.error.code, hist.error.message);
+    if (!hist.ok) return fail(hist.error.code, hist.error.message);
 
     simdjson::padded_string padded(hist.value.data(), hist.value.size());
     simdjson::ondemand::document doc;
-    if (ambient::json_parser.iterate(padded).get(doc))
-        return fail(ErrorCode::ParseError, "Failed to parse stored history JSON.");
+    if (ambient::json_parser.iterate(padded).get(doc)) return fail(ErrorCode::ParseError, "Failed to parse stored history JSON.");
 
     simdjson::ondemand::array arr;
-    if (doc.get_array().get(arr))
-        return fail(ErrorCode::ParseError, "Stored history is not a JSON array.");
+    if (doc.get_array().get(arr)) return fail(ErrorCode::ParseError, "Stored history is not a JSON array.");
 
     std::vector<Message> loaded;
     for (auto item : arr) {
         simdjson::ondemand::object obj;
-        if (item.get_object().get(obj))
-            continue;
+        if (item.get_object().get(obj)) continue;
         Message msg;
         std::string_view role;
         std::string_view content;
         std::string_view tool_call_id;
-        if (!obj["role"].get_string().get(role))
-            msg.role = std::string(role);
-        if (!obj["content"].get_string().get(content))
-            msg.content = std::string(content);
-        if (!obj["tool_call_id"].get_string().get(tool_call_id))
-            msg.tool_call_id = std::string(tool_call_id);
+        if (!obj["role"].get_string().get(role)) msg.role = std::string(role);
+        if (!obj["content"].get_string().get(content)) msg.content = std::string(content);
+        if (!obj["tool_call_id"].get_string().get(tool_call_id)) msg.tool_call_id = std::string(tool_call_id);
 
         simdjson::ondemand::array tcs;
         if (!obj["tool_calls"].get_array().get(tcs)) {
             for (auto tc_item : tcs) {
                 simdjson::ondemand::object tc;
-                if (tc_item.get_object().get(tc))
-                    continue;
+                if (tc_item.get_object().get(tc)) continue;
                 ToolCall call;
                 std::string_view id, name, arguments;
-                if (!tc["id"].get_string().get(id))
-                    call.id = std::string(id);
-                if (!tc["name"].get_string().get(name))
-                    call.name = std::string(name);
-                if (!tc["arguments"].get_string().get(arguments))
-                    call.arguments = std::string(arguments);
+                if (!tc["id"].get_string().get(id)) call.id = std::string(id);
+                if (!tc["name"].get_string().get(name)) call.name = std::string(name);
+                if (!tc["arguments"].get_string().get(arguments)) call.arguments = std::string(arguments);
                 msg.tool_calls.push_back(std::move(call));
             }
         }
@@ -247,18 +222,12 @@ Result<void> load_flow_memory(Session &session, FlowMemory &memory) {
             simdjson::ondemand::object sobj;
             if (!sdoc.get_object().get(sobj)) {
                 int64_t v = 0;
-                if (!sobj["prompt_tokens"].get_int64().get(v))
-                    memory.stats.prompt_tokens = static_cast<int>(v);
-                if (!sobj["completion_tokens"].get_int64().get(v))
-                    memory.stats.completion_tokens = static_cast<int>(v);
-                if (!sobj["tool_calls"].get_int64().get(v))
-                    memory.stats.tool_calls = static_cast<int>(v);
-                if (!sobj["compressions"].get_int64().get(v))
-                    memory.stats.compressions = static_cast<int>(v);
-                if (!sobj["prune_cycles"].get_int64().get(v))
-                    memory.stats.prune_cycles = static_cast<int>(v);
-                if (!sobj["turns"].get_int64().get(v))
-                    memory.stats.turns = static_cast<int>(v);
+                if (!sobj["prompt_tokens"].get_int64().get(v)) memory.stats.prompt_tokens = static_cast<int>(v);
+                if (!sobj["completion_tokens"].get_int64().get(v)) memory.stats.completion_tokens = static_cast<int>(v);
+                if (!sobj["tool_calls"].get_int64().get(v)) memory.stats.tool_calls = static_cast<int>(v);
+                if (!sobj["compressions"].get_int64().get(v)) memory.stats.compressions = static_cast<int>(v);
+                if (!sobj["prune_cycles"].get_int64().get(v)) memory.stats.prune_cycles = static_cast<int>(v);
+                if (!sobj["turns"].get_int64().get(v)) memory.stats.turns = static_cast<int>(v);
             }
         }
     }
@@ -266,8 +235,8 @@ Result<void> load_flow_memory(Session &session, FlowMemory &memory) {
     return ok();
 }
 
-Result<std::string> run_turn(Session &session, FlowMemory &state, std::string_view user_prompt,
-                             bool stream, TokenStreamFn on_token, void *token_user_data) {
+Result<std::string> run_turn(Session &session, FlowMemory &state, std::string_view user_prompt, bool stream, TokenStreamFn on_token,
+                             void *token_user_data) {
     ActiveMemoryGuard guard(&state);
 
     trigger_event(session, EventType::OnTurnStart, std::span<const uint8_t>());
@@ -281,10 +250,8 @@ Result<std::string> run_turn(Session &session, FlowMemory &state, std::string_vi
 
     {
         int total = 0;
-        for (const auto &msg : state.history)
-            total += count_message_tokens(session, msg);
-        if (total > session.config.context_window * 7 / 10 && state.history.size() > 6)
-            compress_context(session, state);
+        for (const auto &msg : state.history) total += count_message_tokens(session, msg);
+        if (total > session.config.context_window * 7 / 10 && state.history.size() > 6) compress_context(session, state);
     }
 
     std::string final_text;
@@ -293,24 +260,20 @@ Result<std::string> run_turn(Session &session, FlowMemory &state, std::string_vi
 
     while (loop) {
         auto prune_res = prune_history_state(session, state);
-        if (!prune_res.ok)
-            return fail<std::string>(prune_res.error.code, prune_res.error.message);
+        if (!prune_res.ok) return fail<std::string>(prune_res.error.code, prune_res.error.message);
 
         Arena &arena = ambient::current_arena(session);
         arena.reset();
 
         const bool provider_needs_text_tools = session.config.provider == AiProvider::LlamaCpp;
         const bool has_system = !state.history.empty() && state.history[0].role == "system";
-        const bool need_tools_prefix =
-            provider_needs_text_tools && !session.tools_system_prompt.empty() && !has_system;
+        const bool need_tools_prefix = provider_needs_text_tools && !session.tools_system_prompt.empty() && !has_system;
         const size_t view_count = state.history.size() + (need_tools_prefix ? 1 : 0);
 
         auto message_views = arena.allocate_span<MessageView>(view_count);
         if (view_count != 0 && message_views.size() != view_count) {
-            return fail<std::string>(
-                ErrorCode::DecodeFailed,
-                "Arena capacity exhausted building message views. "
-                "Increase Config::arena_capacity or reduce Config::context_window.");
+            return fail<std::string>(ErrorCode::DecodeFailed, "Arena capacity exhausted building message views. "
+                                                              "Increase Config::arena_capacity or reduce Config::context_window.");
         }
 
         size_t view_offset = 0;
@@ -326,8 +289,7 @@ Result<std::string> run_turn(Session &session, FlowMemory &state, std::string_vi
         std::string_view combined_system;
         if (has_system && provider_needs_text_tools && !session.tools_system_prompt.empty()) {
             std::string combined;
-            combined.reserve(state.history[0].content.size() + 1 +
-                             session.tools_system_prompt.size());
+            combined.reserve(state.history[0].content.size() + 1 + session.tools_system_prompt.size());
             combined += state.history[0].content;
             combined += '\n';
             combined += session.tools_system_prompt;
@@ -338,10 +300,8 @@ Result<std::string> run_turn(Session &session, FlowMemory &state, std::string_vi
             MessageView &mv = message_views[i + view_offset];
             const Message &m = state.history[i];
             mv.role = m.role;
-            if (i == 0 && !combined_system.empty())
-                mv.content = combined_system;
-            else
-                mv.content = m.content;
+            if (i == 0 && !combined_system.empty()) mv.content = combined_system;
+            else mv.content = m.content;
             mv.tool_call_id = m.tool_call_id;
 
             if (!m.tool_calls.empty()) {
@@ -357,8 +317,7 @@ Result<std::string> run_turn(Session &session, FlowMemory &state, std::string_vi
                 auto tvs = arena.allocate_span<TensorView>(m.tensors.size());
                 for (size_t j = 0; j < m.tensors.size(); ++j) {
                     const TensorData &td = m.tensors[j];
-                    tvs[j] = {td.name, td.dtype,
-                              std::span<const int64_t>(td.shape.data(), td.shape.size()),
+                    tvs[j] = {td.name, td.dtype, std::span<const int64_t>(td.shape.data(), td.shape.size()),
                               std::span<const uint8_t>(td.data.data(), td.data.size())};
                 }
                 mv.tensors = tvs;
@@ -369,14 +328,10 @@ Result<std::string> run_turn(Session &session, FlowMemory &state, std::string_vi
 
         trigger_event(session, EventType::OnInferenceSubmit, std::span<const uint8_t>());
 
-        InferRequest req{.messages = message_views,
-                         .stream = stream,
-                         .on_token = on_token,
-                         .token_user_data = token_user_data};
+        InferRequest req{.messages = message_views, .stream = stream, .on_token = on_token, .token_user_data = token_user_data};
 
         auto resp_res = infer(session, req);
-        if (!resp_res.ok)
-            return fail<std::string>(resp_res.error.code, resp_res.error.message);
+        if (!resp_res.ok) return fail<std::string>(resp_res.error.code, resp_res.error.message);
 
         trigger_event(session, EventType::OnInferenceComplete, std::span<const uint8_t>());
 
@@ -396,8 +351,7 @@ Result<std::string> run_turn(Session &session, FlowMemory &state, std::string_vi
         assistant_msg.role = std::string(resp.message.role);
         assistant_msg.content = std::string(resp.message.content);
         for (const auto &tcv : resp.message.tool_calls) {
-            assistant_msg.tool_calls.push_back(
-                ToolCall{std::string(tcv.id), std::string(tcv.name), std::string(tcv.arguments)});
+            assistant_msg.tool_calls.push_back(ToolCall{std::string(tcv.id), std::string(tcv.name), std::string(tcv.arguments)});
         }
 
         final_text = assistant_msg.content;
@@ -406,38 +360,28 @@ Result<std::string> run_turn(Session &session, FlowMemory &state, std::string_vi
         if (!resp.message.tool_calls.empty()) {
             if (tool_rounds >= session.config.max_tool_call_rounds) {
                 utils::log(session, LogLevel::Warning,
-                           "Tool call round limit (" +
-                               std::to_string(session.config.max_tool_call_rounds) +
+                           "Tool call round limit (" + std::to_string(session.config.max_tool_call_rounds) +
                                ") reached; stopping tool loop.");
-                return fail<std::string>(
-                    ErrorCode::ToolCallLimitExceeded,
-                    "Exceeded max_tool_call_rounds (" +
-                        std::to_string(session.config.max_tool_call_rounds) + ")");
+                return fail<std::string>(ErrorCode::ToolCallLimitExceeded,
+                                         "Exceeded max_tool_call_rounds (" + std::to_string(session.config.max_tool_call_rounds) + ")");
             }
             ++tool_rounds;
 
             for (const auto &tcv : resp.message.tool_calls) {
                 trigger_event(session, EventType::OnToolCall,
-                              std::span<const uint8_t>(
-                                  reinterpret_cast<const uint8_t *>(tcv.name.data()),
-                                  tcv.name.size()));
+                              std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(tcv.name.data()), tcv.name.size()));
 
                 fire_tool_hooks(session, state, FlowHook::When::Pre, tcv.name, tcv.arguments, {});
 
                 std::string result_text;
                 auto exec_res = execute_tool(session, tcv.name, tcv.arguments);
-                if (exec_res.ok)
-                    result_text = std::move(exec_res.value);
-                else
-                    result_text = "Error: " + exec_res.error.message;
+                if (exec_res.ok) result_text = std::move(exec_res.value);
+                else result_text = "Error: " + exec_res.error.message;
 
-                fire_tool_hooks(session, state, FlowHook::When::Post, tcv.name, tcv.arguments,
-                                result_text);
+                fire_tool_hooks(session, state, FlowHook::When::Post, tcv.name, tcv.arguments, result_text);
 
                 trigger_event(session, EventType::OnToolResult,
-                              std::span<const uint8_t>(
-                                  reinterpret_cast<const uint8_t *>(result_text.data()),
-                                  result_text.size()));
+                              std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(result_text.data()), result_text.size()));
 
                 state.stats.tool_calls++;
                 {
@@ -458,9 +402,7 @@ Result<std::string> run_turn(Session &session, FlowMemory &state, std::string_vi
     }
 
     auto save_res = save_flow_memory(session, state);
-    if (!save_res.ok)
-        utils::log(session, LogLevel::Warning,
-                   "save_flow_memory failed: " + save_res.error.message);
+    if (!save_res.ok) utils::log(session, LogLevel::Warning, "save_flow_memory failed: " + save_res.error.message);
 
     return ok(std::move(final_text));
 }

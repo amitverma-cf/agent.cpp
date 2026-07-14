@@ -155,10 +155,3 @@ cfg.model    = "gpt-4o";
 
 Any endpoint that speaks the OpenAI Chat Completions protocol works (Ollama, LM Studio, Together AI, etc.).
 
-## Running the example CLI
-
-```bash
-./build/agent_cli --workspace .workspace --model .workspace/models/my.gguf
-```
-
-Type messages at the `>` prompt. `/exit` or `/quit` to quit. Session stats print on exit.

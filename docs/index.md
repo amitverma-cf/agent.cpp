@@ -23,7 +23,7 @@ The library is designed around three principles:
 | [API — Conversation](api/conversation.md) | `FlowMemory`, `run_turn`, pruning, compression |
 | [API — FSM](api/fsm.md) | `FlowState`, `Flow`, `FlowHook`, `step_flow`, `run_flow` |
 | [API — Scheduler](api/scheduler.md) | `AgentScheduler`, `CronTask`, parallel subagents |
-| [API — Tools](api/tools.md) | Built-in tools, `Tool` struct, custom tools |
+| [API — Tools](api/tools.md) | Built-in tools, `Tool` struct, custom tools, Skills, permission gate |
 | [API — Memory](api/memory.md) | `MemoryConfig`, `store_memory`, `retrieve_memory` |
 | [API — Data Sources](api/data-sources.md) | `DataSource`, RAG/SQLite/GraphRAG integration |
 | [API — Events](api/events.md) | `EventType`, `EventHook`, `register_event_hook` |
@@ -68,3 +68,4 @@ int main() {
 | `AGENT_ENABLE_OPENAI` | `ON` | OpenAI-compatible provider (requires networking) |
 | `AGENT_ENABLE_ONNX` | `OFF` | ONNX Runtime multimodal inference backend |
 | `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UBSan |
+| `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |

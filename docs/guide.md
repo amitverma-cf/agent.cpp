@@ -210,6 +210,40 @@ agent::rebuild_tool_index(session);
 
 ---
 
+## Permissions
+
+Every tool call — native, `bind_data_source_tool`-backed, or a skill's `use_skill` — passes through a per-call Allow/Ask/Deny gate before its callback runs, checked in `execute_tool` right before dispatch. By default `Config::permission_check` is `nullptr`, meaning **everything is allowed**, matching prior behavior exactly.
+
+```cpp
+agent::PermissionDecision my_policy(std::string_view tool_name, std::string_view arguments, void *) {
+    if (tool_name == "delete_path")
+        return agent::PermissionDecision::Deny;      // never allowed
+    if (tool_name == "run_command")
+        return agent::PermissionDecision::Ask;        // ask the user first
+    return agent::PermissionDecision::Allow;          // everything else proceeds
+}
+
+bool confirm_with_user(std::string_view tool_name, std::string_view arguments, void *) {
+    printf("Allow %s(%s)? [y/N] ", std::string(tool_name).c_str(), std::string(arguments).c_str());
+    return getchar() == 'y';
+}
+
+cfg.permission_check = my_policy;
+cfg.permission_prompt = confirm_with_user;   // only consulted when my_policy returns Ask
+```
+
+`Ask` with no `permission_prompt` set is treated as `Deny` — there's no silent fallback to Allow. A denied or declined call returns `ErrorCode::PermissionDenied` without ever invoking the tool's callback (not just skipping its result — the callback genuinely never runs).
+
+A ready-made example policy ships as `agent::tools::default_permission_policy` — Ask before `run_command`/`delete_path`/`move_path`, Allow everything else. It's not wired in automatically; opt in explicitly:
+
+```cpp
+cfg.permission_check = agent::tools::default_permission_policy;
+```
+
+This composes with, but doesn't replace, sandbox enforcement (`Config::sandbox_filesystem`): the permission gate decides *whether* a call is attempted; the filesystem sandbox constrains *what paths* a filesystem tool can touch once it runs. Neither can stop a tool's own native code from doing something outside agent.cpp's view entirely — a `Tool::callback` is a plain function pointer with the full privileges of the host process. If a tool's code isn't fully trusted, the permission gate (ask/deny before it's ever called) is the mitigation this library provides; there's no additional runtime isolation layer underneath it.
+
+---
+
 ## Default tools reference
 
 When `auto_default_tools = true`, these tools are registered automatically:
@@ -226,6 +260,38 @@ When `auto_default_tools = true`, these tools are registered automatically:
 | `file_info` | `path` | — | JSON `{exists, type, size, path}` |
 | `run_command` | `command` | `timeout_seconds` (default 30) | JSON `{exit_code, output}` |
 | `compress_context` | — | `keep_recent` (default 6) | `"Context compressed."` |
+
+---
+
+## Skills
+
+Skills are [SKILL.md](https://agentskills.io)-format capability packages: a directory with a `SKILL.md` file (YAML frontmatter — at minimum `name` and `description` — plus free-form Markdown instructions). This is an open, cross-vendor format; skills authored for Claude Code, Codex CLI, or Gemini CLI work here unmodified.
+
+Set `Config::skills_dir` to a directory containing one subdirectory per skill:
+
+```
+my_skills/
+  pdf-tools/
+    SKILL.md
+  xlsx-tools/
+    SKILL.md
+```
+
+```cpp
+cfg.skills_dir = "my_skills";
+auto sess = agent::init(cfg);
+```
+
+At `init()`, each skill's `name`+`description` (only — not the full body) is folded into the tools system prompt, and a `use_skill` tool is registered automatically. The model calls `use_skill({"name": "pdf-tools"})` to load a skill's full `SKILL.md` content only when it's actually relevant — this progressive-disclosure shape keeps unused skills' token cost to a couple of lines each.
+
+You can also drive this directly, e.g. from your own application code or a `FlowState::context_provider`:
+
+```cpp
+auto res = agent::load_skills_dir(session, "my_skills");   // populate session.skills + register use_skill
+auto body = agent::read_skill_body(session, "pdf-tools");  // full SKILL.md content on demand
+```
+
+Like `session.config.tools`, `session.skills` isn't mutex-guarded: call `load_skills_dir` during single-threaded setup (at `init()`, or before starting `AgentScheduler` dispatch), not concurrently with an active turn or scheduler `pump()` on another thread.
 
 ---
 
@@ -570,4 +636,4 @@ if (!res.ok) {
 }
 ```
 
-Full error code list: `Ok`, `InvalidConfig`, `UnsupportedProvider`, `FilesystemError`, `ProviderInitFailed`, `ModelLoadFailed`, `DecodeFailed`, `NetworkError`, `HttpError`, `ParseError`, `Cancelled`, `KeyNotFound`, `ToolCallLimitExceeded`, `SandboxViolation`.
+Full error code list: `Ok`, `InvalidConfig`, `UnsupportedProvider`, `FilesystemError`, `ProviderInitFailed`, `ModelLoadFailed`, `DecodeFailed`, `NetworkError`, `HttpError`, `ParseError`, `Cancelled`, `KeyNotFound`, `ToolCallLimitExceeded`, `SandboxViolation`, `PermissionDenied`.
