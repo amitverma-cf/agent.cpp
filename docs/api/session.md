@@ -68,6 +68,14 @@ struct Config {
     int  max_tool_call_rounds = 10;      // max tool-call loop iterations per turn
     bool sandbox_filesystem   = true;    // block filesystem paths outside workspace_dir
 
+    // Skills (see guide.md#skills); empty = feature inert
+    std::string skills_dir;
+
+    // Per-call tool permission gate (see guide.md#permissions); nullptr = Allow everything
+    PermissionCheckFn  permission_check     = nullptr;
+    PermissionPromptFn permission_prompt    = nullptr;  // resolves Ask; nullptr => Ask is Deny
+    void              *permission_user_data = nullptr;
+
     // Logging
     bool  enable_file_logging  = false;  // write to workspace_dir/logs/agent_*.log
     LogFn logger               = nullptr;

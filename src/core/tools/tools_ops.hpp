@@ -16,4 +16,4 @@ struct ToolsOps {
 
 const ToolsOps *find_tools_ops();
 
-}
+} // namespace agent::tools

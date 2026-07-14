@@ -221,6 +221,18 @@ Summarise and compress the active conversation's older history to free context w
 
 Returns: `"Context compressed."` on success.
 
+### Skill loader
+
+#### `use_skill`
+
+Registered automatically when `Config::skills_dir` is set (see [Skills](../guide.md#skills)). Loads the full `SKILL.md` content for a named skill, previously scanned by `load_skills_dir`.
+
+```json
+{ "name": "pdf-tools" }
+```
+
+Returns: the skill's full `SKILL.md` file content. Returns `KeyNotFound` if the name doesn't match a loaded skill.
+
 ---
 
 ## Sandbox

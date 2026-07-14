@@ -7,20 +7,16 @@
 namespace agent {
 
 static FlowMemory &active_memory_for(Flow &flow, const FlowState &state) {
-    if (!state.isolated_memory)
-        return flow.memory;
+    if (!state.isolated_memory) return flow.memory;
     auto &branch = flow.isolated_memories[std::string(state.state_id)];
-    if (branch.id.empty())
-        branch.id = flow.id + ":" + std::string(state.state_id);
+    if (branch.id.empty()) branch.id = flow.id + ":" + std::string(state.state_id);
     return branch;
 }
 
 Result<bool> step_flow(Session &session, void *context, Flow &flow) {
-    if (flow.has_finished)
-        return ok(false);
+    if (flow.has_finished) return ok(false);
 
-    if (flow.states.empty())
-        return fail<bool>(ErrorCode::InvalidConfig, "Flow has no registered states.");
+    if (flow.states.empty()) return fail<bool>(ErrorCode::InvalidConfig, "Flow has no registered states.");
 
     if (!flow.has_started) {
         flow.has_started = true;
@@ -31,13 +27,10 @@ Result<bool> step_flow(Session &session, void *context, Flow &flow) {
     FlowMemory &memory = active_memory_for(flow, current);
 
     trigger_event(session, EventType::OnStateTransition,
-                  std::span<const uint8_t>(
-                      reinterpret_cast<const uint8_t *>(current.state_id.data()),
-                      current.state_id.size()));
+                  std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(current.state_id.data()), current.state_id.size()));
 
     if (!current.on_transition)
-        return fail<bool>(ErrorCode::InvalidConfig,
-                          "Flow state missing on_transition: " + std::string(current.state_id));
+        return fail<bool>(ErrorCode::InvalidConfig, "Flow state missing on_transition: " + std::string(current.state_id));
 
     bool injected_system = false;
     std::optional<Message> saved_system;
@@ -84,16 +77,14 @@ Result<bool> step_flow(Session &session, void *context, Flow &flow) {
 
     if (!effective_system_prompt.empty()) {
         if (injected_system) {
-            if (!memory.history.empty() && memory.history[0].role == "system")
-                memory.history.erase(memory.history.begin());
+            if (!memory.history.empty() && memory.history[0].role == "system") memory.history.erase(memory.history.begin());
         } else if (saved_system) {
             memory.history[0] = std::move(*saved_system);
             memory.history[0].token_count = -1;
         }
     }
 
-    if (!next_res.ok)
-        return fail<bool>(next_res.error.code, next_res.error.message);
+    if (!next_res.ok) return fail<bool>(next_res.error.code, next_res.error.message);
 
     std::string_view next_id = next_res.value;
 
@@ -109,17 +100,14 @@ Result<bool> step_flow(Session &session, void *context, Flow &flow) {
         }
     }
 
-    return fail<bool>(ErrorCode::InvalidConfig,
-                      "Flow transitioned to unregistered state: " + std::string(next_id));
+    return fail<bool>(ErrorCode::InvalidConfig, "Flow transitioned to unregistered state: " + std::string(next_id));
 }
 
 Result<void> run_flow(Session &session, void *context, Flow &flow) {
     while (true) {
         auto res = step_flow(session, context, flow);
-        if (!res.ok)
-            return fail(res.error.code, res.error.message);
-        if (!res.value)
-            return ok();
+        if (!res.ok) return fail(res.error.code, res.error.message);
+        if (!res.value) return ok();
     }
 }
 

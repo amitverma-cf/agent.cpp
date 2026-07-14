@@ -1,6 +1,5 @@
-#include <catch_amalgamated.hpp>
-
 #include <agent-cpp/agent.hpp>
+#include <catch_amalgamated.hpp>
 #include <string>
 #include <vector>
 
@@ -29,8 +28,7 @@ TEST_CASE("trigger_event invokes a registered hook with the given payload", "[ev
 
     std::string payload = "my_tool";
     agent::trigger_event(session, agent::EventType::OnToolCall,
-                         std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(payload.data()),
-                                                  payload.size()));
+                         std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(payload.data()), payload.size()));
 
     REQUIRE(rec.fire_count == 1);
     REQUIRE(rec.payload == "my_tool");
@@ -89,10 +87,7 @@ TEST_CASE("OnCompression fires during a real compress_context call", "[events][c
 
 TEST_CASE("OnPrune fires when run_turn prunes history over budget", "[events][pruning]") {
     auto session_result =
-        agent::init({.provider = agent::AiProvider::Mock,
-                     .workspace_dir = "/tmp/agent_test_ws",
-                     .context_window = 400,
-                     .max_tokens = 50});
+        agent::init({.provider = agent::AiProvider::Mock, .workspace_dir = "/tmp/agent_test_ws", .context_window = 400, .max_tokens = 50});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 

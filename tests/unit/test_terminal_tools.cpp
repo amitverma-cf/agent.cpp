@@ -1,6 +1,5 @@
-#include <catch_amalgamated.hpp>
-
 #include <agent-cpp/agent.hpp>
+#include <catch_amalgamated.hpp>
 #include <filesystem>
 #include <string>
 
@@ -16,8 +15,7 @@ std::string make_workspace(const char *name) {
 
 const agent::Tool *find_tool(const agent::Session &session, std::string_view name) {
     for (const auto &t : session.config.tools)
-        if (t.name == name)
-            return &t;
+        if (t.name == name) return &t;
     return nullptr;
 }
 
@@ -58,8 +56,7 @@ TEST_CASE("run_command enforces a timeout", "[terminal_tools]") {
 
     const auto *run_tool = find_tool(session, "run_command");
 #ifdef _WIN32
-    auto res = run_tool->callback(R"({"command":"ping -n 10 127.0.0.1 > NUL","timeout_seconds":1})",
-                                  run_tool->user_data);
+    auto res = run_tool->callback(R"({"command":"ping -n 10 127.0.0.1 > NUL","timeout_seconds":1})", run_tool->user_data);
 #else
     auto res = run_tool->callback(R"({"command":"sleep 10","timeout_seconds":1})", run_tool->user_data);
 #endif

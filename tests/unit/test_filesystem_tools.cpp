@@ -1,6 +1,5 @@
-#include <catch_amalgamated.hpp>
-
 #include <agent-cpp/agent.hpp>
+#include <catch_amalgamated.hpp>
 #include <filesystem>
 #include <string>
 
@@ -17,8 +16,7 @@ std::string make_workspace(const char *name) {
 
 const agent::Tool *find_tool(const agent::Session &session, std::string_view name) {
     for (const auto &t : session.config.tools)
-        if (t.name == name)
-            return &t;
+        if (t.name == name) return &t;
     return nullptr;
 }
 
@@ -35,8 +33,7 @@ TEST_CASE("write_file then read_file round-trips content", "[filesystem_tools]")
     REQUIRE(write_tool != nullptr);
     REQUIRE(read_tool != nullptr);
 
-    auto write_res =
-        write_tool->callback(R"({"path":"note.txt","content":"hello world"})", write_tool->user_data);
+    auto write_res = write_tool->callback(R"({"path":"note.txt","content":"hello world"})", write_tool->user_data);
     REQUIRE(write_res.ok);
     REQUIRE(write_res.value.find("wrote 11 bytes") != std::string::npos);
 
@@ -54,8 +51,7 @@ TEST_CASE("read_file truncates at max_bytes", "[filesystem_tools]") {
     const auto *write_tool = find_tool(session, "write_file");
     const auto *read_tool = find_tool(session, "read_file");
 
-    auto write_res =
-        write_tool->callback(R"({"path":"big.txt","content":"0123456789"})", write_tool->user_data);
+    auto write_res = write_tool->callback(R"({"path":"big.txt","content":"0123456789"})", write_tool->user_data);
     REQUIRE(write_res.ok);
 
     auto read_res = read_tool->callback(R"({"path":"big.txt","max_bytes":4})", read_tool->user_data);

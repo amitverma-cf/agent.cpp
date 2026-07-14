@@ -35,6 +35,7 @@ add_library(agent
     src/core/executor/ambient_turn.cpp
     src/core/scheduler/scheduler.cpp
     src/core/data/data_source_registry.cpp
+    src/core/skills/skills_registry.cpp
     src/core/providers/provider_ops.cpp
     src/core/providers/llama_provider.cpp
     src/core/providers/openai_compatible_provider.cpp
@@ -163,6 +164,8 @@ add_executable(test_agent
     tests/unit/test_events.cpp
     tests/unit/test_scheduler_cron.cpp
     tests/unit/test_arena.cpp
+    tests/unit/test_skills.cpp
+    tests/unit/test_permissions.cpp
     tests/integration/test_session.cpp
     tests/integration/test_flow.cpp
 )

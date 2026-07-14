@@ -1,43 +1,35 @@
----
-# Agent clang-format configuration
-# Inspired by core standards
-
 BasedOnStyle: LLVM
+
 IndentWidth: 4
-ColumnLimit: 120
-AllowShortFunctionsOnASingleLine: Inline
-AllowShortIfStatementsOnASingleLine: false
-AllowShortLoopsOnASingleLine: false
-BreakBeforeBrackets: Attach
-
-# Pointer/Reference Alignment: void * ptr, int & a
-PointerAlignment: Right
-DerivePointerAlignment: false
-
-# Spaces
-SpaceAfterCStyleCast: true
-SpaceBeforeParens: ControlStatements
-SpaceInEmptyParentheses: false
-SpacesInAngles: false
-SpacesInContainerLiterals: false
-SpacesInCStyleCastParentheses: false
-SpacesInParentheses: false
-SpacesInSquareBrackets: false
-
-# Indentation
+ContinuationIndentWidth: 4
+ColumnLimit: 140
 UseTab: Never
-NamespaceIndentation: None
 
-# Alignment
-AlignAfterOpenBracket: Align
-AlignConsecutiveAssignments: false
-AlignConsecutiveDeclarations: false
-AlignOperands: Align
-AlignTrailingComments: true
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowShortLoopsOnASingleLine: true
+AllowShortEnumsOnASingleLine: true
+AllowShortBlocksOnASingleLine: Always
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortLambdasOnASingleLine: All
 
-# Sorting
+BinPackArguments: true
+BinPackParameters: true
+PackConstructorInitializers: CurrentLine
+
+PointerAlignment: Right
+ReferenceAlignment: Right
+
 SortIncludes: true
 IncludeBlocks: Regroup
 
-Standard: c++20
-...
+SpaceBeforeParens: ControlStatements
+SpacesInParentheses: false
+
+NamespaceIndentation: None
+
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+
+ReflowComments: false
