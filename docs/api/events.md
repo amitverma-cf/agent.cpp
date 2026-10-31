@@ -18,7 +18,6 @@ enum class EventType {
     OnStateTransition,     // fired when a new FSM state is entered
     OnCompression,         // fired after context compression completes
     OnPrune,               // fired after a sliding-window prune operation
-    OnCronFire,            // fired when a cron task fires
     OnSubAgentComplete,    // fired when a subagent FSM finishes
 };
 ```
@@ -48,7 +47,6 @@ struct Event {
 | `OnStateTransition` | UTF-8 bytes of the new state_id |
 | `OnCompression` | empty |
 | `OnPrune` | empty |
-| `OnCronFire` | empty |
 | `OnSubAgentComplete` | empty |
 
 ---

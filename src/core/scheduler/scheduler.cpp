@@ -2,7 +2,6 @@
 #include "../utils/utils.hpp"
 
 #include <agent-cpp/agent.hpp>
-#include <chrono>
 #include <thread>
 #include <vector>
 
@@ -22,56 +21,7 @@ Result<void> AgentScheduler::spawn(std::string id, Flow flow, void *context) {
     return ok();
 }
 
-Result<void> AgentScheduler::add_cron(std::string id, CronTask::TaskFn fn, void *user_data, std::chrono::milliseconds delay,
-                                      std::chrono::milliseconds interval) {
-    for (const auto &e : cron_jobs_)
-        if (e.task.id == id) return fail(ErrorCode::InvalidConfig, "AgentScheduler: cron id already registered: " + id);
-
-    CronJob entry;
-    entry.task.id = std::move(id);
-    entry.task.callback = fn;
-    entry.task.user_data = user_data;
-    entry.task.next_fire = std::chrono::steady_clock::now() + delay;
-    entry.task.interval = interval;
-    entry.done = false;
-    cron_jobs_.push_back(std::move(entry));
-    return ok();
-}
-
-Result<void> AgentScheduler::cancel_cron(std::string_view id) {
-    for (auto &e : cron_jobs_) {
-        if (e.task.id == id) {
-            e.done = true;
-            return ok();
-        }
-    }
-    return fail(ErrorCode::KeyNotFound, "AgentScheduler: cron job not found: " + std::string(id));
-}
-
 Result<void> AgentScheduler::pump(Session &session) {
-    auto now = std::chrono::steady_clock::now();
-
-    for (auto &entry : cron_jobs_) {
-        if (entry.done || now < entry.task.next_fire) continue;
-
-        utils::log(session, LogLevel::Debug, "AgentScheduler: cron '" + entry.task.id + "' fired.");
-        trigger_event(session, EventType::OnCronFire, std::span<const uint8_t>());
-
-        if (entry.task.callback) {
-            auto res = entry.task.callback(session, entry.task.user_data);
-            if (!res.ok)
-                utils::log(session, LogLevel::Warning, "AgentScheduler: cron '" + entry.task.id + "' failed: " + res.error.message);
-        }
-
-        if (entry.task.interval.count() > 0) {
-            entry.task.next_fire += entry.task.interval;
-            now = std::chrono::steady_clock::now();
-            if (entry.task.next_fire < now) entry.task.next_fire = now + entry.task.interval;
-        } else {
-            entry.done = true;
-        }
-    }
-
     auto finish = [&](SubAgent &entry, Result<bool> res) {
         if (!res.ok) {
             entry.done = true;
@@ -139,7 +89,7 @@ Result<void> AgentScheduler::run_until_done(Session &session) {
         auto res = pump(session);
         if (!res.ok) return res;
     }
-    return pump(session);
+    return ok();
 }
 
 bool AgentScheduler::all_done() const {

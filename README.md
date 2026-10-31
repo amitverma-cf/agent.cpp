@@ -17,7 +17,7 @@ agent.cpp provides a complete runtime for building AI agents on local inference 
 - **Monadic error handling.** Every fallible function returns `Result<T>`. No exceptions anywhere.
 - **Single public header.** `#include <agent-cpp/agent.hpp>`. Backend headers are behind CMake flags.
 - **FSM executor.** Decompose agent workflows into named states, each with its own system prompt, tool allowlist, and pre/post hooks.
-- **Cooperative multi-agent scheduler.** Run parallel FSM subagents interleaved round-robin with cron tasks — no threads required.
+- **Cooperative multi-agent scheduler.** Run parallel FSM subagents; llama.cpp subagents share one continuously-batched decode.
 - **Automatic context management.** Sliding-window pruning and LLM-based compression keep conversations within the context budget automatically.
 - **Built-in tools.** Filesystem (8 tools), terminal, and context compressor — registered by default.
 - **Skills.** Load [SKILL.md](https://agentskills.io)-format capability packages from a directory; only name/description sit in context until the model calls `use_skill` to load the rest.
@@ -138,7 +138,7 @@ src/core/
   skills/
     skills_registry.cpp        -- load_skills_dir, read_skill_body, use_skill tool
   scheduler/
-    scheduler.cpp              -- AgentScheduler, cron
+    scheduler.cpp              -- AgentScheduler
   providers/
     mock / llama / onnx
   memory/

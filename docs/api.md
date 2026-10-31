@@ -322,7 +322,6 @@ enum class EventType {
     OnStateTransition,     // FSM state entered (payload = state_id bytes)
     OnCompression,         // context compression completed
     OnPrune,               // history sliding-window prune completed
-    OnCronFire,            // cron task fired
     OnSubAgentComplete,    // subagent FSM finished
 };
 ```
@@ -476,38 +475,6 @@ struct Flow {
     size_t current_state_index = 0;
     bool   has_started         = false;
     bool   has_finished        = false;
-};
-```
-
----
-
-## Scheduler types
-
-### `CronTask`
-
-```cpp
-struct CronTask {
-    std::string id;
-
-    using TaskFn = Result<void> (*)(Session &session, void *user_data);
-    TaskFn   callback  = nullptr;
-    void    *user_data = nullptr;
-
-    std::chrono::steady_clock::time_point next_fire;
-    std::chrono::milliseconds             interval{0};   // 0 = one-shot
-};
-```
-
-### `SubAgentResult`
-
-Result from a completed subagent.
-
-```cpp
-struct SubAgentResult {
-    std::string id;
-    bool        ok = false;
-    Error       error;
-    TurnStats   stats;
 };
 ```
 
@@ -790,7 +757,7 @@ Result<void> clear_provider_kv_cache(Session &session);
 
 ## AgentScheduler
 
-Multi-agent scheduler. `pump()`/`run_until_done()` internally dispatch across real OS threads for `LlamaCpp` (bounded by `Config::max_parallel_subagents`), and sequentially otherwise; see [scheduler.md](api/scheduler.md) for the concurrency model per provider. `AgentScheduler`'s own methods (`spawn`, `add_cron`, etc.) are not thread-safe themselves — call them from one thread.
+Multi-agent scheduler. `pump()`/`run_until_done()` internally dispatch across real OS threads for `LlamaCpp` (bounded by `Config::max_parallel_subagents`), and sequentially otherwise; see [scheduler.md](api/scheduler.md) for the concurrency model per provider. `AgentScheduler`'s own methods (`spawn`, `pump`, etc.) are not thread-safe themselves — call them from one thread.
 
 ```cpp
 class AgentScheduler {
@@ -799,23 +766,10 @@ public:
     // context is passed through to each step_flow call for that executor.
     Result<void> spawn(std::string id, Flow flow, void *context = nullptr);
 
-    // Register a cron task.
-    //   delay    -- time before the first fire
-    //   interval -- repeat period; 0 = one-shot
-    Result<void> add_cron(
-        std::string                id,
-        CronTask::TaskFn           fn,
-        void                      *user_data,
-        std::chrono::milliseconds  delay,
-        std::chrono::milliseconds  interval = std::chrono::milliseconds{0});
-
-    // Mark a cron task as done (stops future fires). Returns KeyNotFound if missing.
-    Result<void> cancel_cron(std::string_view id);
-
-    // Advance all pending subagents one FSM step each; fire all due cron tasks.
+    // Advance all pending subagents one FSM step each.
     Result<void> pump(Session &session);
 
-    // Loop pump() until all subagents are done. Continues firing cron tasks.
+    // Loop pump() until all subagents are done.
     Result<void> run_until_done(Session &session);
 
     // True when every spawned subagent has finished (success or error).

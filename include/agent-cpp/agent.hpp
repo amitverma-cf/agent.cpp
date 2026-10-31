@@ -1,6 +1,5 @@
 #pragma once
 
-#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -212,7 +211,6 @@ enum class EventType {
     OnStateTransition,
     OnCompression,
     OnPrune,
-    OnCronFire,
     OnSubAgentComplete,
 };
 
@@ -407,22 +405,9 @@ struct SubAgentResult {
     TurnStats stats;
 };
 
-struct CronTask {
-    std::string id;
-    using TaskFn = Result<void> (*)(Session &session, void *user_data);
-    TaskFn callback = nullptr;
-    void *user_data = nullptr;
-    std::chrono::steady_clock::time_point next_fire;
-    std::chrono::milliseconds interval{0};
-};
-
 class AgentScheduler {
   public:
     Result<void> spawn(std::string id, Flow flow, void *context = nullptr);
-
-    Result<void> add_cron(std::string id, CronTask::TaskFn fn, void *user_data, std::chrono::milliseconds delay,
-                          std::chrono::milliseconds interval = std::chrono::milliseconds{0});
-    Result<void> cancel_cron(std::string_view id);
 
     Result<void> pump(Session &session);
     Result<void> run_until_done(Session &session);
@@ -438,13 +423,7 @@ class AgentScheduler {
         bool done = false;
         SubAgentResult result;
     };
-    struct CronJob {
-        CronTask task;
-        bool done = false;
-    };
-
     std::vector<SubAgent> subagents_;
-    std::vector<CronJob> cron_jobs_;
 };
 
 // -------------------------- Lifecycle --------------------------
