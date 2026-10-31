@@ -94,7 +94,9 @@ It sets `AGENT_ENGINE_FLAG_NATIVE_TOOLS` (the core only adds the skills list to 
 `AGENT_ENGINE_FLAG_CONCURRENT` (parallel subagents share one continuously batched decode).
 
 `Config::engine_options`: `gpu_layers`, `threads`, `chat_template` (overrides the template embedded in the GGUF),
-`mmproj` (path to a multimodal projector GGUF, enables image / audio input).
+`mmproj` (path to a multimodal projector GGUF, enables image / audio input), `mode` (`"generate"`, the
+default, `"embed"` or `"rerank"`, see below), `pooling` (embed mode: `"mean"`, `"cls"` or `"last"` to
+override the model's pooling).
 
 ### Image and audio input
 
@@ -119,6 +121,42 @@ cfg.engine_options = R"({"mmproj": ".workspace/models/mmproj-SmolVLM-256M-Instru
 
 Prompts with media are prefilled on their own sequence under the batcher's lock (libmtmd encodes the
 media and decodes text and embedding chunks in turn); generation then joins the shared batched rounds.
+
+### Embeddings and reranking
+
+Embedding and reranker models need a llama context created in embedding mode with pooling, which
+can't generate text, so `options.mode` picks what an instance does:
+
+| `mode` | Context | `run()` serves | Output |
+|---|---|---|---|
+| `"generate"` (default) | chat (as above) | `AGENT_CAP_TEXT_GEN` | text + tool calls |
+| `"embed"` | `embeddings = true`, the model's pooling (mean if it declares none; `options.pooling` overrides) | `AGENT_CAP_EMBED` | one `"embedding"` tensor (f32 `[n_embd]`, L2-normalized) per TEXT part, in order |
+| `"rerank"` | `embeddings = true`, `LLAMA_POOLING_TYPE_RANK` | `AGENT_CAP_RERANK` | one `"scores"` tensor (f32 `[n_docs]`): first TEXT part = query, later TEXT parts = documents |
+
+`caps` is static, so it lists `AGENT_CAP_EMBED | AGENT_CAP_RERANK` next to text generation; an
+instance returns `AGENT_ERR_UNSUPPORTED` for a task that doesn't match its mode (and for media parts
+in embed / rerank mode). `mmproj` is only accepted in generate mode. Loading a model that declares
+a non-rank pooling type (an embedding model) in rerank mode fails.
+
+- Rerank inputs are built the way llama-server builds them: the model's `rerank` chat template
+  (`{query}` / `{document}` placeholders) when the GGUF has one, otherwise
+  `[BOS] query [EOS] [SEP] document [EOS]` following the vocab's add-BOS/EOS/SEP flags. Template text
+  may contain special tokens; the query and documents are tokenized as plain text. Scores are the
+  classifier's raw output (higher = more relevant).
+- Up to 16 inputs are packed into one decode, each on its own sequence, with the batch sized to one
+  micro-batch so non-causal (BERT-style) models see each sequence whole. An input is limited to
+  `min(context_window, n_ctx_train)` tokens and longer ones are truncated (for rerank, the document
+  first); keep RAG chunks well under that.
+- Embed / rerank decodes on one instance are serialized; the instance still sets
+  `AGENT_ENGINE_FLAG_CONCURRENT`, so concurrent callers queue rather than fail.
+
+Use them through `agent::embed` / `agent::rerank` / the RAG pipeline ([rag.md](rag.md)):
+
+```cpp
+cfg.model          = ".workspace/models/bge-small-en-v1.5-q8_0.gguf";
+cfg.context_window = 512;
+cfg.engine_options = R"({"mode": "embed"})";
+```
 
 `common_chat` reports errors by throwing, and exceptions must not cross the plugin ABI. So the
 plugin catches at exactly those calls (template load/render, output parsing) and converts them to

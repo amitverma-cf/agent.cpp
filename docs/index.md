@@ -28,6 +28,7 @@ The library is designed around three principles:
 | [API — Tools](api/tools.md) | Built-in tools, `Tool` struct, custom tools, Skills, permission gate |
 | [API — Memory](api/memory.md) | `MemoryConfig`, `store_memory`, `retrieve_memory` |
 | [API — Data Sources](api/data-sources.md) | `DataSource`, RAG/SQLite/GraphRAG integration |
+| [API — RAG](api/rag.md) | `embed`, `rerank`, `VectorStoreOps` (in-memory, sqlite-vec), chunking, `rag_index` / `rag_query`, `search_knowledge` tool |
 | [API — Events](api/events.md) | `EventType`, `EventHook`, `register_event_hook` |
 | [API — Stats](api/stats.md) | `TurnStats`, `SessionStats`, `get_stats` |
 | [API — Model hub](api/hub.md) | CLI-side `agent_hub`: Hugging Face downloads, `models.json`, licence policy |

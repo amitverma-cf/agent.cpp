@@ -728,3 +728,115 @@ Result<void> resume_graph(Session &session, const Graph &graph, std::string_view
                           std::string_view human_input = {});
 
 } // namespace agent
+
+// ============================================================================================
+// -------------------------- RAG: embeddings, rerank, vector stores --------------------------
+// Non-chat engine tasks (AGENT_CAP_EMBED / AGENT_CAP_RERANK), a pluggable VectorStoreOps table with an
+// in-memory brute-force default, a character/paragraph chunker, and the index -> query -> rerank
+// pipeline plus a "search_knowledge" tool. Embedding, reranking and chat normally use different
+// models, so each runs in its own Session (e.g. the llama engine with engine_options
+// {"mode":"embed"} / {"mode":"rerank"}). See docs/api/rag.md.
+// ============================================================================================
+
+namespace agent {
+
+// One pooled, L2-normalized embedding per text, in order. session must be an AiProvider::Engine
+// session whose engine performs AGENT_CAP_EMBED. Texts go to the engine in batches. One session must
+// not run embed / rerank / run_turn concurrently from several threads.
+Result<std::vector<std::vector<float>>> embed(Session &session, std::span<const std::string_view> texts);
+// One relevance score per document, in document order (higher = more relevant; the scale is the
+// model's, e.g. raw reranker logits). session's engine must perform AGENT_CAP_RERANK.
+Result<std::vector<float>> rerank(Session &session, std::string_view query, std::span<const std::string_view> docs);
+
+struct VectorStoreConfig {
+    // Backend-specific location. In-memory: unused. sqlite-vec: file path, or empty / ":memory:".
+    std::string path;
+    // Collection (table) name: [A-Za-z_][A-Za-z0-9_]{0,63}.
+    std::string name = "rag";
+    // Embedding dimensionality. 0 in RagIndex::config = taken from the first embedding.
+    int dimensions = 0;
+};
+
+struct VectorHit {
+    std::string id;
+    std::string text;
+    std::string metadata_json;
+    float score = 0.0f; // cosine similarity, 1 = same direction
+};
+
+// Pluggable vector store, same pattern as StoreOps. open() returns the state passed to every other
+// call. Implementations must be safe to call from several threads on one state.
+struct VectorStoreOps {
+    using OpenFn = Result<std::shared_ptr<void>> (*)(const VectorStoreConfig &config);
+    // Inserts or replaces the entry with this id.
+    using UpsertFn = Result<void> (*)(void *state, std::string_view id, std::string_view text, std::span<const float> embedding,
+                                      std::string_view metadata_json);
+    // Up to k entries, most similar first.
+    using QueryTopkFn = Result<std::vector<VectorHit>> (*)(void *state, std::span<const float> embedding, int k);
+    // true when an entry was removed, false when id was not present.
+    using EraseFn = Result<bool> (*)(void *state, std::string_view id);
+    using ClearFn = Result<void> (*)(void *state);
+
+    OpenFn open = nullptr;
+    UpsertFn upsert = nullptr;
+    QueryTopkFn query_topk = nullptr;
+    EraseFn erase = nullptr;
+    ClearFn clear = nullptr;
+};
+
+// Brute-force cosine search over vectors kept in process memory (nothing persists). The optional
+// agent-store-sqlite library provides agent::store::sqlite_vector_store() (sqlite-vec).
+const VectorStoreOps *in_memory_vector_store();
+
+struct ChunkOptions {
+    size_t size = 1000;   // maximum bytes per chunk
+    size_t overlap = 150; // bytes repeated from the end of the previous chunk; must be < size
+};
+
+// Splits text into chunks of at most options.size bytes, breaking preferably at paragraph breaks
+// (blank lines), then at line / sentence ends, then at whitespace, never inside a UTF-8 sequence.
+// Consecutive chunks overlap by up to options.overlap bytes, starting at a word boundary. The views
+// point into text; surrounding whitespace is trimmed and empty chunks are dropped.
+Result<std::vector<std::string_view>> chunk_text(std::string_view text, const ChunkOptions &options = {});
+
+// A vector store holding document chunks under ids "<doc_id>#<n>", with metadata
+// {"doc_id": ..., "chunk": n, "offset": byte offset in the document}.
+struct RagIndex {
+    const VectorStoreOps *store = nullptr; // nullptr = in_memory_vector_store()
+    VectorStoreConfig config;
+    // Opened by the first rag_index / rag_query (dimensions from that embedding when
+    // config.dimensions is 0) or explicitly by open_rag_index. Not thread-safe until opened.
+    std::shared_ptr<void> state;
+};
+
+// Opens index.store with index.config (dimensions overrides config.dimensions when > 0).
+Result<void> open_rag_index(RagIndex &index, int dimensions = 0);
+
+struct RagHit {
+    std::string id; // "<doc_id>#<n>"
+    std::string doc_id;
+    std::string text;
+    std::string metadata_json;
+    float similarity = 0.0f; // cosine similarity from the vector store
+    float score = 0.0f;      // ranking score: the rerank score when reranked, otherwise similarity
+};
+
+// Chunks text, embeds the chunks with embed_session and upserts them as "<doc_id>#<n>". Re-indexing
+// a doc_id replaces its chunks (stale higher-numbered chunks are erased).
+Result<void> rag_index(Session &embed_session, RagIndex &index, std::string_view doc_id, std::string_view text,
+                       const ChunkOptions &options = {});
+// Removes every chunk of doc_id.
+Result<void> rag_erase(RagIndex &index, std::string_view doc_id);
+// Embeds query and returns the k most similar chunks. With rerank_session, max(4*k, 20) candidates
+// are fetched, reordered by the reranker, and the top k returned.
+Result<std::vector<RagHit>> rag_query(Session &embed_session, RagIndex &index, std::string_view query, int k,
+                                      Session *rerank_session = nullptr);
+
+// A "search_knowledge" tool ({"query": string, "k": integer (optional)}) that runs rag_query and
+// returns [{"id", "score", "text"}, ...] as JSON. The tool's state is retained by chat_session;
+// embed_session, index and rerank_session are referenced and must outlive it (and not be moved).
+// Calls through one tool are serialized. Add it with chat_session.config.tools.push_back(...) and
+// rebuild_tool_index(chat_session).
+Tool make_rag_tool(Session &chat_session, Session &embed_session, RagIndex &index, Session *rerank_session = nullptr, int k = 4);
+
+} // namespace agent
