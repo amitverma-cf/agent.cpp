@@ -185,6 +185,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 ### Phase 4: Engine add-ons (ongoing; each is an independent task)
 Priority wave A (v1 **starter pack**, installed by default by `agent setup`):
 - [ ] `llama`: + libmtmd (vision/audio/video in), OCR models, embeddings, rerank, **decision models** (choice/score/yes-no)
+  - [x] libmtmd image + audio input (`engine_options.mmproj`); video input still open (needs ffmpeg)
 - [ ] `sherpa`: Kokoro TTS, Parakeet / Whisper STT, VAD, diarization (Windows-friendly breadth)
 - [ ] `sdcpp`: stable-diffusion.cpp txt2img / img2img / video (Wan, LTX) with progress + cancel
 - [ ] `trellis`: TRELLIS.2 image → GLB (3D gen)

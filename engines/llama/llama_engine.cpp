@@ -6,6 +6,10 @@
 //
 // Prompts are rendered with the model's own Jinja chat template and the reply is parsed into
 // content + tool calls by llama.cpp's common_chat (each model's native tool-call format).
+//
+// With a multimodal projector (options.mmproj) image and audio parts are fed through libmtmd: each
+// media part becomes mtmd's media marker in the rendered chat, and the prompt is prefilled with
+// mtmd_helper_eval_chunks on the request's sequence before generation joins the shared rounds.
 
 #include <agent-cpp/engine_abi.h>
 
@@ -17,6 +21,9 @@
 #include <condition_variable>
 #include <cstdio>
 #include <llama.h>
+#include <memory>
+#include <mtmd-helper.h>
+#include <mtmd.h>
 #include <mutex>
 #include <simdjson.h>
 #include <string>
@@ -87,6 +94,20 @@ class Batcher {
         llama_batch_free(batch);
         if (!ok) return false;
         next_pos_[seq] = pos;
+        out = llama_sampler_sample(sampler, ctx, -1);
+        return true;
+    }
+
+    // Prefill for prompts with media. mtmd encodes images/audio with the projector and decodes text
+    // and embedding chunks in turn; positions come back from the helper because M-RoPE models
+    // advance fewer positions than tokens for an image. Runs under the batching mutex like prefill().
+    bool prefill_media(llama_seq_id seq, mtmd_context *mctx, const mtmd_input_chunks *chunks, llama_sampler *sampler,
+                       llama_token &out) {
+        std::lock_guard<std::mutex> lock(mu_);
+        llama_pos n_past = next_pos_[seq];
+        if (mtmd_helper_eval_chunks(mctx, ctx, chunks, n_past, seq, static_cast<int32_t>(llama_n_batch(ctx)), true, &n_past) != 0)
+            return false;
+        next_pos_[seq] = n_past;
         out = llama_sampler_sample(sampler, ctx, -1);
         return true;
     }
@@ -183,6 +204,7 @@ struct CallOutput {
 
 struct Instance {
     Batcher batcher;
+    mtmd::context_ptr mtmd; // projector for image/audio input; null without options.mmproj. Freed before the model.
     common_chat_templates_ptr templates;
     std::mutex out_mu;
     std::unordered_map<std::thread::id, CallOutput> outputs;
@@ -221,7 +243,16 @@ template <typename T> T json_number(simdjson::ondemand::object &obj, const char 
     return static_cast<T>(d);
 }
 
-common_chat_templates_inputs build_inputs(const agent_request *req) {
+bool is_media(const agent_part &p) { return p.kind == AGENT_PART_FILE || p.kind == AGENT_PART_BYTES; }
+
+void erase_all(std::string &text, std::string_view needle) {
+    if (needle.empty()) return;
+    for (size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at)) text.erase(at, needle.size());
+}
+
+// marker: mtmd's media marker, or nullptr for a text-only model. Each media part becomes one marker at
+// its position in the message; markers typed by the user are stripped so they can't misalign media.
+common_chat_templates_inputs build_inputs(const agent_request *req, const char *marker) {
     common_chat_templates_inputs in;
     in.use_jinja = true;
     in.add_generation_prompt = true;
@@ -231,8 +262,19 @@ common_chat_templates_inputs build_inputs(const agent_request *req) {
         const agent_message &m = req->messages[i];
         common_chat_msg msg;
         msg.role = std::string(sv(m.role));
-        for (size_t p = 0; p < m.n_parts; ++p)
-            if (m.parts[p].kind == AGENT_PART_TEXT) msg.content += sv(m.parts[p].text);
+        for (size_t p = 0; p < m.n_parts; ++p) {
+            if (m.parts[p].kind == AGENT_PART_TEXT) {
+                if (!marker) {
+                    msg.content += sv(m.parts[p].text);
+                    continue;
+                }
+                std::string text(sv(m.parts[p].text));
+                erase_all(text, marker);
+                msg.content += text;
+            } else if (marker && is_media(m.parts[p])) {
+                msg.content += marker;
+            }
+        }
         for (size_t c = 0; c < m.n_tool_calls; ++c)
             msg.tool_calls.push_back(common_chat_tool_call{std::string(sv(m.tool_calls[c].name)), std::string(sv(m.tool_calls[c].arguments)),
                                                            std::string(sv(m.tool_calls[c].id))});
@@ -315,6 +357,90 @@ bool tokenize_prompt(const llama_vocab *vocab, const common_chat_prompt &prompt,
     return !tokens.empty();
 }
 
+// Decodes every media part of the request, in prompt order, into mtmd bitmaps. The helper sniffs
+// the format from the bytes (stb_image for images, miniaudio for wav/mp3/flac), so mime is only used
+// to reject video, which needs mtmd's ffmpeg subprocess path and isn't built into the plugin.
+int32_t load_media(const Instance &inst, const agent_request *req, std::vector<mtmd::bitmap> &out, std::string &error) {
+    for (size_t i = 0; i < req->n_messages; ++i) {
+        const agent_message &m = req->messages[i];
+        for (size_t p = 0; p < m.n_parts; ++p) {
+            const agent_part &part = m.parts[p];
+            if (!is_media(part)) continue;
+            const std::string_view mime = sv(part.mime);
+            if (mime.substr(0, 6) == "video/") {
+                error = "llama: video input is not supported";
+                return AGENT_ERR_UNSUPPORTED;
+            }
+            mtmd_helper_bitmap_wrapper w{};
+            std::string label;
+            if (part.kind == AGENT_PART_FILE) {
+                label = std::string(sv(part.path));
+                w = mtmd_helper_bitmap_init_from_file(inst.mtmd.get(), label.c_str(), false, mtmd_helper_init_opt_default());
+            } else {
+                label = "<bytes>";
+                if (part.data && part.size)
+                    w = mtmd_helper_bitmap_init_from_buf(inst.mtmd.get(), static_cast<const unsigned char *>(part.data), part.size, false,
+                                                         mtmd_helper_init_opt_default());
+            }
+            if (w.video_ctx) mtmd_helper_video_free(w.video_ctx);
+            mtmd::bitmap bmp(w.bitmap);
+            if (!bmp.ptr) {
+                error = "llama: could not decode media " + label + " (" + std::string(mime) + ")";
+                return part.kind == AGENT_PART_FILE ? AGENT_ERR_FILESYSTEM : AGENT_ERR_PARSE;
+            }
+            const bool audio = mtmd_bitmap_is_audio(bmp.ptr.get());
+            if (audio ? !mtmd_support_audio(inst.mtmd.get()) : !mtmd_support_vision(inst.mtmd.get())) {
+                error = std::string("llama: the loaded mmproj does not support ") + (audio ? "audio" : "image") + " input";
+                return AGENT_ERR_UNSUPPORTED;
+            }
+            out.push_back(std::move(bmp));
+        }
+    }
+    return AGENT_OK;
+}
+
+// mtmd counterpart of tokenize_prompt(): parts are split at the media markers (build_inputs stripped
+// user-typed ones, so every marker is ours) and bitmaps go in at the markers. User-input text is
+// tokenized as plain text, template text with special tokens.
+bool tokenize_media_prompt(const Instance &inst, const common_chat_prompt &prompt, const std::vector<mtmd::bitmap> &bitmaps,
+                           mtmd_input_chunks *chunks, std::string &error) {
+    const std::string_view marker = mtmd_default_marker();
+    std::vector<mtmd_input_text> texts;
+    std::vector<std::pair<bool, size_t>> order; // (is_bitmap, index into texts / bitmaps)
+    texts.reserve(prompt.parts.size() + bitmaps.size() + 1);
+    size_t n_bitmaps = 0;
+    auto add_text = [&](std::string_view t, bool parse_special) {
+        if (t.empty()) return;
+        texts.push_back(mtmd_input_text{t.data(), t.size(), false, parse_special});
+        order.emplace_back(false, texts.size() - 1);
+    };
+    for (const auto &part : prompt.parts) {
+        std::string_view rest = part.text;
+        for (size_t at = rest.find(marker); at != std::string_view::npos; at = rest.find(marker)) {
+            add_text(rest.substr(0, at), !part.is_input);
+            order.emplace_back(true, n_bitmaps++);
+            rest.remove_prefix(at + marker.size());
+        }
+        add_text(rest, !part.is_input);
+    }
+    if (n_bitmaps != bitmaps.size()) {
+        error = "llama: chat template kept " + std::to_string(n_bitmaps) + " of " + std::to_string(bitmaps.size()) + " media parts";
+        return false;
+    }
+    std::vector<mtmd_input_part> parts(order.size());
+    std::vector<const mtmd_input_part *> ptrs(order.size());
+    for (size_t i = 0; i < order.size(); ++i) {
+        if (order[i].first) parts[i] = mtmd_input_part{nullptr, bitmaps[order[i].second].ptr.get()};
+        else parts[i] = mtmd_input_part{&texts[order[i].second], nullptr};
+        ptrs[i] = &parts[i];
+    }
+    if (mtmd_tokenize_from_parts(inst.mtmd.get(), chunks, ptrs.data(), ptrs.size(), true) != 0) {
+        error = "llama: media tokenization failed";
+        return false;
+    }
+    return true;
+}
+
 bool ends_with_stop(const std::string &text, const std::vector<std::string> &stops, size_t &cut) {
     for (const auto &s : stops) {
         if (!s.empty() && text.size() >= s.size() && text.compare(text.size() - s.size(), s.size(), s) == 0) {
@@ -381,13 +507,14 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     const int n_ctx = std::max(1, json_number<int>(cfg, "context_window", 2048));
     const int n_seq = std::max(1, json_number<int>(cfg, "parallel", 1));
     int gpu_layers = -1, threads = 0;
-    std::string chat_template;
+    std::string chat_template, mmproj;
     simdjson::ondemand::object options;
     if (!cfg["options"].get_object().get(options)) {
         gpu_layers = json_number<int>(options, "gpu_layers", -1);
         threads = json_number<int>(options, "threads", 0);
         std::string_view t;
         if (!options["chat_template"].get_string().get(t)) chat_template = std::string(t);
+        if (!options["mmproj"].get_string().get(t)) mmproj = std::string(t);
     }
 
     auto mparams = llama_model_default_params();
@@ -398,6 +525,20 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         return AGENT_ERR_MODEL_LOAD_FAILED;
     }
 
+    mtmd::context_ptr mctx;
+    if (!mmproj.empty()) {
+        mtmd_context_params mp = mtmd_context_params_default();
+        mp.use_gpu = gpu_layers != 0;
+        mp.print_timings = false;
+        if (threads > 0) mp.n_threads = threads;
+        mctx.reset(mtmd_init_from_file(mmproj.c_str(), model, mp));
+        if (!mctx) {
+            llama_model_free(model);
+            std::snprintf(err, err_cap, "llama: failed to load mmproj from %s", mmproj.c_str());
+            return AGENT_ERR_MODEL_LOAD_FAILED;
+        }
+    }
+
     auto cparams = llama_context_default_params();
     cparams.n_ctx = static_cast<uint32_t>(n_ctx) * static_cast<uint32_t>(n_seq);
     cparams.n_seq_max = static_cast<uint32_t>(n_seq);
@@ -405,8 +546,12 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         cparams.n_threads = threads;
         cparams.n_threads_batch = threads;
     }
+    // Projectors with non-causal attention over image tokens (e.g. Gemma 3) need a whole image in
+    // one micro-batch.
+    if (mctx && mtmd_decode_use_non_causal(mctx.get(), nullptr)) cparams.n_ubatch = cparams.n_batch;
     llama_context *ctx = llama_init_from_model(model, cparams);
     if (!ctx) {
+        mctx.reset();
         llama_model_free(model);
         std::snprintf(err, err_cap, "llama: failed to create context");
         return AGENT_ERR_MODEL_LOAD_FAILED;
@@ -417,6 +562,7 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     inst->batcher.ctx = ctx;
     inst->batcher.seq_ctx = n_ctx;
     inst->batcher.seed_free_list(n_seq);
+    inst->mtmd = std::move(mctx);
     // Exception firewall (see start_session): template loading parses Jinja and may throw.
     try {
         inst->templates = common_chat_templates_init(model, chat_template);
@@ -453,13 +599,34 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
     Batcher &b = inst->batcher;
     const llama_vocab *vocab = llama_model_get_vocab(b.model);
 
-    common_chat_session session;
+    bool has_media = false;
+    for (size_t i = 0; i < req->n_messages && !has_media; ++i)
+        for (size_t p = 0; p < req->messages[i].n_parts && !has_media; ++p) has_media = is_media(req->messages[i].parts[p]);
+    if (has_media && !inst->mtmd)
+        return inst->fail(AGENT_ERR_UNSUPPORTED, "llama: image/audio input needs a multimodal projector (engine option \"mmproj\")");
+
     std::string error;
-    if (!start_session(*inst, vocab, build_inputs(req), session, error)) return inst->fail(AGENT_ERR_INVALID_CONFIG, error);
+    std::vector<mtmd::bitmap> bitmaps;
+    if (has_media) {
+        int32_t rc = load_media(*inst, req, bitmaps, error);
+        if (rc != AGENT_OK) return inst->fail(rc, error);
+    }
+
+    common_chat_session session;
+    if (!start_session(*inst, vocab, build_inputs(req, inst->mtmd ? mtmd_default_marker() : nullptr), session, error))
+        return inst->fail(AGENT_ERR_INVALID_CONFIG, error);
 
     std::vector<llama_token> tokens;
-    if (!tokenize_prompt(vocab, session.prompt(), tokens)) return inst->fail(AGENT_ERR_DECODE_FAILED, "llama: tokenization failed");
-    const int n_prompt = static_cast<int>(tokens.size());
+    mtmd::input_chunks chunks(has_media ? mtmd_input_chunks_init() : nullptr);
+    int n_prompt = 0;
+    if (has_media) {
+        if (!tokenize_media_prompt(*inst, session.prompt(), bitmaps, chunks.ptr.get(), error))
+            return inst->fail(AGENT_ERR_DECODE_FAILED, error);
+        n_prompt = static_cast<int>(mtmd_helper_get_n_tokens(chunks.ptr.get()));
+    } else {
+        if (!tokenize_prompt(vocab, session.prompt(), tokens)) return inst->fail(AGENT_ERR_DECODE_FAILED, "llama: tokenization failed");
+        n_prompt = static_cast<int>(tokens.size());
+    }
     if (n_prompt >= b.seq_ctx)
         return inst->fail(AGENT_ERR_INVALID_CONFIG, "llama: prompt is " + std::to_string(n_prompt) + " tokens but context_window is " +
                                                         std::to_string(b.seq_ctx));
@@ -475,7 +642,9 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
     int32_t status = AGENT_OK;
     llama_token tok = 0;
 
-    if (!b.prefill(seq, tokens, sampler, tok)) {
+    const bool prefilled =
+        has_media ? b.prefill_media(seq, inst->mtmd.get(), chunks.ptr.get(), sampler, tok) : b.prefill(seq, tokens, sampler, tok);
+    if (!prefilled) {
         status = inst->fail(AGENT_ERR_DECODE_FAILED, "llama: prompt decode failed");
     } else {
         char piece[256];
@@ -568,8 +737,10 @@ int32_t llama_reset_cache(void *instance) {
 const agent_engine_v1 kLlamaEngine = {
     AGENT_ENGINE_ABI_VERSION,
     "llama",
-    "0.2",
-    AGENT_CAP_TEXT_GEN | AGENT_CAP_TOOL_CALL,
+    "0.3",
+    // Static: what the plugin can do. Image/audio input also needs options.mmproj (and audio a
+    // projector that supports it); otherwise run() returns AGENT_ERR_UNSUPPORTED for media parts.
+    AGENT_CAP_TEXT_GEN | AGENT_CAP_TOOL_CALL | AGENT_CAP_VISION_IN | AGENT_CAP_AUDIO_IN,
     AGENT_ENGINE_FLAG_CONCURRENT | AGENT_ENGINE_FLAG_NATIVE_TOOLS,
     llama_create,
     llama_destroy,

@@ -8,6 +8,10 @@ set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
 set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
 set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)  # engines never download; the CLI hub does
+# libmtmd (image / audio input) without the rest of tools/. Video goes through an ffmpeg
+# subprocess in mtmd's helpers, which a plugin must not spawn, so it stays off.
+set(LLAMA_BUILD_MTMD ON CACHE BOOL "" FORCE)
+set(MTMD_VIDEO OFF CACHE BOOL "" FORCE)
 add_subdirectory(${PROJECT_SOURCE_DIR}/vendor/llama.cpp ${CMAKE_CURRENT_BINARY_DIR}/llama.cpp EXCLUDE_FROM_ALL)
 
 add_library(agent-engine-llama SHARED
@@ -18,7 +22,7 @@ target_include_directories(agent-engine-llama PRIVATE
     ${PROJECT_SOURCE_DIR}/include
     ${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader
 )
-target_link_libraries(agent-engine-llama PRIVATE llama llama-common)
+target_link_libraries(agent-engine-llama PRIVATE llama llama-common mtmd)
 set_target_properties(agent-engine-llama PROPERTIES PREFIX "" CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 set_source_files_properties(${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader/simdjson.cpp PROPERTIES COMPILE_OPTIONS "-w")
 target_compile_options(agent-engine-llama PRIVATE ${AGENT_WARNINGS})
@@ -31,7 +35,7 @@ set_target_properties(llama PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "$<T
 if(TARGET ggml)
     set_target_properties(ggml PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "$<TARGET_PROPERTY:ggml,INTERFACE_INCLUDE_DIRECTORIES>")
 endif()
-foreach(dep llama-common llama-common-base)
+foreach(dep llama-common llama-common-base mtmd)
     if(TARGET ${dep})
         set_target_properties(${dep} PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "$<TARGET_PROPERTY:${dep},INTERFACE_INCLUDE_DIRECTORIES>")
     endif()

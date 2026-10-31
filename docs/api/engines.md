@@ -80,7 +80,32 @@ parses replies into content + tool calls in the model's native format, using lla
 It sets `AGENT_ENGINE_FLAG_NATIVE_TOOLS` (the core only adds the skills list to the system message) and
 `AGENT_ENGINE_FLAG_CONCURRENT` (parallel subagents share one continuously batched decode).
 
-`Config::engine_options`: `gpu_layers`, `threads`, `chat_template` (overrides the template embedded in the GGUF).
+`Config::engine_options`: `gpu_layers`, `threads`, `chat_template` (overrides the template embedded in the GGUF),
+`mmproj` (path to a multimodal projector GGUF, enables image / audio input).
+
+### Image and audio input
+
+With `mmproj` set, the plugin loads the projector with llama.cpp's libmtmd (linked statically into the
+plugin) and accepts `AGENT_PART_FILE` / `AGENT_PART_BYTES` parts in input messages:
+
+- Images: anything stb_image decodes (PNG, JPEG, BMP, GIF, ...). Audio: WAV, MP3, FLAC, if the projector
+  supports audio (e.g. Voxtral, Qwen2.5-Omni). The format is detected from the bytes, not the mime type.
+- Each media part becomes libmtmd's media marker at its position in the message, so text and media keep
+  their order in the rendered chat template. Markers typed by the user are stripped.
+- Video (`video/*`) is rejected: libmtmd decodes video through an `ffmpeg` subprocess, which is not
+  built into the plugin.
+
+`caps` is a static field, so it lists what the plugin can do (`AGENT_CAP_VISION_IN`,
+`AGENT_CAP_AUDIO_IN`), not what the loaded model can do. `run()` returns `AGENT_ERR_UNSUPPORTED` if a
+request carries media and no `mmproj` was loaded, or if the projector lacks the needed modality.
+
+```cpp
+cfg.model          = ".workspace/models/SmolVLM-256M-Instruct-Q8_0.gguf";
+cfg.engine_options = R"({"mmproj": ".workspace/models/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf"})";
+```
+
+Prompts with media are prefilled on their own sequence under the batcher's lock (libmtmd encodes the
+media and decodes text and embedding chunks in turn); generation then joins the shared batched rounds.
 
 `common_chat` reports errors by throwing, and exceptions must not cross the plugin ABI. So the
 plugin catches at exactly those calls (template load/render, output parsing) and converts them to
