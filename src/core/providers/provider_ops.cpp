@@ -3,6 +3,7 @@
 #include "../executor/ambient_turn.hpp"
 
 #include <agent-cpp/agent.hpp>
+#include <agent-cpp/engine_abi.h>
 
 namespace agent::providers {
 
@@ -16,6 +17,10 @@ namespace {
 Result<void> init_mock(Session &) { return ok(); }
 
 Result<InferResponse> infer_mock(Session &session, const InferRequest &request) {
+    // The built-in mock only chats.
+    const uint32_t task = request.task ? request.task : session.config.default_task;
+    if (task != 0 && task != AGENT_CAP_TEXT_GEN)
+        return fail<InferResponse>(ErrorCode::UnsupportedProvider, "The mock provider only performs text generation.");
     if (request.stream && request.on_token) request.on_token("Mock Response Streamed", request.token_user_data);
 
     std::string_view response_text = ambient::current_arena(session).allocate_string("Mock Response");

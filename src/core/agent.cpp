@@ -89,6 +89,13 @@ Result<InferResponse> infer(Session &session, const InferRequest &request) {
     return ops->infer(session, request);
 }
 
+Result<InferResponse> run_task(Session &session, uint32_t task, const InferRequest &request) {
+    if (task == 0) return fail<InferResponse>(ErrorCode::InvalidConfig, "run_task: task must be an AGENT_CAP_* bit, not 0.");
+    InferRequest req = request;
+    req.task = task;
+    return infer(session, req);
+}
+
 Result<void> init_memory(Session &session) {
     const StoreOps *ops = memory::active_store(session);
     if (!ops->open || !ops->put || !ops->get || !ops->clear)

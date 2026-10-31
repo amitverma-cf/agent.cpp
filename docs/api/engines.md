@@ -26,9 +26,24 @@ auto session = agent::init(cfg);
  "parallel": 4, "options": { ...Config::engine_options... }}
 ```
 
-Each request carries one task (`agent_request::task`): `AGENT_CAP_TEXT_GEN` if the engine supports
-it, otherwise the lowest capability bit the engine declares (e.g. `AGENT_CAP_GENERIC` for the onnx
-engine). Tensors on a `MessageView` are sent as `AGENT_PART_TENSOR` parts, and tensor parts in the
+Each request carries one task (`agent_request::task`, one `AGENT_CAP_*` bit from `engine_abi.h`).
+Pick it per call with `InferRequest::task` or `agent::run_task`, or per session with
+`Config::default_task` (which also drives `run_turn` / `run_turn_with_media`):
+
+```cpp
+agent::InferRequest req{.messages = {&msg, 1}};
+auto speech = agent::run_task(session, AGENT_CAP_TTS, req);   // same as req.task = AGENT_CAP_TTS; infer()
+
+cfg.default_task = AGENT_CAP_IMAGE_GEN;                         // every run_turn of this session draws
+```
+
+An explicit task must be a single bit the engine declares (otherwise `InvalidConfig` for zero or
+several bits, `UnsupportedProvider` for an undeclared one; `Config::default_task` is checked at
+`init()`). With no task set (0) the core picks one automatically: `AGENT_CAP_TEXT_GEN` if the engine
+supports it, otherwise the lowest capability bit the engine declares (e.g. `AGENT_CAP_GENERIC` for
+the onnx engine). Tool definitions (`tools_json`) are only sent with `AGENT_CAP_TEXT_GEN`.
+
+Tensors on a `MessageView` are sent as `AGENT_PART_TENSOR` parts, and tensor parts in the
 reply come back in `InferResponse::output_tensors`.
 
 Files that engines generate (audio, images, video, meshes) are written to `<workspace>/artifacts/` and
@@ -345,8 +360,9 @@ and at every sampler step, then `run()` returns `AGENT_ERR_CANCELLED`.
 sd.cpp's log and progress callbacks are process-global, so generations from different sdcpp instances
 are serialized by a mutex inside the plugin.
 
-The core currently sends every request as `AGENT_CAP_TEXT_GEN`, so the sdcpp engine is driven
-through the C ABI directly until the core routes image tasks.
+Through the core, pick the task explicitly: `run_task(session, AGENT_CAP_IMAGE_EDIT, req)`, or
+`Config::default_task = AGENT_CAP_IMAGE_GEN` so `run_turn` draws (the automatic task is the lowest
+declared bit, `IMAGE_GEN`).
 
 ## The trellis engine
 
@@ -486,15 +502,18 @@ clusters closer than `threshold` merge. With two Kokoro voices, TitaNet separate
 while `3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx` mixed them up, also in sherpa-onnx's
 own `sherpa-onnx-offline-speaker-diarization` tool.
 
-Requests are routed by task and content:
+Requests are routed by task, and by content when the task was not chosen explicitly. Pick it with
+`run_task(session, AGENT_CAP_TTS, req)` / `InferRequest::task`, or `Config::default_task` for
+`run_turn`:
 
 | `task` | Last user message | Result |
 |---|---|---|
 | `TTS` | text | speech: WAV file in `output_dir` (`FILE`, `audio/wav`) + a short `TEXT` summary |
-| `ASR` or `TEXT_GEN` | audio part, `asr` configured | transcript as a `TEXT` part |
-| `ASR` or `TEXT_GEN` | audio part, no `asr`, `vad` configured | speech segments, as for `VAD` |
-| `ASR` or `TEXT_GEN` | audio part, only `diarize` configured | speaker segments, as for `DIARIZE` |
-| `ASR` or `TEXT_GEN` | text, no audio | speech, as for `TTS` |
+| `ASR` | audio `FILE`/`BYTES` part, `asr` configured | transcript as a `TEXT` part |
+| automatic (no task set; the core sends `ASR`, the lowest bit) or `TEXT_GEN` | audio part, `asr` configured | transcript, as for `ASR` |
+| automatic or `TEXT_GEN` | audio part, no `asr`, `vad` configured | speech segments, as for `VAD` |
+| automatic or `TEXT_GEN` | audio part, only `diarize` configured | speaker segments, as for `DIARIZE` |
+| automatic or `TEXT_GEN` | text, no audio | speech, as for `TTS` |
 | `VAD` | audio part (+ optional `TEXT` command) | `TEXT` `[{"start":0.52,"end":1.84}, ...]` (seconds) + `TENSOR` `segments` F32 `[n, 2]` |
 | `DIARIZE` | audio part | `TEXT` `[{"start":0.03,"end":4.64,"speaker":0}, ...]` + `TENSOR` `segments` F32 `[n, 3]` (start, end, speaker) |
 

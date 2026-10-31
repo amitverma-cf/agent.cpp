@@ -239,6 +239,11 @@ struct InferRequest {
     ProgressFn on_progress = nullptr;
     void *progress_user_data = nullptr;
     const volatile int32_t *cancel = nullptr; // engines stop with ErrorCode::Cancelled when *cancel != 0
+    // AiProvider::Engine: the one capability this call performs, an AGENT_CAP_* bit from
+    // <agent-cpp/engine_abi.h> (e.g. AGENT_CAP_TTS). It must be a single bit the engine declares, or the
+    // call fails with InvalidConfig / UnsupportedProvider. 0 = Config::default_task, and when that is 0
+    // too, automatic: AGENT_CAP_TEXT_GEN if the engine supports it, else its lowest capability bit.
+    uint32_t task = 0;
 };
 
 struct InferResponse {
@@ -428,6 +433,11 @@ struct Config {
     // engine_options paths read-only, workspace read-only, workspace/artifacts read-write, no
     // network, no /tmp. memory_limit_bytes becomes the host's RLIMIT_AS.
     SandboxPolicy engine_sandbox{.enabled = true, .allow_tmp = false, .network = SandboxNetwork::Deny};
+
+    // AiProvider::Engine: the task (an AGENT_CAP_* bit) for requests that don't set InferRequest::task,
+    // including every inference of run_turn / run_turn_with_media. Checked against the engine's caps
+    // at init(). 0 = automatic (see InferRequest::task).
+    uint32_t default_task = 0;
 };
 
 struct DataSource {
@@ -506,6 +516,9 @@ void free_backend();
 Result<Session> init(const Config &config);
 
 Result<InferResponse> infer(Session &session, const InferRequest &request);
+// infer() with InferRequest::task = task (one AGENT_CAP_* bit, non-zero), e.g.
+// run_task(session, AGENT_CAP_TTS, request) on an engine that does both ASR and TTS.
+Result<InferResponse> run_task(Session &session, uint32_t task, const InferRequest &request);
 
 Result<void> init_memory(Session &session);
 Result<void> store_memory(Session &session, std::string_view key, std::string_view value);

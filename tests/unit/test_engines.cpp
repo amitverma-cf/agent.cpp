@@ -587,3 +587,127 @@ TEST_CASE("load_engine_manifest loads plugins listed in engines.json", "[engines
     auto absent = agent::load_engine_manifest((dir / "nope.json").string());
     REQUIRE(absent.error.code == agent::ErrorCode::FilesystemError);
 }
+
+// ------------------------------------------------------------------ explicit tasks
+
+namespace {
+
+// Replies "task=<agent_request::task>" so tests can see which task the core sent.
+struct TaskReply {
+    std::string text;
+    agent_part part{};
+};
+
+int32_t task_create(agent_str, void **out, char *, size_t) {
+    static int instance = 0;
+    *out = &instance;
+    return AGENT_OK;
+}
+void task_destroy(void *) {}
+int32_t task_run(void *, const agent_request *req, agent_response *resp) {
+    thread_local TaskReply reply;
+    reply.text = "task=" + std::to_string(req->task);
+    reply.part = agent_part{};
+    reply.part.kind = AGENT_PART_TEXT;
+    reply.part.text = agent_str{reply.text.data(), reply.text.size()};
+    *resp = agent_response{};
+    resp->message.role = agent_str{"assistant", 9};
+    resp->message.parts = &reply.part;
+    resp->message.n_parts = 1;
+    return AGENT_OK;
+}
+void task_free(void *, agent_response *resp) { *resp = agent_response{}; }
+const char *task_error(void *) { return ""; }
+
+// Speech-only, like sherpa: no TEXT_GEN, so the automatic task is the lowest bit (ASR).
+const agent_engine_v1 kTaskEngine = {
+    AGENT_ENGINE_ABI_VERSION,
+    "task_echo_test",
+    "1.0",
+    AGENT_CAP_ASR | AGENT_CAP_TTS,
+    0,
+    task_create,
+    task_destroy,
+    task_run,
+    task_free,
+    task_error,
+    nullptr,
+    nullptr,
+};
+
+agent::Config task_config() {
+    REQUIRE(agent::register_engine(&kTaskEngine).ok);
+    agent::Config cfg;
+    cfg.provider = agent::AiProvider::Engine;
+    cfg.engine = "task_echo_test";
+    cfg.workspace_dir = kWorkspace;
+    cfg.auto_default_tools = false;
+    return cfg;
+}
+
+std::string task_of(agent::Session &session, uint32_t task) {
+    agent::MessageView msg{.role = "user", .content = "hi"};
+    agent::InferRequest req;
+    req.messages = std::span<const agent::MessageView>(&msg, 1);
+    req.task = task;
+    auto res = agent::infer(session, req);
+    INFO(res.error.message);
+    REQUIRE(res.ok);
+    return std::string(res.value.message.content);
+}
+
+} // namespace
+
+TEST_CASE("InferRequest::task and run_task pick the engine task explicitly", "[engines][task]") {
+    auto res = agent::init(task_config());
+    INFO(res.error.message);
+    REQUIRE(res.ok);
+    agent::Session session = std::move(res.value);
+
+    // 0 = automatic: TEXT_GEN if supported, else the lowest capability bit.
+    REQUIRE(task_of(session, 0) == "task=" + std::to_string(AGENT_CAP_ASR));
+    REQUIRE(task_of(session, AGENT_CAP_TTS) == "task=" + std::to_string(AGENT_CAP_TTS));
+
+    agent::MessageView msg{.role = "user", .content = "hi"};
+    agent::InferRequest req;
+    req.messages = std::span<const agent::MessageView>(&msg, 1);
+    auto tts = agent::run_task(session, AGENT_CAP_TTS, req);
+    REQUIRE(tts.ok);
+    REQUIRE(tts.value.message.content == "task=" + std::to_string(AGENT_CAP_TTS));
+
+    // Not declared, several bits, or zero.
+    auto undeclared = agent::run_task(session, AGENT_CAP_IMAGE_GEN, req);
+    REQUIRE_FALSE(undeclared.ok);
+    REQUIRE(undeclared.error.code == agent::ErrorCode::UnsupportedProvider);
+    auto two_bits = agent::run_task(session, AGENT_CAP_ASR | AGENT_CAP_TTS, req);
+    REQUIRE_FALSE(two_bits.ok);
+    REQUIRE(two_bits.error.code == agent::ErrorCode::InvalidConfig);
+    REQUIRE(agent::run_task(session, 0, req).error.code == agent::ErrorCode::InvalidConfig);
+}
+
+TEST_CASE("Config::default_task drives run_turn and is checked at init", "[engines][task]") {
+    auto cfg = task_config();
+    cfg.default_task = AGENT_CAP_TTS;
+    auto res = agent::init(cfg);
+    INFO(res.error.message);
+    REQUIRE(res.ok);
+    agent::Session session = std::move(res.value);
+    agent::FlowMemory memory;
+    memory.id = "default_task";
+    auto reply = agent::run_turn(session, memory, "say this");
+    REQUIRE(reply.ok);
+    REQUIRE(reply.value == "task=" + std::to_string(AGENT_CAP_TTS));
+    // An explicit InferRequest::task still wins.
+    REQUIRE(task_of(session, AGENT_CAP_ASR) == "task=" + std::to_string(AGENT_CAP_ASR));
+
+    cfg.default_task = AGENT_CAP_IMAGE_GEN;
+    auto bad = agent::init(cfg);
+    REQUIRE_FALSE(bad.ok);
+    REQUIRE(bad.error.code == agent::ErrorCode::UnsupportedProvider);
+    REQUIRE(bad.error.message.find("default_task") != std::string::npos);
+
+    // The mock engine plugin only does TEXT_GEN.
+    auto mock = engine_config();
+    mock.default_task = AGENT_CAP_TTS;
+    REQUIRE(agent::init(mock).error.code == agent::ErrorCode::UnsupportedProvider);
+}
