@@ -48,9 +48,13 @@ struct RepoInfo {
 Result<RepoInfo> parse_repo_info(std::string_view json);
 
 // Picks the file the spec refers to: exact path (or unique basename) match for ModelSpec::file,
-// otherwise the .gguf whose name contains ModelSpec::quant (ties: shortest name, multi-part shards
-// "-00001-of-0000N" are rejected with a clear error). With neither, the repo must hold one .gguf.
+// otherwise the .gguf whose name contains ModelSpec::quant (a single-file GGUF wins; otherwise the
+// first shard "-00001-of-0000N" of a split GGUF). With neither, the repo must hold one .gguf.
 Result<RemoteFile> select_file(const RepoInfo &info, const ModelSpec &spec);
+
+// Split GGUF ("<stem>-00001-of-00003.gguf"): every shard of the set `shard` belongs to, in order.
+// A file that isn't a shard yields just itself. Fails when a shard is missing from the repo.
+Result<std::vector<RemoteFile>> split_set(const RepoInfo &info, const RemoteFile &shard);
 
 // -------------------------- Licence policy --------------------------
 

@@ -79,6 +79,27 @@ bool is_mmproj(std::string_view path) { return ifind(basename_of(path), "mmproj"
 // "model-00001-of-00003.gguf"
 bool is_split_shard(std::string_view path) { return ifind(basename_of(path), "-of-0") != std::string_view::npos; }
 
+// "<prefix>-00002-of-00005.gguf" -> prefix, 2, 5. false when path isn't a well-formed shard name.
+bool parse_shard(std::string_view path, std::string_view &prefix, int &index, int &total) {
+    constexpr std::string_view kExt = ".gguf";
+    if (path.size() < kExt.size() + 15 || !ends_with_ci(path, kExt)) return false;
+    const std::string_view stem = path.substr(0, path.size() - kExt.size());
+    // stem ends with "-NNNNN-of-NNNNN" (5 digits each).
+    const std::string_view tail = stem.substr(stem.size() - 15);
+    if (tail[0] != '-' || tail.substr(6, 4) != "-of-") return false;
+    auto digits = [](std::string_view d, int &out) {
+        out = 0;
+        for (char c : d) {
+            if (c < '0' || c > '9') return false;
+            out = out * 10 + (c - '0');
+        }
+        return true;
+    };
+    if (!digits(tail.substr(1, 5), index) || !digits(tail.substr(10, 5), total) || index < 1 || total < 1 || index > total) return false;
+    prefix = stem.substr(0, stem.size() - 15);
+    return true;
+}
+
 // Quant match whose boundaries are not part of a longer tag: "Q4_K" must not pick "Q4_K_M".
 bool quant_matches_exact(std::string_view filename, std::string_view quant) {
     const std::string_view name = basename_of(filename);
@@ -272,15 +293,41 @@ Result<RemoteFile> select_file(const RepoInfo &info, const ModelSpec &spec) {
     if (pool.empty())
         return fail<RemoteFile>(ErrorCode::KeyNotFound, "hub: no .gguf matching '" + spec.quant + "' in " + spec.repo +
                                                             (ggufs.empty() ? std::string() : " (available: " + join_paths(ggufs) + ")"));
-    std::vector<const RemoteFile *> whole;
-    for (const RemoteFile *f : pool)
+    std::vector<const RemoteFile *> whole, first_shards;
+    for (const RemoteFile *f : pool) {
+        std::string_view prefix;
+        int index = 0, total = 0;
         if (!is_split_shard(f->path)) whole.push_back(f);
-    if (whole.empty())
-        return fail<RemoteFile>(ErrorCode::InvalidConfig, "hub: '" + spec.quant + "' in " + spec.repo +
-                                                              " is only available as a split GGUF, which is not supported yet (" + join_paths(pool) + ")");
+        else if (parse_shard(f->path, prefix, index, total) && index == 1) first_shards.push_back(f);
+    }
+    if (whole.empty()) {
+        if (first_shards.size() == 1) return ok(*first_shards.front());
+        if (first_shards.empty())
+            return fail<RemoteFile>(ErrorCode::InvalidConfig, "hub: '" + spec.quant + "' in " + spec.repo +
+                                                                  " has shards but no first shard (-00001-of-N): " + join_paths(pool));
+        return fail<RemoteFile>(ErrorCode::InvalidConfig, "hub: '" + spec.quant + "' is ambiguous in " + spec.repo + ": " + join_paths(first_shards));
+    }
     if (whole.size() > 1)
         return fail<RemoteFile>(ErrorCode::InvalidConfig, "hub: '" + spec.quant + "' is ambiguous in " + spec.repo + ": " + join_paths(whole));
     return ok(*whole.front());
+}
+
+Result<std::vector<RemoteFile>> split_set(const RepoInfo &info, const RemoteFile &shard) {
+    std::string_view prefix;
+    int index = 0, total = 0;
+    if (!parse_shard(shard.path, prefix, index, total)) return ok(std::vector<RemoteFile>{shard});
+    std::vector<RemoteFile> set;
+    set.reserve(static_cast<size_t>(total));
+    char suffix[32];
+    for (int i = 1; i <= total; ++i) {
+        std::snprintf(suffix, sizeof(suffix), "-%05d-of-%05d.gguf", i, total);
+        const std::string want = std::string(prefix) + suffix;
+        auto it = std::find_if(info.files.begin(), info.files.end(), [&](const RemoteFile &f) { return f.path == want; });
+        if (it == info.files.end())
+            return fail<std::vector<RemoteFile>>(ErrorCode::KeyNotFound, "hub: split GGUF is missing shard " + want);
+        set.push_back(*it);
+    }
+    return ok(std::move(set));
 }
 
 // -------------------------- Licence policy --------------------------
@@ -556,10 +603,24 @@ Result<void> remove_model(std::string_view name, const std::string &catalog_path
     auto it = std::find_if(cat.value.begin(), cat.value.end(), [&](const CatalogEntry &e) { return e.name == name; });
     if (it == cat.value.end()) return fail(ErrorCode::KeyNotFound, "hub: no model named '" + std::string(name) + "' in " + catalog_path);
     if (delete_file && !it->path.empty()) {
-        std::error_code ec;
-        std::filesystem::remove(it->path, ec);
-        if (ec) return fail(ErrorCode::FilesystemError, "hub: cannot delete " + it->path + ": " + ec.message());
-        std::filesystem::remove(it->path + ".part", ec);
+        // A split GGUF is catalogued by its first shard; delete every shard of the set.
+        std::vector<std::string> paths{it->path};
+        std::string_view prefix;
+        int index = 0, total = 0;
+        if (parse_shard(it->path, prefix, index, total)) {
+            paths.clear();
+            char suffix[32];
+            for (int i = 1; i <= total; ++i) {
+                std::snprintf(suffix, sizeof(suffix), "-%05d-of-%05d.gguf", i, total);
+                paths.push_back(std::string(prefix) + suffix);
+            }
+        }
+        for (const std::string &p : paths) {
+            std::error_code ec;
+            std::filesystem::remove(p, ec);
+            if (ec) return fail(ErrorCode::FilesystemError, "hub: cannot delete " + p + ": " + ec.message());
+            std::filesystem::remove(p + ".part", ec);
+        }
     }
     cat.value.erase(it);
     return save_catalog(catalog_path, cat.value);

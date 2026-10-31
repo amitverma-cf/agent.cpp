@@ -382,6 +382,10 @@ Result<CatalogEntry> pull_model(std::string_view spec_text, const PullOptions &o
 
     auto file = select_file(info.value, spec.value);
     if (!file.ok) return fail<CatalogEntry>(file.error.code, file.error.message);
+    // A split GGUF downloads every shard next to the first; the catalogue points at shard 1, which
+    // is what llama.cpp loads (it finds the rest by name).
+    auto shards = split_set(info.value, file.value);
+    if (!shards.ok) return fail<CatalogEntry>(shards.error.code, shards.error.message);
 
     const RepoInfo &ri = info.value;
     std::string license = ri.license.empty() ? std::string("unknown") : ri.license;
@@ -415,25 +419,33 @@ Result<CatalogEntry> pull_model(std::string_view spec_text, const PullOptions &o
                        .sha256 = file.value.sha256,
                        .license = license};
 
-    bool have = false;
-    if (std::filesystem::is_regular_file(dest, ec) && (file.value.size == 0 || file_size_or_zero(entry.path) == file.value.size)) {
-        have = true;
-        if (!file.value.sha256.empty() && !(existing != cat.value.end() && existing->sha256 == file.value.sha256)) {
-            auto digest = sha256_file(entry.path);
-            have = digest.ok && digest.value == file.value.sha256;
+    const auto repo_dir = std::filesystem::path(models_dir) / std::filesystem::path(repo_dir_name);
+    uint64_t total_size = 0;
+    for (const RemoteFile &shard : shards.value) {
+        const std::string shard_path = (shard.path == file.value.path) ? entry.path : std::filesystem::absolute(repo_dir / shard.path, ec).lexically_normal().string();
+        bool have = false;
+        if (std::filesystem::is_regular_file(shard_path, ec) && (shard.size == 0 || file_size_or_zero(shard_path) == shard.size)) {
+            have = true;
+            const bool known_good = shard.path == file.value.path && existing != cat.value.end() && existing->sha256 == shard.sha256;
+            if (!shard.sha256.empty() && !known_good) {
+                auto digest = sha256_file(shard_path);
+                have = digest.ok && digest.value == shard.sha256;
+            }
         }
+        if (!have) {
+            const std::string url = opts.http.endpoint + "/" + encode_path(spec.value.repo) + "/resolve/" + encode_path(spec.value.revision) + "/" +
+                                    encode_path(shard.path);
+            DownloadOptions dl{.expected_size = shard.size,
+                               .expected_sha256 = shard.sha256,
+                               .on_progress = opts.on_progress,
+                               .progress_user_data = opts.progress_user_data,
+                               .cancel = opts.cancel};
+            auto r = download_file(url, shard_path, opts.http, dl);
+            if (!r.ok) return fail<CatalogEntry>(r.error.code, r.error.message);
+        }
+        total_size += shard.size ? shard.size : file_size_or_zero(shard_path);
     }
-    if (!have) {
-        const std::string url = opts.http.endpoint + "/" + encode_path(spec.value.repo) + "/resolve/" + encode_path(spec.value.revision) + "/" +
-                                encode_path(file.value.path);
-        DownloadOptions dl{.expected_size = file.value.size,
-                           .expected_sha256 = file.value.sha256,
-                           .on_progress = opts.on_progress,
-                           .progress_user_data = opts.progress_user_data,
-                           .cancel = opts.cancel};
-        auto r = download_file(url, entry.path, opts.http, dl);
-        if (!r.ok) return fail<CatalogEntry>(r.error.code, r.error.message);
-    }
+    if (shards.value.size() > 1) entry.size = total_size;
     if (entry.size == 0) entry.size = file_size_or_zero(entry.path);
 
     if (existing != cat.value.end()) *existing = entry;
