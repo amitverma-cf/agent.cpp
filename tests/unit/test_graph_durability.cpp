@@ -339,3 +339,45 @@ TEST_CASE("graph durability: resume from the sqlite checkpointer in a new Sessio
     REQUIRE(resumed.state.histories.at("chat").history.size() == 2);
     REQUIRE(count_events(resumed.events, agent::GraphEventType::NodeStart, "before") == 0);
 }
+
+TEST_CASE("graph durability: a fresh run after an interrupt answers the abandoned tool calls", "[graph][durability]") {
+    agent::Session session = make_session();
+    g_ping_calls = 0;
+
+    auto worker = agent_node("worker", "msg", "out");
+    worker.allowed_tools = {"ping"};
+    worker.interrupt_before_tools = true;
+    agent::Graph g = agent::make_graph(worker);
+
+    agent::GraphRun run;
+    run.thread_id = "abandoned";
+    agent::set_state(run.state, "msg", "call:ping");
+    REQUIRE(agent::run_graph(session, g, run).ok);
+    REQUIRE(run.status == agent::GraphRunStatus::Interrupted);
+    REQUIRE(run.pending_tool_calls.size() == 1);
+
+    // Instead of resume_graph, start a new run on the same thread.
+    agent::GraphRun fresh;
+    fresh.thread_id = "abandoned";
+    agent::set_state(fresh.state, "msg", "hello again");
+    REQUIRE(agent::run_graph(session, g, fresh).ok);
+    REQUIRE(fresh.status == agent::GraphRunStatus::Completed);
+    REQUIRE(fresh.pending_tool_calls.empty());
+    REQUIRE(g_ping_calls == 0);
+    REQUIRE(agent::get_state(fresh.state, "out") == "echo: hello again");
+
+    // user, assistant(tool call), tool(error), user, assistant
+    const auto &history = fresh.state.histories.at("worker").history;
+    REQUIRE(history.size() == 5);
+    REQUIRE(history[1].tool_calls.size() == 1);
+    REQUIRE(history[2].role == "tool");
+    REQUIRE(history[2].tool_call_id == history[1].tool_calls[0].id);
+    REQUIRE(history[2].content.find("not executed") != std::string::npos);
+    REQUIRE(history[3].content == "hello again");
+    REQUIRE(count_events(fresh.events, agent::GraphEventType::ToolResult, "worker") == 1);
+
+    // The answered history is what got checkpointed: resuming the completed thread changes nothing.
+    agent::GraphRun again;
+    REQUIRE(agent::resume_graph(session, g, "abandoned", again).ok);
+    REQUIRE(again.state.histories.at("worker").history.size() == 5);
+}
