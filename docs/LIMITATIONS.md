@@ -34,7 +34,6 @@ Status as of 2026-10-31. Each entry says what breaks, why, and the planned fix. 
 |---|---|
 | The task for non-chat engines is inferred as "TEXT_GEN, else the lowest capability bit". Multi-capability engines (sherpa: ASR+TTS) route by content as a workaround. | Explicit task on the public API (e.g. `InferRequest::task`, `run_task(...)`), which already exists internally as `providers::infer_task`. |
 | `agent_engine_v1` has no struct-size field, so it can't grow compatibly. | Add `struct_size` to the request/response/engine structs in ABI v2. |
-| `on_chunk` size units (bytes vs samples) are not specified by the header. | Specify bytes in `engine_abi.h`. |
 | Cancel granularity differs per engine: ONNX only before `Run()`, llama per token, sd.cpp per step, sherpa per sentence. | Document per engine; the engine host makes hard cancel (kill) possible. |
 | `Flow`/`AgentScheduler` duplicate the graph runtime. | Being removed; the graph runtime replaces them. |
 
@@ -64,7 +63,6 @@ Status as of 2026-10-31. Each entry says what breaks, why, and the planned fix. 
 | Limitation | Fix |
 |---|---|
 | `agent setup` cannot download prebuilt engines yet. | Release pipeline publishing per-engine/per-backend archives. |
-| `/open` needs `xdg-open` / `open` / `start`. | Fall back to printing the path. |
 | The CLI hides only the Hermes/Qwen `<tool_call>` markup from the token stream. | Use the engine's parsed message instead of filtering raw tokens. |
 | The hub can't download split GGUFs; proxy credentials are ignored; gated repos are untested. | Implement shard sets; proxy auth; test with `HF_TOKEN`. |
 | MCP: stdio only (no HTTP transport), no resources/prompts/sampling, tested against a fake server only. | Implement Streamable HTTP and the remaining features; test with real servers. |
