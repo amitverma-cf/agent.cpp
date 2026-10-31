@@ -229,7 +229,7 @@ struct MessageView {
     std::string_view              content;
     std::span<const ToolCallView> tool_calls;
     std::string_view              tool_call_id;   // non-empty for role="tool"
-    std::span<const TensorView>   tensors;        // multimodal (ONNX)
+    std::span<const TensorView>   tensors;        // raw named tensors (e.g. the onnx engine)
 };
 ```
 
@@ -271,7 +271,7 @@ Output from `infer`. Views are arena-backed and invalidated on the next `infer`/
 struct InferResponse {
     MessageView                 message;
     TokenUsage                  usage;
-    std::span<const TensorView> output_tensors;   // ONNX output only
+    std::span<const TensorView> output_tensors;   // tensor outputs (e.g. the onnx engine)
 };
 ```
 
@@ -309,7 +309,7 @@ struct MemoryConfig {
 ## Providers
 
 ```cpp
-enum class AiProvider { Mock, OnnxRuntime, Engine };
+enum class AiProvider { Mock, Engine };   // ONNX Runtime, llama.cpp, ... are Engine plugins
 ```
 
 ---

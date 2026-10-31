@@ -28,12 +28,18 @@ wsl cmake -B build -G Ninja -DAGENT_ENGINE_LLAMA=OFF
 wsl cmake --build build
 ```
 
-### Build with ONNX Runtime
+### Build the ONNX Runtime engine plugin
+
+Download a prebuilt release (e.g. `onnxruntime-linux-x64-1.31.1.tgz` from
+https://github.com/microsoft/onnxruntime/releases), extract it, and point CMake at it:
 
 ```bash
-wsl cmake -B build -G Ninja -DAGENT_ENABLE_ONNX=ON
+wsl cmake -B build -G Ninja -DAGENT_ENGINE_ONNX=ON -DONNXRUNTIME_ROOT=/path/to/onnxruntime-linux-x64-1.31.1
 wsl cmake --build build
 ```
+
+This builds `build/engines/onnx/agent-engine-onnx.so` and copies `libonnxruntime.so.1` next to it.
+Ship the two together: the plugin finds ONNX Runtime through its `$ORIGIN` RPATH.
 
 ### Enable sanitizers
 

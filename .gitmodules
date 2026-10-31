@@ -4,8 +4,3 @@
 [submodule "vendor/simdjson"]
 	path = vendor/simdjson
 	url = https://github.com/simdjson/simdjson.git
-[submodule "vendor/onnxruntime"]
-	path = vendor/onnxruntime
-	url = https://github.com/microsoft/onnxruntime.git
-	branch = v1.27.1
-	shallow = true

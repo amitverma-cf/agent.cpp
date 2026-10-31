@@ -11,11 +11,6 @@ Result<InferResponse> infer_engine(Session &session, const InferRequest &request
 Result<int> count_tokens_engine(Session &session, std::string_view text);
 Result<void> clear_kv_cache_engine(Session &session);
 
-#ifdef AGENT_HAS_ONNX
-Result<void> init_onnx(Session &session);
-Result<InferResponse> infer_onnx(Session &session, const InferRequest &request);
-#endif
-
 namespace {
 
 Result<void> init_mock(Session &) { return ok(); }
@@ -41,10 +36,6 @@ constexpr ProviderOps kProviderOps[] = {
                 .infer = infer_engine,
                 .count_tokens = count_tokens_engine,
                 .clear_kv_cache = clear_kv_cache_engine},
-#ifdef AGENT_HAS_ONNX
-    ProviderOps{
-        .provider = AiProvider::OnnxRuntime, .init = init_onnx, .infer = infer_onnx, .count_tokens = nullptr, .clear_kv_cache = nullptr},
-#endif
 };
 
 } // namespace

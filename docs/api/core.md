@@ -142,7 +142,7 @@ Default: `context_window * 8 + 2 MiB`. Override via `Config::arena_capacity`. Th
 
 ## DType
 
-Element types for tensor data used with the ONNX Runtime provider.
+Element types for tensor data, e.g. for the `onnx` engine plugin (`AGENT_PART_TENSOR` parts).
 
 ```cpp
 enum class DType { Float32, Float16, Int8, Int32, Int64, UInt8 };

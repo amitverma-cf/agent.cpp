@@ -104,6 +104,13 @@ void forward_progress(void *user_data, uint64_t step, uint64_t total) {
     if (ctx->on_progress) ctx->on_progress(step, total, ctx->progress_user_data);
 }
 
+// The task sent with every request: text generation when the engine supports it, otherwise the
+// engine's lowest capability bit (e.g. AGENT_CAP_GENERIC for the onnx engine).
+uint32_t engine_task(const agent_engine_v1 *engine) {
+    if ((engine->caps & AGENT_CAP_TEXT_GEN) || engine->caps == 0) return AGENT_CAP_TEXT_GEN;
+    return static_cast<uint32_t>(engine->caps & (~engine->caps + 1));
+}
+
 Result<InferResponse> arena_full() {
     return fail<InferResponse>(ErrorCode::DecodeFailed, "Arena capacity exhausted. Increase Config::arena_capacity.");
 }
@@ -200,7 +207,7 @@ Result<InferResponse> infer_engine(Session &session, const InferRequest &request
                                          static_cast<double>(temperature), request.stream ? "true" : "false");
 
     CallbackCtx cb_ctx{request.on_token, request.token_user_data, request.on_progress, request.progress_user_data};
-    agent_request req{.task = AGENT_CAP_TEXT_GEN,
+    agent_request req{.task = engine_task(engine),
                       .messages = msgs.data(),
                       .n_messages = msgs.size(),
                       .tools_json = to_c(build_tools_json(session)),

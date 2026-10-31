@@ -149,7 +149,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 ### Phase 1: Clean slate (1 to 2 weeks)
 - [x] Remove the OpenAI-compatible provider and cron
 - [ ] Remove `AgentScheduler` provider-specific threading (replaced by the graph runtime in Phase 3)
-- [ ] Move the ONNX provider and its vendored ORT headers into `engines/onnx/` (kept, not deleted)
+- [x] Move the ONNX provider into `engines/onnx/` (`agent-engine-onnx` plugin, built against a prebuilt ORT release; `AiProvider::OnnxRuntime` and the vendored ORT headers removed)
 - [x] Move SQLite, sqlite-vec and the memory write-back cache out of `libagent` into `tools/store-sqlite/` (used by the CLI)
 - [x] Move llama.cpp out of core into `engines/llama/` (`agent-engine-llama` plugin; `AiProvider::LlamaCpp` removed)
 - [ ] Move httplib/OpenSSL into `tools/hub/` (CLI only); `libagent` depends only on simdjson
@@ -190,6 +190,8 @@ Priority wave A (v1 **starter pack**, installed by default by `agent setup`):
 - [ ] `sdcpp`: stable-diffusion.cpp txt2img / img2img / video (Wan, LTX) with progress + cancel
 - [ ] `trellis`: TRELLIS.2 image → GLB (3D gen)
 - [ ] `onnx`: generic ONNX Runtime engine (classifiers, detectors, custom models), grown from the existing provider
+  - [x] v1: named tensors in/out (`AGENT_CAP_GENERIC`), concurrent `run()`, threads, graph optimization level, CPU/CUDA EP selection
+  - [ ] IoBinding / device-resident outputs, more EPs (DirectML, CoreML, TensorRT), cancel during `Run()`, task-specific pre/post-processing (classify, embed, detect)
 Wave B (optional add-ons):
 - [ ] `whisper`: whisper.cpp STT
 - [ ] `parakeet`: parakeet.cpp (ggml STT)

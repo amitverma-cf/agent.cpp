@@ -75,11 +75,16 @@ cfg.temperature    = 0.8f;
 
 ### ONNX Runtime
 
-Multimodal models (image, audio, embeddings) via ONNX Runtime.
+Arbitrary ONNX graphs (classifiers, detectors, embeddings) via the `agent-engine-onnx` plugin
+(build with `-DAGENT_ENGINE_ONNX=ON -DONNXRUNTIME_ROOT=<prebuilt ORT>`). Inputs and outputs are raw
+named tensors (`MessageView::tensors` / `InferResponse::output_tensors`); see
+[api/engines.md](api/engines.md#the-onnx-engine).
 
 ```cpp
-cfg.provider = agent::AiProvider::OnnxRuntime;
-cfg.model    = ".workspace/models/clip-vit-b32.onnx";
+cfg.provider       = agent::AiProvider::Engine;
+cfg.engine         = "./engines/onnx/agent-engine-onnx.so";
+cfg.model          = ".workspace/models/clip-vit-b32.onnx";
+cfg.engine_options = R"({"threads": 4})";
 ```
 
 ---
