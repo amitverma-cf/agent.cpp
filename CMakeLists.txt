@@ -296,8 +296,11 @@ if(AGENT_BUILD_HUB)
     target_link_libraries(test_agent PRIVATE agent_hub)
 endif()
 if(AGENT_BUILD_CLI)
-    target_sources(test_agent PRIVATE tests/unit/test_cli.cpp)
+    target_sources(test_agent PRIVATE tests/unit/test_cli.cpp tests/unit/test_voice.cpp)
     target_link_libraries(test_agent PRIVATE agent_cli_core)
+    # The agent voice end-to-end test runs the real binary.
+    target_compile_definitions(test_agent PRIVATE AGENT_TEST_CLI_PATH="$<TARGET_FILE:agent_cli_bin>")
+    add_dependencies(test_agent agent_cli_bin)
 endif()
 target_compile_definitions(test_agent PRIVATE AGENT_TEST_MOCK_ENGINE_PATH="$<TARGET_FILE:agent-engine-mock>"
                                               AGENT_TEST_ENGINE_HOST_PATH="$<TARGET_FILE:agent-engine-host>")

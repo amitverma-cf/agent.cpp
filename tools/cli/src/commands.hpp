@@ -48,5 +48,6 @@ int cmd_engine(const CommandLine &cl, Context &ctx);
 int cmd_model(const CommandLine &cl, Context &ctx);
 int cmd_chat(const CommandLine &cl, Context &ctx);
 int cmd_run(const CommandLine &cl, Context &ctx);
+int cmd_voice(const CommandLine &cl, Context &ctx); // voice.cpp
 
 } // namespace agent::cli

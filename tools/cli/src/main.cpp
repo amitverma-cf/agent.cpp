@@ -43,6 +43,7 @@ int main(int argc, char **argv) {
     if (cl.command == "model") return cmd_model(cl, ctx);
     if (cl.command == "chat") return cmd_chat(cl, ctx);
     if (cl.command == "run") return cmd_run(cl, ctx);
+    if (cl.command == "voice") return cmd_voice(cl, ctx);
     std::fprintf(stderr, "agent: unhandled command '%s'\n", cl.command.c_str());
     return 2;
 }

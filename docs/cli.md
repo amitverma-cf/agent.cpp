@@ -1,8 +1,8 @@
 # The `agent` CLI
 
 `agent` is the command-line app built on top of `libagent`. It has a setup wizard, an engine and model
-manager, and a text chat with streaming and tool calls. It uses only `libagent`, `agent_hub` (Hugging
-Face downloads), `agent_store_sqlite` (conversation storage) and simdjson.
+manager, a text chat with streaming and tool calls, and a voice loop. It uses only `libagent`, `agent_hub` (Hugging
+Face downloads), `agent_store_sqlite` (conversation storage), simdjson and miniaudio (sound devices).
 
 ```sh
 cmake -B build -G Ninja            # AGENT_BUILD_CLI=ON by default (needs AGENT_BUILD_HUB, i.e. OpenSSL)
@@ -204,6 +204,57 @@ resume (`--input` answers every paused branch). Checkpoints and the graph event 
 `"checkpointer": "memory"`. Runs checkpointed by earlier CLI versions in the workspace's key-value
 store cannot be resumed.
 
+## agent voice
+
+`agent voice` is a spoken conversation: microphone → speech detection → speech-to-text → one LLM turn →
+text-to-speech → speaker, in a loop until Ctrl-C. Speech runs on the `sherpa` engine (found like any other
+engine: `engines.json`, else next to the binary); the LLM turn is the same as in `agent chat`. A guide with
+model downloads is in [guides/voice-assistant.md](guides/voice-assistant.md).
+
+```sh
+agent voice --asr-model ~/models/sherpa-onnx-whisper-tiny.en --tts-model ~/models/kokoro-en-v0_19 \
+            --vad-model ~/models/silero_vad.onnx --model qwen
+# no sound card (or a test): read the microphone from a WAV file, write the replies as WAV files
+agent voice --asr-model ... --tts-model ... --input-wav question.wav --output-dir replies/ --max-turns 1
+```
+
+| Flag | |
+|---|---|
+| `--asr-model DIR` | sherpa-onnx Whisper (`*encoder*.onnx`, `*decoder*.onnx`, `*tokens.txt`) or NeMo transducer / Parakeet (also `*joiner*.onnx`) directory; int8 files are preferred. A JSON object is passed through as the engine's `asr` options. Required |
+| `--tts-model DIR` | sherpa-onnx Kokoro directory (`model.onnx`, `voices.bin`, `tokens.txt`, a `lexicon*.txt`). Or a JSON `tts` object. Required |
+| `--speaker-id N` | Kokoro voice (default 0) |
+| `--vad-model FILE` | `silero_vad.onnx`: utterances are cut by Silero VAD in the sherpa engine (streaming mode). Without it an energy gate is used, which works in a quiet room only |
+| `-m, --model`, `-e, --engine`, `--engine-options`, `--ctx`, `--max-tokens`, `--workspace`, `--inprocess`, `-y, --yes`, `--verbose` | as for `agent chat` |
+| `--input-wav FILE` | file backend: the microphone is this WAV (any rate, resampled to 16 kHz); the loop ends at its end |
+| `--output-dir DIR` | file backend for the speaker: each reply becomes `DIR/reply-NNN.wav` |
+| `--max-turns N` | stop after N answered utterances |
+| `--barge-in` | keep listening while a reply plays; speaking over it stops playback. Needs headphones or echo cancellation: the CLI has none, so speakers would interrupt themselves |
+| `--resume ID` | continue a saved conversation (voice and chat conversations share the store) |
+
+**How a turn goes.** Audio is captured as 16 kHz mono f32 and fed to the detector in 100 ms chunks. When a
+speech segment ends (0.6 s of silence for Silero, see `min_silence`), the segment plus 200 ms before and
+150 ms after goes to the ASR session as an in-memory tensor. Transcripts without words (`[BLANK_AUDIO]`,
+`(music)`) and utterances shorter than 250 ms are skipped. The transcript is the user message of a normal
+`run_turn` (streamed, tools and permission prompts as in `agent chat`, saved after each turn as
+`voice-YYYYMMDD-HHMMSS`). The reply is cleaned for speech (markdown, code blocks and tool-call markup are
+dropped; numbers and `+ - = % / x` are spelled out, because Kokoro's lexicon has no digits), synthesized
+by the TTS session and played. Without `--barge-in` the loop is half-duplex: what the microphone hears
+while a reply is produced or played is dropped, so the agent does not answer itself.
+
+The screen shows `[listening]`, `you: <transcript>`, `agent: <reply>`, `[spoken] 1.84 s of speech at
+24000 Hz`, `[barge-in]` and `[error] ...` lines (an engine error skips that utterance; the loop goes on).
+
+**Audio backends.** Sound devices go through [miniaudio](https://github.com/mackron/miniaudio) (vendored
+single header, 0.11.26, public domain / MIT-0; it loads ALSA / PulseAudio / JACK / WASAPI / Core Audio at
+run time, so the binary has no link-time audio dependency; `-DAGENT_CLI_AUDIO_DEVICE=OFF` leaves it out).
+Only the CLI links it, never `libagent`. When there is no microphone, `agent voice` stops with a hint to use
+`--input-wav`; when there is no speaker, replies go to `<workspace>/voice/` as WAV files. The device backend
+has not been tested on real hardware yet (the development machine has no sound card); the file backend is
+what the tests run.
+
+**Graph form.** A graph file cannot express this loop today: a graph runs on one engine session, and
+`agent run` registers no function nodes for ASR / TTS.
+
 ## Code layout
 
 `tools/cli/src/`:
@@ -216,4 +267,9 @@ store cannot be resumed.
   default app.
 - `commands.cpp`: `setup`, `engine`, `model` and `run`.
 - `chat.cpp`: the chat screen.
+- `audio.{hpp,cpp}` (+ `miniaudio_impl.c`): WAV read/write, resampling, and the file and miniaudio
+  device backends behind small op tables (in `agent_cli_core`).
+- `voice.hpp`, `voice_core.cpp`: the energy gate, the voice loop, flag handling and the sherpa options
+  built from model directories (in `agent_cli_core`, covered by `tests/unit/test_voice.cpp`).
+- `voice.cpp`: `agent voice` (engine sessions and the hooks the loop calls).
 - `main.cpp`: dispatches to the commands.

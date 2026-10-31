@@ -155,7 +155,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [ ] OS sandboxing follow-ups: test real engines under the default engine policy, macOS profile, Windows AppContainer (filesystem/network), `"sandbox"` for MCP servers in `agent.json`
 - [ ] Hub: proxy auth, gated repos (split GGUF downloads done)
 - [ ] Windows build + test pass (owner)
-- [ ] Voice loop: mic/speaker I/O + VAD (sherpa) → ASR → LLM → TTS example
+- [x] Voice loop: mic/speaker I/O + VAD (sherpa) → ASR → LLM → TTS (`agent voice`, [guide](guides/voice-assistant.md)); file backend tested end to end, real sound devices untested
 
 **Recently done** (see the phase lists below): engine plugin ABI + loader + manifest; llama (b12020, Jinja templates, native tool calls, vision/audio input, embed/rerank), sdcpp, sherpa and onnx engines; media/progress/cancel in the turn loop; graph runtime + `agent.json` loader; MCP stdio client; RAG pipeline; Hugging Face hub; `agent` CLI (`setup`, `engine`, `model`, `chat`, `run`); SQLite moved out of the core.
 
@@ -225,7 +225,8 @@ Priority wave A (v1 **starter pack**, installed by default by `agent setup`):
   - [x] embeddings + rerank (`engine_options.mode` `"embed"` / `"rerank"`, `AGENT_CAP_EMBED` / `AGENT_CAP_RERANK`; tested with bge-small-en-v1.5, jina-reranker-v1-tiny-en, bge-reranker-v2-m3)
 - [ ] `sherpa`: Kokoro TTS, Parakeet / Whisper STT, VAD, diarization (Windows-friendly breadth)
   - [x] v1 (`engines/sherpa`, sherpa-onnx 2.0.1 prebuilt C API): Kokoro TTS (WAV artifact + streamed audio chunks, progress, cancel), Whisper / NeMo transducer (Parakeet) ASR; Linux x64 tested with kokoro-en-v0_19 + whisper-tiny.en
-  - [ ] VAD, diarization, VITS/Matcha/Kitten TTS, Windows build
+  - [x] Silero VAD (`AGENT_CAP_VAD`, offline + streaming mode) and pyannote + speaker-embedding diarization (`AGENT_CAP_DIARIZE`); audio input also as an F32 tensor; tested with silero_vad.onnx, pyannote segmentation-3.0 + NeMo TitaNet small
+  - [ ] VITS/Matcha/Kitten TTS, Windows build
 - [ ] `sdcpp`: stable-diffusion.cpp txt2img / img2img / video (Wan, LTX) with progress + cancel
   - [x] txt2img + img2img with progress + per-step cancel (`agent-engine-sdcpp`, stable-diffusion.cpp master-1028, opt-in `AGENT_ENGINE_SDCPP`)
   - [ ] video (Wan, LTX)
@@ -257,6 +258,8 @@ Watch list: audio.cpp as a meta-engine; llama.cpp native TTS / image gen when th
   - [x] `agent run <agent.json>`: `--set`, `--thread`, `--resume/--input`, final state + interrupt report
   - [ ] multi-agent status view
 - [ ] Mic input / speaker output for voice agents (small C audio I/O library such as miniaudio, decided in Phase 0)
+  - [x] miniaudio 0.11.26 vendored, CLI only (`tools/cli/src/audio.{hpp,cpp}`): 16 kHz mono capture, playback, plus a WAV file backend; `agent voice` with barge-in
+  - [ ] verify capture / playback on real hardware (Linux ALSA/PulseAudio, Windows WASAPI); echo cancellation for barge-in on loudspeakers
 - [x] User config at `%APPDATA%\agent\` (Windows) and `~/.config/agent/` (Linux) (`$AGENT_CONFIG_DIR` / `--config-dir` override; the Windows path is untested)
 - [ ] Release artifacts: Windows x64 (CPU/CUDA/Vulkan), Linux x64 (CPU/CUDA/Vulkan), macOS (CI only)
   - [x] Linux tarball script `scripts/package.sh` (`agent-<version>-linux-x64[-<backend>].tar.gz`, version from `project(VERSION)`); CPU tested, CUDA/Vulkan untested; no CI, no uploads
@@ -264,7 +267,7 @@ Watch list: audio.cpp as a meta-engine; llama.cpp native TTS / image gen when th
 
 ### Phase 6: SDK and docs (finalize at release)
 - [ ] Guides: embed the library, write an engine plugin, write a tool, write a graph (JSON + C++)
-- [ ] Examples: voice assistant (STT → LLM → TTS), image agent (LLM → SD → VLM critique loop), video storyboard, RAG over docs, OCR → extraction, decision-model router
+- [ ] Examples: voice assistant (STT → LLM → TTS) (done: `agent voice` + [guide](guides/voice-assistant.md); no graph JSON form, a graph runs on one engine session), image agent (LLM → SD → VLM critique loop), video storyboard, RAG over docs, OCR → extraction, decision-model router
 - [ ] Engine plugin template repo / cookiecutter
 - [ ] Benchmarks: tokens/s, time to first audio, peak memory per pipeline
 
