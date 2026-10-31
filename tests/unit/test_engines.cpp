@@ -260,3 +260,27 @@ TEST_CASE("llama engine prefills prompts longer than n_batch in chunks", "[engin
     REQUIRE(memory.stats.prompt_tokens > 2048);
 }
 #endif
+
+#ifdef AGENT_TEST_LLAMA_ENGINE_PATH
+// Set AGENT_TEST_LLAMA_TOOL_MODEL to an instruct GGUF with a tool-calling chat template, e.g.
+// https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF (qwen2.5-0.5b-instruct-q4_k_m.gguf)
+TEST_CASE("llama engine completes a native tool-call round trip", "[engines][llama][model]") {
+    const char *model = std::getenv("AGENT_TEST_LLAMA_TOOL_MODEL");
+    if (!model) SKIP("AGENT_TEST_LLAMA_TOOL_MODEL not set");
+    auto cfg = llama_config(model);
+    cfg.context_window = 2048;
+    cfg.max_tokens = 128;
+    cfg.tools = {make_ping_tool()};
+    auto res = agent::init(cfg);
+    REQUIRE(res.ok);
+    agent::Session session = std::move(res.value);
+
+    g_ping_calls = 0;
+    agent::FlowMemory memory;
+    memory.id = "llama_tools";
+    auto reply = agent::run_turn(session, memory, "Call the ping tool now.");
+    INFO(reply.error.message);
+    REQUIRE(reply.ok);
+    REQUIRE(g_ping_calls >= 1);
+}
+#endif

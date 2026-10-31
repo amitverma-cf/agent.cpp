@@ -399,7 +399,8 @@ struct Session {
     std::shared_ptr<std::mutex> event_mutex = std::make_shared<std::mutex>();
 
     std::unordered_map<std::string, size_t> tool_by_name;
-    std::string tools_system_prompt;
+    std::string tools_system_prompt;  // tool list + usage instructions, followed by skills_system_prompt
+    std::string skills_system_prompt; // skill names + descriptions only
 
     std::unordered_map<std::string, DataSource> data_sources;
     std::unordered_map<std::string, Skill> skills;

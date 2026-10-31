@@ -3,11 +3,16 @@
 // One instance = one model + one llama_context with n_seq_max = "parallel" sequence slots.
 // Concurrent run() calls (AgentScheduler subagents) are continuously batched: each generation's
 // next-token step joins a shared round, and one llama_decode serves every active sequence.
+//
+// Prompts are rendered with the model's own Jinja chat template and the reply is parsed into
+// content + tool calls by llama.cpp's common_chat (each model's native tool-call format).
 
 #include <agent-cpp/engine_abi.h>
 
 #include <algorithm>
 #include <cctype>
+#include <chat.h>
+#include <exception>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -170,15 +175,15 @@ class Batcher {
 // Response storage for one in-flight run(). Owned by the instance, keyed by thread, so concurrent
 // run() calls never share buffers; released by free_response().
 struct CallOutput {
-    std::string text;
-    std::string visible;
-    std::string tool_id, tool_name, tool_args;
+    std::string content;
+    common_chat_msg parsed;
+    std::vector<agent_tool_call> calls;
     agent_part part{};
-    agent_tool_call call{};
 };
 
 struct Instance {
     Batcher batcher;
+    common_chat_templates_ptr templates;
     std::mutex out_mu;
     std::unordered_map<std::thread::id, CallOutput> outputs;
     std::unordered_map<std::thread::id, std::string> errors;
@@ -210,111 +215,148 @@ llama_sampler *build_sampler(float temperature) {
     return s;
 }
 
-std::string message_text(const agent_message &m) {
-    std::string out;
-    for (size_t p = 0; p < m.n_parts; ++p) {
-        const agent_part &part = m.parts[p];
-        if (part.kind == AGENT_PART_TEXT) out.append(part.text.data, part.text.size);
-    }
-    // Earlier assistant tool calls are replayed in the same JSON form the model is asked to emit.
-    for (size_t c = 0; c < m.n_tool_calls; ++c) {
-        if (!out.empty()) out += '\n';
-        out += "{\"name\": \"";
-        out.append(m.tool_calls[c].name.data, m.tool_calls[c].name.size);
-        out += "\", \"arguments\": ";
-        out.append(m.tool_calls[c].arguments.data, m.tool_calls[c].arguments.size);
-        out += '}';
-    }
-    return out;
+template <typename T> T json_number(simdjson::ondemand::object &obj, const char *key, T fallback) {
+    double d = 0;
+    if (obj[key].get_double().get(d)) return fallback;
+    return static_cast<T>(d);
 }
 
-std::string format_manual(const std::vector<std::string> &roles, const std::vector<std::string> &contents) {
-    std::string prompt;
-    for (size_t i = 0; i < roles.size(); ++i) prompt += roles[i] + ": " + contents[i] + "\n";
-    prompt += "assistant: ";
-    return prompt;
-}
-
-// Returns empty when the model has no built-in template or llama.cpp can't apply it.
-std::string format_templated(const llama_model *model, const std::vector<std::string> &roles, const std::vector<std::string> &contents) {
-    const char *tmpl = llama_model_chat_template(model, nullptr);
-    if (!tmpl) return {};
-    std::vector<llama_chat_message> chat;
-    chat.reserve(roles.size());
-    size_t guess = 256;
-    for (size_t i = 0; i < roles.size(); ++i) {
-        chat.push_back(llama_chat_message{roles[i].c_str(), contents[i].c_str()});
-        guess += (roles[i].size() + contents[i].size() + 16) * 2;
+common_chat_templates_inputs build_inputs(const agent_request *req) {
+    common_chat_templates_inputs in;
+    in.use_jinja = true;
+    in.add_generation_prompt = true;
+    in.enable_thinking = false;
+    in.messages.reserve(req->n_messages);
+    for (size_t i = 0; i < req->n_messages; ++i) {
+        const agent_message &m = req->messages[i];
+        common_chat_msg msg;
+        msg.role = std::string(sv(m.role));
+        for (size_t p = 0; p < m.n_parts; ++p)
+            if (m.parts[p].kind == AGENT_PART_TEXT) msg.content += sv(m.parts[p].text);
+        for (size_t c = 0; c < m.n_tool_calls; ++c)
+            msg.tool_calls.push_back(common_chat_tool_call{std::string(sv(m.tool_calls[c].name)), std::string(sv(m.tool_calls[c].arguments)),
+                                                           std::string(sv(m.tool_calls[c].id))});
+        msg.tool_call_id = std::string(sv(m.tool_call_id));
+        in.messages.push_back(std::move(msg));
     }
-    std::vector<char> buf(guess);
-    int32_t n = llama_chat_apply_template(tmpl, chat.data(), chat.size(), true, buf.data(), static_cast<int32_t>(buf.size()));
-    if (n < 0) return {};
-    if (static_cast<size_t>(n) > buf.size()) {
-        buf.resize(static_cast<size_t>(n));
-        n = llama_chat_apply_template(tmpl, chat.data(), chat.size(), true, buf.data(), static_cast<int32_t>(buf.size()));
-        if (n < 0) return {};
-    }
-    return std::string(buf.data(), static_cast<size_t>(n));
-}
 
-bool find_json_object(std::string_view text, size_t from, size_t &start, size_t &end) {
-    for (size_t i = from; i < text.size(); ++i) {
-        if (text[i] != '{') continue;
-        size_t depth = 0;
-        bool in_str = false, esc = false;
-        for (size_t j = i; j < text.size(); ++j) {
-            char c = text[j];
-            if (in_str) {
-                if (esc) esc = false;
-                else if (c == '\\') esc = true;
-                else if (c == '"') in_str = false;
-                continue;
+    // tools_json: [{"name": ..., "description": ..., "parameters": {...}}, ...]
+    if (req->tools_json.size) {
+        simdjson::ondemand::parser parser;
+        simdjson::padded_string json(sv(req->tools_json));
+        simdjson::ondemand::document doc;
+        simdjson::ondemand::array arr;
+        if (!parser.iterate(json).get(doc) && !doc.get_array().get(arr)) {
+            for (auto el : arr) {
+                simdjson::ondemand::object obj;
+                if (el.get_object().get(obj)) continue;
+                common_chat_tool tool;
+                std::string_view s;
+                for (auto field : obj) {
+                    std::string_view key;
+                    if (field.unescaped_key().get(key)) continue;
+                    if (key == "name" && !field.value().get_string().get(s)) tool.name = std::string(s);
+                    else if (key == "description" && !field.value().get_string().get(s)) tool.description = std::string(s);
+                    else if (key == "parameters" && !field.value().raw_json().get(s)) tool.parameters = std::string(s);
+                }
+                if (!tool.name.empty()) {
+                    if (tool.parameters.empty()) tool.parameters = "{}";
+                    in.tools.push_back(std::move(tool));
+                }
             }
-            if (c == '"') in_str = true;
-            else if (c == '{') ++depth;
-            else if (c == '}' && --depth == 0) {
-                start = i;
-                end = j;
-                return true;
-            }
+        }
+    }
+    return in;
+}
+
+// Exception firewall. llama.cpp's common_chat (Jinja rendering, PEG parsing) reports errors by
+// throwing; nothing may unwind across the C plugin ABI into the host, so these two calls are the
+// only places in agent.cpp that catch. Everything else in the plugin and the core is exception-free.
+bool start_session(const Instance &inst, const llama_vocab *vocab, const common_chat_templates_inputs &in, common_chat_session &out,
+                   std::string &error) {
+    try {
+        out = common_chat_session(inst.templates.get(), vocab, in);
+        return true;
+    } catch (const std::exception &e) {
+        error = std::string("llama: chat template failed: ") + e.what();
+    } catch (...) { error = "llama: chat template failed"; }
+    return false;
+}
+
+bool finish_session(common_chat_session &session, const common_chat_input &generated, common_chat_msg &out, std::string &error) {
+    try {
+        out = session.finish(generated);
+        return true;
+    } catch (const std::exception &e) {
+        error = std::string("llama: could not parse model output: ") + e.what();
+    } catch (...) { error = "llama: could not parse model output"; }
+    return false;
+}
+
+// Template parts may carry special tokens; user-provided parts are tokenized as plain text so they
+// can't inject control tokens.
+bool tokenize_prompt(const llama_vocab *vocab, const common_chat_prompt &prompt, std::vector<llama_token> &tokens) {
+    bool first = true;
+    for (const auto &part : prompt.parts) {
+        if (part.text.empty()) continue;
+        const int32_t len = static_cast<int32_t>(part.text.size());
+        const size_t at = tokens.size();
+        tokens.resize(at + part.text.size() + 4);
+        int32_t n = llama_tokenize(vocab, part.text.data(), len, tokens.data() + at, static_cast<int32_t>(tokens.size() - at), first,
+                                   !part.is_input);
+        if (n < 0) {
+            tokens.resize(at + static_cast<size_t>(-n));
+            n = llama_tokenize(vocab, part.text.data(), len, tokens.data() + at, -n, first, !part.is_input);
+        }
+        if (n < 0) return false;
+        tokens.resize(at + static_cast<size_t>(n));
+        first = false;
+    }
+    return !tokens.empty();
+}
+
+bool ends_with_stop(const std::string &text, const std::vector<std::string> &stops, size_t &cut) {
+    for (const auto &s : stops) {
+        if (!s.empty() && text.size() >= s.size() && text.compare(text.size() - s.size(), s.size(), s) == 0) {
+            cut = text.size() - s.size();
+            return true;
         }
     }
     return false;
 }
 
-// Finds the first {"name": ..., "arguments": ...} object in the reply.
-bool extract_tool_call(std::string_view text, CallOutput &out) {
+// Fallback for models that drift from their own tool-call format (e.g. small Qwen2.5 models copy
+// the "{{...}}" example their template ships with): finds the first {"name": ..., "arguments": ...}
+// object anywhere in the text, retrying from each '{' so a stray outer brace is skipped.
+bool find_loose_tool_call(std::string_view text, common_chat_tool_call &call) {
     simdjson::ondemand::parser parser;
-    size_t from = 0, start = 0, end = 0;
-    while (find_json_object(text, from, start, end)) {
-        from = end + 1;
-        simdjson::padded_string json(text.substr(start, end - start + 1));
+    for (size_t i = text.find('{'); i != std::string_view::npos; i = text.find('{', i + 1)) {
+        size_t depth = 0, end = std::string_view::npos;
+        bool in_str = false, esc = false;
+        for (size_t j = i; j < text.size() && end == std::string_view::npos; ++j) {
+            char c = text[j];
+            if (in_str) {
+                if (esc) esc = false;
+                else if (c == '\\') esc = true;
+                else if (c == '"') in_str = false;
+            } else if (c == '"') in_str = true;
+            else if (c == '{') ++depth;
+            else if (c == '}' && --depth == 0) end = j;
+        }
+        if (end == std::string_view::npos) return false;
+        simdjson::padded_string json(text.substr(i, end - i + 1));
         simdjson::ondemand::document doc;
-        if (parser.iterate(json).get(doc)) continue;
         simdjson::ondemand::object obj;
-        if (doc.get_object().get(obj)) continue;
-        std::string_view name;
+        if (parser.iterate(json).get(doc) || doc.get_object().get(obj)) continue;
+        std::string_view name, args;
         if (obj["name"].get_string().get(name) || name.empty()) continue;
-        std::string args;
-        std::string_view raw;
         auto a = obj["arguments"];
-        if (!a.get_string().get(raw)) args = std::string(raw);
-        else if (!a.raw_json().get(raw)) args = std::string(raw);
-        out.tool_name = std::string(name);
-        out.tool_id = "call_" + out.tool_name;
-        out.tool_args = args.empty() ? "{}" : args;
-        std::string_view visible = text.substr(0, start);
-        while (!visible.empty() && std::isspace(static_cast<unsigned char>(visible.back()))) visible.remove_suffix(1);
-        out.visible = std::string(visible);
+        if (a.get_string().get(args) && a.raw_json().get(args)) args = "{}";
+        call.name = std::string(name);
+        call.arguments = std::string(args);
         return true;
     }
     return false;
-}
-
-template <typename T> T json_number(simdjson::ondemand::object &obj, const char *key, T fallback) {
-    double d = 0;
-    if (obj[key].get_double().get(d)) return fallback;
-    return static_cast<T>(d);
 }
 
 // ------------------------------------------------------------------ ABI functions
@@ -339,10 +381,13 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     const int n_ctx = std::max(1, json_number<int>(cfg, "context_window", 2048));
     const int n_seq = std::max(1, json_number<int>(cfg, "parallel", 1));
     int gpu_layers = -1, threads = 0;
+    std::string chat_template;
     simdjson::ondemand::object options;
     if (!cfg["options"].get_object().get(options)) {
         gpu_layers = json_number<int>(options, "gpu_layers", -1);
         threads = json_number<int>(options, "threads", 0);
+        std::string_view t;
+        if (!options["chat_template"].get_string().get(t)) chat_template = std::string(t);
     }
 
     auto mparams = llama_model_default_params();
@@ -372,6 +417,16 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     inst->batcher.ctx = ctx;
     inst->batcher.seq_ctx = n_ctx;
     inst->batcher.seed_free_list(n_seq);
+    // Exception firewall (see start_session): template loading parses Jinja and may throw.
+    try {
+        inst->templates = common_chat_templates_init(model, chat_template);
+    } catch (const std::exception &e) {
+        std::snprintf(err, err_cap, "llama: invalid chat template: %s", e.what());
+    } catch (...) { std::snprintf(err, err_cap, "llama: invalid chat template"); }
+    if (!inst->templates) {
+        delete inst;
+        return AGENT_ERR_MODEL_LOAD_FAILED;
+    }
     *out_instance = inst;
     return AGENT_OK;
 }
@@ -384,42 +439,27 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
 
     int max_tokens = 512;
     float temperature = 0.7f;
-    {
+    if (req->params_json.size) {
         simdjson::ondemand::parser parser;
         simdjson::padded_string json(sv(req->params_json));
         simdjson::ondemand::document doc;
         simdjson::ondemand::object params;
-        if (!req->params_json.size || parser.iterate(json).get(doc) || doc.get_object().get(params)) {
-            // keep defaults
-        } else {
+        if (!parser.iterate(json).get(doc) && !doc.get_object().get(params)) {
             max_tokens = json_number<int>(params, "max_tokens", max_tokens);
             temperature = json_number<float>(params, "temperature", temperature);
         }
     }
 
-    std::vector<std::string> roles, contents;
-    roles.reserve(req->n_messages);
-    contents.reserve(req->n_messages);
-    for (size_t i = 0; i < req->n_messages; ++i) {
-        roles.emplace_back(sv(req->messages[i].role));
-        contents.push_back(message_text(req->messages[i]));
-    }
-
     Batcher &b = inst->batcher;
-    std::string prompt = format_templated(b.model, roles, contents);
-    if (prompt.empty()) prompt = format_manual(roles, contents);
-
     const llama_vocab *vocab = llama_model_get_vocab(b.model);
-    std::vector<llama_token> tokens(prompt.size() + 4);
-    int n_prompt = llama_tokenize(vocab, prompt.data(), static_cast<int32_t>(prompt.size()), tokens.data(),
-                                  static_cast<int32_t>(tokens.size()), true, true);
-    if (n_prompt < 0) {
-        tokens.resize(static_cast<size_t>(-n_prompt));
-        n_prompt = llama_tokenize(vocab, prompt.data(), static_cast<int32_t>(prompt.size()), tokens.data(),
-                                  static_cast<int32_t>(tokens.size()), true, true);
-    }
-    if (n_prompt <= 0) return inst->fail(AGENT_ERR_DECODE_FAILED, "llama: tokenization failed");
-    tokens.resize(static_cast<size_t>(n_prompt));
+
+    common_chat_session session;
+    std::string error;
+    if (!start_session(*inst, vocab, build_inputs(req), session, error)) return inst->fail(AGENT_ERR_INVALID_CONFIG, error);
+
+    std::vector<llama_token> tokens;
+    if (!tokenize_prompt(vocab, session.prompt(), tokens)) return inst->fail(AGENT_ERR_DECODE_FAILED, "llama: tokenization failed");
+    const int n_prompt = static_cast<int>(tokens.size());
     if (n_prompt >= b.seq_ctx)
         return inst->fail(AGENT_ERR_INVALID_CONFIG, "llama: prompt is " + std::to_string(n_prompt) + " tokens but context_window is " +
                                                         std::to_string(b.seq_ctx));
@@ -429,8 +469,8 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
     if (!b.acquire_seq(seq)) return inst->fail(AGENT_ERR_DECODE_FAILED, "llama: no free sequence slot (raise max_parallel_subagents)");
     llama_sampler *sampler = build_sampler(temperature);
 
-    CallOutput &out = inst->output();
-    out = CallOutput{};
+    common_chat_input generated;
+    const std::vector<std::string> &stops = session.additional_stops();
     int completion = 0;
     int32_t status = AGENT_OK;
     llama_token tok = 0;
@@ -445,12 +485,17 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
                 status = inst->fail(AGENT_ERR_CANCELLED, "llama: cancelled");
                 break;
             }
-            int n = llama_token_to_piece(vocab, tok, piece, sizeof(piece), 0, false);
+            int n = llama_token_to_piece(vocab, tok, piece, sizeof(piece), 0, true);
             if (n > 0) {
-                out.text.append(piece, static_cast<size_t>(n));
+                generated.append(std::string(piece, static_cast<size_t>(n)), tok);
                 if (req->on_chunk) req->on_chunk(req->user_data, AGENT_CHUNK_TEXT, piece, static_cast<size_t>(n));
             }
             ++completion;
+            size_t cut = 0;
+            if (ends_with_stop(generated.text, stops, cut)) {
+                generated.truncate(cut);
+                break;
+            }
             if (!b.next_token(seq, tok, sampler, tok)) {
                 status = inst->fail(AGENT_ERR_DECODE_FAILED, "llama: decode failed");
                 break;
@@ -461,25 +506,35 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
     b.release_seq(seq);
     if (status != AGENT_OK) return status;
 
+    CallOutput &out = inst->output();
+    out = CallOutput{};
+    if (finish_session(session, generated, out.parsed, error)) out.content = out.parsed.content;
+    else out.content = generated.text; // unparseable output is returned verbatim rather than failing the turn
+
+    common_chat_tool_call loose;
+    if (out.parsed.tool_calls.empty() && req->tools_json.size && find_loose_tool_call(generated.text, loose)) {
+        out.parsed.tool_calls.push_back(std::move(loose));
+        out.content.clear();
+    }
+    out.calls.reserve(out.parsed.tool_calls.size());
+    for (size_t i = 0; i < out.parsed.tool_calls.size(); ++i) {
+        common_chat_tool_call &c = out.parsed.tool_calls[i];
+        if (c.id.empty()) c.id = "call_" + std::to_string(i);
+        if (c.arguments.empty()) c.arguments = "{}";
+        out.calls.push_back(agent_tool_call{agent_str{c.id.data(), c.id.size()}, agent_str{c.name.data(), c.name.size()},
+                                            agent_str{c.arguments.data(), c.arguments.size()}});
+    }
+
     *resp = agent_response{};
     resp->message.role = agent_str{"assistant", 9};
     resp->usage = agent_usage{n_prompt, completion};
-
-    std::string_view text = out.text;
-    if (req->tools_json.size) {
-        if (extract_tool_call(out.text, out)) {
-            out.call = agent_tool_call{agent_str{out.tool_id.data(), out.tool_id.size()}, agent_str{out.tool_name.data(), out.tool_name.size()},
-                                       agent_str{out.tool_args.data(), out.tool_args.size()}};
-            resp->message.tool_calls = &out.call;
-            resp->message.n_tool_calls = 1;
-            text = out.visible;
-        }
-    }
     out.part = agent_part{};
     out.part.kind = AGENT_PART_TEXT;
-    out.part.text = agent_str{text.data(), text.size()};
+    out.part.text = agent_str{out.content.data(), out.content.size()};
     resp->message.parts = &out.part;
     resp->message.n_parts = 1;
+    resp->message.tool_calls = out.calls.data();
+    resp->message.n_tool_calls = out.calls.size();
     return AGENT_OK;
 }
 
@@ -513,9 +568,9 @@ int32_t llama_reset_cache(void *instance) {
 const agent_engine_v1 kLlamaEngine = {
     AGENT_ENGINE_ABI_VERSION,
     "llama",
-    "0.1",
+    "0.2",
     AGENT_CAP_TEXT_GEN | AGENT_CAP_TOOL_CALL,
-    AGENT_ENGINE_FLAG_CONCURRENT,
+    AGENT_ENGINE_FLAG_CONCURRENT | AGENT_ENGINE_FLAG_NATIVE_TOOLS,
     llama_create,
     llama_destroy,
     llama_run,

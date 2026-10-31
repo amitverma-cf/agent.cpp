@@ -25,7 +25,7 @@ static Result<std::string> run_command_cb(std::string_view args, void *ud) {
         auto k = field.unescaped_key();
         if (k.error()) continue;
         if (k.value() == "command") {
-            (void)field.value().get_string().get(command_sv);
+            { if (field.value().get_string().get(command_sv)) command_sv = {}; }
         } else if (k.value() == "timeout_seconds") {
             int64_t v = 0;
             if (!field.value().get_int64().get(v)) timeout_seconds = v;

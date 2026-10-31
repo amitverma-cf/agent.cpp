@@ -167,7 +167,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [ ] Run requests with cancel, progress and chunk streaming
 - [ ] Agent loop (pi-agent-core style) with tool-call limits
 - [ ] Tools return `{parts}` (text and/or artifacts)
-- [ ] `llama` engine v1: current API, chat templates, tool-call parsing, continuous batching
+- [x] `llama` engine v1: llama.cpp b12020, Jinja chat templates + native tool-call parsing (common_chat), continuous batching
 - [ ] Freeze public `agent.hpp` v1 and write `docs/api`
 
 ### Phase 3: Workflows, state, durability (3 weeks)

@@ -279,10 +279,12 @@ bool supports_parallel(const Session &session) {
     return state && (state->engine->flags & AGENT_ENGINE_FLAG_CONCURRENT);
 }
 
-bool needs_text_tools(const Session &session) {
-    if (session.config.provider != AiProvider::Engine) return false;
+std::string_view injected_system_text(const Session &session) {
+    if (session.config.provider != AiProvider::Engine) return {};
     auto *state = static_cast<EngineState *>(session.provider_state.get());
-    return state && !(state->engine->flags & AGENT_ENGINE_FLAG_NATIVE_TOOLS);
+    if (!state) return {};
+    return (state->engine->flags & AGENT_ENGINE_FLAG_NATIVE_TOOLS) ? std::string_view(session.skills_system_prompt)
+                                                                   : std::string_view(session.tools_system_prompt);
 }
 
 Result<int> count_tokens_engine(Session &session, std::string_view text) {
