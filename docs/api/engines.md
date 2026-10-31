@@ -424,8 +424,9 @@ tokens and the 1024³ decode needs ~14 GB of host RAM.
 ## The sherpa engine
 
 `engines/sherpa` (`agent-engine-sherpa`) wraps [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) through
-its C API for speech: Kokoro text-to-speech and Whisper / NeMo transducer (Parakeet TDT) speech-to-text.
-Caps `AGENT_CAP_TTS | AGENT_CAP_ASR`, flags 0.
+its C API for speech: Kokoro text-to-speech, Whisper / NeMo transducer (Parakeet TDT) speech-to-text, Silero
+voice activity detection and pyannote speaker diarization.
+Caps `AGENT_CAP_TTS | AGENT_CAP_ASR | AGENT_CAP_VAD | AGENT_CAP_DIARIZE`, flags 0.
 
 Build against the official prebuilt shared release (`sherpa-onnx-v<ver>-linux-x64-shared.tar.bz2` from the
 GitHub releases page; tested with v2.0.1):
@@ -454,6 +455,15 @@ configured get loaded:
   "asr": {
     "whisper": {"encoder": "tiny.en-encoder.int8.onnx", "decoder": "tiny.en-decoder.int8.onnx",
                 "tokens": "tiny.en-tokens.txt", "language": "en", "task": "transcribe"}
+  },
+  "vad": {
+    "silero": {"model": "silero_vad.onnx"},
+    "threshold": 0.5, "min_silence": 0.5, "min_speech": 0.25, "max_speech": 20, "streaming": false
+  },
+  "diarize": {
+    "pyannote": {"model": "sherpa-onnx-pyannote-segmentation-3-0/model.onnx"},
+    "embedding": {"model": "nemo_en_titanet_small.onnx"},
+    "num_speakers": 0, "threshold": 0.5, "min_duration_on": 0.3, "min_duration_off": 0.5
   }
 }
 ```
@@ -466,20 +476,49 @@ espeak-ng and ignores `data_dir`, so English text needs a lexicon
 words missing from it are skipped. Paths are checked at `create()`; a missing file fails with
 `AGENT_ERR_MODEL_LOAD_FAILED`.
 
+`vad` takes the `silero` family ([silero_vad.onnx](https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx),
+MIT). `threshold` is the speech probability, `min_silence` / `min_speech` / `max_speech` are in seconds (longer
+speech is split). `diarize` needs a pyannote segmentation model
+([sherpa-onnx-pyannote-segmentation-3-0](https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2),
+MIT) and a speaker embedding model from the `speaker-recongition-models` release (sic), for example
+`nemo_en_titanet_small.onnx` (CC-BY-4.0). `num_speakers` > 0 fixes the number of speakers; otherwise
+clusters closer than `threshold` merge. With two Kokoro voices, TitaNet separated the speakers in our test,
+while `3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx` mixed them up, also in sherpa-onnx's
+own `sherpa-onnx-offline-speaker-diarization` tool.
+
 Requests are routed by task and content:
 
 | `task` | Last user message | Result |
 |---|---|---|
 | `TTS` | text | speech: WAV file in `output_dir` (`FILE`, `audio/wav`) + a short `TEXT` summary |
-| `ASR` or `TEXT_GEN` | audio `FILE`/`BYTES` part | transcript as a `TEXT` part |
+| `ASR` or `TEXT_GEN` | audio part, `asr` configured | transcript as a `TEXT` part |
+| `ASR` or `TEXT_GEN` | audio part, no `asr`, `vad` configured | speech segments, as for `VAD` |
+| `ASR` or `TEXT_GEN` | audio part, only `diarize` configured | speaker segments, as for `DIARIZE` |
 | `ASR` or `TEXT_GEN` | text, no audio | speech, as for `TTS` |
+| `VAD` | audio part (+ optional `TEXT` command) | `TEXT` `[{"start":0.52,"end":1.84}, ...]` (seconds) + `TENSOR` `segments` F32 `[n, 2]` |
+| `DIARIZE` | audio part | `TEXT` `[{"start":0.03,"end":4.64,"speaker":0}, ...]` + `TENSOR` `segments` F32 `[n, 3]` (start, end, speaker) |
 
-A task whose component is not configured returns `AGENT_ERR_UNSUPPORTED`. Audio input must be a 16-bit PCM
-mono WAV; other sample rates are resampled to 16 kHz by sherpa-onnx. During synthesis each sentence is
+Hosts that do not send an explicit task send the engine's lowest capability bit, `ASR`; give a session
+only a `vad` (or only a `diarize`) component and its audio requests are segmented instead of transcribed.
+A task whose component is not configured returns `AGENT_ERR_UNSUPPORTED`; `VAD` / `DIARIZE` without an
+audio part return `AGENT_ERR_INVALID_CONFIG`.
+
+Audio input is a `FILE` or `BYTES` WAV (16-bit PCM mono; other sample rates are resampled to 16 kHz), or an
+`F32` `TENSOR` of mono samples at 16 kHz (any name, shape `[n]`). Through the C++ API that is a
+`TensorView` on the message, so audio can go from a microphone to the engine without a file.
+
+**Streaming VAD.** With `"streaming": true` the detector keeps its state between `run()` calls, so a host can
+feed microphone audio in small chunks (`agent voice` sends 100 ms). Each call returns the segments that
+*finished* during that call, with times counted from the start of the stream, plus one entry
+`{"start":s,"end":now,"open":true}` while speech is still going on (the `TENSOR` holds only finished
+segments). A `TEXT` part `reset` on the request starts a new stream (the clock goes back to 0), `flush`
+ends it and returns whatever was still open. Without `streaming`, every call is a stream of its own. During synthesis each sentence is
 streamed through `on_chunk(AGENT_CHUNK_AUDIO, samples, n_samples * sizeof(float))` (mono f32 at the model's
 sample rate, which the `TEXT` part reports), progress goes to `on_progress(step, 1000)`, and `cancel` stops
 generation at the next sentence. ASR reports progress 0/1 and 1/1 and the transcript as one `TEXT` chunk.
 
 Limitation: sherpa-onnx validates configs and returns NULL for most errors, but some malformed model files
 (for example a corrupt tokens file) make it call `exit()` inside `create()`. Only point it at real model files.
-Licences: Kokoro (Apache-2.0) and Whisper (MIT) are fine for the catalogue.
+Licences: Kokoro (Apache-2.0), Whisper (MIT), Silero VAD (MIT), pyannote segmentation-3.0 (MIT) and the
+TitaNet embedding model (CC-BY-4.0) are fine for the catalogue. 3D-Speaker embedding models are Apache-2.0 according to
+the 3D-Speaker repository; check the individual model card.
