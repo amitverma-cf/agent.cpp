@@ -312,6 +312,7 @@ int serve(const agent_engine_v1 *engine) {
             req.cancel = &g_cancel;
 
             agent_response resp{};
+            resp.struct_size = sizeof(resp);
             const int32_t rc = engine->run(instance, &req, &resp);
             if (rc != AGENT_OK) {
                 send_error(rc, last_error(engine, instance, "run failed"));
@@ -386,6 +387,9 @@ const agent_engine_v1 *load(const char *path, std::string &error) {
     else if (e->abi_version != AGENT_ENGINE_ABI_VERSION)
         error = "engine ABI version " + std::to_string(e->abi_version) + " does not match host ABI version " +
                 std::to_string(AGENT_ENGINE_ABI_VERSION);
+    else if (e->struct_size < AGENT_ENGINE_V2_SIZE)
+        error = "engine table is " + std::to_string(e->struct_size) + " bytes, smaller than the ABI 2 baseline (" +
+                std::to_string(AGENT_ENGINE_V2_SIZE) + ")";
     else if (!e->name || !*e->name) error = "engine has no name";
     else if (!e->create || !e->destroy || !e->run || !e->free_response || !e->last_error) error = "engine is missing a required function";
     else return e;

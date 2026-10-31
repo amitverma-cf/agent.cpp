@@ -447,7 +447,7 @@ int32_t sd_engine_run(void *instance, const agent_request *req, agent_response *
     inst->parts[1].kind = AGENT_PART_TEXT;
     inst->parts[1].text = to_c(inst->text);
 
-    *resp = agent_response{};
+    agent_response_reset(resp);
     resp->message.role = agent_str{"assistant", 9};
     resp->message.parts = inst->parts;
     resp->message.n_parts = 2;
@@ -460,13 +460,14 @@ void sd_engine_free_response(void *instance, agent_response *resp) {
     inst->text.clear();
     inst->parts[0] = agent_part{};
     inst->parts[1] = agent_part{};
-    *resp = agent_response{};
+    agent_response_reset(resp);
 }
 
 const char *sd_engine_last_error(void *instance) { return static_cast<Instance *>(instance)->error.c_str(); }
 
 const agent_engine_v1 kSdcppEngine = {
     AGENT_ENGINE_ABI_VERSION,
+    sizeof(agent_engine_v1),
     "sdcpp",
     "0.1",
     AGENT_CAP_IMAGE_GEN | AGENT_CAP_IMAGE_EDIT,

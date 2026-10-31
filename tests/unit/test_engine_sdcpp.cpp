@@ -128,7 +128,7 @@ TEST_CASE("sdcpp engine generates a PNG with a real model", "[engines][sdcpp][mo
     const std::string params = R"({"width":128,"height":128})";
     ProgressLog progress;
     volatile int32_t cancel = 0;
-    agent_request req{};
+    agent_request req{.struct_size = sizeof(agent_request)};
     req.task = AGENT_CAP_IMAGE_GEN;
     req.messages = &msg;
     req.n_messages = 1;
@@ -143,7 +143,7 @@ TEST_CASE("sdcpp engine generates a PNG with a real model", "[engines][sdcpp][mo
     req.cancel = &cancel;
 
     SECTION("txt2img writes a PNG and reports progress") {
-        agent_response resp{};
+        agent_response resp{.struct_size = sizeof(agent_response)};
         const int32_t rc = engine->run(inst, &req, &resp);
         INFO(engine->last_error(inst));
         REQUIRE(rc == AGENT_OK);
@@ -171,7 +171,7 @@ TEST_CASE("sdcpp engine generates a PNG with a real model", "[engines][sdcpp][mo
             req.task = AGENT_CAP_IMAGE_EDIT;
             const std::string edit_params = R"({"strength":0.5,"steps":2})";
             req.params_json = str(edit_params);
-            agent_response edit{};
+            agent_response edit{.struct_size = sizeof(agent_response)};
             const int32_t erc = engine->run(inst, &req, &edit);
             INFO(engine->last_error(inst));
             REQUIRE(erc == AGENT_OK);
@@ -193,7 +193,7 @@ TEST_CASE("sdcpp engine generates a PNG with a real model", "[engines][sdcpp][mo
 
     SECTION("a pre-set cancel flag stops the run") {
         cancel = 1;
-        agent_response resp{};
+        agent_response resp{.struct_size = sizeof(agent_response)};
         REQUIRE(engine->run(inst, &req, &resp) == AGENT_ERR_CANCELLED);
     }
 
@@ -210,14 +210,14 @@ TEST_CASE("sdcpp engine generates a PNG with a real model", "[engines][sdcpp][mo
             if (step >= 1) *c->flag = 1;
         };
         req.user_data = &ctx;
-        agent_response resp{};
+        agent_response resp{.struct_size = sizeof(agent_response)};
         REQUIRE(engine->run(inst, &req, &resp) == AGENT_ERR_CANCELLED);
         REQUIRE(ctx.calls > 0);
     }
 
     SECTION("non-image tasks are rejected") {
         req.task = AGENT_CAP_TEXT_GEN;
-        agent_response resp{};
+        agent_response resp{.struct_size = sizeof(agent_response)};
         REQUIRE(engine->run(inst, &req, &resp) == AGENT_ERR_UNSUPPORTED);
     }
 

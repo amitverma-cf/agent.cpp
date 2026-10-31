@@ -115,18 +115,19 @@ int32_t fake_run(void *instance, const agent_request *req, agent_response *resp)
         p.data = inst->floats.data() + r * static_cast<size_t>(inst->shape);
         p.size = static_cast<size_t>(inst->shape) * sizeof(float);
     }
-    *resp = agent_response{};
+    agent_response_reset(resp);
     resp->message.role = agent_str{"assistant", 9};
     resp->message.parts = inst->parts.data();
     resp->message.n_parts = inst->parts.size();
     return AGENT_OK;
 }
 
-void fake_free_response(void *, agent_response *resp) { *resp = agent_response{}; }
+void fake_free_response(void *, agent_response *resp) { agent_response_reset(resp); }
 const char *fake_last_error(void *inst) { return static_cast<FakeInstance *>(inst)->error.c_str(); }
 
 const agent_engine_v1 kFakeEngine = {
     AGENT_ENGINE_ABI_VERSION,
+    sizeof(agent_engine_v1),
     "rag-fake",
     "1.0",
     AGENT_CAP_EMBED | AGENT_CAP_RERANK,

@@ -93,6 +93,7 @@ TEST_CASE("engine_ipc round-trips requests and responses", "[engine_host][ipc]")
     msgs[1].n_tool_calls = 1;
     agent_request req{};
     req.task = AGENT_CAP_TEXT_GEN;
+    req.flags = AGENT_REQUEST_FLAG_AUTO_TASK;
     req.messages = msgs;
     req.n_messages = 2;
     req.tools_json = {"[]", 2};
@@ -116,6 +117,8 @@ TEST_CASE("engine_ipc round-trips requests and responses", "[engine_host][ipc]")
     REQUIRE(r.at_end());
     REQUIRE(flags == ipc::kRunStream);
     REQUIRE(got.task == AGENT_CAP_TEXT_GEN);
+    REQUIRE(got.flags == AGENT_REQUEST_FLAG_AUTO_TASK);
+    REQUIRE(got.struct_size == sizeof(agent_request));
     REQUIRE(got.n_messages == 2);
     REQUIRE(sv(got.messages[0].role) == "user");
     REQUIRE(got.messages[0].n_parts == 4);
@@ -155,6 +158,7 @@ TEST_CASE("engine_ipc round-trips requests and responses", "[engine_host][ipc]")
     ipc::Reader rr(out.data() + ipc::kHeaderSize, out.size() - ipc::kHeaderSize);
     agent_response back{};
     REQUIRE(rr.response(back, arena));
+    REQUIRE(back.struct_size == sizeof(agent_response));
     REQUIRE(back.usage.prompt_tokens == 7);
     REQUIRE(back.usage.completion_tokens == 3);
     REQUIRE(back.message.n_parts == 4);
@@ -465,6 +469,7 @@ TEST_CASE("engines.json \"isolation\" selects process isolation by default", "[e
 TEST_CASE("Process isolation needs a plugin file", "[engine_host]") {
     static const agent_engine_v1 *linked = [] {
         static agent_engine_v1 e = {AGENT_ENGINE_ABI_VERSION,
+                                    sizeof(agent_engine_v1),
                                     "linked_in",
                                     "0",
                                     AGENT_CAP_TEXT_GEN,

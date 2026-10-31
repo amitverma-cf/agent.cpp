@@ -13,18 +13,28 @@
  * Ownership: everything the host passes in is borrowed for the duration of the call.
  * Everything the engine returns in agent_response stays valid until free_response() (or the
  * next run() on the same instance) and is owned by the engine.
+ *
+ * Versioning (ABI 2): agent_engine_v1, agent_request and agent_response carry a struct_size, the
+ * sizeof() of the struct as its writer was compiled. Fields are only ever appended. The fields that
+ * exist in ABI 2 (the "v2 baseline", AGENT_*_V2_SIZE) are always present: the host rejects engine
+ * tables smaller than that and always passes requests / responses at least that large. A reader
+ * must check struct_size (AGENT_HAS_FIELD) before touching any field added after the v2 baseline,
+ * and a writer of agent_response must not write past the host's response->struct_size (use
+ * agent_response_reset() instead of assigning a whole agent_response). The "_v1" in the type and
+ * entry point names is historical: abi_version is what counts.
  */
 #ifndef AGENT_CPP_ENGINE_ABI_H
 #define AGENT_CPP_ENGINE_ABI_H
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define AGENT_ENGINE_ABI_VERSION 1
+#define AGENT_ENGINE_ABI_VERSION 2
 
 #if defined(_WIN32)
 #define AGENT_ENGINE_EXPORT __declspec(dllexport)
@@ -136,8 +146,17 @@ enum agent_chunk_kind {
 typedef void (*agent_chunk_fn)(void *user_data, uint32_t kind, const void *data, size_t size);
 typedef void (*agent_progress_fn)(void *user_data, uint64_t step, uint64_t total);
 
+/* agent_request::flags. */
+enum agent_request_flag {
+    /* The caller did not choose the task: the host picked it (AGENT_CAP_TEXT_GEN if declared, else the
+     * lowest declared capability bit). Engines with several tasks may route by content instead. */
+    AGENT_REQUEST_FLAG_AUTO_TASK = 1u << 0,
+};
+
 typedef struct agent_request {
-    uint32_t task; /* the single agent_capability this call performs, e.g. AGENT_CAP_TEXT_GEN */
+    uint32_t struct_size; /* sizeof(agent_request) as the host was compiled; >= AGENT_REQUEST_V2_SIZE */
+    uint32_t task;        /* the single agent_capability this call performs, e.g. AGENT_CAP_TEXT_GEN */
+    uint32_t flags;       /* agent_request_flag bits */
     const agent_message *messages;
     size_t n_messages;
     agent_str tools_json;   /* JSON array of tool definitions, empty if none */
@@ -155,12 +174,14 @@ typedef struct agent_usage {
 } agent_usage;
 
 typedef struct agent_response {
+    uint32_t struct_size;  /* set by the host before run(): the size of the struct it passes. Engines never write it */
     agent_message message; /* assistant output: text / file / tensor parts, tool calls */
     agent_usage usage;
 } agent_response;
 
 typedef struct agent_engine_v1 {
-    uint32_t abi_version; /* AGENT_ENGINE_ABI_VERSION */
+    uint32_t abi_version; /* AGENT_ENGINE_ABI_VERSION; first in every ABI version */
+    uint32_t struct_size; /* sizeof(agent_engine_v1) as the engine was compiled; >= AGENT_ENGINE_V2_SIZE */
     const char *name;     /* "llama", "whisper", "sdcpp", ... */
     const char *version;
     uint64_t caps;        /* agent_capability bits */
@@ -182,6 +203,24 @@ typedef struct agent_engine_v1 {
 } agent_engine_v1;
 
 typedef const agent_engine_v1 *(*agent_engine_get_v1_fn)(void);
+
+/* The v2 baseline: every ABI-2 reader and writer has at least these bytes. Fixed forever. */
+#define AGENT_ENGINE_V2_SIZE (offsetof(agent_engine_v1, reset_cache) + sizeof(void *))
+#define AGENT_REQUEST_V2_SIZE (offsetof(agent_request, cancel) + sizeof(void *))
+#define AGENT_RESPONSE_V2_SIZE (offsetof(agent_response, usage) + sizeof(agent_usage))
+
+/* True when *s (an agent_engine_v1, agent_request or agent_response) is large enough to hold field.
+ * Required before reading or writing any field added after the v2 baseline. */
+#define AGENT_HAS_FIELD(s, type, field) ((size_t)(s)->struct_size >= offsetof(type, field) + sizeof(((type *)0)->field))
+
+/* Zeroes every field of *r that the host's struct holds, keeping struct_size. Use it in run() and
+ * free_response() instead of `*r = agent_response{}`, which would clear struct_size (and, against a
+ * host built with an older, smaller agent_response, write past its end). */
+static inline void agent_response_reset(agent_response *r) {
+    const size_t start = offsetof(agent_response, message);
+    const size_t end = r->struct_size < sizeof(*r) ? r->struct_size : sizeof(*r);
+    if (end > start) memset((char *)r + start, 0, end - start);
+}
 
 #define AGENT_ENGINE_ENTRY_POINT "agent_engine_get_v1"
 

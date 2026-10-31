@@ -2,9 +2,11 @@
 #include <agent-cpp/engine_abi.h>
 #include <catch_amalgamated.hpp>
 #include <cctype>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -61,18 +63,85 @@ TEST_CASE("load_engine_plugin reports a missing library", "[engines]") {
 }
 
 TEST_CASE("register_engine rejects an ABI mismatch and incomplete tables", "[engines]") {
-    static const agent_engine_v1 wrong_abi = {AGENT_ENGINE_ABI_VERSION + 1, "wrong_abi", "0", 0, 0, nullptr, nullptr, nullptr,
-                                              nullptr,                      nullptr,     nullptr, nullptr};
+    static const agent_engine_v1 wrong_abi = {AGENT_ENGINE_ABI_VERSION + 1,
+                                              sizeof(agent_engine_v1),
+                                              "wrong_abi",
+                                              "0",
+                                              0,
+                                              0,
+                                              nullptr,
+                                              nullptr,
+                                              nullptr,
+                                              nullptr,
+                                              nullptr,
+                                              nullptr,
+                                              nullptr};
     auto r1 = agent::register_engine(&wrong_abi);
     REQUIRE_FALSE(r1.ok);
     REQUIRE(r1.error.code == agent::ErrorCode::UnsupportedProvider);
 
-    static const agent_engine_v1 incomplete = {AGENT_ENGINE_ABI_VERSION, "incomplete", "0", 0, 0, nullptr, nullptr, nullptr,
-                                               nullptr,                  nullptr,      nullptr, nullptr};
+    static const agent_engine_v1 incomplete = {AGENT_ENGINE_ABI_VERSION,
+                                               sizeof(agent_engine_v1),
+                                               "incomplete",
+                                               "0",
+                                               0,
+                                               0,
+                                               nullptr,
+                                               nullptr,
+                                               nullptr,
+                                               nullptr,
+                                               nullptr,
+                                               nullptr,
+                                               nullptr};
     auto r2 = agent::register_engine(&incomplete);
     REQUIRE_FALSE(r2.ok);
     REQUIRE(r2.error.code == agent::ErrorCode::InvalidConfig);
     REQUIRE(agent::find_engine("incomplete") == nullptr);
+
+    // ABI 2: an engine table smaller than the v2 baseline is refused, and so is an ABI 1 plugin.
+    static const agent_engine_v1 small = {
+        AGENT_ENGINE_ABI_VERSION, 8, "too_small", "0", 0, 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+    auto r3 = agent::register_engine(&small);
+    REQUIRE_FALSE(r3.ok);
+    REQUIRE(r3.error.code == agent::ErrorCode::UnsupportedProvider);
+    REQUIRE(r3.error.message.find("baseline") != std::string::npos);
+    static const agent_engine_v1 v1 = {
+        1, sizeof(agent_engine_v1), "abi_one", "0", 0, 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+    REQUIRE(agent::register_engine(&v1).error.code == agent::ErrorCode::UnsupportedProvider);
+}
+
+TEST_CASE("ABI 2 struct sizes and helpers", "[engines][abi]") {
+    // The baselines cover every field of ABI 2 (nothing has been appended yet).
+    STATIC_REQUIRE(AGENT_ENGINE_V2_SIZE == sizeof(agent_engine_v1));
+    STATIC_REQUIRE(AGENT_REQUEST_V2_SIZE == sizeof(agent_request));
+    STATIC_REQUIRE(AGENT_RESPONSE_V2_SIZE <= sizeof(agent_response));
+    STATIC_REQUIRE(offsetof(agent_engine_v1, abi_version) == 0);
+    STATIC_REQUIRE(offsetof(agent_request, struct_size) == 0);
+    STATIC_REQUIRE(offsetof(agent_response, struct_size) == 0);
+
+    agent_request req{.struct_size = sizeof(agent_request)};
+    REQUIRE(AGENT_HAS_FIELD(&req, agent_request, cancel));
+    req.struct_size = static_cast<uint32_t>(offsetof(agent_request, cancel));
+    REQUIRE_FALSE(AGENT_HAS_FIELD(&req, agent_request, cancel));
+    REQUIRE(AGENT_HAS_FIELD(&req, agent_request, user_data));
+
+    // agent_response_reset keeps struct_size and never writes past it.
+    struct {
+        agent_response resp;
+        unsigned char guard[16];
+    } buf;
+    std::memset(&buf, 0xAB, sizeof(buf));
+    buf.resp.struct_size = static_cast<uint32_t>(offsetof(agent_response, usage)); // a host without `usage`
+    agent_response_reset(&buf.resp);
+    REQUIRE(buf.resp.struct_size == offsetof(agent_response, usage));
+    REQUIRE(buf.resp.message.parts == nullptr);
+    REQUIRE(buf.resp.message.n_parts == 0);
+    REQUIRE(buf.resp.usage.prompt_tokens == static_cast<int32_t>(0xABABABAB));
+    REQUIRE(buf.guard[0] == 0xAB);
+    buf.resp.struct_size = sizeof(agent_response);
+    agent_response_reset(&buf.resp);
+    REQUIRE(buf.resp.usage.prompt_tokens == 0);
+    REQUIRE(buf.resp.struct_size == sizeof(agent_response));
 }
 
 TEST_CASE("AiProvider::Engine runs a turn through the plugin", "[engines]") {
@@ -419,12 +488,12 @@ int32_t run_with_media(LlamaAbi &abi, const agent_part &media, std::string_view 
     msg.role = abi_str("user");
     msg.parts = parts;
     msg.n_parts = 2;
-    agent_request req{};
+    agent_request req{.struct_size = sizeof(agent_request)};
     req.task = AGENT_CAP_TEXT_GEN;
     req.messages = &msg;
     req.n_messages = 1;
     req.params_json = abi_str(R"({"max_tokens":24,"temperature":0})");
-    agent_response resp{};
+    agent_response resp{.struct_size = sizeof(agent_response)};
     int32_t rc = abi.engine->run(abi.inst, &req, &resp);
     if (rc == AGENT_OK) {
         for (size_t i = 0; i < resp.message.n_parts; ++i)
@@ -604,24 +673,31 @@ int32_t task_create(agent_str, void **out, char *, size_t) {
     return AGENT_OK;
 }
 void task_destroy(void *) {}
+// What the last request looked like (ABI 2: struct sizes and the auto-task flag).
+uint32_t g_task_request_size = 0, g_task_response_size = 0, g_task_flags = 0;
+
 int32_t task_run(void *, const agent_request *req, agent_response *resp) {
     thread_local TaskReply reply;
+    g_task_request_size = req->struct_size;
+    g_task_response_size = resp->struct_size;
+    g_task_flags = req->flags;
     reply.text = "task=" + std::to_string(req->task);
     reply.part = agent_part{};
     reply.part.kind = AGENT_PART_TEXT;
     reply.part.text = agent_str{reply.text.data(), reply.text.size()};
-    *resp = agent_response{};
+    agent_response_reset(resp);
     resp->message.role = agent_str{"assistant", 9};
     resp->message.parts = &reply.part;
     resp->message.n_parts = 1;
     return AGENT_OK;
 }
-void task_free(void *, agent_response *resp) { *resp = agent_response{}; }
+void task_free(void *, agent_response *resp) { agent_response_reset(resp); }
 const char *task_error(void *) { return ""; }
 
 // Speech-only, like sherpa: no TEXT_GEN, so the automatic task is the lowest bit (ASR).
 const agent_engine_v1 kTaskEngine = {
     AGENT_ENGINE_ABI_VERSION,
+    sizeof(agent_engine_v1),
     "task_echo_test",
     "1.0",
     AGENT_CAP_ASR | AGENT_CAP_TTS,
@@ -664,9 +740,13 @@ TEST_CASE("InferRequest::task and run_task pick the engine task explicitly", "[e
     REQUIRE(res.ok);
     agent::Session session = std::move(res.value);
 
-    // 0 = automatic: TEXT_GEN if supported, else the lowest capability bit.
+    // 0 = automatic: TEXT_GEN if supported, else the lowest capability bit, flagged as the host's pick.
     REQUIRE(task_of(session, 0) == "task=" + std::to_string(AGENT_CAP_ASR));
+    REQUIRE(g_task_flags == AGENT_REQUEST_FLAG_AUTO_TASK);
+    REQUIRE(g_task_request_size == sizeof(agent_request));
+    REQUIRE(g_task_response_size == sizeof(agent_response));
     REQUIRE(task_of(session, AGENT_CAP_TTS) == "task=" + std::to_string(AGENT_CAP_TTS));
+    REQUIRE(g_task_flags == 0);
 
     agent::MessageView msg{.role = "user", .content = "hi"};
     agent::InferRequest req;

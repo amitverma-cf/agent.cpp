@@ -11,10 +11,11 @@
 //                                 -> SherpaOnnxOfflineSpeakerDiarization (AGENT_CAP_DIARIZE)
 //
 // Routing: task TTS synthesizes the last user text; tasks VAD and DIARIZE segment the last user
-// audio. Task ASR (and TEXT_GEN, which older hosts send for every request) is routed by content:
-// an audio part on the last user message is transcribed (or, when no recognizer is configured,
-// segmented by the VAD, else diarized), otherwise its text is synthesized. A task whose component
-// was not configured is UNSUPPORTED.
+// audio; an explicit task ASR transcribes the last user audio (none: INVALID_CONFIG). When the host
+// picked the task itself (AGENT_REQUEST_FLAG_AUTO_TASK, it sends ASR as the lowest capability bit) or
+// sends TEXT_GEN, the request is routed by content: an audio part on the last user message is
+// transcribed (or, when no recognizer is configured, segmented by the VAD, else diarized), otherwise
+// its text is synthesized. A task whose component was not configured is UNSUPPORTED.
 //
 // Audio input is a FILE or BYTES WAV, or an F32 TENSOR of mono samples at 16 kHz.
 
@@ -676,12 +677,13 @@ void sherpa_destroy(void *instance) { delete static_cast<SherpaInstance *>(insta
 
 int32_t sherpa_run(void *instance, const agent_request *req, agent_response *resp) {
     auto *inst = static_cast<SherpaInstance *>(instance);
-    *resp = agent_response{};
+    agent_response_reset(resp);
     inst->error.clear();
     if (cancelled(req)) return inst->fail(AGENT_ERR_CANCELLED, "sherpa: cancelled");
 
     const UserInput in = last_user_input(req);
     uint32_t task = req->task;
+    const bool auto_task = (req->flags & AGENT_REQUEST_FLAG_AUTO_TASK) != 0;
     switch (task) {
     case AGENT_CAP_TTS: break;
     case AGENT_CAP_VAD:
@@ -690,7 +692,13 @@ int32_t sherpa_run(void *instance, const agent_request *req, agent_response *res
             return inst->fail(AGENT_ERR_INVALID_CONFIG, "sherpa: VAD / diarization needs an audio part in the last user message");
         break;
     case AGENT_CAP_ASR:
-    case AGENT_CAP_TEXT_GEN: // routed by content (hosts without an explicit task send the lowest capability bit)
+        if (!auto_task) {
+            if (!in.audio)
+                return inst->fail(AGENT_ERR_INVALID_CONFIG, "sherpa: an ASR request needs an audio part on the last user message");
+            break;
+        }
+        [[fallthrough]];
+    case AGENT_CAP_TEXT_GEN: // routed by content
         if (!in.audio) task = AGENT_CAP_TTS;
         else if (inst->asr) task = AGENT_CAP_ASR;
         else if (inst->vad) task = AGENT_CAP_VAD;
@@ -716,19 +724,20 @@ int32_t sherpa_run(void *instance, const agent_request *req, agent_response *res
         rc = synthesize(*inst, req, in.text, resp);
     }
     if (rc != AGENT_OK) {
-        *resp = agent_response{};
+        agent_response_reset(resp);
         return rc;
     }
     resp->message.role = agent_str{"assistant", 9};
     return AGENT_OK;
 }
 
-void sherpa_free_response(void *, agent_response *resp) { *resp = agent_response{}; }
+void sherpa_free_response(void *, agent_response *resp) { agent_response_reset(resp); }
 
 const char *sherpa_last_error(void *instance) { return static_cast<SherpaInstance *>(instance)->error.c_str(); }
 
 const agent_engine_v1 kSherpaEngine = {
     AGENT_ENGINE_ABI_VERSION,
+    sizeof(agent_engine_v1),
     "sherpa",
     "0.2",
     AGENT_CAP_ASR | AGENT_CAP_TTS | AGENT_CAP_VAD | AGENT_CAP_DIARIZE,

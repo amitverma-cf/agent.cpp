@@ -75,7 +75,7 @@ void on_progress(void *ud, uint64_t step, uint64_t total) {
 struct OneMessage {
     agent_part parts[2]{};
     agent_message msg{};
-    agent_request req{};
+    agent_request req{.struct_size = sizeof(agent_request)};
 
     OneMessage(uint32_t task, std::string_view text, std::string_view audio_path, Captured *cap) {
         size_t n = 0;
@@ -177,7 +177,7 @@ TEST_CASE("sherpa without components creates but every task is UNSUPPORTED", "[e
     REQUIRE(create(e, R"({"model":"","options":{}})", &inst) == AGENT_OK);
     REQUIRE(inst != nullptr);
 
-    agent_response resp{};
+    agent_response resp{.struct_size = sizeof(agent_response)};
     OneMessage tts(AGENT_CAP_TTS, "hello", "", nullptr);
     REQUIRE(e->run(inst, &tts.req, &resp) == AGENT_ERR_UNSUPPORTED);
     REQUIRE(std::string_view(e->last_error(inst)).find("tts") != std::string_view::npos);
@@ -242,7 +242,7 @@ TEST_CASE("sherpa Kokoro TTS writes a WAV and Whisper transcribes it", "[engines
     // TTS through the explicit task.
     Captured cap;
     OneMessage tts_req(AGENT_CAP_TTS, "Hello world.", "", &cap);
-    agent_response resp{};
+    agent_response resp{.struct_size = sizeof(agent_response)};
     REQUIRE(e->run(inst, &tts_req.req, &resp) == AGENT_OK);
     REQUIRE(resp.message.n_parts == 2);
     REQUIRE(resp.message.parts[0].kind == AGENT_PART_TEXT);
@@ -308,11 +308,15 @@ TEST_CASE("sherpa Kokoro TTS writes a WAV and Whisper transcribes it", "[engines
         e->free_response(inst, &resp);
     }
 
-    // ASR task with text and no audio falls back to TTS.
+    // An automatic ASR task (the host's pick) with text and no audio falls back to TTS ...
     OneMessage fallback(AGENT_CAP_ASR, "Hello.", "", nullptr);
+    fallback.req.flags = AGENT_REQUEST_FLAG_AUTO_TASK;
     REQUIRE(e->run(inst, &fallback.req, &resp) == AGENT_OK);
     REQUIRE(resp.message.n_parts == 2);
     e->free_response(inst, &resp);
+    // ... an explicit one is an error.
+    OneMessage explicit_asr(AGENT_CAP_ASR, "Hello.", "", nullptr);
+    REQUIRE(e->run(inst, &explicit_asr.req, &resp) == AGENT_ERR_INVALID_CONFIG);
 
     // A non-WAV file is reported, not crashed on.
     const std::string bogus = std::string(kOutDir) + "/bogus.wav";
@@ -354,6 +358,17 @@ TEST_CASE("sherpa engine speaks and listens through a Session", "[engines][sherp
     REQUIRE(heard.ok);
     INFO("transcript: " << heard.value);
     REQUIRE(lower(heard.value).find("hello") != std::string::npos);
+
+    // Explicit tasks through the public API.
+    agent::MessageView msg{.role = "user", .content = "Hello there."};
+    agent::InferRequest req;
+    req.messages = std::span<const agent::MessageView>(&msg, 1);
+    auto speech = agent::run_task(session, AGENT_CAP_TTS, req);
+    REQUIRE(speech.ok);
+    REQUIRE(speech.value.message.media.size() == 1);
+    auto no_audio = agent::run_task(session, AGENT_CAP_ASR, req);
+    REQUIRE_FALSE(no_audio.ok);
+    REQUIRE(no_audio.error.message.find("audio part") != std::string::npos);
 }
 
 // ------------------------------------------------------------------ VAD / diarization

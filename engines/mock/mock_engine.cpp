@@ -144,7 +144,7 @@ int32_t mock_run(void *instance, const agent_request *req, agent_response *resp)
         }
     }
 
-    *resp = agent_response{};
+    agent_response_reset(resp);
     resp->message.role = agent_str{"assistant", 9};
     resp->usage = agent_usage{static_cast<int32_t>(last_user.size()), 1};
 
@@ -214,12 +214,13 @@ int32_t mock_run(void *instance, const agent_request *req, agent_response *resp)
     return AGENT_OK;
 }
 
-void mock_free_response(void *, agent_response *resp) { *resp = agent_response{}; }
+void mock_free_response(void *, agent_response *resp) { agent_response_reset(resp); }
 
 const char *mock_last_error(void *instance) { return static_cast<MockInstance *>(instance)->error.c_str(); }
 
 const agent_engine_v1 kMockEngine = {
     AGENT_ENGINE_ABI_VERSION,
+    sizeof(agent_engine_v1),
     "mock",
     "1.0",
     AGENT_CAP_TEXT_GEN | AGENT_CAP_TOOL_CALL,
