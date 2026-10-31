@@ -18,7 +18,8 @@ The library is designed around three principles:
 |---|---|
 | [Getting Started](getting-started.md) | Build instructions, first program |
 | [Installing and packaging](packaging.md) | `cmake --install`, `find_package(agent-cpp)`, static/shared, Linux release tarball (`scripts/package.sh`) |
-| [The `agent` CLI](cli.md) | `agent setup`, `engine`, `model`, `chat`: config files, permissions, slash commands |
+| [The `agent` CLI](cli.md) | `agent setup`, `engine`, `model`, `chat`, `run`, `voice`: config files, permissions, slash commands |
+| [Guide: a local voice assistant](guides/voice-assistant.md) | `agent voice` with Silero VAD, Whisper, a llama.cpp model and Kokoro; file backend for headless runs |
 | [Architecture](architecture.md) | System diagrams, memory model, data flow |
 | [Limitations](LIMITATIONS.md) | Known limitations and planned fixes |
 | [OS sandbox](security-sandbox.md) | Landlock / seccomp / rlimits for the engine host, `run_command` and MCP servers; `SandboxPolicy`, defaults, platform status |

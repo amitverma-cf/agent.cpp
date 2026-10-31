@@ -63,12 +63,17 @@ constexpr std::string_view kChatBool[] = {"yes", "list", "verbose", "inprocess"}
 constexpr std::string_view kRunValue[] = {"model", "engine", "workspace", "thread", "set", "resume", "input", "engine-options"};
 constexpr std::string_view kRunBool[] = {"yes", "inprocess"};
 
+constexpr std::string_view kVoiceValue[] = {"model",     "engine", "asr-model",  "tts-model",      "vad-model", "input-wav", "output-dir",
+                                            "workspace", "ctx",    "max-tokens", "engine-options", "resume",    "max-turns", "speaker-id"};
+constexpr std::string_view kVoiceBool[] = {"yes", "verbose", "inprocess", "barge-in"};
+
 constexpr CommandSpec kCommands[] = {
     {"setup", {}, 0, 0, kSetupValue, kSetupBool},
     {"engine", kEngineSubs, 0, 0, {}, {}},
     {"model", kModelSubs, 0, 0, kModelValue, kModelBool},
     {"chat", {}, 0, 0, kChatValue, kChatBool},
     {"run", {}, 1, 1, kRunValue, kRunBool},
+    {"voice", {}, 0, 0, kVoiceValue, kVoiceBool},
     {"help", {}, 0, 1, {}, {}},
     {"version", {}, 0, 0, {}, {}},
 };
@@ -198,6 +203,11 @@ std::string usage_text() {
            "  run <graph.json>           run a declarative graph\n"
            "        [-m|--model NAME|PATH] [-e|--engine NAME|PATH] [--workspace DIR] [--thread ID] [--set k=v]\n"
            "        [--resume ID] [--input TEXT] [--engine-options JSON] [-y|--yes] [--inprocess]\n"
+           "  voice                      talk to the agent: mic -> VAD -> ASR -> LLM -> TTS -> speaker\n"
+           "        --asr-model DIR --tts-model DIR [--vad-model silero_vad.onnx] [-m|--model NAME|PATH]\n"
+           "        [--input-wav FILE] [--output-dir DIR] [--barge-in] [--max-turns N] [--speaker-id N]\n"
+           "        [--resume ID] [-e|--engine NAME|PATH] [--workspace DIR] [--ctx N] [--max-tokens N]\n"
+           "        [--engine-options JSON] [-y|--yes] [--verbose] [--inprocess]\n"
            "  version                    print the version\n"
            "\n"
            "global options: -h|--help, --config-dir DIR (default: $AGENT_CONFIG_DIR or the platform config dir)\n"
