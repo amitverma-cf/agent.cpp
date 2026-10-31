@@ -13,6 +13,14 @@
 #include <string>
 #include <vector>
 
+#if defined(__SANITIZE_ADDRESS__)
+#define AGENT_TEST_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define AGENT_TEST_ASAN 1
+#endif
+#endif
+
 #if defined(__linux__)
 #include <cerrno>
 #include <sys/socket.h>
@@ -361,6 +369,36 @@ TEST_CASE("the engine host runs the mock engine under its default sandbox", "[sa
     auto r = agent::run_turn(open_res.value, memory, "read:" + root + "/secret/secret.txt");
     REQUIRE(r.ok);
     CHECK(r.value == "read ok: 10 bytes");
+}
+
+TEST_CASE("engine_sandbox.memory_limit_bytes reaches the host", "[sandbox][engine_host][rlimit]") {
+#if defined(AGENT_TEST_ASAN)
+    // An ASan-built host reserves terabytes of shadow memory at startup: no RLIMIT_AS fits.
+    SKIP("RLIMIT_AS and AddressSanitizer are incompatible");
+#endif
+    const std::string ws = fresh_dir("engine_rlimit");
+    agent::Config cfg;
+    cfg.provider = agent::AiProvider::Engine;
+    cfg.engine = AGENT_TEST_MOCK_ENGINE_PATH;
+    cfg.engine_isolation = agent::EngineIsolation::Process;
+    cfg.engine_host_path = AGENT_TEST_ENGINE_HOST_PATH;
+    cfg.model = "mock.bin";
+    cfg.workspace_dir = ws;
+    cfg.engine_max_restarts = 0;
+
+    cfg.engine_sandbox.memory_limit_bytes = 4ull << 30;
+    auto roomy = agent::init(cfg);
+    INFO(roomy.error.message);
+    REQUIRE(roomy.ok);
+    agent::FlowMemory memory;
+    auto r = agent::run_turn(roomy.value, memory, "hello");
+    REQUIRE(r.ok);
+    CHECK(r.value == "echo: hello");
+
+    // 8 MiB of address space is not enough to map the host's libraries and thread stacks.
+    cfg.engine_sandbox.memory_limit_bytes = 8ull << 20;
+    auto starved = agent::init(cfg);
+    CHECK_FALSE(starved.ok);
 }
 
 TEST_CASE("an opted-in MCP server still works inside the sandbox", "[sandbox][mcp]") {
