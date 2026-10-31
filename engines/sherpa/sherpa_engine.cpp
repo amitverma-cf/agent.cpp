@@ -1,4 +1,4 @@
-// agent-engine-sherpa: sherpa-onnx speech (TTS + ASR) as an agent.cpp engine plugin.
+// agent-engine-sherpa: sherpa-onnx speech (TTS, ASR, VAD, diarization) as an agent.cpp engine plugin.
 //
 // Wraps the sherpa-onnx C API (sherpa-onnx/c-api/c-api.h), which reports failures through NULL
 // returns, so no exception boundary is needed here. Components are created only when configured:
@@ -6,10 +6,17 @@
 //   options.tts.kokoro            -> SherpaOnnxOfflineTts      (AGENT_CAP_TTS)
 //   options.asr.whisper           -> SherpaOnnxOfflineRecognizer (AGENT_CAP_ASR)
 //   options.asr.nemo_transducer / options.asr.transducer
+//   options.vad.silero            -> SherpaOnnxVoiceActivityDetector (AGENT_CAP_VAD)
+//   options.diarize.pyannote + options.diarize.embedding
+//                                 -> SherpaOnnxOfflineSpeakerDiarization (AGENT_CAP_DIARIZE)
 //
-// Routing: task TTS synthesizes the last user text. Task ASR (and TEXT_GEN, which older hosts send
-// for every request) is routed by content: an audio part on the last user message is transcribed,
-// otherwise its text is synthesized. A task whose component was not configured is UNSUPPORTED.
+// Routing: task TTS synthesizes the last user text; tasks VAD and DIARIZE segment the last user
+// audio. Task ASR (and TEXT_GEN, which older hosts send for every request) is routed by content:
+// an audio part on the last user message is transcribed (or, when no recognizer is configured,
+// segmented by the VAD, else diarized), otherwise its text is synthesized. A task whose component
+// was not configured is UNSUPPORTED.
+//
+// Audio input is a FILE or BYTES WAV, or an F32 TENSOR of mono samples at 16 kHz.
 
 #include <agent-cpp/engine_abi.h>
 
@@ -23,6 +30,7 @@
 #include <string>
 #include <string_view>
 #include <sys/stat.h>
+#include <vector>
 
 #include <sherpa-onnx/c-api/c-api.h>
 
@@ -41,16 +49,26 @@ struct SherpaInstance {
     int32_t tts_sid = 0;
     float tts_speed = 1.0f;
     const SherpaOnnxOfflineRecognizer *asr = nullptr;
+    const SherpaOnnxVoiceActivityDetector *vad = nullptr;
+    int32_t vad_window = 512;
+    bool vad_streaming = false;  // keep the detector's state across run() calls
+    int64_t vad_fed = 0;         // samples fed since the last reset (streaming mode)
+    int64_t vad_open_start = -1; // streaming: sample where the current, unfinished speech began
+    const SherpaOnnxOfflineSpeakerDiarization *diarizer = nullptr;
 
     // Response storage: valid until free_response() or the next run().
     std::string text;
     std::string path;
     agent_part parts[2]{};
+    std::vector<float> tensor; // segments as an F32 tensor
+    int64_t tensor_shape[2]{};
     std::string error;
 
     ~SherpaInstance() {
         if (tts) SherpaOnnxDestroyOfflineTts(tts);
         if (asr) SherpaOnnxDestroyOfflineRecognizer(asr);
+        if (vad) SherpaOnnxDestroyVoiceActivityDetector(vad);
+        if (diarizer) SherpaOnnxDestroyOfflineSpeakerDiarization(diarizer);
     }
 
     int32_t fail(int32_t code, std::string msg) {
@@ -203,14 +221,87 @@ int32_t create_asr(SherpaInstance &inst, simdjson::dom::object asr, int32_t thre
     return AGENT_OK;
 }
 
+constexpr int32_t kVadRate = 16000; // Silero VAD, pyannote segmentation and the recognizers all run at 16 kHz
+
+int32_t create_vad(SherpaInstance &inst, simdjson::dom::object vad, int32_t threads, const std::string &provider, char *err,
+                   size_t err_cap) {
+    simdjson::dom::object silero;
+    if (vad["silero"].get_object().get(silero)) {
+        std::snprintf(err, err_cap, "sherpa: options.vad needs a model family; supported: \"silero\"");
+        return AGENT_ERR_INVALID_CONFIG;
+    }
+    std::string model;
+    if (int32_t rc = require_path(silero, "vad.silero", "model", model, err, err_cap)) return rc;
+
+    SherpaOnnxVadModelConfig cfg;
+    std::memset(&cfg, 0, sizeof(cfg));
+    cfg.silero_vad.model = model.c_str();
+    cfg.silero_vad.threshold = static_cast<float>(json_num(vad, "threshold", 0.5));
+    cfg.silero_vad.min_silence_duration = static_cast<float>(json_num(vad, "min_silence", 0.5));
+    cfg.silero_vad.min_speech_duration = static_cast<float>(json_num(vad, "min_speech", 0.25));
+    cfg.silero_vad.max_speech_duration = static_cast<float>(json_num(vad, "max_speech", 20.0));
+    cfg.silero_vad.window_size = 512;
+    cfg.sample_rate = kVadRate;
+    cfg.num_threads = threads > 1 ? 1 : threads; // a 512-sample window gains nothing from more threads
+    cfg.provider = provider.c_str();
+
+    // buffer_size_in_seconds bounds the audio the detector keeps for one segment.
+    const float buffer_seconds = cfg.silero_vad.max_speech_duration + 10.0f;
+    inst.vad = SherpaOnnxCreateVoiceActivityDetector(&cfg, buffer_seconds);
+    if (!inst.vad) {
+        std::snprintf(err, err_cap, "sherpa: failed to create Silero VAD from %s", model.c_str());
+        return AGENT_ERR_MODEL_LOAD_FAILED;
+    }
+    inst.vad_window = cfg.silero_vad.window_size;
+    bool streaming = false;
+    if (!vad["streaming"].get_bool().get(streaming)) inst.vad_streaming = streaming;
+    return AGENT_OK;
+}
+
+int32_t create_diarizer(SherpaInstance &inst, simdjson::dom::object dia, int32_t threads, const std::string &provider, char *err,
+                        size_t err_cap) {
+    simdjson::dom::object pyannote, embedding;
+    if (dia["pyannote"].get_object().get(pyannote) || dia["embedding"].get_object().get(embedding)) {
+        std::snprintf(err, err_cap, "sherpa: options.diarize needs \"pyannote\" (segmentation) and \"embedding\" models");
+        return AGENT_ERR_INVALID_CONFIG;
+    }
+    ComponentPaths p;
+    int32_t rc = AGENT_OK;
+    if ((rc = require_path(pyannote, "diarize.pyannote", "model", p.a, err, err_cap)) ||
+        (rc = require_path(embedding, "diarize.embedding", "model", p.b, err, err_cap)))
+        return rc;
+
+    SherpaOnnxOfflineSpeakerDiarizationConfig cfg;
+    std::memset(&cfg, 0, sizeof(cfg));
+    cfg.segmentation.pyannote.model = p.a.c_str();
+    cfg.segmentation.num_threads = threads;
+    cfg.segmentation.provider = provider.c_str();
+    cfg.embedding.model = p.b.c_str();
+    cfg.embedding.num_threads = threads;
+    cfg.embedding.provider = provider.c_str();
+    const double speakers = json_num(dia, "num_speakers", 0);
+    cfg.clustering.num_clusters = speakers >= 1 && speakers <= 1000 ? static_cast<int32_t>(speakers) : -1;
+    cfg.clustering.threshold = static_cast<float>(json_num(dia, "threshold", 0.5));
+    cfg.min_duration_on = static_cast<float>(json_num(dia, "min_duration_on", 0.3));
+    cfg.min_duration_off = static_cast<float>(json_num(dia, "min_duration_off", 0.5));
+
+    inst.diarizer = SherpaOnnxCreateOfflineSpeakerDiarization(&cfg);
+    if (!inst.diarizer) {
+        std::snprintf(err, err_cap, "sherpa: failed to create speaker diarization from %s + %s", p.a.c_str(), p.b.c_str());
+        return AGENT_ERR_MODEL_LOAD_FAILED;
+    }
+    return AGENT_OK;
+}
+
 // ------------------------------------------------------------------ request helpers
 
 struct UserInput {
     std::string_view text;   // last TEXT part of the last user message
-    const agent_part *audio; // last audio FILE/BYTES part of the last user message
+    const agent_part *audio; // last audio FILE/BYTES/TENSOR part of the last user message
 };
 
 bool is_audio(const agent_part &p) {
+    if (p.kind == AGENT_PART_TENSOR) return p.dtype == AGENT_DTYPE_F32; // mono samples at 16 kHz
     const std::string_view mime = sv(p.mime);
     if (mime.starts_with("audio/")) return true;
     if (p.kind == AGENT_PART_FILE && mime.empty()) return sv(p.path).ends_with(".wav");
@@ -225,7 +316,8 @@ UserInput last_user_input(const agent_request *req) {
         for (size_t p = 0; p < m.n_parts; ++p) {
             const agent_part &part = m.parts[p];
             if (part.kind == AGENT_PART_TEXT && part.text.size > 0) in.text = sv(part.text);
-            else if ((part.kind == AGENT_PART_FILE || part.kind == AGENT_PART_BYTES) && is_audio(part)) in.audio = &part;
+            else if ((part.kind == AGENT_PART_FILE || part.kind == AGENT_PART_BYTES || part.kind == AGENT_PART_TENSOR) && is_audio(part))
+                in.audio = &part;
         }
         break;
     }
@@ -242,39 +334,92 @@ void set_text_response(SherpaInstance &inst, agent_response *resp) {
     resp->message.n_parts = 1;
 }
 
+// Mono f32 samples of an audio part. FILE / BYTES are WAVs (any rate); a TENSOR is taken as 16 kHz.
+struct Audio {
+    std::vector<float> samples;
+    int32_t rate = 0;
+};
+
+int32_t load_audio(SherpaInstance &inst, const agent_part &part, Audio &out) {
+    if (part.kind == AGENT_PART_TENSOR) {
+        if (part.dtype != AGENT_DTYPE_F32 || (part.size % sizeof(float)) != 0 || (part.size && !part.data))
+            return inst.fail(AGENT_ERR_UNSUPPORTED, "sherpa: an audio tensor must be F32 mono samples at 16 kHz");
+        out.samples.resize(part.size / sizeof(float));
+        if (part.size) std::memcpy(out.samples.data(), part.data, part.size);
+        out.rate = kVadRate;
+    } else {
+        const SherpaOnnxWave *wave = nullptr;
+        std::string where;
+        if (part.kind == AGENT_PART_FILE) {
+            where = std::string(sv(part.path));
+            wave = SherpaOnnxReadWave(where.c_str());
+        } else {
+            where = "<bytes>";
+            if (part.size > static_cast<size_t>(std::numeric_limits<int32_t>::max()))
+                return inst.fail(AGENT_ERR_UNSUPPORTED, "sherpa: audio buffer too large");
+            wave = SherpaOnnxReadWaveFromBinaryData(static_cast<const char *>(part.data), static_cast<int32_t>(part.size));
+        }
+        if (!wave) return inst.fail(AGENT_ERR_UNSUPPORTED, "sherpa: could not read audio " + where + " (expected a 16-bit PCM mono WAV)");
+        if (wave->num_samples > 0 && wave->samples) out.samples.assign(wave->samples, wave->samples + wave->num_samples);
+        out.rate = wave->sample_rate;
+        SherpaOnnxFreeWave(wave);
+    }
+    if (out.samples.empty() || out.rate <= 0) return inst.fail(AGENT_ERR_DECODE_FAILED, "sherpa: audio input is empty");
+    if (out.samples.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max()))
+        return inst.fail(AGENT_ERR_UNSUPPORTED, "sherpa: audio input too long");
+    return AGENT_OK;
+}
+
+// Resamples in place (the windowed-sinc resampler sherpa-onnx uses for its own examples).
+void resample_to(Audio &audio, int32_t rate) {
+    if (audio.rate == rate || audio.samples.empty()) return;
+    const float cutoff = 0.99f * 0.5f * static_cast<float>(audio.rate < rate ? audio.rate : rate);
+    const SherpaOnnxLinearResampler *r = SherpaOnnxCreateLinearResampler(audio.rate, rate, cutoff, 6);
+    if (!r) return;
+    const SherpaOnnxResampleOut *o =
+        SherpaOnnxLinearResamplerResample(r, audio.samples.data(), static_cast<int32_t>(audio.samples.size()), 1);
+    if (o) {
+        audio.samples.assign(o->samples, o->samples + (o->n > 0 ? o->n : 0));
+        audio.rate = rate;
+        SherpaOnnxLinearResamplerResampleFree(o);
+    }
+    SherpaOnnxDestroyLinearResampler(r);
+}
+
+std::string fmt_seconds(double s) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.3f", s);
+    return buf;
+}
+
+// TEXT part = the JSON in inst.text, TENSOR part "segments" = inst.tensor as [rows, cols] F32.
+void set_segments_response(SherpaInstance &inst, agent_response *resp, int64_t cols) {
+    set_text_response(inst, resp);
+    inst.tensor_shape[0] = static_cast<int64_t>(inst.tensor.size()) / cols;
+    inst.tensor_shape[1] = cols;
+    inst.parts[1] = agent_part{};
+    inst.parts[1].kind = AGENT_PART_TENSOR;
+    inst.parts[1].name = agent_str{"segments", 8};
+    inst.parts[1].dtype = AGENT_DTYPE_F32;
+    inst.parts[1].shape = inst.tensor_shape;
+    inst.parts[1].ndim = 2;
+    inst.parts[1].data = inst.tensor.data();
+    inst.parts[1].size = inst.tensor.size() * sizeof(float);
+    resp->message.n_parts = 2;
+}
+
 // ------------------------------------------------------------------ ASR
 
-int32_t transcribe(SherpaInstance &inst, const agent_request *req, const agent_part &audio, agent_response *resp) {
-    const SherpaOnnxWave *wave = nullptr;
-    std::string where;
-    if (audio.kind == AGENT_PART_FILE) {
-        where = std::string(sv(audio.path));
-        wave = SherpaOnnxReadWave(where.c_str());
-    } else {
-        where = "<bytes>";
-        if (audio.size > static_cast<size_t>(std::numeric_limits<int32_t>::max()))
-            return inst.fail(AGENT_ERR_UNSUPPORTED, "sherpa: audio buffer too large");
-        wave = SherpaOnnxReadWaveFromBinaryData(static_cast<const char *>(audio.data), static_cast<int32_t>(audio.size));
-    }
-    if (!wave)
-        return inst.fail(AGENT_ERR_UNSUPPORTED, "sherpa: could not read audio " + where + " (expected a 16-bit PCM mono WAV)");
-    if (wave->num_samples <= 0 || wave->sample_rate <= 0) {
-        SherpaOnnxFreeWave(wave);
-        return inst.fail(AGENT_ERR_DECODE_FAILED, "sherpa: audio " + where + " is empty");
-    }
-    if (cancelled(req)) {
-        SherpaOnnxFreeWave(wave);
-        return inst.fail(AGENT_ERR_CANCELLED, "sherpa: cancelled");
-    }
+int32_t transcribe(SherpaInstance &inst, const agent_request *req, const agent_part &part, agent_response *resp) {
+    Audio audio;
+    if (int32_t rc = load_audio(inst, part, audio)) return rc;
+    if (cancelled(req)) return inst.fail(AGENT_ERR_CANCELLED, "sherpa: cancelled");
 
     const SherpaOnnxOfflineStream *stream = SherpaOnnxCreateOfflineStream(inst.asr);
-    if (!stream) {
-        SherpaOnnxFreeWave(wave);
-        return inst.fail(AGENT_ERR_DECODE_FAILED, "sherpa: failed to create recognition stream");
-    }
+    if (!stream) return inst.fail(AGENT_ERR_DECODE_FAILED, "sherpa: failed to create recognition stream");
     if (req->on_progress) req->on_progress(req->user_data, 0, 1);
     // sherpa-onnx resamples to the model's 16 kHz feature rate when the WAV rate differs.
-    SherpaOnnxAcceptWaveformOffline(stream, wave->sample_rate, wave->samples, wave->num_samples);
+    SherpaOnnxAcceptWaveformOffline(stream, audio.rate, audio.samples.data(), static_cast<int32_t>(audio.samples.size()));
     SherpaOnnxDecodeOfflineStream(inst.asr, stream);
     const SherpaOnnxOfflineRecognizerResult *result = SherpaOnnxGetOfflineStreamResult(stream);
     if (req->on_progress) req->on_progress(req->user_data, 1, 1);
@@ -290,11 +435,122 @@ int32_t transcribe(SherpaInstance &inst, const agent_request *req, const agent_p
         SherpaOnnxDestroyOfflineRecognizerResult(result);
     }
     SherpaOnnxDestroyOfflineStream(stream);
-    SherpaOnnxFreeWave(wave);
     if (rc != AGENT_OK) return rc;
 
     if (req->on_chunk && !inst.text.empty()) req->on_chunk(req->user_data, AGENT_CHUNK_TEXT, inst.text.data(), inst.text.size());
     set_text_response(inst, resp);
+    return AGENT_OK;
+}
+
+// ------------------------------------------------------------------ VAD
+
+std::string segment_json(double start, double end) { return "{\"start\":" + fmt_seconds(start) + ",\"end\":" + fmt_seconds(end); }
+
+// Pops the finished segments into json / inst.tensor; times in seconds since the stream start.
+void drain_vad_segments(SherpaInstance &inst, std::string &json, size_t &count) {
+    while (!SherpaOnnxVoiceActivityDetectorEmpty(inst.vad)) {
+        const SherpaOnnxSpeechSegment *seg = SherpaOnnxVoiceActivityDetectorFront(inst.vad);
+        if (seg && seg->start >= 0 && seg->n > 0) {
+            const double start = static_cast<double>(seg->start) / kVadRate;
+            const double end = static_cast<double>(seg->start + seg->n) / kVadRate;
+            json += (count++ ? "," : "") + segment_json(start, end) + "}";
+            inst.tensor.push_back(static_cast<float>(start));
+            inst.tensor.push_back(static_cast<float>(end));
+        }
+        if (seg) SherpaOnnxDestroySpeechSegment(seg);
+        SherpaOnnxVoiceActivityDetectorPop(inst.vad);
+    }
+}
+
+// Offline (default): the whole input is one stream; every speech segment is returned.
+// Streaming (options.vad.streaming): the detector keeps its state between calls; each call feeds
+// more audio and returns the segments that finished, plus an "open" entry while speech is ongoing.
+// A TEXT part "reset" on the request starts a new stream, "flush" ends the current one.
+int32_t detect_speech(SherpaInstance &inst, const agent_request *req, const agent_part &part, std::string_view command,
+                      agent_response *resp) {
+    Audio audio;
+    if (int32_t rc = load_audio(inst, part, audio)) return rc;
+    resample_to(audio, kVadRate);
+    if (audio.rate != kVadRate) return inst.fail(AGENT_ERR_DECODE_FAILED, "sherpa: could not resample audio to 16 kHz");
+
+    const bool streaming = inst.vad_streaming;
+    if (!streaming || command == "reset") {
+        SherpaOnnxVoiceActivityDetectorReset(inst.vad);
+        inst.vad_fed = 0;
+        inst.vad_open_start = -1;
+    }
+    inst.tensor.clear();
+    std::string json = "[";
+    size_t count = 0;
+    const size_t n = audio.samples.size();
+    const size_t window = static_cast<size_t>(inst.vad_window);
+    for (size_t off = 0; off < n; off += window) {
+        if (cancelled(req)) return inst.fail(AGENT_ERR_CANCELLED, "sherpa: cancelled");
+        const size_t len = n - off < window ? n - off : window;
+        SherpaOnnxVoiceActivityDetectorAcceptWaveform(inst.vad, audio.samples.data() + off, static_cast<int32_t>(len));
+        inst.vad_fed += static_cast<int64_t>(len);
+        const bool speaking = SherpaOnnxVoiceActivityDetectorDetected(inst.vad) != 0;
+        if (speaking && inst.vad_open_start < 0) inst.vad_open_start = inst.vad_fed - static_cast<int64_t>(len);
+        drain_vad_segments(inst, json, count);
+        if (!speaking) inst.vad_open_start = -1;
+        if (req->on_progress && (off / window) % 64 == 0) req->on_progress(req->user_data, off, n);
+    }
+    if (!streaming || command == "flush") {
+        SherpaOnnxVoiceActivityDetectorFlush(inst.vad);
+        drain_vad_segments(inst, json, count);
+        inst.vad_open_start = -1;
+    }
+    if (streaming && inst.vad_open_start >= 0 && SherpaOnnxVoiceActivityDetectorDetected(inst.vad)) {
+        const double start = static_cast<double>(inst.vad_open_start) / kVadRate;
+        const double end = static_cast<double>(inst.vad_fed) / kVadRate;
+        json += (count ? "," : "") + segment_json(start, end) + ",\"open\":true}";
+    }
+    if (req->on_progress) req->on_progress(req->user_data, n, n);
+    inst.text = json + "]";
+    set_segments_response(inst, resp, 2);
+    return AGENT_OK;
+}
+
+// ------------------------------------------------------------------ diarization
+
+struct DiarizeCtx {
+    const agent_request *req;
+};
+
+int32_t diarize_progress(int32_t done, int32_t total, void *arg) {
+    const agent_request *req = static_cast<DiarizeCtx *>(arg)->req;
+    if (req->on_progress && total > 0)
+        req->on_progress(req->user_data, static_cast<uint64_t>(done < 0 ? 0 : done), static_cast<uint64_t>(total));
+    return cancelled(req) ? 1 : 0; // non-zero stops processing
+}
+
+int32_t diarize(SherpaInstance &inst, const agent_request *req, const agent_part &part, agent_response *resp) {
+    Audio audio;
+    if (int32_t rc = load_audio(inst, part, audio)) return rc;
+    resample_to(audio, SherpaOnnxOfflineSpeakerDiarizationGetSampleRate(inst.diarizer));
+    DiarizeCtx ctx{req};
+    const SherpaOnnxOfflineSpeakerDiarizationResult *result = SherpaOnnxOfflineSpeakerDiarizationProcessWithCallback(
+        inst.diarizer, audio.samples.data(), static_cast<int32_t>(audio.samples.size()), diarize_progress, &ctx);
+    if (cancelled(req)) {
+        if (result) SherpaOnnxOfflineSpeakerDiarizationDestroyResult(result);
+        return inst.fail(AGENT_ERR_CANCELLED, "sherpa: cancelled");
+    }
+    if (!result) return inst.fail(AGENT_ERR_DECODE_FAILED, "sherpa: speaker diarization failed");
+    const int32_t n = SherpaOnnxOfflineSpeakerDiarizationResultGetNumSegments(result);
+    const SherpaOnnxOfflineSpeakerDiarizationSegment *segs =
+        n > 0 ? SherpaOnnxOfflineSpeakerDiarizationResultSortByStartTime(result) : nullptr;
+    inst.tensor.clear();
+    std::string json = "[";
+    for (int32_t i = 0; segs && i < n; ++i) {
+        json += (i ? "," : "") + segment_json(segs[i].start, segs[i].end) + ",\"speaker\":" + std::to_string(segs[i].speaker) + "}";
+        inst.tensor.push_back(segs[i].start);
+        inst.tensor.push_back(segs[i].end);
+        inst.tensor.push_back(static_cast<float>(segs[i].speaker));
+    }
+    if (segs) SherpaOnnxOfflineSpeakerDiarizationDestroySegment(segs);
+    SherpaOnnxOfflineSpeakerDiarizationDestroyResult(result);
+    inst.text = json + "]";
+    set_segments_response(inst, resp, 3);
     return AGENT_OK;
 }
 
@@ -383,13 +639,15 @@ int32_t sherpa_create(agent_str config_json, void **out_instance, char *err, siz
         return AGENT_ERR_INVALID_CONFIG;
     }
     simdjson::dom::object options;
-    simdjson::dom::object tts, asr;
-    bool has_tts = false, has_asr = false;
+    simdjson::dom::object tts, asr, vad, dia;
+    bool has_tts = false, has_asr = false, has_vad = false, has_dia = false;
     int32_t threads = 2;
     std::string provider = "cpu";
     if (!cfg["options"].get_object().get(options)) {
         has_tts = !options["tts"].get_object().get(tts);
         has_asr = !options["asr"].get_object().get(asr);
+        has_vad = !options["vad"].get_object().get(vad);
+        has_dia = !options["diarize"].get_object().get(dia);
         const double t = json_num(options, "threads", 0);
         if (t >= 1 && t <= 256) threads = static_cast<int32_t>(t);
         std::string prov = json_str(options, "provider");
@@ -404,6 +662,8 @@ int32_t sherpa_create(agent_str config_json, void **out_instance, char *err, siz
     int32_t rc = AGENT_OK;
     if (has_tts) rc = create_tts(*inst, tts, threads, provider, err, err_cap);
     if (rc == AGENT_OK && has_asr) rc = create_asr(*inst, asr, threads, provider, err, err_cap);
+    if (rc == AGENT_OK && has_vad) rc = create_vad(*inst, vad, threads, provider, err, err_cap);
+    if (rc == AGENT_OK && has_dia) rc = create_diarizer(*inst, dia, threads, provider, err, err_cap);
     if (rc != AGENT_OK) {
         delete inst;
         return rc;
@@ -421,18 +681,36 @@ int32_t sherpa_run(void *instance, const agent_request *req, agent_response *res
     if (cancelled(req)) return inst->fail(AGENT_ERR_CANCELLED, "sherpa: cancelled");
 
     const UserInput in = last_user_input(req);
-    bool want_asr = false;
-    switch (req->task) {
+    uint32_t task = req->task;
+    switch (task) {
     case AGENT_CAP_TTS: break;
+    case AGENT_CAP_VAD:
+    case AGENT_CAP_DIARIZE:
+        if (!in.audio)
+            return inst->fail(AGENT_ERR_INVALID_CONFIG, "sherpa: VAD / diarization needs an audio part in the last user message");
+        break;
     case AGENT_CAP_ASR:
-    case AGENT_CAP_TEXT_GEN: want_asr = in.audio != nullptr; break; // routed by content
-    default: return inst->fail(AGENT_ERR_UNSUPPORTED, "sherpa: only TTS and ASR tasks are supported");
+    case AGENT_CAP_TEXT_GEN: // routed by content (hosts without an explicit task send the lowest capability bit)
+        if (!in.audio) task = AGENT_CAP_TTS;
+        else if (inst->asr) task = AGENT_CAP_ASR;
+        else if (inst->vad) task = AGENT_CAP_VAD;
+        else if (inst->diarizer) task = AGENT_CAP_DIARIZE;
+        else task = AGENT_CAP_ASR;
+        break;
+    default: return inst->fail(AGENT_ERR_UNSUPPORTED, "sherpa: only TTS, ASR, VAD and DIARIZE tasks are supported");
     }
 
     int32_t rc = AGENT_OK;
-    if (want_asr) {
+    if (task == AGENT_CAP_ASR) {
         if (!inst->asr) return inst->fail(AGENT_ERR_UNSUPPORTED, "sherpa: ASR requested but options.asr was not configured");
         rc = transcribe(*inst, req, *in.audio, resp);
+    } else if (task == AGENT_CAP_VAD) {
+        if (!inst->vad) return inst->fail(AGENT_ERR_UNSUPPORTED, "sherpa: VAD requested but options.vad was not configured");
+        rc = detect_speech(*inst, req, *in.audio, in.text, resp);
+    } else if (task == AGENT_CAP_DIARIZE) {
+        if (!inst->diarizer)
+            return inst->fail(AGENT_ERR_UNSUPPORTED, "sherpa: diarization requested but options.diarize was not configured");
+        rc = diarize(*inst, req, *in.audio, resp);
     } else {
         if (!inst->tts) return inst->fail(AGENT_ERR_UNSUPPORTED, "sherpa: TTS requested but options.tts was not configured");
         rc = synthesize(*inst, req, in.text, resp);
@@ -452,8 +730,8 @@ const char *sherpa_last_error(void *instance) { return static_cast<SherpaInstanc
 const agent_engine_v1 kSherpaEngine = {
     AGENT_ENGINE_ABI_VERSION,
     "sherpa",
-    "0.1",
-    AGENT_CAP_ASR | AGENT_CAP_TTS,
+    "0.2",
+    AGENT_CAP_ASR | AGENT_CAP_TTS | AGENT_CAP_VAD | AGENT_CAP_DIARIZE,
     0,
     sherpa_create,
     sherpa_destroy,

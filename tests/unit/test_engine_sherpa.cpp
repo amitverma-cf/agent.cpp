@@ -4,6 +4,8 @@
 //   AGENT_TEST_SHERPA_TTS_DIR  extracted Kokoro dir (model.onnx, voices.bin, tokens.txt, lexicon-en-us.txt)
 //   AGENT_TEST_SHERPA_ASR_DIR  extracted Whisper dir (*-encoder[.int8].onnx, *-decoder[.int8].onnx, *-tokens.txt)
 //                              or NeMo transducer dir (encoder*.onnx, decoder*.onnx, joiner*.onnx, tokens.txt)
+//   AGENT_TEST_SHERPA_VAD_MODEL silero_vad.onnx
+//   AGENT_TEST_SHERPA_SEGMENTATION_MODEL + AGENT_TEST_SHERPA_EMBEDDING_MODEL  speaker diarization models
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/engine_abi.h>
 #include <catch_amalgamated.hpp>
@@ -14,8 +16,11 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -349,4 +354,299 @@ TEST_CASE("sherpa engine speaks and listens through a Session", "[engines][sherp
     REQUIRE(heard.ok);
     INFO("transcript: " << heard.value);
     REQUIRE(lower(heard.value).find("hello") != std::string::npos);
+}
+
+// ------------------------------------------------------------------ VAD / diarization
+//
+// Gated on AGENT_TEST_SHERPA_VAD_MODEL (silero_vad.onnx) and, for diarization,
+// AGENT_TEST_SHERPA_SEGMENTATION_MODEL (pyannote segmentation-3.0 model.onnx) +
+// AGENT_TEST_SHERPA_EMBEDDING_MODEL (a 3D-Speaker / NeMo speaker embedding .onnx). The speech comes
+// from Kokoro (AGENT_TEST_SHERPA_TTS_DIR), so every model test also needs that.
+
+namespace {
+
+// One user message whose audio is an F32 tensor of 16 kHz samples, plus an optional text command.
+struct TensorMessage {
+    agent_part parts[2]{};
+    int64_t shape[1]{};
+    agent_message msg{};
+    agent_request req{};
+
+    TensorMessage(uint32_t task, const std::vector<float> &samples, std::string_view text = {}) {
+        size_t n = 0;
+        if (!text.empty()) {
+            parts[n].kind = AGENT_PART_TEXT;
+            parts[n++].text = c_str(text);
+        }
+        shape[0] = static_cast<int64_t>(samples.size());
+        parts[n].kind = AGENT_PART_TENSOR;
+        parts[n].name = c_str("audio");
+        parts[n].dtype = AGENT_DTYPE_F32;
+        parts[n].shape = shape;
+        parts[n].ndim = 1;
+        parts[n].data = samples.data();
+        parts[n++].size = samples.size() * sizeof(float);
+        msg.role = c_str("user");
+        msg.parts = parts;
+        msg.n_parts = n;
+        req.task = task;
+        req.messages = &msg;
+        req.n_messages = 1;
+        req.output_dir = c_str(kOutDir);
+    }
+};
+
+// 16-bit PCM mono WAV as written by sherpa-onnx (44-byte header) -> samples resampled to 16 kHz.
+std::vector<float> read_wav_16k(const std::string &path) {
+    std::ifstream f(path, std::ios::binary);
+    std::vector<char> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    REQUIRE(bytes.size() > 44);
+    uint32_t rate = 0;
+    std::memcpy(&rate, bytes.data() + 24, 4);
+    const size_t n = (bytes.size() - 44) / 2;
+    std::vector<float> in(n);
+    for (size_t i = 0; i < n; ++i) {
+        int16_t v;
+        std::memcpy(&v, bytes.data() + 44 + 2 * i, 2);
+        in[i] = static_cast<float>(v) / 32768.0f;
+    }
+    const double step = static_cast<double>(rate) / 16000.0;
+    std::vector<float> out(static_cast<size_t>(static_cast<double>(n) / step));
+    for (size_t i = 0; i < out.size(); ++i) out[i] = in[std::min(n - 1, static_cast<size_t>(static_cast<double>(i) * step))];
+    return out;
+}
+
+void append_silence(std::vector<float> &v, double seconds) { v.insert(v.end(), static_cast<size_t>(seconds * 16000), 0.0f); }
+
+// Speaks text with the instance and returns it as 16 kHz samples.
+std::vector<float> speak(const agent_engine_v1 *e, void *tts, std::string_view text) {
+    OneMessage m(AGENT_CAP_TTS, text, "", nullptr);
+    agent_response resp{};
+    REQUIRE(e->run(tts, &m.req, &resp) == AGENT_OK);
+    const std::string wav(sv(resp.message.parts[1].path));
+    e->free_response(tts, &resp);
+    return read_wav_16k(wav);
+}
+
+struct Seg {
+    double start, end;
+    int speaker;
+    bool open;
+};
+
+// Minimal parser for the engine's [{"start":..,"end":..[,"speaker":..][,"open":true]}] output.
+std::vector<Seg> parse_segments(std::string_view json) {
+    std::vector<Seg> out;
+    size_t at = 0;
+    while ((at = json.find("{\"start\":", at)) != std::string_view::npos) {
+        Seg s{0, 0, -1, false};
+        s.start = std::strtod(std::string(json.substr(at + 9, 20)).c_str(), nullptr);
+        const size_t e = json.find("\"end\":", at);
+        s.end = std::strtod(std::string(json.substr(e + 6, 20)).c_str(), nullptr);
+        const size_t close = json.find('}', at);
+        const size_t sp = json.find("\"speaker\":", at);
+        if (sp != std::string_view::npos && sp < close) s.speaker = std::atoi(std::string(json.substr(sp + 10, 8)).c_str());
+        const size_t op = json.find("\"open\":true", at);
+        s.open = op != std::string_view::npos && op < close;
+        out.push_back(s);
+        at = close;
+    }
+    return out;
+}
+
+std::string vad_options(bool streaming) {
+    const char *model = env("AGENT_TEST_SHERPA_VAD_MODEL");
+    if (!model) return {};
+    return std::string("\"vad\":{\"silero\":{\"model\":\"") + model +
+           "\"},\"min_silence\":0.4,\"streaming\":" + (streaming ? "true" : "false") + "}";
+}
+
+} // namespace
+
+TEST_CASE("sherpa VAD and diarization configs are validated", "[engines][sherpa]") {
+    const agent_engine_v1 *e = sherpa_engine();
+    REQUIRE((e->caps & AGENT_CAP_VAD) != 0);
+    REQUIRE((e->caps & AGENT_CAP_DIARIZE) != 0);
+    void *inst = nullptr;
+    std::string err;
+    REQUIRE(create(e, R"({"options":{"vad":{"silero":{}}}})", &inst, &err) == AGENT_ERR_INVALID_CONFIG);
+    REQUIRE(err.find("vad.silero.model") != std::string::npos);
+    REQUIRE(create(e, R"({"options":{"vad":{"silero":{"model":"/nonexistent/silero_vad.onnx"}}}})", &inst, &err) ==
+            AGENT_ERR_MODEL_LOAD_FAILED);
+    REQUIRE(create(e, R"({"options":{"vad":{"webrtc":{}}}})", &inst, &err) == AGENT_ERR_INVALID_CONFIG);
+    REQUIRE(create(e, R"({"options":{"diarize":{"pyannote":{"model":"x"}}}})", &inst, &err) == AGENT_ERR_INVALID_CONFIG);
+    REQUIRE(
+        create(e, R"({"options":{"diarize":{"pyannote":{"model":"/nonexistent/seg.onnx"},"embedding":{"model":"/nonexistent/emb.onnx"}}}})",
+               &inst, &err) == AGENT_ERR_MODEL_LOAD_FAILED);
+    REQUIRE(inst == nullptr);
+
+    // No VAD configured: a VAD request is UNSUPPORTED; a VAD request without audio is a config error.
+    REQUIRE(create(e, R"({"options":{}})", &inst) == AGENT_OK);
+    agent_response resp{};
+    const std::vector<float> samples(1600, 0.0f);
+    TensorMessage vad(AGENT_CAP_VAD, samples);
+    REQUIRE(e->run(inst, &vad.req, &resp) == AGENT_ERR_UNSUPPORTED);
+    REQUIRE(std::string_view(e->last_error(inst)).find("vad") != std::string_view::npos);
+    TensorMessage dia(AGENT_CAP_DIARIZE, samples);
+    REQUIRE(e->run(inst, &dia.req, &resp) == AGENT_ERR_UNSUPPORTED);
+    OneMessage no_audio(AGENT_CAP_VAD, "hello", "", nullptr);
+    REQUIRE(e->run(inst, &no_audio.req, &resp) == AGENT_ERR_INVALID_CONFIG);
+    // A non-F32 tensor is not audio.
+    TensorMessage bad(AGENT_CAP_VAD, samples);
+    bad.parts[0].dtype = AGENT_DTYPE_I32;
+    REQUIRE(e->run(inst, &bad.req, &resp) == AGENT_ERR_INVALID_CONFIG);
+    e->destroy(inst);
+}
+
+TEST_CASE("sherpa Silero VAD finds speech offline and streaming", "[engines][sherpa][model]") {
+    const std::string tts = tts_options();
+    const std::string vad = vad_options(false);
+    if (tts.empty() || vad.empty()) SKIP("AGENT_TEST_SHERPA_TTS_DIR and AGENT_TEST_SHERPA_VAD_MODEL not both set");
+    const agent_engine_v1 *e = sherpa_engine();
+    fs::create_directories(kOutDir);
+    void *speaker = nullptr;
+    REQUIRE(create(e, "{\"options\":{" + tts + "}}", &speaker) == AGENT_OK);
+
+    // 0.5 s silence | speech A | 1.2 s silence | speech B | 0.6 s silence
+    std::vector<float> audio;
+    append_silence(audio, 0.5);
+    const std::vector<float> a = speak(e, speaker, "Hello world, this is the first sentence.");
+    audio.insert(audio.end(), a.begin(), a.end());
+    const double a_end = static_cast<double>(audio.size()) / 16000;
+    append_silence(audio, 1.2);
+    const double b_start = static_cast<double>(audio.size()) / 16000;
+    const std::vector<float> b = speak(e, speaker, "And here comes the second one.");
+    audio.insert(audio.end(), b.begin(), b.end());
+    const double b_end = static_cast<double>(audio.size()) / 16000;
+    append_silence(audio, 0.6);
+    e->destroy(speaker);
+    INFO("speech A 0.50-" << a_end << " s, speech B " << b_start << "-" << b_end << " s");
+
+    // Offline, explicit task, tensor input: two segments + a [2, 2] tensor.
+    void *inst = nullptr;
+    std::string err;
+    REQUIRE(create(e, "{\"options\":{" + vad + "}}", &inst, &err) == AGENT_OK);
+    TensorMessage offline(AGENT_CAP_VAD, audio);
+    agent_response resp{};
+    REQUIRE(e->run(inst, &offline.req, &resp) == AGENT_OK);
+    REQUIRE(resp.message.n_parts == 2);
+    const std::string json(sv(resp.message.parts[0].text));
+    INFO("offline: " << json);
+    const std::vector<Seg> segs = parse_segments(json);
+    REQUIRE(segs.size() == 2);
+    REQUIRE(segs[0].start == Catch::Approx(0.5).margin(0.35));
+    REQUIRE(segs[0].end == Catch::Approx(a_end).margin(0.5));
+    REQUIRE(segs[1].start == Catch::Approx(b_start).margin(0.35));
+    REQUIRE(segs[1].end == Catch::Approx(b_end).margin(0.5));
+    const agent_part &tensor = resp.message.parts[1];
+    REQUIRE(tensor.kind == AGENT_PART_TENSOR);
+    REQUIRE(sv(tensor.name) == "segments");
+    REQUIRE(tensor.ndim == 2);
+    REQUIRE(tensor.shape[0] == 2);
+    REQUIRE(tensor.shape[1] == 2);
+    REQUIRE(static_cast<const float *>(tensor.data)[2] == Catch::Approx(segs[1].start).margin(0.001));
+    e->free_response(inst, &resp);
+
+    // A VAD-only instance answers the ASR task (what hosts without an explicit task send) with segments.
+    TensorMessage routed(AGENT_CAP_ASR, audio);
+    REQUIRE(e->run(inst, &routed.req, &resp) == AGENT_OK);
+    REQUIRE(parse_segments(sv(resp.message.parts[0].text)).size() == 2);
+    e->free_response(inst, &resp);
+    e->destroy(inst);
+
+    // Streaming: 100 ms chunks; segments come out as they finish, an "open" one while speech goes on.
+    REQUIRE(create(e, "{\"options\":{" + vad_options(true) + "}}", &inst, &err) == AGENT_OK);
+    std::vector<Seg> finished;
+    bool saw_open = false;
+    for (size_t off = 0; off < audio.size(); off += 1600) {
+        const std::vector<float> chunk(audio.begin() + static_cast<std::ptrdiff_t>(off),
+                                       audio.begin() + static_cast<std::ptrdiff_t>(std::min(audio.size(), off + 1600)));
+        TensorMessage m(AGENT_CAP_VAD, chunk, off == 0 ? "reset" : "");
+        REQUIRE(e->run(inst, &m.req, &resp) == AGENT_OK);
+        for (const Seg &s : parse_segments(sv(resp.message.parts[0].text))) {
+            if (s.open) saw_open = true;
+            else finished.push_back(s);
+        }
+        e->free_response(inst, &resp);
+    }
+    TensorMessage flush(AGENT_CAP_VAD, std::vector<float>(160, 0.0f), "flush");
+    REQUIRE(e->run(inst, &flush.req, &resp) == AGENT_OK);
+    for (const Seg &s : parse_segments(sv(resp.message.parts[0].text))) finished.push_back(s);
+    e->free_response(inst, &resp);
+    REQUIRE(saw_open);
+    REQUIRE(finished.size() == 2);
+    REQUIRE(finished[0].start == Catch::Approx(segs[0].start).margin(0.1));
+    REQUIRE(finished[1].end == Catch::Approx(segs[1].end).margin(0.15));
+
+    // "reset" starts the clock again.
+    TensorMessage again(AGENT_CAP_VAD, audio, "reset");
+    REQUIRE(e->run(inst, &again.req, &resp) == AGENT_OK);
+    const std::vector<Seg> again_segs = parse_segments(sv(resp.message.parts[0].text));
+    REQUIRE_FALSE(again_segs.empty());
+    REQUIRE(again_segs[0].start == Catch::Approx(segs[0].start).margin(0.1));
+    e->free_response(inst, &resp);
+    e->destroy(inst);
+}
+
+TEST_CASE("sherpa diarization tells two Kokoro voices apart", "[engines][sherpa][model]") {
+    const std::string tts = tts_options();
+    const char *seg_model = env("AGENT_TEST_SHERPA_SEGMENTATION_MODEL");
+    const char *emb_model = env("AGENT_TEST_SHERPA_EMBEDDING_MODEL");
+    if (tts.empty() || !seg_model || !emb_model)
+        SKIP("AGENT_TEST_SHERPA_TTS_DIR, AGENT_TEST_SHERPA_SEGMENTATION_MODEL and AGENT_TEST_SHERPA_EMBEDDING_MODEL not all set");
+    const agent_engine_v1 *e = sherpa_engine();
+    fs::create_directories(kOutDir);
+
+    // Speaker 0 (af) and speaker 9 (bm_george) of kokoro-en-v0_19 take turns.
+    std::string tts_b = tts;
+    const size_t sid = tts_b.find("\"speaker_id\":0");
+    REQUIRE(sid != std::string::npos);
+    tts_b.replace(sid, 14, "\"speaker_id\":9");
+    void *voice_a = nullptr, *voice_b = nullptr;
+    REQUIRE(create(e, "{\"options\":{" + tts + "}}", &voice_a) == AGENT_OK);
+    REQUIRE(create(e, "{\"options\":{" + tts_b + "}}", &voice_b) == AGENT_OK);
+    std::vector<float> audio;
+    append_silence(audio, 0.3);
+    for (const auto &[voice, text] : {std::pair{voice_a, "Good morning. Did you sleep well last night? I hope the noise did not wake you."},
+                                      std::pair{voice_b, "I slept very well, thank you. The room was quiet and the bed was comfortable."},
+                                      std::pair{voice_a, "That is great to hear. Shall we have breakfast together before the meeting?"}}) {
+        const std::vector<float> s = speak(e, voice, text);
+        audio.insert(audio.end(), s.begin(), s.end());
+        append_silence(audio, 0.8);
+    }
+    e->destroy(voice_a);
+    e->destroy(voice_b);
+
+    void *inst = nullptr;
+    std::string err;
+    const std::string cfg = std::string("{\"options\":{\"diarize\":{\"pyannote\":{\"model\":\"") + seg_model +
+                            "\"},\"embedding\":{\"model\":\"" + emb_model + "\"},\"num_speakers\":2}}}";
+    REQUIRE(create(e, cfg, &inst, &err) == AGENT_OK);
+    INFO(err);
+    Captured cap;
+    TensorMessage m(AGENT_CAP_DIARIZE, audio);
+    m.req.on_progress = on_progress;
+    m.req.user_data = &cap;
+    agent_response resp{};
+    REQUIRE(e->run(inst, &m.req, &resp) == AGENT_OK);
+    const std::string json(sv(resp.message.parts[0].text));
+    INFO("diarization: " << json);
+    const std::vector<Seg> segs = parse_segments(json);
+    REQUIRE(segs.size() >= 3);
+    REQUIRE(resp.message.parts[1].shape[1] == 3);
+    // The speaker in the middle of the audio differs from the one at the start and the end.
+    const double total = static_cast<double>(audio.size()) / 16000;
+    auto speaker_at = [&](double t) {
+        for (const Seg &s : segs)
+            if (s.start <= t && t <= s.end) return s.speaker;
+        return -1;
+    };
+    const int first = segs.front().speaker, last = segs.back().speaker, middle = speaker_at(total / 2);
+    REQUIRE(first >= 0);
+    REQUIRE(first == last);
+    REQUIRE(std::any_of(segs.begin(), segs.end(), [&](const Seg &s) { return s.speaker != first; }));
+    if (middle >= 0) REQUIRE(middle != first); // total / 2 may fall into a pause
+    REQUIRE(cap.total > 0);
+    e->free_response(inst, &resp);
+    e->destroy(inst);
 }
