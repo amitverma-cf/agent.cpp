@@ -707,6 +707,34 @@ void reset_run_status(GraphRun &run) {
     run.pending_tool_calls.clear();
 }
 
+constexpr std::string_view kAbandonedCall =
+    "Error: tool call not executed: the run was restarted with run_graph before the call was approved (use resume_graph to answer "
+    "pending tool calls)";
+
+// A fresh run_graph on a thread whose last run paused before tool calls (interrupt_before_tools),
+// or died mid-round, would otherwise continue a history whose last assistant message has calls
+// without results. Each such call gets an error tool message so the conversation stays valid.
+void answer_abandoned_calls(GraphState &state, std::vector<GraphEvent> &events) {
+    for (auto &[name, memory] : state.histories) {
+        auto &history = memory.history;
+        size_t i = history.size();
+        while (i > 0 && history[i - 1].role == "tool") --i;
+        if (i == 0 || history[i - 1].role != "assistant" || history[i - 1].tool_calls.empty()) continue;
+        const std::vector<ToolCall> calls = history[i - 1].tool_calls;
+        for (const auto &tc : calls) {
+            bool answered = false;
+            for (size_t j = i; j < history.size() && !answered; ++j) answered = history[j].tool_call_id == tc.id;
+            if (answered) continue;
+            Message msg;
+            msg.role = "tool";
+            msg.content = std::string(kAbandonedCall);
+            msg.tool_call_id = tc.id;
+            history.push_back(std::move(msg));
+            log_event(events, GraphEventType::ToolResult, name, tc.name, kAbandonedCall);
+        }
+    }
+}
+
 bool is_approval(std::string_view text) {
     std::string lower;
     for (char c : text)
@@ -778,6 +806,7 @@ Result<void> run_graph(Session &session, const Graph &graph, GraphRun &run) {
             if (!graph::is_internal_key(key)) run.state.values.insert_or_assign(key, std::move(value));
         run.state.histories = std::move(previous.state.histories);
         run.step = previous.step;
+        answer_abandoned_calls(run.state, run.events);
     } else if (stored.error.code != ErrorCode::KeyNotFound) {
         return fail(stored.error.code, stored.error.message);
     }

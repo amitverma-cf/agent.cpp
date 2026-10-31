@@ -348,6 +348,8 @@ The turn then continues, and the model sees the tool results. If the model asks 
 
 You can pass the decision explicitly with `resume_graph(..., PermissionDecision::Allow / Deny, human_input)`. With the string-only overload, a `human_input` of `approve`, `approved`, `yes`, `y`, `allow` or `ok` (case-insensitive) counts as approval, and anything else is a denial.
 
+**Starting over instead of resuming.** A fresh `run_graph` on a thread whose last run paused before tool calls abandons those calls: they never run. So that the conversation stays valid (every tool call answered before the next user message), `run_graph` appends a tool message `Error: tool call not executed: the run was restarted with run_graph before the call was approved (...)` for each unanswered call at the end of every loaded history, and logs a `ToolResult` event for it. The model sees the calls as failed. Use `resume_graph` to actually answer them.
+
 ---
 
 ## Event log
