@@ -89,6 +89,7 @@ add_library(agent
     src/core/providers/engine_provider.cpp
     src/core/engines/engine_registry.cpp
     src/core/engines/engine_remote.cpp
+    src/core/engines/engine_shm.cpp
     src/core/utils/utils.cpp
     src/core/memory/in_memory_store.cpp
     src/core/tools/tools_ops.cpp
@@ -129,6 +130,10 @@ set_source_files_properties(
 
 find_package(Threads REQUIRED)
 target_link_libraries(agent PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # shm_open / shm_unlink (engine IPC shared memory); part of libc since glibc 2.34.
+    target_link_libraries(agent PRIVATE rt)
+endif()
 
 # Optional SQLite storage (KV store + sqlite-vec data source). Used by the CLI; library users opt in
 # by linking agent_store_sqlite. libagent itself has no SQLite dependency.
@@ -303,8 +308,9 @@ if(AGENT_BUILD_CLI)
     add_dependencies(test_agent agent_cli_bin)
 endif()
 target_compile_definitions(test_agent PRIVATE AGENT_TEST_MOCK_ENGINE_PATH="$<TARGET_FILE:agent-engine-mock>"
+                                              AGENT_TEST_MOCK_CONCURRENT_ENGINE_PATH="$<TARGET_FILE:agent-engine-mock-concurrent>"
                                               AGENT_TEST_ENGINE_HOST_PATH="$<TARGET_FILE:agent-engine-host>")
-add_dependencies(test_agent agent-engine-mock agent-engine-host)
+add_dependencies(test_agent agent-engine-mock agent-engine-mock-concurrent agent-engine-host)
 
 # Tiny MCP stdio server the MCP client tests talk to.
 add_executable(fake_mcp_server tests/helpers/fake_mcp_server.cpp)

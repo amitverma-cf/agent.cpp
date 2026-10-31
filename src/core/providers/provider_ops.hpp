@@ -32,6 +32,17 @@ std::string_view injected_system_text(const Session &session);
 // Process isolation: how many times the session's agent-engine-host was started (1 + restarts);
 // -1 when the engine runs in-process. For tests and diagnostics.
 int engine_host_starts(const Session &session);
+// Process isolation diagnostics (all zero for in-process engines): host starts, Run / Response frames
+// whose payloads went through shared memory, the most calls in flight at once, and whether shared
+// memory is in use at all.
+struct EngineHostStats {
+    int starts = 0;
+    uint64_t shm_requests = 0;
+    uint64_t shm_responses = 0;
+    int max_in_flight = 0;
+    bool shm = false;
+};
+EngineHostStats engine_host_stats(const Session &session);
 
 // Runs request on the session's engine with an explicit task (one agent_capability bit, e.g.
 // AGENT_CAP_EMBED) instead of the engine's default. The converted request and the response views
