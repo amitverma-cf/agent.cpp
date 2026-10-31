@@ -1,13 +1,9 @@
 #include <agent-cpp/agent.hpp>
 #include <catch_amalgamated.hpp>
 
-TEST_CASE("Session lifecycle: valid Mock init, invalid OpenAICompatible init", "[session]") {
+TEST_CASE("Session lifecycle: valid Mock init", "[session]") {
     auto res = agent::init({.provider = agent::AiProvider::Mock, .workspace_dir = "/tmp/agent_test_ws"});
     REQUIRE(res.ok);
-
-    auto res_invalid = agent::init({.provider = agent::AiProvider::OpenAICompatible, .workspace_dir = "/tmp/agent_test_ws"});
-    REQUIRE_FALSE(res_invalid.ok);
-    REQUIRE((res_invalid.error.code == agent::ErrorCode::InvalidConfig || res_invalid.error.code == agent::ErrorCode::UnsupportedProvider));
 }
 
 TEST_CASE("LlamaCpp init requires a model path", "[session][llama]") {
@@ -28,16 +24,6 @@ TEST_CASE("LlamaCpp init with a nonexistent model file fails to load", "[session
     REQUIRE(res.error.code == agent::ErrorCode::ModelLoadFailed);
 #else
     SUCCEED("AGENT_ENABLE_LLAMACPP=OFF; nothing to test");
-#endif
-}
-
-TEST_CASE("OpenAICompatible init requires base_url and model", "[session][openai]") {
-    auto res = agent::init({.provider = agent::AiProvider::OpenAICompatible, .model = "gpt-4o", .workspace_dir = "/tmp/agent_test_ws"});
-    REQUIRE_FALSE(res.ok);
-#ifdef AGENT_HAS_OPENAICOMPATIBLE
-    REQUIRE(res.error.code == agent::ErrorCode::InvalidConfig);
-#else
-    REQUIRE(res.error.code == agent::ErrorCode::UnsupportedProvider);
 #endif
 }
 

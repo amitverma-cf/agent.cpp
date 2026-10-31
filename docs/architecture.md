@@ -28,7 +28,7 @@ agent.cpp is structured around three core principles that inform every design de
 +------v------------------+         +------------------v-----------+
 |     Provider Layer       |         |       Tools Layer            |
 |  ProviderOps[]           |         |  ToolsOps  tool_by_name      |
-|  Mock  LlamaCpp  OpenAI  |         |  filesystem  terminal        |
+|  Mock  LlamaCpp          |         |  filesystem  terminal        |
 |  OnnxRuntime             |         |  compressor  skills          |
 +--------------------------+         |  permission gate (Allow/     |
                                      |  Ask/Deny, checked pre-call) |
@@ -90,7 +90,6 @@ Provider, memory, and tools subsystems are resolved through `constexpr` arrays o
 ProviderOps kProviderOps[] = {
     { /* Mock     */ init_mock,    infer_mock,    ... },
     { /* LlamaCpp */ init_llama,   infer_llama,   ... },
-    { /* OpenAI   */ init_openai,  infer_openai_compatible,  ... },
     { /* Onnx     */ init_onnx,    infer_onnx,    ... },
 };
 
@@ -203,7 +202,7 @@ pump()
     if recurring:  next_fire += interval  (skip-ahead if still behind)
     if one-shot:   done = true
 
-  if provider == OpenAICompatible or provider == LlamaCpp:
+  if provider == LlamaCpp:
     batch = up to max_parallel_subagents not-done SubEntry's
     spawn one std::thread per batch entry, each calling step_flow(session, ctx, flow)
     join all threads
@@ -223,7 +222,6 @@ All subagents share the same `Session`. Three different concurrency mechanisms a
 | Provider | Mechanism | Why |
 |---|---|---|
 | `Mock`, `OnnxRuntime` | Sequential round-robin (unchanged) | No batching support / not worth the complexity for these. |
-| `OpenAICompatible` | Real OS threads | Plain HTTP calls — safe and effective to run concurrently. |
 | `LlamaCpp` | Threads + continuous batching (see below) | A single `llama_context` can only run one `llama_decode` at a time regardless of thread count — threads alone buy nothing; the actual parallelism has to come from batching multiple sequences into one decode call. |
 
 Making any of this safe required removing all of `Session`'s ambient mutable "current turn" state and replacing it with `thread_local` variables in the `agent::ambient` namespace (`src/core/executor/ambient_turn.cpp`): which `FlowMemory`/hooks/tool-allowlist the current thread's `execute_tool` call is running under (`ambient::active_memory`, `ambient::active_hooks`, `ambient::allowed_tools`), which `Arena` slot to use (`ambient::worker_arena_index`, resolved via `ambient::current_arena(session)`), and the cached `simdjson::ondemand::parser` (`ambient::json_parser`). A single thread behaves identically to the old shared-field design (nothing changes for callers who never touch `AgentScheduler`); concurrent threads get automatic isolation for free, no locking needed on any of it. What *is* still shared and mutex-guarded: `Session::stats` (`Session::stats_mutex`), the log file (`Session::log_mutex`), and event hook dispatch (`Session::event_mutex`), since these genuinely accumulate/fire across every concurrently-running turn.
@@ -275,12 +273,9 @@ When history token total exceeds 70% of `context_window` and history has more th
 |---|---|---|
 | `provider_ops.cpp` | Mock | — |
 | `llama_provider.cpp` | LlamaCpp | `llama.h` |
-| `openai_compatible_provider.cpp` | OpenAICompatible | `httplib.h`, `simdjson` |
 | `onnx_provider.cpp` | OnnxRuntime | `onnxruntime_c_api.h` |
 
 All provider state is heap-allocated and type-erased as `shared_ptr<void>` in `Session::provider_state`. The provider's destructor handles cleanup.
-
-The OpenAI provider includes retry logic with exponential backoff: it retries on connection errors and HTTP 429/500/502/503/504 responses, up to `Config::retry_max_attempts` times, with initial delay `Config::retry_base_delay_ms` that doubles each attempt. Streaming responses are never retried (the stream is consumed on the first attempt).
 
 ---
 

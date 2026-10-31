@@ -106,7 +106,7 @@ printf("task A+B used %d tokens\n",
 
 ## Cost estimation
 
-Use token counts to estimate API costs. For OpenAI pricing (approximate; always verify against the current price list):
+Use token counts to estimate API costs. For example, with per-token prices (approximate):
 
 ```cpp
 auto st = agent::get_stats(session);

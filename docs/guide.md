@@ -71,21 +71,6 @@ cfg.max_tokens     = 1024;
 cfg.temperature    = 0.8f;
 ```
 
-### OpenAI-compatible
-
-Any HTTP API that speaks the OpenAI Chat Completions format.
-
-```cpp
-cfg.provider = agent::AiProvider::OpenAICompatible;
-cfg.base_url = "https://api.openai.com";
-cfg.api_key  = std::getenv("OPENAI_API_KEY");
-cfg.model    = "gpt-4o";
-```
-
-Works with Ollama, LM Studio, Together AI, Groq, Mistral, Anyscale, and any other compatible provider.
-
-Network failures and HTTP 429/5xx responses are automatically retried up to `retry_max_attempts` times (default 3) with exponential backoff starting at `retry_base_delay_ms` (default 500 ms).
-
 ### ONNX Runtime
 
 Multimodal models (image, audio, embeddings) via ONNX Runtime.
@@ -398,7 +383,7 @@ agent::FlowState my_state{
 
 ## Parallel subagents with scheduling
 
-`AgentScheduler` runs multiple `Flow`s. For `AiProvider::OpenAICompatible`, subagents run with real thread-pooled parallelism (bounded by `Config::max_parallel_subagents`); for every other provider (a local model can only decode one sequence at a time), subagents are interleaved in a cooperative round-robin instead. All subagents share the same `Session`. See [docs/api/scheduler.md](api/scheduler.md) for details.
+`AgentScheduler` runs multiple `Flow`s. For `AiProvider::LlamaCpp`, subagents run on worker threads whose next-token steps are continuously batched into one `llama_decode` (bounded by `Config::max_parallel_subagents`); for every other provider, subagents are interleaved in a cooperative round-robin instead. All subagents share the same `Session`. See [docs/api/scheduler.md](api/scheduler.md) for details.
 
 ```cpp
 agent::AgentScheduler scheduler;

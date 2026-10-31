@@ -38,7 +38,6 @@ add_library(agent
     src/core/skills/skills_registry.cpp
     src/core/providers/provider_ops.cpp
     src/core/providers/llama_provider.cpp
-    src/core/providers/openai_compatible_provider.cpp
     src/core/providers/onnx_provider.cpp
     src/core/utils/utils.cpp
     src/core/memory/memory_ops.cpp
@@ -81,28 +80,8 @@ target_compile_definitions(agent PRIVATE SQLITE_THREADSAFE=1 SQLITE_CORE SQLITE_
 find_package(Threads REQUIRED)
 target_link_libraries(agent PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
 
-option(AGENT_ENABLE_NETWORKING "use network capabilities to support HTTP/HTTPS" ON)
 option(AGENT_ENABLE_LLAMACPP "use llama.cpp (local LLM provider)" ON)
-option(AGENT_ENABLE_OPENAI "use OpenAI-compatible (LLM API Provider)" ON)
 option(AGENT_ENABLE_ONNX "use ONNX Runtime for multimodal inference" OFF)
-
-if(AGENT_ENABLE_NETWORKING)
-    target_include_directories(agent SYSTEM PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/vendor/cpp-httplib
-    )
-    target_compile_definitions(agent PUBLIC AGENT_HAS_NETWORKING)
-
-    find_package(OpenSSL REQUIRED)
-    target_link_libraries(agent PRIVATE
-        OpenSSL::SSL
-        OpenSSL::Crypto
-    )
-    target_compile_definitions(agent PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
-
-    if(AGENT_ENABLE_OPENAI)
-        target_compile_definitions(agent PUBLIC AGENT_HAS_OPENAICOMPATIBLE)
-    endif()
-endif()
 
 if(AGENT_ENABLE_LLAMACPP)
     add_subdirectory(vendor/llama.cpp)

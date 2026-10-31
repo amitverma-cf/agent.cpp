@@ -17,11 +17,6 @@ Result<int> count_tokens_llama_cpp(Session &session, std::string_view text);
 Result<void> clear_kv_cache_llama_cpp(Session &session);
 #endif
 
-#ifdef AGENT_HAS_OPENAICOMPATIBLE
-Result<void> init_openai_compatible(Session &session);
-Result<InferResponse> infer_openai_compatible(Session &session, const InferRequest &request);
-#endif
-
 #ifdef AGENT_HAS_ONNX
 Result<void> init_onnx(Session &session);
 Result<InferResponse> infer_onnx(Session &session, const InferRequest &request);
@@ -53,13 +48,6 @@ constexpr ProviderOps kProviderOps[] = {
                 .infer = infer_llama_cpp,
                 .count_tokens = count_tokens_llama_cpp,
                 .clear_kv_cache = clear_kv_cache_llama_cpp},
-#endif
-#ifdef AGENT_HAS_OPENAICOMPATIBLE
-    ProviderOps{.provider = AiProvider::OpenAICompatible,
-                .init = init_openai_compatible,
-                .infer = infer_openai_compatible,
-                .count_tokens = nullptr,
-                .clear_kv_cache = nullptr},
 #endif
 #ifdef AGENT_HAS_ONNX
     ProviderOps{
