@@ -364,6 +364,7 @@ TEST_CASE("Progress reaches Config::on_progress and request_cancel stops the eng
     progress.cancel_at = 0;
     REQUIRE(agent::run_turn(session, memory, "hello").ok);
 }
+
 #ifdef AGENT_TEST_LLAMA_ENGINE_PATH
 namespace {
 
@@ -524,5 +525,40 @@ TEST_CASE("llama engine reads an image through libmtmd", "[engines][llama][model
         std::string text;
         REQUIRE(run_with_media(abi, media, "What is this?", text) == AGENT_ERR_FILESYSTEM);
     }
+}
+#endif
+
+#ifdef AGENT_TEST_LLAMA_ENGINE_PATH
+TEST_CASE("run_turn_with_media sends an image through the core to the llama engine", "[engines][llama][model][media]") {
+    const char *model = std::getenv("AGENT_TEST_LLAMA_VISION_MODEL");
+    const char *mmproj = std::getenv("AGENT_TEST_LLAMA_VISION_MMPROJ");
+    if (!model || !mmproj) SKIP("AGENT_TEST_LLAMA_VISION_MODEL / AGENT_TEST_LLAMA_VISION_MMPROJ not set");
+
+    const std::string image_path = std::string(kWorkspace) + "/red.bmp";
+    {
+        std::FILE *f = std::fopen(image_path.c_str(), "wb");
+        REQUIRE(f != nullptr);
+        const std::string bmp = solid_bmp(2);
+        std::fwrite(bmp.data(), 1, bmp.size(), f);
+        std::fclose(f);
+    }
+
+    auto cfg = llama_config(model);
+    cfg.context_window = 4096;
+    cfg.max_tokens = 16;
+    cfg.engine_options = std::string("{\"mmproj\":\"") + mmproj + "\"}";
+    auto res = agent::init(cfg);
+    REQUIRE(res.ok);
+    agent::Session session = std::move(res.value);
+
+    const agent::Media media[] = {{image_path, "image/bmp"}};
+    agent::FlowMemory memory;
+    memory.id = "llama_media_e2e";
+    auto reply = agent::run_turn_with_media(session, memory, "What color is this image? Answer with one word.", media);
+    INFO(reply.error.message);
+    REQUIRE(reply.ok);
+    std::string lower = reply.value;
+    for (char &c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    REQUIRE(lower.find("red") != std::string::npos);
 }
 #endif
