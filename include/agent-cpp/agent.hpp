@@ -840,3 +840,34 @@ Result<std::vector<RagHit>> rag_query(Session &embed_session, RagIndex &index, s
 Tool make_rag_tool(Session &chat_session, Session &embed_session, RagIndex &index, Session *rerank_session = nullptr, int k = 4);
 
 } // namespace agent
+
+// ============================================================================================
+// -------------------------- MCP stdio client (Phase 3) --------------------------
+// Model Context Protocol servers run as child processes speaking newline-delimited JSON-RPC 2.0 on
+// stdin/stdout. Each remote tool becomes an ordinary Tool named "<server>.<tool>" whose callback
+// forwards to tools/call, so allowed_tools, the permission gate and graph Tool nodes apply as for
+// any other tool. The Session owns the server processes; they stop on disconnect or when the
+// Session is destroyed. See docs/api/mcp.md.
+// ============================================================================================
+
+namespace agent {
+
+struct McpServerConfig {
+    std::string name;    // tool prefix; letters, digits, '_' and '-' only; unique per Session
+    std::string command; // program to start (looked up on PATH; not run through a shell)
+    std::vector<std::string> args;
+    std::map<std::string, std::string> env; // added to / overriding the inherited environment
+    int timeout_ms = 30000;                 // per request (initialize, each tools/list page, tools/call)
+    std::string working_directory;          // empty = inherit the host's
+};
+
+// Starts the server, runs the initialize handshake and tools/list (following pagination), and
+// registers every remote tool on the Session (then rebuild_tool_index). Returns the registered tools.
+Result<std::vector<Tool>> connect_mcp_server(Session &session, const McpServerConfig &config);
+// Unregisters the server's tools and shuts the process down (close stdin, then terminate).
+Result<void> disconnect_mcp_server(Session &session, std::string_view name);
+void disconnect_mcp_servers(Session &session);
+// Names of the connected servers, in connection order.
+std::vector<std::string> list_mcp_servers(const Session &session);
+
+} // namespace agent

@@ -37,6 +37,7 @@ add_library(agent
     src/core/graph/graph_builders.cpp
     src/core/graph/graph_checkpoint.cpp
     src/core/graph/graph_executor.cpp
+    src/core/mcp/mcp_client.cpp
     src/core/data/data_source_registry.cpp
     src/core/skills/skills_registry.cpp
     src/core/providers/provider_ops.cpp
@@ -55,6 +56,7 @@ add_library(agent
     src/hal/time.cpp
     src/hal/path.cpp
     src/hal/process.cpp
+    src/hal/child_process.cpp
     src/hal/log_file.cpp
     src/hal/dylib.cpp
     vendor/simdjson/singleheader/simdjson.cpp
@@ -183,6 +185,7 @@ add_executable(test_agent
     tests/unit/test_engine_sdcpp.cpp
     tests/unit/test_graph.cpp
     tests/unit/test_rag.cpp
+    tests/unit/test_mcp.cpp
     tests/integration/test_session.cpp
     tests/integration/test_flow.cpp
 )
@@ -202,6 +205,14 @@ if(AGENT_BUILD_HUB)
 endif()
 target_compile_definitions(test_agent PRIVATE AGENT_TEST_MOCK_ENGINE_PATH="$<TARGET_FILE:agent-engine-mock>")
 add_dependencies(test_agent agent-engine-mock)
+
+# Tiny MCP stdio server the MCP client tests talk to.
+add_executable(fake_mcp_server tests/helpers/fake_mcp_server.cpp)
+target_link_libraries(fake_mcp_server PRIVATE agent)
+target_compile_options(fake_mcp_server PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS})
+target_link_options(fake_mcp_server PRIVATE ${SANITIZER_FLAGS})
+target_compile_definitions(test_agent PRIVATE AGENT_TEST_FAKE_MCP_SERVER_PATH="$<TARGET_FILE:fake_mcp_server>")
+add_dependencies(test_agent fake_mcp_server)
 if(AGENT_ENGINE_LLAMA)
     target_compile_definitions(test_agent PRIVATE AGENT_TEST_LLAMA_ENGINE_PATH="$<TARGET_FILE:agent-engine-llama>")
     add_dependencies(test_agent agent-engine-llama)
