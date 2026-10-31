@@ -1,9 +1,8 @@
 name: CI
 
+# Manual only for now; re-enable push/pull_request triggers when CI is wanted.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   build-and-test:
