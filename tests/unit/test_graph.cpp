@@ -327,6 +327,9 @@ TEST_CASE("graph: parallel branches run concurrently on a concurrent engine", "[
     cfg.max_parallel_subagents = 2; // three branches -> two batches
     agent::Session session = make_session(cfg);
     REQUIRE(session.worker_arenas.size() == 2);
+    int completed = 0;
+    agent::register_event_hook(
+        session, agent::EventType::OnSubAgentComplete, [](const agent::Event &, void *ud) { ++*static_cast<int *>(ud); }, &completed);
 
     g_max_inflight = 0;
     agent::Graph g =
@@ -342,6 +345,7 @@ TEST_CASE("graph: parallel branches run concurrently on a concurrent engine", "[
     REQUIRE(agent::get_state(run.state, "a2") == "conc: two");
     REQUIRE(agent::get_state(run.state, "a3") == "conc: three");
     REQUIRE(g_max_inflight.load() >= 2);
+    REQUIRE(completed == 3);
 }
 
 TEST_CASE("graph: scoped state - temp discarded, user/app persisted, thread state per thread", "[graph]") {
@@ -596,4 +600,306 @@ TEST_CASE("graph: tool node runs a tool with arguments from state", "[graph]") {
     bad.thread_id = "tool-bad";
     REQUIRE_FALSE(agent::run_graph(session, agent::make_graph(tool), bad).ok);
     REQUIRE(bad.status == agent::GraphRunStatus::Failed);
+}
+
+// ---- Coverage of what the removed Flow / AgentScheduler API offered ----
+
+namespace {
+
+// A test engine that records what each run() call saw: the system text, the tool definitions and
+// the non-system messages. Replies "rec: <last user text>".
+struct RecordedCall {
+    std::string system;
+    std::string tools_json;
+    std::vector<std::string> messages; // "role: text", system messages excluded
+};
+std::vector<RecordedCall> g_recorded;
+
+int32_t rec_create(agent_str, void **out, char *, size_t) {
+    static int instance = 0;
+    *out = &instance;
+    return AGENT_OK;
+}
+void rec_destroy(void *) {}
+int32_t rec_run(void *, const agent_request *req, agent_response *resp) {
+    RecordedCall call;
+    call.tools_json.assign(req->tools_json.data, req->tools_json.size);
+    std::string last;
+    for (size_t i = 0; i < req->n_messages; ++i) {
+        const agent_message &m = req->messages[i];
+        std::string_view role(m.role.data, m.role.size);
+        std::string text;
+        for (size_t p = 0; p < m.n_parts; ++p)
+            if (m.parts[p].kind == AGENT_PART_TEXT) text.append(m.parts[p].text.data, m.parts[p].text.size);
+        if (role == "system") call.system += text;
+        else call.messages.push_back(std::string(role) + ": " + text);
+        if (role == "user" && !text.empty()) last = text;
+    }
+    g_recorded.push_back(std::move(call));
+
+    static std::string reply;
+    static agent_part part{};
+    reply = "rec: " + last;
+    part = agent_part{};
+    part.kind = AGENT_PART_TEXT;
+    part.text = agent_str{reply.data(), reply.size()};
+    *resp = agent_response{};
+    resp->message.role = agent_str{"assistant", 9};
+    resp->message.parts = &part;
+    resp->message.n_parts = 1;
+    return AGENT_OK;
+}
+void rec_free(void *, agent_response *resp) { *resp = agent_response{}; }
+const char *rec_error(void *) { return ""; }
+
+const agent_engine_v1 kRecordingEngine = {
+    AGENT_ENGINE_ABI_VERSION,
+    "graph_recording_test",
+    "1.0",
+    AGENT_CAP_TEXT_GEN,
+    AGENT_ENGINE_FLAG_NATIVE_TOOLS, // tool definitions arrive in tools_json, filtered by allowed_tools
+    rec_create,
+    rec_destroy,
+    rec_run,
+    rec_free,
+    rec_error,
+    nullptr,
+    nullptr,
+};
+
+agent::Session make_recording_session() {
+    REQUIRE(agent::register_engine(&kRecordingEngine).ok);
+    agent::Config cfg;
+    cfg.engine = "graph_recording_test";
+    cfg.auto_default_tools = false;
+    agent::Tool secret;
+    secret.name = "secret";
+    secret.description = "another test tool";
+    secret.parameter_schema = "{}";
+    secret.callback = [](std::string_view, void *) -> agent::Result<std::string> { return agent::ok(std::string("hidden")); };
+    cfg.tools.push_back(secret);
+    g_recorded.clear();
+    return make_session(cfg);
+}
+
+agent::GraphNode prompt_agent(std::string name, std::string prompt, std::string system_prompt = {}) {
+    agent::GraphNode n = agent_node(std::move(name), "", "");
+    n.prompt = std::move(prompt);
+    n.system_prompt = std::move(system_prompt);
+    return n;
+}
+
+} // namespace
+
+TEST_CASE("graph: each agent node runs with its own system prompt and tool allowlist", "[graph]") {
+    agent::Session session = make_recording_session();
+
+    auto plan = prompt_agent("plan", "make a plan", "You plan.");
+    plan.allowed_tools = {"ping"};
+    auto act = prompt_agent("act", "do it", "You act.");
+    act.allowed_tools = {"secret"};
+    auto any = prompt_agent("any", "anything");
+    agent::Graph g = agent::make_sequential("per_node", {agent::make_graph(plan), agent::make_graph(act), agent::make_graph(any)});
+
+    agent::GraphRun run;
+    run.thread_id = "per-node";
+    REQUIRE(agent::run_graph(session, g, run).ok);
+    REQUIRE(g_recorded.size() == 3);
+    CHECK(g_recorded[0].system.find("You plan.") != std::string::npos);
+    CHECK(g_recorded[0].tools_json.find("\"ping\"") != std::string::npos);
+    CHECK(g_recorded[0].tools_json.find("\"secret\"") == std::string::npos);
+    CHECK(g_recorded[1].system.find("You act.") != std::string::npos);
+    CHECK(g_recorded[1].system.find("You plan.") == std::string::npos);
+    CHECK(g_recorded[1].tools_json.find("\"secret\"") != std::string::npos);
+    CHECK(g_recorded[1].tools_json.find("\"ping\"") == std::string::npos);
+    // No allowlist = every registered tool.
+    CHECK(g_recorded[2].tools_json.find("\"ping\"") != std::string::npos);
+    CHECK(g_recorded[2].tools_json.find("\"secret\"") != std::string::npos);
+}
+
+TEST_CASE("graph: allowed_tools is enforced on model-requested tool calls", "[graph]") {
+    agent::Session session = make_session();
+    g_ping_calls = 0;
+
+    auto worker = prompt_agent("worker", "call:ping");
+    worker.allowed_tools = {"some_other_tool"};
+    agent::GraphRun run;
+    run.thread_id = "allowlist";
+    REQUIRE(agent::run_graph(session, agent::make_graph(worker), run).ok);
+    CHECK(g_ping_calls == 0);
+    const auto &history = run.state.histories.at("worker").history;
+    REQUIRE(history.size() == 4); // user, assistant(tool call), tool, assistant
+    CHECK(history[2].role == "tool");
+    CHECK(history[2].content.find("not allowed") != std::string::npos);
+}
+
+TEST_CASE("graph: agent nodes are isolated by default and share a conversation via history_key", "[graph]") {
+    agent::Session session = make_recording_session();
+
+    SECTION("isolated (default)") {
+        agent::Graph g = agent::make_sequential("isolated", {agent::make_graph(prompt_agent("a", "first", "State A prompt")),
+                                                             agent::make_graph(prompt_agent("b", "second", "State B prompt"))});
+        agent::GraphRun run;
+        run.thread_id = "isolated";
+        REQUIRE(agent::run_graph(session, g, run).ok);
+        REQUIRE(g_recorded.size() == 2);
+        CHECK(g_recorded[1].messages == std::vector<std::string>{"user: second"});
+        CHECK(run.state.histories.at("a").history.size() == 2);
+        CHECK(run.state.histories.at("b").history.size() == 2);
+    }
+
+    SECTION("shared") {
+        auto a = prompt_agent("a", "first", "State A prompt");
+        auto b = prompt_agent("b", "second", "State B prompt");
+        a.history_key = b.history_key = "chat";
+        agent::Graph g = agent::make_sequential("shared", {agent::make_graph(a), agent::make_graph(b)});
+        agent::GraphRun run;
+        run.thread_id = "shared";
+        REQUIRE(agent::run_graph(session, g, run).ok);
+        REQUIRE(g_recorded.size() == 2);
+        // The second node sees the first node's exchange, under its own system prompt.
+        CHECK(g_recorded[1].messages == std::vector<std::string>{"user: first", "assistant: rec: first", "user: second"});
+        CHECK(g_recorded[1].system.find("State B prompt") != std::string::npos);
+        CHECK(g_recorded[1].system.find("State A prompt") == std::string::npos);
+        CHECK(run.state.histories.count("a") == 0);
+        CHECK(run.state.histories.count("b") == 0);
+        const auto &history = run.state.histories.at("chat").history;
+        REQUIRE(history.size() == 4);
+        CHECK(history[0].role == "user"); // system prompts are installed per turn, not stored
+        CHECK(run.state.histories.at("chat").stats.turns == 2);
+
+        // The shared conversation is checkpointed and continues on the next run of the thread.
+        agent::GraphRun again;
+        again.thread_id = "shared";
+        REQUIRE(agent::run_graph(session, g, again).ok);
+        CHECK(again.state.histories.at("chat").history.size() == 8);
+    }
+
+    SECTION("two parallel branches may not share one history") {
+        auto a = prompt_agent("a", "first");
+        auto b = prompt_agent("b", "second");
+        a.history_key = b.history_key = "chat";
+        agent::GraphRun run;
+        run.thread_id = "shared-parallel";
+        auto res = agent::run_graph(session, agent::make_parallel("both", {agent::make_graph(a), agent::make_graph(b)}), run);
+        REQUIRE_FALSE(res.ok);
+        CHECK(res.error.message.find("'chat'") != std::string::npos);
+    }
+}
+
+TEST_CASE("graph: context_provider prepends per-run context to the system prompt", "[graph]") {
+    agent::Session session = make_recording_session();
+
+    auto answer = prompt_agent("answer", "question", "Answer from the docs.");
+    answer.context_provider = [](agent::Session &, const agent::GraphState &state, void *ud) -> agent::Result<std::string> {
+        if (agent::get_state(state, "docs") == "fail") return agent::fail<std::string>(agent::ErrorCode::KeyNotFound, "no docs");
+        return agent::ok(std::string(static_cast<const char *>(ud)) + std::string(agent::get_state(state, "docs")));
+    };
+    static const char *kPrefix = "Docs: ";
+    answer.user_data = const_cast<char *>(kPrefix);
+    agent::Graph g = agent::make_graph(answer);
+
+    agent::GraphRun run;
+    run.thread_id = "context";
+    agent::set_state(run.state, "docs", "install with cmake");
+    REQUIRE(agent::run_graph(session, g, run).ok);
+    REQUIRE(g_recorded.size() == 1);
+    CHECK(g_recorded[0].system.find("Docs: install with cmake\nAnswer from the docs.") != std::string::npos);
+    const auto &history = run.state.histories.at("answer").history;
+    REQUIRE(history.size() == 2);
+    CHECK(history[0].role == "user"); // nothing was written into the conversation
+
+    agent::GraphRun bad;
+    bad.thread_id = "context-bad";
+    agent::set_state(bad.state, "docs", "fail");
+    auto res = agent::run_graph(session, g, bad);
+    REQUIRE_FALSE(res.ok);
+    CHECK(res.error.message == "no docs");
+    CHECK(bad.status == agent::GraphRunStatus::Failed);
+}
+
+namespace {
+
+struct HookLog {
+    std::vector<std::string> calls;
+    const agent::FlowMemory *memory = nullptr;
+};
+
+void record_hook(agent::Session &, agent::FlowMemory &memory, std::string_view tool, std::string_view, std::string_view result, void *ud) {
+    auto *log = static_cast<HookLog *>(ud);
+    log->memory = &memory;
+    log->calls.push_back(std::string(tool) + (result.empty() ? ":pre" : ":post=" + std::string(result)));
+}
+
+void record_other_hook(agent::Session &, agent::FlowMemory &, std::string_view tool, std::string_view, std::string_view, void *ud) {
+    static_cast<HookLog *>(ud)->calls.push_back("other-filter-fired:" + std::string(tool));
+}
+
+} // namespace
+
+TEST_CASE("graph: tool hooks fire around an agent node's tool calls, filtered by tool name", "[graph]") {
+    agent::Session session = make_session();
+    g_ping_calls = 0;
+    HookLog log;
+
+    auto worker = prompt_agent("worker", "call:ping");
+    worker.hooks = {
+        agent::ToolHook{.when = agent::ToolHook::When::Pre, .tool_name = {}, .callback = record_hook, .user_data = &log},
+        agent::ToolHook{.when = agent::ToolHook::When::Post, .tool_name = "ping", .callback = record_hook, .user_data = &log},
+        agent::ToolHook{.when = agent::ToolHook::When::Pre, .tool_name = "other", .callback = record_other_hook, .user_data = &log},
+    };
+    auto plain = prompt_agent("plain", "call:ping"); // no hooks: the worker's are not active here
+    agent::Graph g = agent::make_sequential("hooks", {agent::make_graph(worker), agent::make_graph(plain)});
+
+    agent::GraphRun run;
+    run.thread_id = "hooks";
+    REQUIRE(agent::run_graph(session, g, run).ok);
+    CHECK(g_ping_calls == 2);
+    CHECK(log.calls == std::vector<std::string>{"ping:pre", "ping:post=pong"});
+    CHECK(log.memory == &run.state.histories.at("worker"));
+    // The node's hooks do not replace the event log's.
+    CHECK(count_events(run, agent::GraphEventType::ToolCall, "worker", "ping") == 1);
+    CHECK(count_events(run, agent::GraphEventType::ToolResult, "plain", "ping") == 1);
+
+    SECTION("calls approved on resume fire the hooks too") {
+        log.calls.clear();
+        worker.interrupt_before_tools = true;
+        agent::Graph paused = agent::make_graph(worker);
+        agent::GraphRun first;
+        first.thread_id = "hooks-resume";
+        REQUIRE(agent::run_graph(session, paused, first).ok);
+        REQUIRE(first.status == agent::GraphRunStatus::Interrupted);
+        CHECK(log.calls.empty());
+        agent::GraphRun resumed;
+        REQUIRE(agent::resume_graph(session, paused, "hooks-resume", resumed, "yes").ok);
+        CHECK(log.calls == std::vector<std::string>{"ping:pre", "ping:post=pong"});
+    }
+}
+
+TEST_CASE("graph: parallel agent branches run to completion and fire OnSubAgentComplete", "[graph][events]") {
+    agent::Session session = make_session(); // mock engine: not concurrent, branches run one after another
+    std::vector<std::string> completed;
+    agent::register_event_hook(
+        session, agent::EventType::OnSubAgentComplete,
+        [](const agent::Event &e, void *ud) {
+            static_cast<std::vector<std::string> *>(ud)->emplace_back(reinterpret_cast<const char *>(e.payload.data()), e.payload.size());
+        },
+        &completed);
+
+    std::vector<agent::Graph> workers;
+    for (int i = 0; i < 3; ++i) {
+        auto n = prompt_agent("worker_" + std::to_string(i), "go " + std::to_string(i));
+        n.output_key = "out_" + std::to_string(i);
+        workers.push_back(agent::make_graph(std::move(n)));
+    }
+    agent::GraphRun run;
+    run.thread_id = "subagents";
+    REQUIRE(agent::run_graph(session, agent::make_parallel("team", std::move(workers)), run).ok);
+    REQUIRE(run.status == agent::GraphRunStatus::Completed);
+    CHECK(completed == std::vector<std::string>{"worker_0", "worker_1", "worker_2"});
+    for (int i = 0; i < 3; ++i) {
+        const std::string name = "worker_" + std::to_string(i);
+        CHECK(agent::get_state(run.state, "out_" + std::to_string(i)) == "echo: go " + std::to_string(i));
+        CHECK(run.state.histories.at(name).stats.turns == 1);
+    }
 }

@@ -4,7 +4,7 @@
 
 The graph runtime runs workflows built from named nodes and edges, in the style of LangGraph 1.0 and Google ADK workflow agents. It adds scoped key/value state, a per-run event log, checkpoints keyed by `thread_id`, and interrupts for human approval.
 
-It lives next to `Flow` / `AgentScheduler` ([fsm.md](fsm.md), [scheduler.md](scheduler.md)), which will later move onto it. Everything is plain structs and function pointers: no `std::function`, no virtual calls, no exceptions. A graph is built once at setup, so its nodes use owning strings. Inference inside Agent nodes goes through the usual arena-backed `run_turn`.
+It is the library's only workflow API: it replaced the earlier `Flow` state machine and `AgentScheduler` (see [Migrating from Flow / AgentScheduler](#migrating-from-flow--agentscheduler)). Everything is plain structs and function pointers: no `std::function`, no virtual calls, no exceptions. A graph is built once at setup, so its nodes use owning strings. Inference inside Agent nodes goes through the usual arena-backed `run_turn`.
 
 You can also write graphs declaratively in JSON and load them with `load_graph_json`; see [agent-json.md](agent-json.md).
 
@@ -25,6 +25,9 @@ struct GraphNode {
     std::string input_key;                   // Agent: user message; Tool: JSON arguments
     std::string output_key;                  // Agent: final reply; Tool: tool result
     bool interrupt_before_tools = false;     // Agent
+    std::string history_key;                 // Agent: conversation key; empty = the node name
+    GraphContextFn context_provider = nullptr; // Agent: per-run system-prompt prefix
+    std::vector<ToolHook> hooks;             // Agent: Pre/Post tool hooks
 
     GraphFunctionFn function = nullptr;      // Function
     std::string tool_name;                   // Tool
@@ -33,7 +36,7 @@ struct GraphNode {
     std::string loop_body;                   // Loop
     int max_iterations = 1;                  // Loop
     GraphUntilFn until = nullptr;            // Loop
-    void *user_data = nullptr;               // passed to function / tool_args / until
+    void *user_data = nullptr;               // passed to function / tool_args / until / context_provider
 
     std::string exit_to;                     // where kGraphEnd leads (set by the builders)
 };
@@ -51,7 +54,7 @@ struct Graph {
 
 | Kind | What it does |
 |---|---|
-| `Agent` | Calls `run_turn` on the node's own `FlowMemory` (`state.histories[name]`). Like a `FlowState`, it installs `system_prompt` for the turn only and limits tools to `allowed_tools`. The user message is `state[input_key]` if that key is set, otherwise `prompt`. The final reply is written to `state[output_key]`. |
+| `Agent` | Calls `run_turn` on the node's `FlowMemory` (`state.histories[history_key]`, by default `state.histories[name]`). It installs `system_prompt` (prefixed by `context_provider`'s text, if any) for the node's turn only, limits tools to `allowed_tools`, and activates its `hooks`. The user message is `state[input_key]` if that key is set, otherwise `prompt`. The final reply is written to `state[output_key]`. See [Agent nodes](#agent-nodes). |
 | `Function` | `Result<void> fn(Session &, GraphState &, void *user_data)`. Returning an error fails the node. |
 | `Tool` | Calls `execute_tool(tool_name, args)`. `args` comes from `tool_args(session, state, user_data)`, else `state[input_key]`, else `"{}"`. The result goes to `state[output_key]`. A tool error fails the node. |
 | `Parallel` | Runs every branch, joins them, then follows its own outgoing edge. Built by `make_parallel`. |
@@ -92,12 +95,90 @@ agent::Graph g = agent::make_sequential("pipeline", {
 
 ---
 
+## Agent nodes
+
+### System prompt and tool allowlist
+
+`system_prompt` becomes the conversation's system message (`history[0]`) for the duration of the node's turn and is then removed again (or the previous system message restored), so it is never stored in the history. `allowed_tools` scopes both the tool definitions the engine sees and what `execute_tool` will dispatch while the node runs; a model-requested call to any other tool gets the tool message `Error: Tool not allowed for the current agent node: <name>`. `Session::config.tools` itself is never changed. Empty = every registered tool.
+
+```cpp
+agent::GraphNode reader{.name = "read", .kind = agent::GraphNodeKind::Agent,
+                        .system_prompt = "Inspect the workspace.",
+                        .allowed_tools = {"read_file", "list_dir", "file_info"},
+                        .input_key = "task", .output_key = "findings"};
+```
+
+### Private or shared conversation (`history_key`)
+
+By default every Agent node has its own conversation, `state.histories[<node name>]`: a node that runs again (in a loop, or on a later `run_graph` of the same thread) continues where it left off, but it never sees what other nodes said. Give several Agent nodes the same `history_key` to have them continue **one** conversation, each under its own system prompt and tool allowlist. This is how a plan -> act -> summarise agent keeps its whole exchange in one context:
+
+```cpp
+agent::GraphNode plan{.name = "plan", .kind = agent::GraphNodeKind::Agent,
+                      .system_prompt = "You are a careful planner.", .input_key = "task",
+                      .history_key = "react"};
+agent::GraphNode act{.name = "act", .kind = agent::GraphNodeKind::Agent,
+                     .system_prompt = "You are an executor. Use tools precisely.",
+                     .allowed_tools = {"read_file", "write_file", "run_command"},
+                     .prompt = "Execute your plan now.", .history_key = "react"};
+agent::GraphNode report{.name = "report", .kind = agent::GraphNodeKind::Agent,
+                        .system_prompt = "You are a concise reporter.",
+                        .prompt = "Summarise what was done.", .output_key = "summary",
+                        .history_key = "react"};
+agent::Graph g = agent::make_sequential("react", {agent::make_graph(plan), agent::make_graph(act),
+                                                   agent::make_graph(report)});
+```
+
+Shared histories are checkpointed under their key like any other. Two branches of one `Parallel` node may not use the same history (the join fails with `InvalidConfig`).
+
+### Per-run context (`context_provider`)
+
+```cpp
+using GraphContextFn = Result<std::string> (*)(Session &session, const GraphState &state, void *user_data);
+```
+
+Called before each run of the node, with the node's `user_data`. A non-empty result is prepended to `system_prompt` (separated by a newline) for that run only; nothing is written to the history. An error fails the node. Typical use: fold retrieved context (a [data source](data-sources.md), [RAG](rag.md) hits, values from state) into the prompt without a tool round trip.
+
+```cpp
+agent::Result<std::string> docs_context(agent::Session &session, const agent::GraphState &state, void *) {
+    auto res = agent::query_data_source(session, "product_docs", agent::get_state(state, "question"));
+    if (!res.ok) return agent::ok(std::string());   // answer without context
+    return agent::ok("Relevant docs:\n" + res.value);
+}
+// answer.context_provider = docs_context;
+```
+
+### Tool hooks
+
+```cpp
+struct ToolHook {
+    enum class When { Pre, Post };
+    When when = When::Pre;
+    std::string_view tool_name;   // empty = every tool; the view must outlive the node
+    using HookFn = void (*)(Session &, FlowMemory &memory, std::string_view tool_name,
+                            std::string_view args, std::string_view result, void *user_data);
+    HookFn callback = nullptr;
+    void *user_data = nullptr;
+};
+```
+
+`GraphNode::hooks` are active only while that Agent node runs. For each tool call: the matching `Pre` hooks fire in order (`result` empty), the tool runs, then the matching `Post` hooks fire with its result (including `Error: ...` results). `memory` is the node's conversation. Calls approved on `resume_graph` fire the hooks too; calls a reviewer denied never run, so they fire none. Hooks of nodes inside a `Parallel` branch may be called from worker threads.
+
+```cpp
+static void audit(agent::Session &, agent::FlowMemory &, std::string_view tool, std::string_view args,
+                  std::string_view result, void *) {
+    std::printf("%s %s -> %s\n", std::string(tool).c_str(), std::string(args).c_str(), std::string(result).c_str());
+}
+act.hooks = {{.when = agent::ToolHook::When::Post, .tool_name = "write_file", .callback = audit}};
+```
+
+---
+
 ## Scoped state
 
 ```cpp
 struct GraphState {
     std::map<std::string, std::string, std::less<>> values;
-    std::map<std::string, FlowMemory, std::less<>> histories;  // per Agent node
+    std::map<std::string, FlowMemory, std::less<>> histories;  // per Agent node (or history_key)
     std::vector<std::string> written;                          // runtime bookkeeping
     bool interrupt_requested = false;
     std::string interrupt_reason;
@@ -118,7 +199,7 @@ Values are strings, either JSON or plain text. The key prefix decides the scope,
 
 Write state with `set_state`, which records the key so the runtime can log it, persist it and check it for parallel conflicts. Changing `values` directly works, but the write is not logged, and `user:`/`app:` keys written that way are not persisted. A view returned by `get_state` stays valid until that key is written again.
 
-**Parallel branches** each work on their own copy of `values`. At the join, every key a branch wrote is merged back. If two branches of the same fan-out write the same key, the run fails with `InvalidConfig`, for example: `parallel 'fan': state key 'same' written by branches 'left' and 'right'; parallel branches must write unique keys`. The same applies when one Agent node's history is used by two branches.
+**Parallel branches** each work on their own copy of `values`. At the join, every key a branch wrote is merged back. If two branches of the same fan-out write the same key, the run fails with `InvalidConfig`, for example: `parallel 'fan': state key 'same' written by branches 'left' and 'right'; parallel branches must write unique keys`. The same applies when one Agent history (node name or `history_key`) is used by two branches.
 
 ---
 
@@ -172,7 +253,7 @@ A checkpoint is a JSON object that holds the step counter, the next node, the st
 
 Like LangGraph, the runtime re-executes on resume. A node that failed or was interrupted runs again from its start, so tools should be idempotent. State a failing node wrote before returning its error stays in memory and in the failure checkpoint, but it is not logged or persisted to `user:`/`app:` storage.
 
-Agent node `FlowMemory` ids are `<thread_id>:<node>`, so `run_turn` also saves them under `history:<thread_id>:<node>`. Per-node `TurnStats` are not checkpointed.
+Agent `FlowMemory` ids are `<thread_id>:<history>` (the node name or its `history_key`), so `run_turn` also saves them under `history:<thread_id>:<history>`. Per-node `TurnStats` are not checkpointed.
 
 ---
 
@@ -228,13 +309,15 @@ struct GraphEvent {
 
 Every call appends to `run.events`. The log records node start and end (or failure), every `set_state` write, every tool call and result (both Tool nodes and tool calls made inside Agent turns), interrupts, resumes and checkpoints. Events from parallel branches are appended branch by branch after the join; use the timestamps to see how they interleaved. The log lives in memory and is not persisted.
 
-The existing `EventHook`s also fire: `OnStateTransition` with the node name when a node starts, and `OnToolCall` / `OnToolResult` for Tool nodes and for approved pending calls (`run_turn` fires them itself for its own calls). `EventType` was not extended.
+The existing `EventHook`s also fire: `OnStateTransition` with the node name when a node starts; `OnSubAgentComplete` with the branch's entry node name for each successful branch of a `Parallel` node (fired on the calling thread, in branch order, after the branches have joined); and `OnToolCall` / `OnToolResult` for Tool nodes and for approved pending calls (`run_turn` fires them itself for its own calls).
 
 ---
 
 ## Parallel execution
 
-When `providers::supports_parallel(session)` is true (an engine with `AGENT_ENGINE_FLAG_CONCURRENT`) and the Session has worker arenas, a top-level fan-out runs its branches on threads, at most `Config::max_parallel_subagents` at a time. Each thread uses its own `Session::worker_arenas` slot through the same `ambient::worker_arena_index` mechanism `AgentScheduler` uses. Otherwise the branches run one after another on the calling thread. A `Parallel` node nested inside a branch always runs its branches sequentially.
+When `providers::supports_parallel(session)` is true (an engine with `AGENT_ENGINE_FLAG_CONCURRENT`) and the Session has worker arenas, a top-level fan-out runs its branches on threads, at most `Config::max_parallel_subagents` at a time. Each thread uses its own `Session::worker_arenas` slot (`ambient::worker_arena_index`). More branches than slots run in batches of `max_parallel_subagents`. Otherwise the branches run one after another on the calling thread. A `Parallel` node nested inside a branch always runs its branches sequentially.
+
+With the llama engine the parallelism comes from **continuous batching** inside the plugin, not from the threads themselves: one shared `llama_context` (created with `n_seq_max = max_parallel_subagents`) folds every active generation's next token into a single `llama_decode` per round, so the branch threads mostly wait on that shared batch. See [architecture.md](../architecture.md#continuous-batching).
 
 ---
 
@@ -244,4 +327,28 @@ When `providers::supports_parallel(session)` is true (an engine with `AGENT_ENGI
 - A fan-out is checkpointed as one step. If a branch fails, the whole fan-out runs again on resume.
 - Checkpoints go through `StoreOps`; there is no separate `CheckpointerOps` yet. There is no replay or time travel to an older step, although every `checkpoint:<thread_id>:<step>` is kept.
 - `Async` durability writes synchronously.
-- Graphs are defined in C++ only; loading them from `agent.json` is not implemented yet.
+- `hooks` and `context_provider` are C++ only; `agent.json` can set `history_key` but not these.
+
+---
+
+## Migrating from Flow / AgentScheduler
+
+`Flow`, `FlowState`, `FlowHook`, `run_flow`, `step_flow`, `AgentScheduler` and `SubAgentResult` were removed; `FlowMemory`, `run_turn` and the rest of the conversation API are unchanged.
+
+| Old | Graph runtime |
+|---|---|
+| `FlowState` with `on_transition` calling `run_turn` | An `Agent` node (`prompt` / `input_key`, `output_key`). Custom work goes in a `Function` node. |
+| `FlowState::system_prompt`, `allowed_tools` | `GraphNode::system_prompt`, `allowed_tools` (same per-turn scoping) |
+| `FlowState::hooks` / `FlowHook` | `GraphNode::hooks` / `ToolHook` (same fields and callback signature) |
+| `Flow::memory` shared by all states | Same `history_key` on the Agent nodes |
+| `FlowState::isolated_memory = true` | The default: each Agent node has its own history |
+| `FlowState::context_provider` | `GraphNode::context_provider` (`GraphContextFn`, reads `GraphState`) |
+| `on_transition` returning the next state id / `"exit"` | Static edges, or a router (`GraphRouterFn`) returning a node name / `kGraphEnd` |
+| `void *context` passed to `run_flow` | `GraphNode::user_data` / `GraphEdge::user_data`, or values in `GraphState` |
+| `run_flow` | `run_graph` |
+| `step_flow` | Interrupts (`request_interrupt`, `interrupt_before_tools`) + `resume_graph`, or the per-node `GraphEvent` log |
+| `AgentScheduler::spawn` + `run_until_done` | `make_parallel` with one branch per subagent (concurrent on concurrent engines, up to `max_parallel_subagents` at a time) |
+| `SubAgentResult` | Branch outputs in `GraphState` (`output_key`), per-branch `state.histories[...].stats`; a failing branch fails the run with its error |
+| `OnStateTransition` / `OnSubAgentComplete` events | Fired at node start / per completed parallel branch |
+
+Differences: a graph checkpoints after every node and can be resumed; parallel branches must write distinct state keys; and `AgentScheduler::pump`'s one-state-per-tick round robin has no equivalent (a branch runs to its end).

@@ -81,8 +81,8 @@ struct Config {
     LogFn logger               = nullptr;
     void *logger_user_data     = nullptr;
 
-    // Parallel subagent bound for concurrent engines (worker thread count; the llama
-    // engine also uses it as n_seq_max). See scheduler.md.
+    // Parallel graph branches on concurrent engines (worker thread count; the llama
+    // engine also uses it as n_seq_max). See graph.md#parallel-execution.
     int max_parallel_subagents = 4;
 };
 ```
@@ -155,7 +155,7 @@ struct Session {
     SessionStats stats;                // accumulated telemetry since init or last reset_stats
 
     // internal fields -- do not access directly
-    std::vector<Arena>         worker_arenas;      // one exclusive arena per parallel scheduler worker
+    std::vector<Arena>         worker_arenas;      // one exclusive arena per parallel graph branch thread
     std::vector<EventHook>     event_hooks;
     std::shared_ptr<void>      provider_state;
     std::shared_ptr<void>      memory_state;
@@ -182,7 +182,7 @@ struct Session {
 
 The fields `config`, `arena`, and `stats` are the only ones you should ever read directly. Everything else is managed internally.
 
-`Session` is move-only and must not be called into from multiple threads directly. `AgentScheduler` achieves concurrency across concurrent engine turns without sharing a single `Arena` or mutable `Session` state unsafely: each worker thread gets its own slot in `worker_arenas`, and `stats_mutex`/`log_mutex`/`event_mutex` guard the shared counters, log file, and event hooks. The "current turn" tracking (which memory/hooks/tool-allowlist a tool call is running under, which arena slot, the cached JSON parser) is `thread_local` state internal to the executor, not `Session` fields. See [scheduler.md](scheduler.md) for the full concurrency model.
+`Session` is move-only and must not be called into from multiple threads directly. Parallel graph branches achieve concurrency across concurrent engine turns without sharing a single `Arena` or mutable `Session` state unsafely: each worker thread gets its own slot in `worker_arenas`, and `stats_mutex`/`log_mutex`/`event_mutex` guard the shared counters, log file, and event hooks. The "current turn" tracking (which memory/hooks/tool-allowlist a tool call is running under, which arena slot, the cached JSON parser) is `thread_local` state internal to the executor, not `Session` fields. See [graph.md](graph.md#parallel-execution) and [architecture.md](../architecture.md#concurrency) for the full concurrency model.
 
 ---
 
@@ -224,7 +224,7 @@ void         reset_stats(Session &session);
 Result<void> clear_provider_kv_cache(Session &session);
 ```
 
-Clears the provider's key-value cache for every active sequence. For llama.cpp, this frees cached attention layers in GPU/CPU memory. For other providers it is a no-op. Useful after major context shifts (e.g. between FSM states) to reduce memory footprint. Caller-timed: call it when you know no inference is in flight on that session.
+Clears the provider's key-value cache for every active sequence. For llama.cpp, this frees cached attention layers in GPU/CPU memory. For other providers it is a no-op. Useful after major context shifts (e.g. between unrelated graph runs) to reduce memory footprint. Caller-timed: call it when you know no inference is in flight on that session.
 
 ---
 

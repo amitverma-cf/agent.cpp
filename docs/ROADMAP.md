@@ -74,8 +74,8 @@ Licences vary per **model**, not just per engine. Policy for v1: the built-in ca
 | ONNX provider | Single `Run()`, CPU, 1 thread | **Keep code**: move out of core into the `onnx` engine plugin and grow it (EP selection, threads, IoBinding) |
 | llama.cpp provider + continuous batching | Older API, grammar removed | **Move** into the `llama` engine plugin and port to the current API |
 | Mock provider | Tests | **Keep** as a built-in test engine (the only one compiled into core) |
-| `Flow` FSM + `step_flow` + `void* context` | Ad hoc | **Replace** with the graph runtime |
-| `AgentScheduler` + cron | Threading tied to provider type | **Replace** with graph parallel branches; **drop cron** from core |
+| `Flow` FSM + `step_flow` + `void* context` | Ad hoc | **Done**: removed; the graph runtime replaces it (per-node prompts/allowlists/`ToolHook`s, `history_key`, `context_provider`, `user_data`) |
+| `AgentScheduler` + cron | Threading tied to provider type | **Done**: removed, replaced by graph parallel branches; cron dropped from core |
 | `FlowMemory` / `Message` / `TensorData` | Text-centric | **Replace** with `Part`-based messages + artifact refs |
 | SQLite KV + write-back cache | Inside the core library | **Move to CLI**: becomes the CLI's implementation of the core `CheckpointerOps` / `StateStoreOps` |
 | sqlite-vec DataSource | Inside the core library | **Move to CLI**: the CLI's implementation of the core `VectorStoreOps` |
@@ -168,7 +168,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 
 ### Phase 1: Clean slate (1 to 2 weeks)
 - [x] Remove the OpenAI-compatible provider and cron
-- [ ] Remove `AgentScheduler` provider-specific threading (replaced by the graph runtime in Phase 3)
+- [x] Remove `AgentScheduler` provider-specific threading (`Flow` / `AgentScheduler` removed; the graph runtime's parallel branches replace them)
 - [x] Move the ONNX provider into `engines/onnx/` (`agent-engine-onnx` plugin, built against a prebuilt ORT release; `AiProvider::OnnxRuntime` and the vendored ORT headers removed)
 - [x] Move SQLite, sqlite-vec and the memory write-back cache out of `libagent` into `tools/store-sqlite/` (used by the CLI)
 - [x] Move llama.cpp out of core into `engines/llama/` (`agent-engine-llama` plugin; `AiProvider::LlamaCpp` removed)

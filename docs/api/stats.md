@@ -117,18 +117,18 @@ printf("estimated cost: $%.4f\n", input_cost + output_cost);
 
 ---
 
-## SubAgentResult stats
+## Graph Agent node stats
 
-When using `AgentScheduler`, each `SubAgentResult` contains a copy of the `TurnStats` from that subagent's `Flow::memory`:
+After `run_graph`, each Agent conversation in `run.state.histories` (keyed by node name, or by `history_key`) carries the `TurnStats` of its turns in this call (per-node stats are not checkpointed). For parallel subagents, that is one entry per branch:
 
 ```cpp
-for (const auto &r : scheduler.results()) {
-    printf("agent '%s':\n", r.id.c_str());
-    printf("  turns:             %d\n", r.stats.turns);
-    printf("  tool calls:        %d\n", r.stats.tool_calls);
-    printf("  compressions:      %d\n", r.stats.compressions);
-    printf("  prompt tokens:     %d\n", r.stats.prompt_tokens);
-    printf("  completion tokens: %d\n", r.stats.completion_tokens);
+for (const auto &[name, memory] : run.state.histories) {
+    printf("agent '%s':\n", name.c_str());
+    printf("  turns:             %d\n", memory.stats.turns);
+    printf("  tool calls:        %d\n", memory.stats.tool_calls);
+    printf("  compressions:      %d\n", memory.stats.compressions);
+    printf("  prompt tokens:     %d\n", memory.stats.prompt_tokens);
+    printf("  completion tokens: %d\n", memory.stats.completion_tokens);
 }
 ```
 

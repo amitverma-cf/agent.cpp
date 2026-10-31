@@ -91,7 +91,7 @@ Rules:
 `engines/llama` (`agent-engine-llama`) renders prompts with the model's own Jinja chat template and
 parses replies into content + tool calls in the model's native format, using llama.cpp's `common_chat`.
 It sets `AGENT_ENGINE_FLAG_NATIVE_TOOLS` (the core only adds the skills list to the system message) and
-`AGENT_ENGINE_FLAG_CONCURRENT` (parallel subagents share one continuously batched decode).
+`AGENT_ENGINE_FLAG_CONCURRENT` (parallel graph branches share one continuously batched decode).
 
 `Config::engine_options`: `gpu_layers`, `threads`, `chat_template` (overrides the template embedded in the GGUF),
 `mmproj` (path to a multimodal projector GGUF, enables image / audio input), `mode` (`"generate"`, the

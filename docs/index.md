@@ -4,7 +4,7 @@ A modular, lightweight C++20 AI agent orchestration library built for edge devic
 
 ## What is agent.cpp?
 
-agent.cpp gives you a complete runtime for building AI agents on top of local inference backends (llama.cpp, ONNX Runtime, ... loaded as engine plugins), fully offline. It handles the hard parts: context management, tool calling, multi-agent scheduling, FSM-based agent flows, memory persistence, and observability — all without heap allocations in the hot path.
+agent.cpp gives you a complete runtime for building AI agents on top of local inference backends (llama.cpp, ONNX Runtime, ... loaded as engine plugins), fully offline. It handles the hard parts: context management, tool calling, graph workflows with parallel subagents, memory persistence, and observability — all without heap allocations in the hot path.
 
 The library is designed around three principles:
 
@@ -24,9 +24,7 @@ The library is designed around three principles:
 | [API — Session](api/session.md) | `Config`, `Session`, `init()`, `AgentRuntime` |
 | [API — Engines](api/engines.md) | Engine plugins, `engine_abi.h`, `AiProvider::Engine` |
 | [API — Conversation](api/conversation.md) | `FlowMemory`, `run_turn`, pruning, compression |
-| [API — FSM](api/fsm.md) | `FlowState`, `Flow`, `FlowHook`, `step_flow`, `run_flow` |
-| [API — Scheduler](api/scheduler.md) | `AgentScheduler`, parallel subagents |
-| [API — Graph runtime](api/graph.md) | `Graph`, Agent/Function/Tool nodes, Sequential/Parallel/Loop, scoped state, checkpoints, interrupts |
+| [API — Graph runtime](api/graph.md) | `Graph`, Agent/Function/Tool nodes (system prompt, tool allowlist, `ToolHook`s, shared histories), Sequential/Parallel/Loop, parallel subagents, scoped state, checkpoints, interrupts, migrating from `Flow`/`AgentScheduler` |
 | [API — agent.json](api/agent-json.md) | Declarative graphs: `load_graph_json`, JSON schema, routes, workflow nodes, `register_graph_function` |
 | [API — Tools](api/tools.md) | Built-in tools, `Tool` struct, custom tools, Skills, permission gate |
 | [API — MCP client](api/mcp.md) | `connect_mcp_server`: MCP stdio servers as tools |

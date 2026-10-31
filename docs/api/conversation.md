@@ -162,7 +162,7 @@ Result<std::string> run_turn(
 |---|---|
 | `session` | The active session |
 | `memory` | Conversation history + stats; modified in place |
-| `user_prompt` | User input; appended as a `"user"` message. Pass `""` to run without a user message (useful in FSM states where the system prompt sets the context) |
+| `user_prompt` | User input; appended as a `"user"` message. Pass `""` to run without a user message (useful when the system prompt sets the context, or to continue after tool results were appended) |
 | `stream` | If `true`, tokens are delivered via `on_token` as they arrive |
 | `on_token` | Streaming callback; called once per token when `stream = true` |
 | `token_user_data` | Passed through to `on_token` |
@@ -189,9 +189,9 @@ Result<std::string> run_turn(
 Each tool call in the assistant's response is processed in order:
 
 - `trigger_event(OnToolCall)` fires with the tool name as payload.
-- All `FlowHook::Pre` callbacks for this tool fire.
+- All active `ToolHook::Pre` callbacks for this tool fire (a graph Agent node's `hooks`).
 - `execute_tool` dispatches the call via `Session::tool_by_name` (O(1)).
-- All `FlowHook::Post` callbacks fire with the result.
+- All active `ToolHook::Post` callbacks fire with the result.
 - `trigger_event(OnToolResult)` fires with the result as payload.
 - A `"tool"` message is appended to history.
 

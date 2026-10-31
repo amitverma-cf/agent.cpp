@@ -121,33 +121,24 @@ auto r2 = agent::run_turn(session, conv, "List the files in my workspace.");
 if (r2.ok) printf("Agent: %s\n", r2.value.c_str());
 ```
 
-### Step 4 — use an FSM for structured agent flows
+### Step 4 — use a graph for structured agent flows
 
 ```cpp
-agent::Result<std::string_view> plan_state(
-        agent::Session &session, agent::FlowMemory &conv, void *) {
-    auto r = agent::run_turn(session, conv, "Make a plan.");
-    if (!r.ok) return agent::fail<std::string_view>(r.error.code, r.error.message);
-    return agent::ok(std::string_view("execute"));
-}
+// Two Agent nodes that continue one conversation (same history_key), each with its own prompt.
+agent::GraphNode plan{.name = "plan", .kind = agent::GraphNodeKind::Agent,
+                      .system_prompt = "You are a careful planner.", .prompt = "Make a plan.",
+                      .history_key = "demo"};
+agent::GraphNode execute{.name = "execute", .kind = agent::GraphNodeKind::Agent,
+                         .prompt = "Execute the plan step by step.", .output_key = "result",
+                         .history_key = "demo"};
+agent::Graph g = agent::make_sequential("plan_execute", {agent::make_graph(plan), agent::make_graph(execute)});
 
-agent::Result<std::string_view> execute_state(
-        agent::Session &session, agent::FlowMemory &conv, void *) {
-    auto r = agent::run_turn(session, conv, "Execute the plan step by step.");
-    if (!r.ok) return agent::fail<std::string_view>(r.error.code, r.error.message);
-    return agent::ok(std::string_view("exit"));
-}
-
-std::vector<agent::FlowState> states = {
-    {.state_id = "plan",    .on_transition = plan_state},
-    {.state_id = "execute", .on_transition = execute_state},
-};
-
-agent::Flow flow;
-flow.states    = states;
-flow.memory.id = "fsm_demo";
-
-auto flow_res = agent::run_flow(session, nullptr, flow);
+agent::GraphRun run;
+run.thread_id = "graph_demo";
+auto graph_res = agent::run_graph(session, g, run);
+if (graph_res.ok) printf("Result: %s\n", std::string(agent::get_state(run.state, "result")).c_str());
 ```
+
+See [api/graph.md](api/graph.md) for routing, parallel subagents, loops, checkpoints and human-in-the-loop interrupts.
 
 

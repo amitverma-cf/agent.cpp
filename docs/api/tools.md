@@ -51,7 +51,7 @@ agent::rebuild_tool_index(session);   // required after mutating tools
 
 ### O(1) dispatch
 
-Tools are dispatched via `session.tool_by_name`, an `unordered_map<string, size_t>` that maps tool name to index in `session.config.tools`. `rebuild_tool_index` (re)builds this index. It is called automatically by `init()` and by `step_flow` when filtering to `allowed_tools`.
+Tools are dispatched via `session.tool_by_name`, an `unordered_map<string, size_t>` that maps tool name to index in `session.config.tools`. `rebuild_tool_index` (re)builds this index. It is called automatically by `init()`; call it again after changing `session.config.tools`. Per-node `allowed_tools` (graph Agent nodes) does not touch the index: it is a thread-local allowlist checked by `execute_tool`.
 
 ### MCP servers
 

@@ -16,13 +16,13 @@ agent.cpp is structured around three core principles that inform every design de
 ```
 +---------------------------------------------------------------------+
 |                        User Application                              |
-|   Flow  AgentScheduler  FlowMemory  EventHooks         |
+|   Graph  GraphRun  FlowMemory  EventHooks                            |
 +-----------------------------+---------------------------------------+
                               | calls
 +-----------------------------v---------------------------------------+
 |                      Orchestration Layer                             |
-|   run_turn     step_flow / run_flow                       |
-|   compress_context          AgentScheduler::pump                     |
+|   run_turn                  run_graph / resume_graph                 |
+|   compress_context          parallel branches, checkpoints           |
 +------+-----------------------------------------------+--------------+
        | infer                                          | execute_tool
 +------v------------------+         +------------------v-----------+
@@ -131,11 +131,11 @@ run_turn(session, memory, user_prompt)
       |    |
       |    +-- for each tool call:
       |         +-- trigger_event(OnToolCall)
-      |         +-- fire FlowHook::Pre callbacks
+      |         +-- fire ToolHook::Pre callbacks
       |         +-- execute_tool()  -->  O(1) tool_by_name lookup
       |         |     -->  permission_check (Allow/Ask/Deny), if Config::permission_check is set
       |         |     -->  callback
-      |         +-- fire FlowHook::Post callbacks
+      |         +-- fire ToolHook::Post callbacks
       |         +-- trigger_event(OnToolResult)
       |         +-- push tool Message to history
       |
@@ -148,73 +148,58 @@ run_turn(session, memory, user_prompt)
 
 ---
 
-## FSM executor
+## Graph runtime
 
-The FSM is a named-state machine where each state declares its own isolated context: system prompt, tool allowlist, and pre/post hooks. The `Flow` owns a single `FlowMemory` that persists across all state transitions — the conversation accumulates as the FSM traverses states.
+Multi-step workflows are graphs (`src/core/graph/`, [api/graph.md](api/graph.md)): named nodes (Agent, Function, Tool, Parallel, Loop) joined by static or routed edges, with a `GraphState` of scoped key/value pairs plus one `FlowMemory` per Agent conversation.
 
 ```
-Flow
- +-- states:  [StateA, StateB, StateC, ...]
- +-- memory:  FlowMemory   (shared across all states, unless a state sets isolated_memory)
- +-- isolated_memories: unordered_map<string, FlowMemory>   (per-state, when isolated_memory = true)
- +-- current_state_index, has_started, has_finished
-
-step_flow():
-  current = states[current_state_index]
-  active_memory = current.isolated_memory ? isolated_memories[current.state_id] : memory
-
-  1. Save & inject system_prompt into active_memory.history[0]
-
-  2. Save session.config.tools
-     Filter to current.allowed_tools
-     Rebuild tool_by_name
-
-  3. Save ambient::active_hooks (thread_local)
-     Set to current.hooks
-
-  4. If current.context_provider set, call it and fold the result into the
-     effective system prompt for this turn only
-
-  5. Call current.on_transition(session, active_memory, context)
-     Returns next_state_id  ("exit" / "" = done)
-
-  6. Restore hooks, tools, tool_by_name, system message
-
-  7. Look up next state --> update current_state_index
+run_graph(session, graph, run)
+  load checkpoint:<thread>:latest (per-thread values + Agent histories), user:/app: keys, caller seed
+  node = graph.entry
+  loop:
+    trigger_event(OnStateTransition, node.name)
+    Agent node:
+      memory = state.histories[node.history_key or node.name]
+      1. system prompt = context_provider(state) + "\n" + node.system_prompt
+         installed into memory.history[0] for this run only (saved / restored)
+      2. ambient::allowed_tools = node.allowed_tools   (thread_local; restored after)
+         ambient::active_hooks  = [event-log Pre] + node.hooks + [event-log Post]
+      3. run_turn(session, memory, state[input_key] or prompt)
+      4. state[output_key] = reply
+    Function / Tool / Loop node: call it
+    Parallel node: run each branch on a copy of the state (threads on concurrent engines),
+                   join (distinct keys / histories), trigger_event(OnSubAgentComplete) per branch
+    log writes, persist user:/app: keys, checkpoint (per GraphDurability)
+    node = edge / router target (kGraphEnd -> exit_to or done)
 ```
 
-The save/restore pattern guarantees that each state receives exactly the tools and system prompt it declared, with no global mutation surviving into the next state.
+The save/restore pattern guarantees that each Agent node gets exactly the tools, hooks and system prompt it declared, with no global mutation surviving into the next node; nodes sharing a `history_key` continue one conversation under their own prompts.
 
 ---
 
-## Scheduler concurrency
+## Concurrency
 
-`AgentScheduler` interleaves multiple `Flow`s. `pump()` advances pending subagents — how it advances them depends on `session.config.provider`:
+A graph `Parallel` node fans out to its branches. How they run depends on the provider:
 
 ```
-pump()
-  if providers::supports_parallel(session):   // engine flag AGENT_ENGINE_FLAG_CONCURRENT
-    batch = up to max_parallel_subagents not-done SubEntry's
-    spawn one std::thread per batch entry, each calling step_flow(session, ctx, flow)
-    join all threads
-    (finish each: done=true + result on error or FSM-finished)
+run_parallel_node()
+  if providers::supports_parallel(session) && top-level fan-out:   // engine flag AGENT_ENGINE_FLAG_CONCURRENT
+    for each batch of up to max_parallel_subagents branches:
+      spawn one std::thread per branch (ambient::worker_arena_index = slot), each running the branch to its end
+      join all threads
   else:
-    for each SubEntry where !done:
-      result = step_flow(session, context, flow)
-      (finish each: done=true + result on error or FSM-finished)
-
-run_until_done()
-  while !all_done():  pump()
+    run each branch to its end, one after another
+  join: merge branch writes and histories; fail on a key written by two branches
 ```
 
-All subagents share the same `Session`. Three different concurrency mechanisms are used, one per provider family, because each has a genuinely different constraint:
+All branches share the same `Session`. Two different mechanisms are used, because each provider family has a genuinely different constraint:
 
 | Provider | Mechanism | Why |
 |---|---|---|
-| `Mock`, non-concurrent engines | Sequential round-robin (unchanged) | No batching support / not worth the complexity for these. |
+| `Mock`, non-concurrent engines | Sequential | No batching support / not worth the complexity for these. |
 | Concurrent engines (llama) | Threads + continuous batching inside the plugin (see below) | A single `llama_context` can only run one `llama_decode` at a time regardless of thread count — threads alone buy nothing; the actual parallelism has to come from batching multiple sequences into one decode call. |
 
-Making any of this safe required removing all of `Session`'s ambient mutable "current turn" state and replacing it with `thread_local` variables in the `agent::ambient` namespace (`src/core/executor/ambient_turn.cpp`): which `FlowMemory`/hooks/tool-allowlist the current thread's `execute_tool` call is running under (`ambient::active_memory`, `ambient::active_hooks`, `ambient::allowed_tools`), which `Arena` slot to use (`ambient::worker_arena_index`, resolved via `ambient::current_arena(session)`), and the cached `simdjson::ondemand::parser` (`ambient::json_parser`). A single thread behaves identically to the old shared-field design (nothing changes for callers who never touch `AgentScheduler`); concurrent threads get automatic isolation for free, no locking needed on any of it. What *is* still shared and mutex-guarded: `Session::stats` (`Session::stats_mutex`), the log file (`Session::log_mutex`), and event hook dispatch (`Session::event_mutex`), since these genuinely accumulate/fire across every concurrently-running turn.
+Making any of this safe required removing all of `Session`'s ambient mutable "current turn" state and replacing it with `thread_local` variables in the `agent::ambient` namespace (`src/core/executor/ambient_turn.cpp`): which `FlowMemory`/hooks/tool-allowlist the current thread's `execute_tool` call is running under (`ambient::active_memory`, `ambient::active_hooks`, `ambient::allowed_tools`), which `Arena` slot to use (`ambient::worker_arena_index`, resolved via `ambient::current_arena(session)`), and the cached `simdjson::ondemand::parser` (`ambient::json_parser`). A single thread behaves identically to a shared-field design; concurrent threads get automatic isolation for free, no locking needed on any of it. What *is* still shared and mutex-guarded: `Session::stats` (`Session::stats_mutex`), the log file (`Session::log_mutex`), and event hook dispatch (`Session::event_mutex`), since these genuinely accumulate/fire across every concurrently-running turn.
 
 ### Continuous batching
 
@@ -225,7 +210,7 @@ Making any of this safe required removing all of `Session`'s ambient mutable "cu
 - Each generation owns its own `llama_sampler` chain (its own temperature, its own RNG) built fresh per call — nothing sampling-related is shared, so no locking is needed there; only the decode call itself is serialized through the `Batcher`'s mutex. (An earlier version also installed a GBNF grammar sampler here to force tool-call output into valid JSON; it was removed after a real-model crash traced the vendored `llama_sampler_init_grammar_lazy_patterns`/`llama_grammar_init_impl` path to an uncaught `std::regex_error` inside llama.cpp itself. Tool-call JSON is extracted unconstrained via bracket-matching instead, as it always was before that attempt.)
 - Sequence slots are a fixed-size free list of `[0, n_seq_max)`; `acquire_seq()`/`release_seq()` check them out/in per generation, failing cleanly with an error if the pool is exhausted rather than corrupting state.
 
-This is deliberately not built on C++20 coroutines: an earlier design considered making `run_turn`/`infer` themselves suspendable so the scheduler could interleave partial generations directly, but that would have meant changing the public `ProviderInferFn` contract for every provider for a benefit only the llama engine needs. The thread-plus-shared-engine design gets the same real batching benefit — one shared `llama_decode` per round across every active sequence — without touching any public signature.
+This is deliberately not built on C++20 coroutines: an earlier design considered making `run_turn`/`infer` themselves suspendable so parallel branches could interleave partial generations directly, but that would have meant changing the public `ProviderInferFn` contract for every provider for a benefit only the llama engine needs. The thread-plus-shared-engine design gets the same real batching benefit — one shared `llama_decode` per round across every active sequence — without touching any public signature.
 
 ---
 
@@ -253,7 +238,7 @@ When history token total exceeds 70% of `context_window` and history has more th
 
 ### KV cache
 
-`clear_provider_kv_cache(session)` delegates to `ProviderOps::clear_kv_cache`. For llama.cpp this clears the KV cache for every active sequence in the shared `llama_context`, which discards all cached key-value pairs. Useful before FSM state transitions that represent a significant context shift, or to reclaim VRAM between long sessions.
+`clear_provider_kv_cache(session)` delegates to `ProviderOps::clear_kv_cache`. For llama.cpp this clears the KV cache for every active sequence in the shared `llama_context`, which discards all cached key-value pairs. Useful before switching to work that represents a significant context shift, or to reclaim VRAM between long sessions.
 
 ---
 
@@ -308,7 +293,7 @@ When `Config::enable_file_logging = true`, `init()` creates `workspace_dir/logs/
 [2025-01-15T14:32:01Z] [INFO]  Session initialised. workspace=.workspace
 [2025-01-15T14:32:01Z] [DEBUG] infer: submitting to provider.
 [2025-01-15T14:32:02Z] [DEBUG] Pruned 4 messages from history.
-[2025-01-15T14:32:05Z] [INFO]  AgentScheduler: subagent 'worker' completed.
+[2025-01-15T14:32:05Z] [WARN]  Tool call round limit (10) reached; stopping tool loop.
 ```
 
-`Session::log_file` is a `shared_ptr<FILE>` with a `fclose` deleter, so the file is closed when the session is destroyed. Log lines are written through `hal::write_log_line` (`src/hal/log_file.cpp`), guarded by `Session::log_mutex` since multiple scheduler worker threads can log concurrently.
+`Session::log_file` is a `shared_ptr<FILE>` with a `fclose` deleter, so the file is closed when the session is destroyed. Log lines are written through `hal::write_log_line` (`src/hal/log_file.cpp`), guarded by `Session::log_mutex` since parallel graph branch threads can log concurrently.

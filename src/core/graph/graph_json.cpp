@@ -477,12 +477,13 @@ Result<LoadedGraph> parse_document(Parser &p, simdjson::dom::element root, std::
 
         if (kind == "agent") {
             n.kind = GraphNodeKind::Agent;
-            p.check_fields(
-                obj, where,
-                {"name", "kind", "system_prompt", "prompt", "input_key", "output_key", "allowed_tools", "interrupt_before_tools"});
+            p.check_fields(obj, where,
+                           {"name", "kind", "system_prompt", "prompt", "input_key", "output_key", "allowed_tools", "interrupt_before_tools",
+                            "history_key"});
             if (!read_string(p, obj, "system_prompt", n.system_prompt, where, err) ||
                 !read_string(p, obj, "prompt", n.prompt, where, err) || !read_string(p, obj, "input_key", n.input_key, where, err) ||
                 !read_string(p, obj, "output_key", n.output_key, where, err) ||
+                !read_string(p, obj, "history_key", n.history_key, where, err) ||
                 !read_string_array(p, obj, "allowed_tools", n.allowed_tools, where, err) ||
                 !read_bool(p, obj, "interrupt_before_tools", n.interrupt_before_tools, where, err))
                 return failure(err);

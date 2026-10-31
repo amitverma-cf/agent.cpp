@@ -35,7 +35,7 @@ struct StoreOps {
 };
 ```
 
-`open` runs once from `init()`. The state it returns is kept in `Session::memory_state` and passed to every other call. All four functions must be set, and they must be safe to call from multiple threads (`AgentScheduler` runs flows in parallel).
+`open` runs once from `init()`. The state it returns is kept in `Session::memory_state` and passed to every other call. All four functions must be set, and they must be safe to call from multiple threads (parallel graph branches run turns concurrently).
 
 ---
 
@@ -72,7 +72,7 @@ cfg.memory = {
 };
 ```
 
-**Concurrency**: the cache is protected by a single mutex, so `store_memory`/`retrieve_memory` are safe to call concurrently from multiple threads — including from multiple `Flow`s running in parallel under `AgentScheduler` (see [scheduler.md](scheduler.md)), which already calls `store_memory` after every turn via the conversation-history auto-persist below. This is built thread-safe uniformly rather than assuming a particular access pattern. That single mutex is also a shared serialization point across every concurrent `store_memory`/`retrieve_memory` call — fine at the default `Config::max_parallel_subagents = 4`, but worth keeping in mind as a scaling ceiling if that value is raised substantially for a larger deployment.
+**Concurrency**: the cache is protected by a single mutex, so `store_memory`/`retrieve_memory` are safe to call concurrently from multiple threads — including from parallel graph branches (see [graph.md](graph.md#parallel-execution)), whose turns already call `store_memory` after every turn via the conversation-history auto-persist below. This is built thread-safe uniformly rather than assuming a particular access pattern. That single mutex is also a shared serialization point across every concurrent `store_memory`/`retrieve_memory` call — fine at the default `Config::max_parallel_subagents = 4`, but worth keeping in mind as a scaling ceiling if that value is raised substantially for a larger deployment.
 
 ---
 

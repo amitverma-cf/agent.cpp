@@ -194,7 +194,7 @@ TEST_CASE("llama engine generates text with a real model", "[engines][llama][mod
     REQUIRE(agent::clear_provider_kv_cache(session).ok);
 }
 
-TEST_CASE("llama engine runs parallel subagents through continuous batching", "[engines][llama][model]") {
+TEST_CASE("llama engine runs parallel graph branches through continuous batching", "[engines][llama][model]") {
     if (!test_model()) SKIP("AGENT_TEST_LLAMA_MODEL not set");
     auto cfg = llama_config(test_model());
     cfg.max_parallel_subagents = 3;
@@ -202,26 +202,22 @@ TEST_CASE("llama engine runs parallel subagents through continuous batching", "[
     REQUIRE(res.ok);
     agent::Session session = std::move(res.value);
 
-    static const agent::FlowState kStates[] = {
-        {.state_id = "go",
-         .on_transition = [](agent::Session &s, agent::FlowMemory &m, void *) -> agent::Result<std::string_view> {
-             auto r = agent::run_turn(s, m, "Once upon a time");
-             if (!r.ok) return agent::fail<std::string_view>(r.error.code, r.error.message);
-             return agent::ok(std::string_view("exit"));
-         }},
-    };
-    agent::AgentScheduler scheduler;
+    std::vector<agent::Graph> branches;
     for (int i = 0; i < 3; ++i) {
-        agent::Flow flow;
-        flow.states = kStates;
-        flow.memory.id = "batch_" + std::to_string(i);
-        REQUIRE(scheduler.spawn("w" + std::to_string(i), std::move(flow)).ok);
+        agent::GraphNode n;
+        n.name = "w" + std::to_string(i);
+        n.kind = agent::GraphNodeKind::Agent;
+        n.prompt = "Once upon a time";
+        n.output_key = "out" + std::to_string(i);
+        branches.push_back(agent::make_graph(std::move(n)));
     }
-    REQUIRE(scheduler.run_until_done(session).ok);
-    for (const auto &r : scheduler.results()) {
-        INFO(r.id << ": " << r.error.message);
-        REQUIRE(r.ok);
-    }
+    agent::GraphRun run;
+    run.thread_id = "llama_batch";
+    auto ran = agent::run_graph(session, agent::make_parallel("batch", std::move(branches)), run);
+    INFO(ran.error.message);
+    REQUIRE(ran.ok);
+    REQUIRE(run.status == agent::GraphRunStatus::Completed);
+    for (int i = 0; i < 3; ++i) REQUIRE(agent::has_state(run.state, "out" + std::to_string(i)));
 }
 
 #endif

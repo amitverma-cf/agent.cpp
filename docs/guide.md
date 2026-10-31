@@ -91,7 +91,7 @@ cfg.engine_options = R"({"threads": 4})";
 
 ## Low-level inference: infer
 
-`infer` is stateless. You build an `InferRequest` with a span of `MessageView`s and get an `InferResponse` back. The response views are arena-backed and valid only until the next call to `infer`/`run_turn` on the same session (or the same thread's worker arena slot, under `AgentScheduler`).
+`infer` is stateless. You build an `InferRequest` with a span of `MessageView`s and get an `InferResponse` back. The response views are arena-backed and valid only until the next call to `infer`/`run_turn` on the same session (or the same thread's worker arena slot, inside a parallel graph branch).
 
 ```cpp
 agent::MessageView msg;
@@ -276,158 +276,105 @@ auto sess = agent::init(cfg);
 
 At `init()`, each skill's `name`+`description` (only — not the full body) is folded into the tools system prompt, and a `use_skill` tool is registered automatically. The model calls `use_skill({"name": "pdf-tools"})` to load a skill's full `SKILL.md` content only when it's actually relevant — this progressive-disclosure shape keeps unused skills' token cost to a couple of lines each.
 
-You can also drive this directly, e.g. from your own application code or a `FlowState::context_provider`:
+You can also drive this directly, e.g. from your own application code or a graph Agent node's `context_provider`:
 
 ```cpp
 auto res = agent::load_skills_dir(session, "my_skills");   // populate session.skills + register use_skill
 auto body = agent::read_skill_body(session, "pdf-tools");  // full SKILL.md content on demand
 ```
 
-Like `session.config.tools`, `session.skills` isn't mutex-guarded: call `load_skills_dir` during single-threaded setup (at `init()`, or before starting `AgentScheduler` dispatch), not concurrently with an active turn or scheduler `pump()` on another thread.
+Like `session.config.tools`, `session.skills` isn't mutex-guarded: call `load_skills_dir` during single-threaded setup (at `init()`, or before calling `run_graph`), not concurrently with an active turn on another thread.
 
 ---
 
-## FSM executor
+## Graph workflows
 
-The FSM executor drives multi-state agent workflows. Each state declares:
-- `system_prompt` — injected as the system message for the duration of that state only.
-- `allowed_tools` — restricts the session's tool set; empty = all tools.
-- `hooks` — pre/post callbacks around tool calls in that state.
-- `on_transition` — the function that does the actual LLM call(s) and returns the next state ID.
+Multi-step agents are graphs ([api/graph.md](api/graph.md)): named nodes joined by edges. An `Agent` node runs `run_turn` with its own settings:
+- `system_prompt` — installed as the system message for that node's turn only.
+- `allowed_tools` — restricts the tools the model sees and can call; empty = all tools.
+- `hooks` — pre/post callbacks around tool calls made by that node (see below).
+- `history_key` — by default each Agent node has its own conversation; nodes with the same `history_key` share one.
+- `input_key` / `prompt` and `output_key` — where the user message comes from and where the reply goes in the graph state.
 
-```cpp
-static const std::string_view kResearchTools[] = { "read_file", "run_command" };
-static const std::string_view kWriteTools[]    = { "write_file", "append_file" };
-
-agent::Result<std::string_view> research_fn(
-        agent::Session &session, agent::FlowMemory &conv, void *) {
-    auto r = agent::run_turn(session, conv,
-        "Research the topic and gather all relevant information.");
-    if (!r.ok) return agent::fail<std::string_view>(r.error.code, r.error.message);
-    return agent::ok(std::string_view("write"));
-}
-
-agent::Result<std::string_view> write_fn(
-        agent::Session &session, agent::FlowMemory &conv, void *) {
-    auto r = agent::run_turn(session, conv,
-        "Write a comprehensive report based on your research.");
-    if (!r.ok) return agent::fail<std::string_view>(r.error.code, r.error.message);
-    return agent::ok(std::string_view("exit"));
-}
-
-std::vector<agent::FlowState> states = {
-    {
-        .state_id      = "research",
-        .system_prompt = "You are a research assistant. Gather facts, read files, run commands.",
-        .allowed_tools = kResearchTools,
-        .on_transition = research_fn,
-    },
-    {
-        .state_id      = "write",
-        .system_prompt = "You are a technical writer. Produce a clear, structured report.",
-        .allowed_tools = kWriteTools,
-        .on_transition = write_fn,
-    },
-};
-
-agent::Flow flow;
-flow.states    = states;
-flow.memory.id = "report_agent";
-
-auto res = agent::run_flow(session, nullptr, flow);
-if (!res.ok) fprintf(stderr, "FSM failed: %s\n", res.error.message.c_str());
-```
-
-The FSM can also be stepped manually — useful for interactive flows or when you want to inspect the conversation between state transitions:
+`Function` nodes run your C++ code against the state, `Tool` nodes call a tool directly, and routers (conditional edges) pick the next node from the state.
 
 ```cpp
-while (true) {
-    auto step = agent::step_flow(session, nullptr, flow);
-    if (!step.ok) { /* handle error */ break; }
-    if (!step.value) { /* FSM finished */ break; }
-    // inspect flow.memory.history here
-}
+agent::GraphNode research{.name = "research", .kind = agent::GraphNodeKind::Agent,
+    .system_prompt = "You are a research assistant. Gather facts, read files, run commands.",
+    .allowed_tools = {"read_file", "run_command"},
+    .input_key = "topic", .history_key = "report"};
+agent::GraphNode write{.name = "write", .kind = agent::GraphNodeKind::Agent,
+    .system_prompt = "You are a technical writer. Produce a clear, structured report.",
+    .allowed_tools = {"write_file", "append_file"},
+    .prompt = "Write a comprehensive report based on your research.",
+    .output_key = "report", .history_key = "report"};  // continues the research conversation
+
+agent::Graph g = agent::make_sequential("report_agent", {agent::make_graph(research), agent::make_graph(write)});
+
+agent::GraphRun run;
+run.thread_id = "report_agent";
+agent::set_state(run.state, "topic", "the build system");
+auto res = agent::run_graph(session, g, run);
+if (!res.ok) fprintf(stderr, "graph failed: %s\n", res.error.message.c_str());
+else printf("%s\n", std::string(agent::get_state(run.state, "report")).c_str());
 ```
+
+Every node is checkpointed, so a failed or interrupted run continues with `resume_graph`; `run.events` logs each node, state write and tool call. To pause between steps for a human, use `request_interrupt` in a Function node or `interrupt_before_tools` on an Agent node. Graphs can also be written in JSON ([api/agent-json.md](api/agent-json.md)).
 
 ---
 
-## FSM hooks (pre/post tool calls)
+## Tool hooks (pre/post tool calls)
 
-Hooks fire before (`Pre`) or after (`Post`) each tool call while a particular FSM state is active. Use them for logging, auditing, or modifying tool results.
+`ToolHook`s fire before (`Pre`) or after (`Post`) each tool call while a particular Agent node runs. Use them for logging and auditing.
 
 ```cpp
 static void audit_pre(agent::Session &, agent::FlowMemory &,
                       std::string_view name, std::string_view args,
-                      std::string_view result, void *) {
+                      std::string_view, void *) {
     printf("[PRE]  tool=%s args=%s\n", std::string(name).c_str(), std::string(args).c_str());
 }
 
 static void audit_post(agent::Session &, agent::FlowMemory &,
-                       std::string_view name, std::string_view args,
+                       std::string_view name, std::string_view,
                        std::string_view result, void *) {
     printf("[POST] tool=%s result=%s\n", std::string(name).c_str(), std::string(result).c_str());
 }
 
-static const agent::FlowHook kHooks[] = {
-    { .when = agent::FlowHook::When::Pre,  .tool_name = "", .callback = audit_pre  },
-    { .when = agent::FlowHook::When::Post, .tool_name = "", .callback = audit_post },
-};
-
-agent::FlowState my_state{
-    .state_id      = "audited",
-    .hooks         = kHooks,
-    .on_transition = my_transition_fn,
+research.hooks = {
+    {.when = agent::ToolHook::When::Pre,  .tool_name = "", .callback = audit_pre},
+    {.when = agent::ToolHook::When::Post, .tool_name = "", .callback = audit_post},
 };
 ```
 
 `tool_name` is empty in the examples above, which means "fire for every tool call". Set it to a specific tool name to narrow the hook:
 
 ```cpp
-{ .when = agent::FlowHook::When::Post, .tool_name = "run_command", .callback = log_commands }
+{.when = agent::ToolHook::When::Post, .tool_name = "run_command", .callback = log_commands}
 ```
 
 ---
 
-## Parallel subagents with scheduling
+## Parallel subagents
 
-`AgentScheduler` runs multiple `Flow`s. For engines that set `AGENT_ENGINE_FLAG_CONCURRENT` (e.g. the llama engine), subagents run on worker threads whose next-token steps are continuously batched into one `llama_decode` (bounded by `Config::max_parallel_subagents`); for every other provider, subagents are interleaved in a cooperative round-robin instead. All subagents share the same `Session`. See [docs/api/scheduler.md](api/scheduler.md) for details.
-
-```cpp
-agent::AgentScheduler scheduler;
-
-// Spawn two parallel research subagents
-agent::Flow agent_a;
-agent_a.states    = states_a;
-agent_a.memory.id = "worker_a";
-scheduler.spawn("worker_a", std::move(agent_a));
-
-agent::Flow agent_b;
-agent_b.states    = states_b;
-agent_b.memory.id = "worker_b";
-scheduler.spawn("worker_b", std::move(agent_b));
-
-// Run until all subagents finish
-auto res = scheduler.run_until_done(session);
-
-// Collect results
-for (const auto &r : scheduler.results()) {
-    printf("subagent '%s': %s  (turns=%d, tool_calls=%d)\n",
-           r.id.c_str(),
-           r.ok ? "OK" : r.error.message.c_str(),
-           r.stats.turns,
-           r.stats.tool_calls);
-}
-```
-
-You can also drive the scheduler manually in your own loop — useful when you need to interleave scheduler ticks with other work:
+A `Parallel` node (`make_parallel`) fans out to several branches and joins them. For engines that set `AGENT_ENGINE_FLAG_CONCURRENT` (e.g. the llama engine), the branches run on worker threads whose next-token steps are continuously batched into one `llama_decode` (at most `Config::max_parallel_subagents` at a time); for every other provider they run one after another. All branches share the same `Session`; each branch's Agent nodes keep their own conversations, and branches must write distinct state keys.
 
 ```cpp
-while (!scheduler.all_done()) {
-    auto res = scheduler.pump(session);
-    if (!res.ok) break;
-    // do other work here
-}
+auto researcher = [](std::string name, std::string topic) {
+    agent::GraphNode n{.name = name, .kind = agent::GraphNodeKind::Agent,
+                       .prompt = "Research " + topic + ". Write a 3-paragraph summary.",
+                       .output_key = name + "_summary"};
+    return agent::make_graph(std::move(n));
+};
+agent::Graph team = agent::make_parallel("team", {researcher("worker_a", "quantum computing"),
+                                                  researcher("worker_b", "climate science")});
+
+agent::GraphRun run;
+auto res = agent::run_graph(session, team, run);   // a failing branch fails the run with its error
+for (const char *name : {"worker_a", "worker_b"})
+    printf("subagent '%s': turns=%d\n", name, run.state.histories.at(name).stats.turns);
 ```
+
+`OnSubAgentComplete` fires once per finished branch (payload: the branch's entry node name).
 
 ---
 

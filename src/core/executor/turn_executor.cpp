@@ -166,7 +166,7 @@ static Result<void> prune_history_state(Session &session, FlowMemory &state) {
     return ok();
 }
 
-static void fire_tool_hooks(Session &session, FlowMemory &state, FlowHook::When when, std::string_view tool_name, std::string_view args,
+static void fire_tool_hooks(Session &session, FlowMemory &state, ToolHook::When when, std::string_view tool_name, std::string_view args,
                             std::string_view result) {
     for (const auto &hook : ambient::active_hooks) {
         if (hook.when != when) continue;
@@ -451,14 +451,14 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
                 trigger_event(session, EventType::OnToolCall,
                               std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(tcv.name.data()), tcv.name.size()));
 
-                fire_tool_hooks(session, state, FlowHook::When::Pre, tcv.name, tcv.arguments, {});
+                fire_tool_hooks(session, state, ToolHook::When::Pre, tcv.name, tcv.arguments, {});
 
                 std::string result_text;
                 auto exec_res = execute_tool(session, tcv.name, tcv.arguments);
                 if (exec_res.ok) result_text = std::move(exec_res.value);
                 else result_text = "Error: " + exec_res.error.message;
 
-                fire_tool_hooks(session, state, FlowHook::When::Post, tcv.name, tcv.arguments, result_text);
+                fire_tool_hooks(session, state, ToolHook::When::Post, tcv.name, tcv.arguments, result_text);
 
                 trigger_event(session, EventType::OnToolResult,
                               std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(result_text.data()), result_text.size()));
