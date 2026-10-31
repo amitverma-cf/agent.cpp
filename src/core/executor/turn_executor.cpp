@@ -3,6 +3,7 @@
 #include "ambient_turn.hpp"
 
 #include <agent-cpp/agent.hpp>
+#include <atomic>
 #include <mutex>
 #include <simdjson.h>
 
@@ -45,7 +46,20 @@ static void encode_history_json(const FlowMemory &state, std::string &json) {
             utils::escape_json_string(tc.arguments, json);
             json += "\"}";
         }
-        json += "]}";
+        json += "]";
+        if (!msg.media.empty()) {
+            json += ",\"media\":[";
+            for (size_t j = 0; j < msg.media.size(); ++j) {
+                if (j > 0) json += ',';
+                json += "{\"path\":\"";
+                utils::escape_json_string(msg.media[j].path, json);
+                json += "\",\"mime\":\"";
+                utils::escape_json_string(msg.media[j].mime, json);
+                json += "\"}";
+            }
+            json += ']';
+        }
+        json += '}';
     }
     json += ']';
 }
@@ -210,6 +224,19 @@ Result<void> load_flow_memory(Session &session, FlowMemory &memory) {
                 msg.tool_calls.push_back(std::move(call));
             }
         }
+
+        simdjson::ondemand::array media;
+        if (!obj["media"].get_array().get(media)) {
+            for (auto m_item : media) {
+                simdjson::ondemand::object m;
+                if (m_item.get_object().get(m)) continue;
+                Media media_item;
+                std::string_view path, mime;
+                if (!m["path"].get_string().get(path)) media_item.path = std::string(path);
+                if (!m["mime"].get_string().get(mime)) media_item.mime = std::string(mime);
+                msg.media.push_back(std::move(media_item));
+            }
+        }
         loaded.push_back(std::move(msg));
     }
     memory.history = std::move(loaded);
@@ -235,16 +262,30 @@ Result<void> load_flow_memory(Session &session, FlowMemory &memory) {
     return ok();
 }
 
+void request_cancel(Session &session) { std::atomic_ref<int32_t>(*session.cancel_flag).store(1, std::memory_order_relaxed); }
+
+void clear_cancel(Session &session) { std::atomic_ref<int32_t>(*session.cancel_flag).store(0, std::memory_order_relaxed); }
+
+static bool cancel_requested(const Session &session) {
+    return std::atomic_ref<int32_t>(*session.cancel_flag).load(std::memory_order_relaxed) != 0;
+}
+
 Result<std::string> run_turn(Session &session, FlowMemory &state, std::string_view user_prompt, bool stream, TokenStreamFn on_token,
                              void *token_user_data) {
+    return run_turn_with_media(session, state, user_prompt, std::span<const Media>(), stream, on_token, token_user_data);
+}
+
+Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std::string_view user_prompt, std::span<const Media> media,
+                                        bool stream, TokenStreamFn on_token, void *token_user_data) {
     ActiveMemoryGuard guard(&state);
 
     trigger_event(session, EventType::OnTurnStart, std::span<const uint8_t>());
 
-    if (!user_prompt.empty()) {
+    if (!user_prompt.empty() || !media.empty()) {
         Message user_msg;
         user_msg.role = "user";
         user_msg.content = std::string(user_prompt);
+        user_msg.media.assign(media.begin(), media.end());
         state.history.push_back(std::move(user_msg));
     }
 
@@ -283,6 +324,7 @@ Result<std::string> run_turn(Session &session, FlowMemory &state, std::string_vi
             message_views[0].tool_calls = {};
             message_views[0].tool_call_id = "";
             message_views[0].tensors = {};
+            message_views[0].media = {};
             view_offset = 1;
         }
 
@@ -324,11 +366,29 @@ Result<std::string> run_turn(Session &session, FlowMemory &state, std::string_vi
             } else {
                 mv.tensors = {};
             }
+
+            if (!m.media.empty()) {
+                auto mvs = arena.allocate_span<MediaView>(m.media.size());
+                if (mvs.size() != m.media.size())
+                    return fail<std::string>(ErrorCode::DecodeFailed, "Arena capacity exhausted building message views.");
+                for (size_t j = 0; j < m.media.size(); ++j) mvs[j] = {m.media[j].path, m.media[j].mime};
+                mv.media = mvs;
+            } else {
+                mv.media = {};
+            }
         }
+
+        if (cancel_requested(session)) return fail<std::string>(ErrorCode::Cancelled, "Turn cancelled.");
 
         trigger_event(session, EventType::OnInferenceSubmit, std::span<const uint8_t>());
 
-        InferRequest req{.messages = message_views, .stream = stream, .on_token = on_token, .token_user_data = token_user_data};
+        InferRequest req{.messages = message_views,
+                         .stream = stream,
+                         .on_token = on_token,
+                         .token_user_data = token_user_data,
+                         .on_progress = session.config.on_progress,
+                         .progress_user_data = session.config.progress_user_data,
+                         .cancel = session.cancel_flag.get()};
 
         auto resp_res = infer(session, req);
         if (!resp_res.ok) return fail<std::string>(resp_res.error.code, resp_res.error.message);
@@ -353,6 +413,7 @@ Result<std::string> run_turn(Session &session, FlowMemory &state, std::string_vi
         for (const auto &tcv : resp.message.tool_calls) {
             assistant_msg.tool_calls.push_back(ToolCall{std::string(tcv.id), std::string(tcv.name), std::string(tcv.arguments)});
         }
+        for (const auto &m : resp.message.media) assistant_msg.media.push_back(Media{std::string(m.path), std::string(m.mime)});
 
         final_text = assistant_msg.content;
         state.history.push_back(std::move(assistant_msg));

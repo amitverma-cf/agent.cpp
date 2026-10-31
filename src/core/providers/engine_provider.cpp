@@ -86,14 +86,22 @@ std::string_view build_tools_json(const Session &session) {
     return first ? std::string_view() : std::string_view(buf);
 }
 
-struct StreamCtx {
+struct CallbackCtx {
     TokenStreamFn on_token;
-    void *user_data;
+    void *token_user_data;
+    ProgressFn on_progress;
+    void *progress_user_data;
 };
 
 void forward_chunk(void *user_data, uint32_t kind, const void *data, size_t size) {
-    auto *ctx = static_cast<StreamCtx *>(user_data);
-    if (kind == AGENT_CHUNK_TEXT && ctx->on_token) ctx->on_token(std::string_view(static_cast<const char *>(data), size), ctx->user_data);
+    auto *ctx = static_cast<CallbackCtx *>(user_data);
+    if (kind == AGENT_CHUNK_TEXT && ctx->on_token)
+        ctx->on_token(std::string_view(static_cast<const char *>(data), size), ctx->token_user_data);
+}
+
+void forward_progress(void *user_data, uint64_t step, uint64_t total) {
+    auto *ctx = static_cast<CallbackCtx *>(user_data);
+    if (ctx->on_progress) ctx->on_progress(step, total, ctx->progress_user_data);
 }
 
 Result<InferResponse> arena_full() {
@@ -155,11 +163,13 @@ Result<InferResponse> infer_engine(Session &session, const InferRequest &request
     if (msgs.size() != request.messages.size()) return arena_full();
     for (size_t i = 0; i < request.messages.size(); ++i) {
         const MessageView &mv = request.messages[i];
-        const size_t n_parts = (mv.content.empty() ? 0 : 1) + mv.tensors.size();
+        const size_t n_parts = (mv.content.empty() ? 0 : 1) + mv.media.size() + mv.tensors.size();
         auto parts = arena.allocate_span<agent_part>(n_parts);
         if (parts.size() != n_parts) return arena_full();
         size_t p = 0;
         if (!mv.content.empty()) parts[p++] = agent_part{.kind = AGENT_PART_TEXT, .text = to_c(mv.content)};
+        for (const MediaView &media : mv.media)
+            parts[p++] = agent_part{.kind = AGENT_PART_FILE, .path = to_c(media.path), .mime = to_c(media.mime)};
         for (const TensorView &tv : mv.tensors) {
             parts[p++] = agent_part{.kind = AGENT_PART_TENSOR,
                                     .name = to_c(tv.name),
@@ -189,7 +199,7 @@ Result<InferResponse> infer_engine(Session &session, const InferRequest &request
     const int params_len = std::snprintf(params, 96, "{\"max_tokens\":%d,\"temperature\":%.4f,\"stream\":%s}", max_tokens,
                                          static_cast<double>(temperature), request.stream ? "true" : "false");
 
-    StreamCtx stream_ctx{request.on_token, request.token_user_data};
+    CallbackCtx cb_ctx{request.on_token, request.token_user_data, request.on_progress, request.progress_user_data};
     agent_request req{.task = AGENT_CAP_TEXT_GEN,
                       .messages = msgs.data(),
                       .n_messages = msgs.size(),
@@ -197,27 +207,27 @@ Result<InferResponse> infer_engine(Session &session, const InferRequest &request
                       .params_json = agent_str{params, static_cast<size_t>(params_len)},
                       .output_dir = to_c(state->output_dir),
                       .on_chunk = (request.stream && request.on_token) ? forward_chunk : nullptr,
-                      .on_progress = nullptr,
-                      .user_data = &stream_ctx,
-                      .cancel = nullptr};
+                      .on_progress = request.on_progress ? forward_progress : nullptr,
+                      .user_data = &cb_ctx,
+                      .cancel = request.cancel};
 
     // --- run, then copy the engine-owned response into the arena before freeing it ---
     std::unique_lock<std::mutex> lk(state->run_mutex, std::defer_lock);
     if (!(engine->flags & AGENT_ENGINE_FLAG_CONCURRENT)) lk.lock();
 
     agent_response resp{};
-    if (engine->run(state->instance, &req, &resp) != AGENT_OK) {
+    if (const int32_t rc = engine->run(state->instance, &req, &resp); rc != AGENT_OK) {
         const char *e = engine->last_error(state->instance);
-        return fail<InferResponse>(ErrorCode::DecodeFailed, std::string("Engine '") + engine->name + "': " + (e ? e : "run failed"));
+        return fail<InferResponse>(rc == AGENT_ERR_CANCELLED ? ErrorCode::Cancelled : ErrorCode::DecodeFailed,
+                                   std::string("Engine '") + engine->name + "': " + (e ? e : "run failed"));
     }
 
-    // Text parts are concatenated into content; file parts become "[artifact] <mime> <path>" lines
-    // until the message model carries media natively.
-    size_t text_bytes = 0, n_tensors = 0;
+    // Text parts are concatenated into content; file parts become media; tensor parts become tensors.
+    size_t text_bytes = 0, n_tensors = 0, n_media = 0;
     for (size_t i = 0; i < resp.message.n_parts; ++i) {
         const agent_part &pt = resp.message.parts[i];
         if (pt.kind == AGENT_PART_TEXT) text_bytes += pt.text.size;
-        else if (pt.kind == AGENT_PART_FILE) text_bytes += pt.mime.size + pt.path.size + 14;
+        else if (pt.kind == AGENT_PART_FILE) ++n_media;
         else if (pt.kind == AGENT_PART_TENSOR) ++n_tensors;
     }
 
@@ -225,19 +235,18 @@ Result<InferResponse> infer_engine(Session &session, const InferRequest &request
     out.role = "assistant";
     char *text = static_cast<char *>(arena.allocate(text_bytes + 1, 1));
     auto tensors = arena.allocate_span<TensorView>(n_tensors);
+    auto media = arena.allocate_span<MediaView>(n_media);
     auto calls = arena.allocate_span<ToolCallView>(resp.message.n_tool_calls);
-    bool overflow = !text || tensors.size() != n_tensors || calls.size() != resp.message.n_tool_calls;
+    bool overflow = !text || tensors.size() != n_tensors || media.size() != n_media || calls.size() != resp.message.n_tool_calls;
 
-    size_t off = 0, t = 0;
+    size_t off = 0, t = 0, m = 0;
     for (size_t i = 0; !overflow && i < resp.message.n_parts; ++i) {
         const agent_part &pt = resp.message.parts[i];
         if (pt.kind == AGENT_PART_TEXT) {
             if (pt.text.size) std::memcpy(text + off, pt.text.data, pt.text.size);
             off += pt.text.size;
         } else if (pt.kind == AGENT_PART_FILE) {
-            off += static_cast<size_t>(std::snprintf(text + off, text_bytes + 1 - off, "%s[artifact] %.*s %.*s", off ? "\n" : "",
-                                                     static_cast<int>(pt.mime.size), pt.mime.data ? pt.mime.data : "",
-                                                     static_cast<int>(pt.path.size), pt.path.data ? pt.path.data : ""));
+            media[m++] = MediaView{arena.allocate_string(from_c(pt.path)), arena.allocate_string(from_c(pt.mime))};
         } else if (pt.kind == AGENT_PART_TENSOR) {
             auto shape = arena.allocate_span<int64_t>(pt.ndim);
             auto *bytes = static_cast<uint8_t *>(arena.allocate(pt.size ? pt.size : 1, alignof(std::max_align_t)));
@@ -266,6 +275,7 @@ Result<InferResponse> infer_engine(Session &session, const InferRequest &request
     out.content = std::string_view(text, off);
     out.tool_calls = calls;
     out.tensors = tensors;
+    out.media = media;
     return ok(InferResponse{.message = out,
                             .usage = TokenUsage{.prompt_tokens = usage.prompt_tokens,
                                                 .completion_tokens = usage.completion_tokens,

@@ -3,13 +3,17 @@
 //   - a user message starting with "call:<tool>" produces a tool call to <tool> with {}
 //   - streams the reply as one text chunk when on_chunk is set
 //   - a model path of "fail" makes create() fail
+//   - media parts on the last user message are acknowledged as "media: <mime> <path>" lines
+//   - "draw" writes a small file to output_dir and returns it as a FILE part
+//   - "slow" reports 100 progress steps and stops early when *cancel is set
 
 #include <agent-cpp/engine_abi.h>
-
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <thread>
 
 namespace {
 
@@ -17,7 +21,9 @@ struct MockInstance {
     std::string model;
     std::string reply;
     std::string tool_name;
+    std::string out_path;
     agent_part part{};
+    agent_part parts[2]{};
     agent_tool_call call{};
     std::string error;
 };
@@ -46,11 +52,27 @@ int32_t mock_run(void *instance, const agent_request *req, agent_response *resp)
     }
 
     std::string_view last_user;
+    std::string media_lines;
     for (size_t i = 0; i < req->n_messages; ++i) {
         const agent_message &m = req->messages[i];
         if (sv(m.role) != "user") continue;
-        for (size_t p = 0; p < m.n_parts; ++p)
+        media_lines.clear();
+        for (size_t p = 0; p < m.n_parts; ++p) {
             if (m.parts[p].kind == AGENT_PART_TEXT) last_user = sv(m.parts[p].text);
+            else if (m.parts[p].kind == AGENT_PART_FILE)
+                media_lines += "\nmedia: " + std::string(sv(m.parts[p].mime)) + " " + std::string(sv(m.parts[p].path));
+        }
+    }
+
+    if (last_user == "slow") {
+        for (uint64_t step = 1; step <= 100; ++step) {
+            if (req->cancel && *req->cancel) {
+                inst->error = "mock: cancelled";
+                return AGENT_ERR_CANCELLED;
+            }
+            if (req->on_progress) req->on_progress(req->user_data, step, 100);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
     }
 
     *resp = agent_response{};
@@ -66,13 +88,29 @@ int32_t mock_run(void *instance, const agent_request *req, agent_response *resp)
         return AGENT_OK;
     }
 
-    inst->reply = after_tool ? "tool done" : "echo: " + std::string(last_user);
+    inst->reply = after_tool ? "tool done" : "echo: " + std::string(last_user) + media_lines;
     if (req->on_chunk) req->on_chunk(req->user_data, AGENT_CHUNK_TEXT, inst->reply.data(), inst->reply.size());
     inst->part = agent_part{};
     inst->part.kind = AGENT_PART_TEXT;
     inst->part.text = agent_str{inst->reply.data(), inst->reply.size()};
     resp->message.parts = &inst->part;
     resp->message.n_parts = 1;
+
+    if (last_user == "draw") {
+        inst->out_path = std::string(sv(req->output_dir)) + "/mock_drawing.txt";
+        if (FILE *f = std::fopen(inst->out_path.c_str(), "wb")) {
+            std::fputs("mock drawing", f);
+            std::fclose(f);
+        }
+        // parts[0] = text, parts[1] = file; both live in the instance until the next run().
+        inst->parts[0] = inst->part;
+        inst->parts[1] = agent_part{};
+        inst->parts[1].kind = AGENT_PART_FILE;
+        inst->parts[1].path = agent_str{inst->out_path.data(), inst->out_path.size()};
+        inst->parts[1].mime = agent_str{"text/plain", 10};
+        resp->message.parts = inst->parts;
+        resp->message.n_parts = 2;
+    }
     return AGENT_OK;
 }
 

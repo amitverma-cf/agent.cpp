@@ -284,3 +284,80 @@ TEST_CASE("llama engine completes a native tool-call round trip", "[engines][lla
     REQUIRE(g_ping_calls >= 1);
 }
 #endif
+
+TEST_CASE("Media on the user message reaches the engine as FILE parts", "[engines][media]") {
+    auto res = agent::init(engine_config());
+    REQUIRE(res.ok);
+    agent::Session session = std::move(res.value);
+
+    const agent::Media media[] = {{"/tmp/cat.png", "image/png"}, {"/tmp/hello.wav", "audio/wav"}};
+    agent::FlowMemory memory;
+    memory.id = "engine_media_in";
+    auto reply = agent::run_turn_with_media(session, memory, "describe", media);
+    REQUIRE(reply.ok);
+    REQUIRE(reply.value == "echo: describe\nmedia: image/png /tmp/cat.png\nmedia: audio/wav /tmp/hello.wav");
+    REQUIRE(memory.history.front().media.size() == 2);
+}
+
+TEST_CASE("Engine FILE outputs become media on the assistant message and persist", "[engines][media]") {
+    auto res = agent::init(engine_config());
+    REQUIRE(res.ok);
+    agent::Session session = std::move(res.value);
+
+    agent::FlowMemory memory;
+    memory.id = "engine_media_out";
+    auto reply = agent::run_turn(session, memory, "draw");
+    REQUIRE(reply.ok);
+    REQUIRE(reply.value == "echo: draw");
+    const agent::Message &out = memory.history.back();
+    REQUIRE(out.media.size() == 1);
+    REQUIRE(out.media[0].mime == "text/plain");
+    REQUIRE(out.media[0].path.find("artifacts/mock_drawing.txt") != std::string::npos);
+
+    agent::FlowMemory reloaded;
+    reloaded.id = "engine_media_out";
+    REQUIRE(agent::load_flow_memory(session, reloaded).ok);
+    REQUIRE(reloaded.history.back().media.size() == 1);
+    REQUIRE(reloaded.history.back().media[0].path == out.media[0].path);
+}
+
+TEST_CASE("Progress reaches Config::on_progress and request_cancel stops the engine", "[engines][cancel]") {
+    struct Progress {
+        uint64_t last = 0, total = 0;
+        agent::Session *session = nullptr;
+        uint64_t cancel_at = 0;
+    } progress;
+
+    auto cfg = engine_config();
+    cfg.on_progress = [](uint64_t step, uint64_t total, void *ud) {
+        auto *p = static_cast<Progress *>(ud);
+        p->last = step;
+        p->total = total;
+        if (p->cancel_at && step == p->cancel_at) agent::request_cancel(*p->session);
+    };
+    cfg.progress_user_data = &progress;
+    auto res = agent::init(cfg);
+    REQUIRE(res.ok);
+    agent::Session session = std::move(res.value);
+    progress.session = &session;
+
+    agent::FlowMemory memory;
+    memory.id = "engine_progress";
+    auto done = agent::run_turn(session, memory, "slow");
+    REQUIRE(done.ok);
+    REQUIRE(progress.last == 100);
+    REQUIRE(progress.total == 100);
+
+    progress.cancel_at = 10;
+    auto cancelled = agent::run_turn(session, memory, "slow");
+    REQUIRE_FALSE(cancelled.ok);
+    REQUIRE(cancelled.error.code == agent::ErrorCode::Cancelled);
+    REQUIRE(progress.last == 10);
+
+    // Still cancelled until cleared.
+    auto blocked = agent::run_turn(session, memory, "hello");
+    REQUIRE(blocked.error.code == agent::ErrorCode::Cancelled);
+    agent::clear_cancel(session);
+    progress.cancel_at = 0;
+    REQUIRE(agent::run_turn(session, memory, "hello").ok);
+}

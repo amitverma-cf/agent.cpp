@@ -26,9 +26,18 @@ auto session = agent::init(cfg);
  "parallel": 4, "options": { ...Config::engine_options... }}
 ```
 
-Files that engines generate (audio, images, video, meshes) are written to `<workspace>/artifacts/`.
-Until the message model carries media natively, they show up in the reply text as
-`[artifact] <mime> <path>` lines.
+Files that engines generate (audio, images, video, meshes) are written to `<workspace>/artifacts/` and
+come back as `Message::media` entries (`path` + `mime`) on the assistant message; they persist with the
+history. To send media to an engine:
+
+```cpp
+const agent::Media media[] = {{"photo.png", "image/png"}};
+auto reply = agent::run_turn_with_media(session, memory, "What is in this picture?", media);
+```
+
+Long jobs report progress through `Config::on_progress`. `agent::request_cancel(session)` (any thread)
+stops in-flight engine work with `ErrorCode::Cancelled` and blocks further inference until
+`agent::clear_cancel(session)`.
 
 ## Registry
 
