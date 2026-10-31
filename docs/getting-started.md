@@ -5,7 +5,6 @@
 - CMake 3.21+
 - C++20-capable compiler (GCC 12+, Clang 14+, MSVC 19.30+)
 - Ninja (recommended) or Make
-- OpenSSL (for networking; install `libssl-dev` on Debian/Ubuntu)
 
 On Windows, build tools must run under WSL (Debian/Ubuntu). Git and file operations run natively on Windows.
 
@@ -22,7 +21,7 @@ wsl cmake --build build
 cd build && ctest --output-on-failure
 ```
 
-### Build without llama.cpp (API-only or OpenAI)
+### Build without llama.cpp
 
 ```bash
 wsl cmake -B build -G Ninja -DAGENT_ENABLE_LLAMACPP=OFF
@@ -144,14 +143,4 @@ flow.memory.id = "fsm_demo";
 auto flow_res = agent::run_flow(session, nullptr, flow);
 ```
 
-### Step 5 — use the OpenAI-compatible provider
-
-```cpp
-cfg.provider = agent::AiProvider::OpenAICompatible;
-cfg.base_url = "https://api.openai.com";
-cfg.api_key  = std::getenv("OPENAI_API_KEY");
-cfg.model    = "gpt-4o";
-```
-
-Any endpoint that speaks the OpenAI Chat Completions protocol works (Ollama, LM Studio, Together AI, etc.).
 

@@ -89,8 +89,7 @@ Result<void> AgentScheduler::pump(Session &session) {
         }
     };
 
-    const bool provider_can_run_parallel =
-        session.config.provider == AiProvider::OpenAICompatible || session.config.provider == AiProvider::LlamaCpp;
+    const bool provider_can_run_parallel = session.config.provider == AiProvider::LlamaCpp;
 
     if (provider_can_run_parallel) {
         const int batch_size = std::max(1, session.config.max_parallel_subagents);

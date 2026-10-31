@@ -201,7 +201,7 @@ struct MemoryConfig {
     int flush_interval_ms = 500;
 };
 
-enum class AiProvider { Mock, LlamaCpp, OpenAICompatible, OnnxRuntime };
+enum class AiProvider { Mock, LlamaCpp, OnnxRuntime };
 
 enum class EventType {
     OnTurnStart,
@@ -304,8 +304,6 @@ struct Flow {
 
 struct Config {
     AiProvider provider = AiProvider::Mock;
-    std::string base_url;
-    std::string api_key;
     std::string model;
     std::string workspace_dir;
     MemoryConfig memory;
@@ -320,9 +318,6 @@ struct Config {
     bool sandbox_filesystem = true;
     bool auto_default_tools = true;
     bool enable_file_logging = false;
-
-    int retry_max_attempts = 3;
-    int retry_base_delay_ms = 500;
 
     int max_parallel_subagents = 4;
 

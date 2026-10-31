@@ -4,7 +4,6 @@
 
 `AgentScheduler` runs multiple `Flow`s alongside time-triggered cron tasks. All agents share the same `Session`. How subagents advance depends on the provider:
 
-- **`AiProvider::OpenAICompatible`** — real OS-thread parallelism, bounded by `Config::max_parallel_subagents` (default 4). Plain HTTP calls are safe to fan out across threads.
 - **`AiProvider::LlamaCpp`** — also dispatched across up to `max_parallel_subagents` threads, but the actual parallelism comes from **continuous batching** inside the provider, not from the threads themselves: one shared `llama_context` (created with `n_seq_max = max_parallel_subagents`) multiplexes every currently-active generation's next token into a single `llama_decode` call per round, tagged by `llama_seq_id`. A single `llama_context` can't run two `llama_decode` calls at once regardless of thread count, so the threads mostly block waiting on that shared batch rather than doing independent decode work — see [architecture.md](../architecture.md#continuous-batching) for the full design.
 - **`Mock` / `OnnxRuntime`** — strictly single-flight, cooperative round-robin, unchanged.
 
@@ -20,7 +19,7 @@ AgentScheduler
 pump(session):
   1. Fire all cron tasks whose next_fire <= now
   2. Advance pending subagents one Flow step each:
-       - OpenAICompatible: up to max_parallel_subagents at once, on real threads, joined
+       - LlamaCpp: up to max_parallel_subagents at once, on real threads, joined
          before pump() returns
        - otherwise: one at a time, sequentially (today's round-robin, unchanged)
 
@@ -29,7 +28,7 @@ run_until_done(session):
   pump()   <- final pass
 ```
 
-For non-`OpenAICompatible` providers, each `pump()` call still gives every pending subagent exactly one `Flow` state transition, then fires all due cron tasks — a subagent that blocks inside `on_transition` (e.g. doing a long local-model call) blocks the rest of that pump. For `OpenAICompatible`, up to `max_parallel_subagents` subagents advance concurrently per pump, so one slow HTTP call no longer stalls the others.
+For providers other than `LlamaCpp`, each `pump()` call still gives every pending subagent exactly one `Flow` state transition, then fires all due cron tasks — a subagent that blocks inside `on_transition` (e.g. doing a long local-model call) blocks the rest of that pump. For `LlamaCpp`, up to `max_parallel_subagents` subagents advance concurrently per pump, sharing one batched decode.
 
 ---
 

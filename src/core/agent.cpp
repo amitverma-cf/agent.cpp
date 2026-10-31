@@ -49,7 +49,7 @@ Result<Session> init(const Config &config) {
         config.arena_capacity > 0 ? config.arena_capacity : static_cast<size_t>(config.context_window) * 8 + (2UL * 1024 * 1024);
     session.arena = Arena(arena_size);
 
-    const bool provider_can_run_parallel = config.provider == AiProvider::OpenAICompatible || config.provider == AiProvider::LlamaCpp;
+    const bool provider_can_run_parallel = config.provider == AiProvider::LlamaCpp;
     if (provider_can_run_parallel && config.max_parallel_subagents > 0) {
         session.worker_arenas.reserve(static_cast<size_t>(config.max_parallel_subagents));
         for (int i = 0; i < config.max_parallel_subagents; ++i) session.worker_arenas.emplace_back(arena_size);

@@ -41,9 +41,7 @@ All session parameters are set through `Config` before calling `init()`. After `
 struct Config {
     // Provider selection
     AiProvider  provider = AiProvider::Mock;
-    std::string base_url;       // required for OpenAICompatible: e.g. "https://api.openai.com"
-    std::string api_key;        // Bearer token for OpenAICompatible
-    std::string model;          // model file path (llama.cpp/ONNX) or model name (OpenAI)
+    std::string model;          // model file path (llama.cpp/ONNX)
 
     // Workspace -- REQUIRED
     std::string workspace_dir;  // must not contain shell metacharacters
@@ -81,12 +79,8 @@ struct Config {
     LogFn logger               = nullptr;
     void *logger_user_data     = nullptr;
 
-    // Network retry (OpenAICompatible provider only)
-    int retry_max_attempts  = 3;         // attempts before giving up
-    int retry_base_delay_ms = 500;       // initial retry delay; doubles each attempt
-
-    // Parallel subagent bound for OpenAICompatible and LlamaCpp scheduler paths
-    // (bounds both the OpenAI thread pool size and llama.cpp's n_seq_max). See scheduler.md.
+    // Parallel subagent bound for the LlamaCpp scheduler path
+    // (bounds the worker thread count and llama.cpp's n_seq_max). See scheduler.md.
     int max_parallel_subagents = 4;
 };
 ```
@@ -101,7 +95,6 @@ struct Config {
 |---|---|
 | `Mock` | none |
 | `LlamaCpp` | `model` (path to `.gguf` file) |
-| `OpenAICompatible` | `base_url`, `model`; `api_key` if the endpoint requires it |
 | `OnnxRuntime` | `model` (path to `.onnx` file) |
 
 ---
@@ -189,7 +182,7 @@ struct Session {
 
 The fields `config`, `arena`, and `stats` are the only ones you should ever read directly. Everything else is managed internally.
 
-`Session` is move-only and must not be called into from multiple threads directly. `AgentScheduler` achieves concurrency across `OpenAICompatible`/`LlamaCpp` provider turns without sharing a single `Arena` or mutable `Session` state unsafely: each worker thread gets its own slot in `worker_arenas`, and `stats_mutex`/`log_mutex`/`event_mutex` guard the shared counters, log file, and event hooks. The "current turn" tracking (which memory/hooks/tool-allowlist a tool call is running under, which arena slot, the cached JSON parser) is `thread_local` state internal to the executor, not `Session` fields. See [scheduler.md](scheduler.md) for the full concurrency model.
+`Session` is move-only and must not be called into from multiple threads directly. `AgentScheduler` achieves concurrency across `LlamaCpp` provider turns without sharing a single `Arena` or mutable `Session` state unsafely: each worker thread gets its own slot in `worker_arenas`, and `stats_mutex`/`log_mutex`/`event_mutex` guard the shared counters, log file, and event hooks. The "current turn" tracking (which memory/hooks/tool-allowlist a tool call is running under, which arena slot, the cached JSON parser) is `thread_local` state internal to the executor, not `Session` fields. See [scheduler.md](scheduler.md) for the full concurrency model.
 
 ---
 

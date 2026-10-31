@@ -6,7 +6,7 @@ A modular, lightweight C++20 AI agent orchestration library for edge devices, of
 
 ## What it does
 
-agent.cpp provides a complete runtime for building AI agents on any LLM backend — local (llama.cpp, ONNX Runtime) or remote (any OpenAI-compatible API). It handles context management, tool calling, multi-agent scheduling, FSM-based agent flows, memory persistence, and observability — all with no heap allocations in the hot path.
+agent.cpp provides a complete runtime for building AI agents on local inference backends (llama.cpp, ONNX Runtime), fully offline. It handles context management, tool calling, multi-agent scheduling, FSM-based agent flows, memory persistence, and observability — all with no heap allocations in the hot path.
 
 ---
 
@@ -23,7 +23,6 @@ agent.cpp provides a complete runtime for building AI agents on any LLM backend 
 - **Skills.** Load [SKILL.md](https://agentskills.io)-format capability packages from a directory; only name/description sit in context until the model calls `use_skill` to load the rest.
 - **Permission gate.** Optional per-call Allow/Ask/Deny policy checked before any tool dispatch — native tools, data-source tools, and `use_skill` alike.
 - **Sandbox enforcement.** Filesystem tools block paths outside `workspace_dir` when sandbox mode is on.
-- **Retry with backoff.** OpenAI provider retries on network errors and HTTP 429/5xx.
 - **File logging.** Structured timestamped log files written to `workspace_dir/logs/` when enabled.
 - **KV cache management.** Explicit cache clear for llama.cpp to manage VRAM between tasks.
 - **Telemetry.** Per-conversation and session-wide token/tool/compression counters.
@@ -85,8 +84,6 @@ ctest --test-dir build --output-on-failure
 | Option | Default | Description |
 |---|---|---|
 | `AGENT_ENABLE_LLAMACPP` | `ON` | Local llama.cpp inference (GGUF models) |
-| `AGENT_ENABLE_NETWORKING` | `ON` | HTTP/HTTPS via cpp-httplib + OpenSSL |
-| `AGENT_ENABLE_OPENAI` | `ON` | OpenAI-compatible provider |
 | `AGENT_ENABLE_ONNX` | `OFF` | ONNX Runtime multimodal inference |
 | `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UBSan |
 | `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |
@@ -99,7 +96,6 @@ ctest --test-dir build --output-on-failure
 |---|---|---|
 | Mock | `AiProvider::Mock` | Fixed response; always available; for testing |
 | llama.cpp | `AiProvider::LlamaCpp` | Local GGUF models; offline |
-| OpenAI-compatible | `AiProvider::OpenAICompatible` | OpenAI, Ollama, LM Studio, Groq, etc. |
 | ONNX Runtime | `AiProvider::OnnxRuntime` | Multimodal; `.onnx` models |
 
 ---
@@ -144,7 +140,7 @@ src/core/
   scheduler/
     scheduler.cpp              -- AgentScheduler, cron
   providers/
-    mock / llama / openai / onnx
+    mock / llama / onnx
   memory/
     sqlite_provider.cpp        -- bounded write-back cache in front of SQLite
   tools/

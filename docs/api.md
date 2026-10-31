@@ -17,7 +17,7 @@ enum class ErrorCode {
     ProviderInitFailed,   // model load or backend init failed
     ModelLoadFailed,      // model file not found or corrupt
     DecodeFailed,         // JSON parse or response decode failed
-    NetworkError,         // connection/timeout error (OpenAI provider)
+    NetworkError,         // connection/timeout error
     HttpError,            // non-retryable HTTP error
     ParseError,           // tool argument JSON is malformed
     Cancelled,            // operation was cancelled
@@ -303,7 +303,7 @@ struct MemoryConfig {
 ## Providers
 
 ```cpp
-enum class AiProvider { Mock, LlamaCpp, OpenAICompatible, OnnxRuntime };
+enum class AiProvider { Mock, LlamaCpp, OnnxRuntime };
 ```
 
 ---
@@ -571,9 +571,7 @@ Result<std::string> read_skill_body(Session &session, std::string_view name);
 ```cpp
 struct Config {
     AiProvider        provider      = AiProvider::Mock;
-    std::string       base_url;         // OpenAI-compatible endpoint URL
-    std::string       api_key;          // API key (OpenAI provider)
-    std::string       model;            // model path (llama.cpp/ONNX) or name (OpenAI)
+    std::string       model;            // model path (llama.cpp/ONNX)
     std::string       workspace_dir;    // REQUIRED -- no shell metacharacters
 
     MemoryConfig      memory;
@@ -602,12 +600,8 @@ struct Config {
     // File logging
     bool enable_file_logging  = false;  // write timestamped log to workspace_dir/logs/
 
-    // Network retry (OpenAI provider)
-    int retry_max_attempts    = 3;
-    int retry_base_delay_ms   = 500;    // doubles each retry
-
-    // Parallel subagent bound for OpenAICompatible (real threads) and LlamaCpp
-    // (continuous-batching sequence slots) scheduler paths.
+    // Parallel subagent bound for the LlamaCpp scheduler path
+    // (continuous-batching sequence slots).
     int max_parallel_subagents = 4;
 
     LogFn logger          = nullptr;
@@ -796,7 +790,7 @@ Result<void> clear_provider_kv_cache(Session &session);
 
 ## AgentScheduler
 
-Multi-agent scheduler. `pump()`/`run_until_done()` internally dispatch across real OS threads for `OpenAICompatible` and `LlamaCpp` (bounded by `Config::max_parallel_subagents`), and sequentially otherwise; see [scheduler.md](api/scheduler.md) for the concurrency model per provider. `AgentScheduler`'s own methods (`spawn`, `add_cron`, etc.) are not thread-safe themselves — call them from one thread.
+Multi-agent scheduler. `pump()`/`run_until_done()` internally dispatch across real OS threads for `LlamaCpp` (bounded by `Config::max_parallel_subagents`), and sequentially otherwise; see [scheduler.md](api/scheduler.md) for the concurrency model per provider. `AgentScheduler`'s own methods (`spawn`, `add_cron`, etc.) are not thread-safe themselves — call them from one thread.
 
 ```cpp
 class AgentScheduler {

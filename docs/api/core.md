@@ -54,7 +54,7 @@ Error make_error(ErrorCode code, std::string message);
 enum class ErrorCode {
     Ok,                   // no error
     InvalidConfig,        // bad Config field, or missing required workspace_dir
-    UnsupportedProvider,  // provider not compiled in, or missing fields (base_url etc.)
+    UnsupportedProvider,  // provider not compiled in
     FilesystemError,      // I/O error on file or directory operation
     ProviderInitFailed,   // model load or backend initialisation failed
     ModelLoadFailed,      // model file not found or corrupt
@@ -78,7 +78,6 @@ enum class ErrorCode {
 | `workspace_dir` contains `&` or `'` | `InvalidConfig` |
 | `context_window` or `max_tokens` <= 0 | `InvalidConfig` |
 | llama.cpp model file missing | `ProviderInitFailed` |
-| OpenAI API key wrong | `HttpError` |
 | Tool argument missing required field | `ParseError` |
 | Filesystem path outside workspace | `SandboxViolation` |
 | `permission_check` denied a tool, or an `Ask` was declined | `PermissionDenied` |
