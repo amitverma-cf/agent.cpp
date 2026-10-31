@@ -499,7 +499,8 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
                 break;
             }
             const std::string &path = st.artifacts[n - 1].path;
-            if (auto r = open_with_os(path); !r.ok) out("[error] " + r.error.message + "\n");
+            // No desktop opener (headless box, container): the path is still useful to copy.
+            if (auto r = open_with_os(path); !r.ok) out("[note] " + r.error.message + "; the file is at " + path + "\n");
             else out("opened " + path + "\n");
             break;
         }

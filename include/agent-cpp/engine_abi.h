@@ -128,10 +128,11 @@ typedef struct agent_message {
 } agent_message;
 
 enum agent_chunk_kind {
-    AGENT_CHUNK_TEXT = 0,  /* UTF-8 token text */
-    AGENT_CHUNK_AUDIO = 1, /* PCM f32 mono samples */
+    AGENT_CHUNK_TEXT = 0,  /* UTF-8 token text; size = bytes */
+    AGENT_CHUNK_AUDIO = 1, /* PCM f32 mono samples at the engine's output rate; size = bytes (4 per sample) */
 };
 
+/* size is always in bytes, whatever the kind. */
 typedef void (*agent_chunk_fn)(void *user_data, uint32_t kind, const void *data, size_t size);
 typedef void (*agent_progress_fn)(void *user_data, uint64_t step, uint64_t total);
 
