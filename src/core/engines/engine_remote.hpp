@@ -21,6 +21,7 @@ struct RemoteOptions {
     int timeout_ms = 0;        // per-request watchdog, 0 = none
     int cancel_grace_ms = 2000;
     int max_restarts = 3; // per rolling minute
+    SandboxPolicy sandbox; // applied to the host before exec; see core/sandbox/sandbox_policy.hpp
     LogFn logger = nullptr;
     void *logger_user_data = nullptr;
 };

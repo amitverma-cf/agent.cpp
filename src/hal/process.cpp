@@ -1,6 +1,7 @@
 #include "hal/process.hpp"
 
 #include "hal/platform.hpp"
+#include "hal/sandbox.hpp"
 
 #include <cstdio>
 #include <string>
@@ -11,6 +12,7 @@
 #endif
 #include <windows.h>
 #else
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -30,7 +32,7 @@ std::wstring utf8_to_wide(std::string_view s) {
 }
 
 Result<ProcessResult> run_shell_windows(std::string_view working_directory, std::string_view command, int timeout_seconds,
-                                        size_t max_output_bytes) {
+                                        size_t max_output_bytes, PreparedSandbox &sandbox) {
     SECURITY_ATTRIBUTES sa{};
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
@@ -51,15 +53,24 @@ Result<ProcessResult> run_shell_windows(std::string_view working_directory, std:
     si.hStdOutput = write_pipe;
     si.hStdError = write_pipe;
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    HANDLE nul = nullptr;
+    if (sandbox.active) {
+        nul = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, nullptr);
+        si.hStdInput = nul;
+    }
 
     PROCESS_INFORMATION pi{};
-    BOOL created = CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
-                                  wdir.empty() ? nullptr : wdir.c_str(), &si, &pi);
+    BOOL created = CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | (sandbox.active ? CREATE_SUSPENDED : 0),
+                                  nullptr, wdir.empty() ? nullptr : wdir.c_str(), &si, &pi);
     CloseHandle(write_pipe);
+    if (nul && nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
     if (!created) {
         CloseHandle(read_pipe);
         return fail<ProcessResult>(ErrorCode::FilesystemError, "CreateProcess failed.");
     }
+    // Kill-on-close Job Object: closing it at the end also stops anything the command left running.
+    HANDLE job = sandbox.active ? static_cast<HANDLE>(attach_job_object(sandbox, pi.hProcess)) : nullptr;
+    if (sandbox.active) ResumeThread(pi.hThread);
 
     ProcessResult result;
     std::string output;
@@ -110,6 +121,7 @@ Result<ProcessResult> run_shell_windows(std::string_view working_directory, std:
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     CloseHandle(read_pipe);
+    if (job) CloseHandle(job);
 
     result.exit_code = timed_out ? -1 : static_cast<int>(exit_code);
     result.output = std::move(output);
@@ -121,7 +133,12 @@ Result<ProcessResult> run_shell_windows(std::string_view working_directory, std:
 #else // POSIX
 
 Result<ProcessResult> run_shell_posix(std::string_view working_directory, std::string_view command, int timeout_seconds,
-                                      size_t max_output_bytes) {
+                                      size_t max_output_bytes, const PreparedSandbox &sandbox) {
+    // Built before fork(): the child of a multi-threaded process may only make async-signal-safe calls.
+    const std::string wd(working_directory);
+    const std::string cmd(command);
+    const std::string t = std::to_string(timeout_seconds);
+
     int pipefd[2];
     if (pipe(pipefd) != 0) return fail<ProcessResult>(ErrorCode::FilesystemError, "pipe() failed.");
 
@@ -138,17 +155,27 @@ Result<ProcessResult> run_shell_posix(std::string_view working_directory, std::s
         dup2(pipefd[1], STDERR_FILENO);
         close(pipefd[1]);
 
-        std::string wd(working_directory);
         // Never run the command somewhere other than the requested directory.
         if (!wd.empty() && chdir(wd.c_str()) != 0) {
             const char msg[] = "agent: cannot enter working directory\n";
             (void)!write(STDERR_FILENO, msg, sizeof(msg) - 1);
             _exit(126);
         }
+        if (sandbox.active) {
+            // No inherited terminal: nothing to read from, nothing to inject keystrokes into.
+            int devnull = open("/dev/null", O_RDONLY | O_CLOEXEC);
+            if (devnull >= 0) {
+                dup2(devnull, STDIN_FILENO);
+                close(devnull);
+            }
+            if (apply_prepared_sandbox(sandbox) != 0) {
+                const char msg[] = "agent: cannot apply the sandbox\n";
+                (void)!write(STDERR_FILENO, msg, sizeof(msg) - 1);
+                _exit(126);
+            }
+        }
 
-        std::string cmd(command);
         if (timeout_seconds > 0) {
-            std::string t = std::to_string(timeout_seconds);
             execlp("timeout", "timeout", t.c_str(), "sh", "-c", cmd.c_str(), static_cast<char *>(nullptr));
             // Fallback if `timeout` is not installed:
             execlp("sh", "sh", "-c", cmd.c_str(), static_cast<char *>(nullptr));
@@ -198,13 +225,17 @@ Result<ProcessResult> run_shell_posix(std::string_view working_directory, std::s
 } // namespace
 
 Result<ProcessResult> run_shell_command(std::string_view working_directory, std::string_view command, int timeout_seconds,
-                                        size_t max_output_bytes) {
+                                        size_t max_output_bytes, const SandboxPolicy *sandbox) {
     if (command.empty()) return fail<ProcessResult>(ErrorCode::InvalidConfig, "Missing command.");
+    auto prepared = prepare_sandbox(sandbox ? *sandbox : SandboxPolicy{});
+    if (!prepared.ok) return fail<ProcessResult>(prepared.error.code, prepared.error.message);
 #if defined(AGENT_HAL_WINDOWS)
-    return run_shell_windows(working_directory, command, timeout_seconds, max_output_bytes);
+    auto result = run_shell_windows(working_directory, command, timeout_seconds, max_output_bytes, prepared.value);
 #else
-    return run_shell_posix(working_directory, command, timeout_seconds, max_output_bytes);
+    auto result = run_shell_posix(working_directory, command, timeout_seconds, max_output_bytes, prepared.value);
 #endif
+    if (result.ok) result.value.sandbox_warnings = std::move(prepared.value.warnings);
+    return result;
 }
 
 } // namespace agent::hal

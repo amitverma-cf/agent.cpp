@@ -16,6 +16,9 @@ struct SpawnOptions {
     std::vector<std::string> args;
     std::map<std::string, std::string> env; // added to / overriding the parent's environment
     std::string working_directory;          // empty = inherit
+    // OS sandbox applied in the child before exec (Linux/macOS) or as a Job Object (Windows).
+    // enabled = false (default): none. See hal/sandbox.hpp.
+    SandboxPolicy sandbox;
 };
 
 enum class PipeRead {
@@ -46,6 +49,8 @@ class ChildProcess {
     int exit_code() const { return exit_code_; }
     // POSIX: the signal that terminated the child (exit_code is then 128 + signal), 0 otherwise.
     int term_signal() const { return term_signal_; }
+    // What SpawnOptions::sandbox could not enforce on this machine (empty when fully applied or off).
+    const std::vector<std::string> &sandbox_warnings() const { return sandbox_warnings_; }
 
     // Clean shutdown: closes stdin, waits up to grace_ms for the child to exit, then asks it to stop
     // (SIGTERM; TerminateProcess on Windows), waits again, and finally kills it. Returns the exit code.
@@ -59,6 +64,7 @@ class ChildProcess {
     std::unique_ptr<Impl> impl_;
     int exit_code_ = -1;
     int term_signal_ = 0;
+    std::vector<std::string> sandbox_warnings_;
 };
 
 Result<std::unique_ptr<ChildProcess>> spawn_child(const SpawnOptions &options);

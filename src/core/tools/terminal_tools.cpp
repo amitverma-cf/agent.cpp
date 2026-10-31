@@ -2,14 +2,16 @@
 #include "hal/process.hpp"
 
 #include <agent-cpp/agent.hpp>
+#include <filesystem>
+#include <memory>
 #include <simdjson.h>
 #include <string>
 
 namespace agent::tools {
 
-static Result<std::string> run_command_cb(std::string_view args, void *ud) {
-    const std::string &ws = *static_cast<const std::string *>(ud);
+namespace {
 
+Result<std::string> run_command(const std::string &ws, std::string_view args, const SandboxPolicy *sandbox) {
     simdjson::ondemand::parser parser;
     simdjson::padded_string json(args.data(), args.size());
     simdjson::ondemand::document doc;
@@ -33,29 +35,75 @@ static Result<std::string> run_command_cb(std::string_view args, void *ud) {
     }
     if (command_sv.empty()) return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'command'");
 
-    auto proc = hal::run_shell_command(ws, command_sv, static_cast<int>(timeout_seconds));
+    auto proc = hal::run_shell_command(ws, command_sv, static_cast<int>(timeout_seconds), 32 * 1024, sandbox);
     if (!proc.ok) return fail<std::string>(proc.error.code, proc.error.message);
 
     std::string result = "{\"exit_code\":" + std::to_string(proc.value.exit_code) +
                          ",\"timed_out\":" + (proc.value.timed_out ? "true" : "false") + ",\"output\":\"";
     utils::escape_json_string(proc.value.output, result);
-    result += "\"}";
+    result += "\"";
+    if (!proc.value.sandbox_warnings.empty()) {
+        // Tell the caller (and the model) that the sandbox is weaker than configured on this machine.
+        std::string joined;
+        for (const auto &w : proc.value.sandbox_warnings) joined += (joined.empty() ? "" : " ") + w;
+        result += ",\"sandbox_warning\":\"";
+        utils::escape_json_string(joined, result);
+        result += "\"";
+    }
+    result += "}";
     return ok(std::move(result));
 }
+
+Result<std::string> run_command_cb(std::string_view args, void *ud) {
+    return run_command(*static_cast<const std::string *>(ud), args, nullptr);
+}
+
+// The default tool set's run_command: the workspace is the only writable (and, outside the system
+// dirs, the only readable) place when the path sandbox is on.
+Result<std::string> run_command_sandboxed_cb(std::string_view args, void *ud) {
+    const auto &ctx = *static_cast<const WorkspaceContext *>(ud);
+    if (!ctx.workspace_dir) return fail<std::string>(ErrorCode::InvalidConfig, "workspace_dir is null.");
+    const std::string &ws = *ctx.workspace_dir;
+    if (!ctx.command_sandbox.enabled) return run_command(ws, args, nullptr);
+    SandboxPolicy policy = ctx.command_sandbox;
+    policy.filesystem = policy.filesystem && ctx.sandbox;
+    if (!ws.empty()) {
+        std::error_code ec;
+        auto abs = std::filesystem::absolute(ws, ec);
+        policy.read_write_paths.push_back(ec ? ws : abs.string());
+    }
+    return run_command(ws, args, &policy);
+}
+
+constexpr const char *kDescription = "Run a shell command in the workspace directory. stdout and stderr are merged. "
+                                     "Returns JSON: {exit_code, timed_out, output}.\n"
+                                     "Parameters: command (string, required), timeout_seconds (integer, default 30, "
+                                     "0=no timeout).\n"
+                                     "Timeout is enforced on all platforms (Windows CreateProcess wait, POSIX timeout/"
+                                     "wait).";
+
+constexpr const char *kSchema =
+    R"({"type":"object","properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer","description":"max seconds, default 30, 0 = no timeout"}},"required":["command"]})";
+
+} // namespace
 
 Tool get_terminal_tool(const std::string *workspace_dir) {
     return Tool{
         .name = "run_command",
-        .description = "Run a shell command in the workspace directory. stdout and stderr are merged. "
-                       "Returns JSON: {exit_code, timed_out, output}.\n"
-                       "Parameters: command (string, required), timeout_seconds (integer, default 30, "
-                       "0=no timeout).\n"
-                       "Timeout is enforced on all platforms (Windows CreateProcess wait, POSIX timeout/"
-                       "wait). Absolute paths in commands can still access outside the workspace.",
-        .parameter_schema =
-            R"({"type":"object","properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer","description":"max seconds, default 30, 0 = no timeout"}},"required":["command"]})",
+        .description = kDescription,
+        .parameter_schema = kSchema,
         .callback = run_command_cb,
         .user_data = const_cast<void *>(static_cast<const void *>(workspace_dir)),
+    };
+}
+
+Tool get_terminal_tool(std::shared_ptr<WorkspaceContext> ctx) {
+    return Tool{
+        .name = "run_command",
+        .description = kDescription,
+        .parameter_schema = kSchema,
+        .callback = run_command_sandboxed_cb,
+        .user_data = ctx.get(),
     };
 }
 
