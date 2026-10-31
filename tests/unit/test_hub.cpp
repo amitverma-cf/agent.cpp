@@ -1,0 +1,321 @@
+#include <agent-cpp/hub.hpp>
+#include <catch_amalgamated.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <string>
+
+using namespace agent::hub;
+
+namespace {
+
+void write_file(const std::string &path, std::string_view text) {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write(text.data(), static_cast<std::streamsize>(text.size()));
+}
+
+constexpr std::string_view kRepoJson = R"({
+  "id": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+  "gated": false,
+  "tags": ["gguf", "license:apache-2.0"],
+  "cardData": {"license": "apache-2.0", "language": ["en"]},
+  "siblings": [
+    {"rfilename": ".gitattributes", "size": 1561},
+    {"rfilename": "README.md", "size": 4856},
+    {"rfilename": "qwen2.5-0.5b-instruct-q4_k_m.gguf", "size": 491400032,
+     "lfs": {"sha256": "6EB923E7D26E9CEA28811E1A8E852009B21242FB157B26149D3B188F3A8C8653", "size": 491400032, "pointerSize": 135}},
+    {"rfilename": "qwen2.5-0.5b-instruct-q4_k_s.gguf", "size": 100},
+    {"rfilename": "qwen2.5-0.5b-instruct-q4_k.gguf", "size": 90},
+    {"rfilename": "qwen2.5-0.5b-instruct-q8_0.gguf", "size": 200},
+    {"rfilename": "big/model-q5_k_m-00001-of-00002.gguf", "size": 10},
+    {"rfilename": "big/model-q5_k_m-00002-of-00002.gguf", "size": 10},
+    {"rfilename": "mmproj-q8_0.gguf", "size": 5}
+  ]
+})";
+
+} // namespace
+
+TEST_CASE("parse_spec handles file, quant, bare repo and revisions", "[hub]") {
+    auto a = parse_spec("Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf");
+    REQUIRE(a.ok);
+    CHECK(a.value.repo == "Qwen/Qwen2.5-0.5B-Instruct-GGUF");
+    CHECK(a.value.file == "qwen2.5-0.5b-instruct-q4_k_m.gguf");
+    CHECK(a.value.quant.empty());
+    CHECK(a.value.revision == "main");
+
+    auto b = parse_spec("  bartowski/Foo-GGUF:Q4_K_M ");
+    REQUIRE(b.ok);
+    CHECK(b.value.repo == "bartowski/Foo-GGUF");
+    CHECK(b.value.quant == "Q4_K_M");
+    CHECK(b.value.file.empty());
+
+    auto c = parse_spec("https://huggingface.co/ggml-org/models@v2:tinyllamas/stories260K.gguf");
+    REQUIRE(c.ok);
+    CHECK(c.value.repo == "ggml-org/models");
+    CHECK(c.value.revision == "v2");
+    CHECK(c.value.file == "tinyllamas/stories260K.gguf");
+
+    auto d = parse_spec("hf.co/owner/name");
+    REQUIRE(d.ok);
+    CHECK(d.value.repo == "owner/name");
+    CHECK(d.value.file.empty());
+    CHECK(d.value.quant.empty());
+
+    CHECK_FALSE(parse_spec("").ok);
+    CHECK_FALSE(parse_spec("noslash").ok);
+    CHECK_FALSE(parse_spec("a/b/c").ok);
+    CHECK_FALSE(parse_spec("owner/repo:").ok);
+    CHECK_FALSE(parse_spec("own er/repo").ok);
+    CHECK_FALSE(parse_spec("owner/repo:../../etc/passwd.gguf").ok);
+    CHECK_FALSE(parse_spec("owner/repo:/abs/x.gguf").ok);
+    CHECK_FALSE(parse_spec("owner/repo:dir\\x.gguf").ok);
+}
+
+TEST_CASE("quant_matches is case-insensitive and filename-based", "[hub]") {
+    CHECK(quant_matches("qwen2.5-0.5b-instruct-q4_k_m.gguf", "Q4_K_M"));
+    CHECK(quant_matches("Model-IQ2_XXS.gguf", "iq2_xxs"));
+    CHECK_FALSE(quant_matches("model-q8_0.gguf", "Q4_K_M"));
+    CHECK_FALSE(quant_matches("Q4_K_M/model-f16.gguf", "Q4_K_M")); // directory name does not count
+    CHECK_FALSE(quant_matches("model.gguf", ""));
+}
+
+TEST_CASE("parse_repo_info and select_file", "[hub]") {
+    auto info = parse_repo_info(kRepoJson);
+    REQUIRE(info.ok);
+    CHECK(info.value.repo == "Qwen/Qwen2.5-0.5B-Instruct-GGUF");
+    CHECK(info.value.license == "apache-2.0");
+    CHECK_FALSE(info.value.gated);
+    REQUIRE(info.value.files.size() == 9);
+
+    ModelSpec spec{.repo = "Qwen/Qwen2.5-0.5B-Instruct-GGUF", .quant = "q4_k_m"};
+    auto f = select_file(info.value, spec);
+    REQUIRE(f.ok);
+    CHECK(f.value.path == "qwen2.5-0.5b-instruct-q4_k_m.gguf");
+    CHECK(f.value.size == 491400032);
+    CHECK(f.value.sha256 == "6eb923e7d26e9cea28811e1a8e852009b21242fb157b26149d3b188f3a8c8653");
+
+    // Q4_K prefers the exact tag over Q4_K_M / Q4_K_S.
+    spec.quant = "Q4_K";
+    f = select_file(info.value, spec);
+    REQUIRE(f.ok);
+    CHECK(f.value.path == "qwen2.5-0.5b-instruct-q4_k.gguf");
+
+    // Q8_0 must not pick the mmproj file.
+    spec.quant = "Q8_0";
+    f = select_file(info.value, spec);
+    REQUIRE(f.ok);
+    CHECK(f.value.path == "qwen2.5-0.5b-instruct-q8_0.gguf");
+
+    spec.quant = "Q5_K_M"; // split shards only
+    f = select_file(info.value, spec);
+    CHECK_FALSE(f.ok);
+    CHECK(f.error.message.find("split") != std::string::npos);
+
+    spec.quant = "Q2_K";
+    CHECK(select_file(info.value, spec).error.code == agent::ErrorCode::KeyNotFound);
+
+    spec.quant.clear(); // several ggufs, no selector -> ambiguous
+    CHECK_FALSE(select_file(info.value, spec).ok);
+
+    spec.file = "qwen2.5-0.5b-instruct-q8_0.gguf";
+    f = select_file(info.value, spec);
+    REQUIRE(f.ok);
+    CHECK(f.value.size == 200);
+
+    spec.file = "model-q5_k_m-00001-of-00002.gguf"; // unique basename
+    f = select_file(info.value, spec);
+    REQUIRE(f.ok);
+    CHECK(f.value.path == "big/model-q5_k_m-00001-of-00002.gguf");
+
+    spec.file = "missing.gguf";
+    CHECK(select_file(info.value, spec).error.code == agent::ErrorCode::KeyNotFound);
+}
+
+TEST_CASE("parse_repo_info licence fallbacks", "[hub]") {
+    auto tags = parse_repo_info(R"({"id":"a/b","tags":["gguf","license:cc-by-nc-4.0"],"siblings":[]})");
+    REQUIRE(tags.ok);
+    CHECK(tags.value.license == "cc-by-nc-4.0");
+
+    auto other = parse_repo_info(R"({"id":"a/b","gated":"manual","cardData":{"license":"other","license_name":"fish-audio-research-license"}})");
+    REQUIRE(other.ok);
+    CHECK(other.value.gated);
+    CHECK(other.value.license == "other");
+    CHECK(other.value.license_name == "fish-audio-research-license");
+
+    CHECK_FALSE(parse_repo_info("not json").ok);
+}
+
+TEST_CASE("licence policy denies non-commercial and research licences", "[hub]") {
+    for (const char *ok_license : {"apache-2.0", "mit", "bsd-3-clause", "cc-by-4.0", "cc-by-sa-4.0", "llama3.1", "gemma", "openrail", ""})
+        CHECK_FALSE(is_restricted_license(ok_license));
+    for (const char *bad : {"cc-by-nc-4.0", "CC-BY-NC-SA-4.0", "cc-by-nc-nd-4.0", "deepfloyd-if-license", "apple-amlr"})
+        CHECK(is_restricted_license(bad));
+    CHECK(is_restricted_license("other", "fish-audio-research-license"));
+    CHECK(is_restricted_license("other", "Qwen Research License"));
+    CHECK(is_restricted_license("other", "Some Non-Commercial License"));
+    CHECK_FALSE(is_restricted_license("other", "tongyi-qianwen"));
+}
+
+TEST_CASE("sha256 known vectors", "[hub]") {
+    CHECK(sha256_hex(std::string_view("")) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    CHECK(sha256_hex(std::string_view("abc")) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    CHECK(sha256_hex(std::string_view("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")) ==
+          "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+
+    // One million 'a' through the streaming file path (crosses the 1 MiB read buffer).
+    const std::string path = (std::filesystem::temp_directory_path() / "agent_hub_sha_test.bin").string();
+    write_file(path, std::string(1000000, 'a'));
+    auto digest = sha256_file(path);
+    REQUIRE(digest.ok);
+    CHECK(digest.value == "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+    std::filesystem::remove(path);
+    CHECK_FALSE(sha256_file(path).ok);
+}
+
+TEST_CASE("models.json round trip, escaping and remove", "[hub]") {
+    const auto dir = std::filesystem::temp_directory_path() / "agent_hub_catalog_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const std::string catalog = (dir / "models.json").string();
+
+    auto empty = load_catalog(catalog);
+    REQUIRE(empty.ok);
+    CHECK(empty.value.empty());
+
+    const std::string model_path = (dir / "m.gguf").string();
+    write_file(model_path, "GGUF");
+    std::vector<CatalogEntry> entries = {
+        {.name = "qwen", .repo = "Qwen/X", .file = "x.gguf", .path = model_path, .size = 4, .sha256 = "ab", .license = "apache-2.0"},
+        {.name = "we\"ird\\name\n\t\x01", .repo = "a/b", .file = "dir/y.gguf", .path = "C:\\models\\y.gguf", .size = 18446744073709551615ull,
+         .sha256 = "", .license = "other (custom)"},
+    };
+    REQUIRE(save_catalog(catalog, entries).ok);
+    CHECK_FALSE(std::filesystem::exists(catalog + ".tmp"));
+
+    auto loaded = load_catalog(catalog);
+    REQUIRE(loaded.ok);
+    REQUIRE(loaded.value.size() == 2);
+    for (size_t i = 0; i < entries.size(); ++i) {
+        CHECK(loaded.value[i].name == entries[i].name);
+        CHECK(loaded.value[i].repo == entries[i].repo);
+        CHECK(loaded.value[i].file == entries[i].file);
+        CHECK(loaded.value[i].path == entries[i].path);
+        CHECK(loaded.value[i].size == entries[i].size);
+        CHECK(loaded.value[i].sha256 == entries[i].sha256);
+        CHECK(loaded.value[i].license == entries[i].license);
+    }
+
+    CHECK(remove_model("nope", catalog).error.code == agent::ErrorCode::KeyNotFound);
+    REQUIRE(remove_model("qwen", catalog).ok);
+    CHECK_FALSE(std::filesystem::exists(model_path));
+    auto after = list_models(catalog);
+    REQUIRE(after.ok);
+    REQUIRE(after.value.size() == 1);
+    CHECK(after.value[0].repo == "a/b");
+
+    CHECK(catalog_to_json({}) == "{\n  \"models\": []\n}\n");
+    CHECK_FALSE(catalog_from_json("{\"models\": [{\"repo\": \"a/b\"}]}").ok); // entry without name
+    CHECK_FALSE(catalog_from_json("[]").ok);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("proxy URL parsing and NO_PROXY matching", "[hub]") {
+    auto p = parse_proxy_url("http://127.0.0.1:39125");
+    REQUIRE(p.ok);
+    CHECK(p.value.host == "127.0.0.1");
+    CHECK(p.value.port == 39125);
+
+    p = parse_proxy_url("http://user:p%40ss@proxy.corp:3128/");
+    REQUIRE(p.ok);
+    CHECK(p.value.host == "proxy.corp");
+    CHECK(p.value.port == 3128);
+
+    p = parse_proxy_url("proxy.corp");
+    REQUIRE(p.ok);
+    CHECK(p.value.port == 80);
+
+    p = parse_proxy_url("http://[::1]:8080");
+    REQUIRE(p.ok);
+    CHECK(p.value.host == "::1");
+    CHECK(p.value.port == 8080);
+
+    CHECK_FALSE(parse_proxy_url("").ok);
+    CHECK_FALSE(parse_proxy_url("http://host:99999").ok);
+
+    const std::string_view no_proxy = "localhost,127.0.0.1, .internal.net,example.com,*.svc.local";
+    CHECK(host_bypasses_proxy("localhost", no_proxy));
+    CHECK(host_bypasses_proxy("a.internal.net", no_proxy));
+    CHECK(host_bypasses_proxy("internal.net", no_proxy));
+    CHECK(host_bypasses_proxy("cdn.example.com", no_proxy));
+    CHECK(host_bypasses_proxy("x.svc.local", no_proxy));
+    CHECK_FALSE(host_bypasses_proxy("notexample.com", no_proxy));
+    CHECK_FALSE(host_bypasses_proxy("huggingface.co", no_proxy));
+    CHECK(host_bypasses_proxy("anything", "*"));
+    CHECK_FALSE(host_bypasses_proxy("huggingface.co", ""));
+}
+
+// Network test, opt-in: AGENT_TEST_HUB_NETWORK=1. Uses HTTPS_PROXY / SSL_CERT_FILE etc. from the env.
+TEST_CASE("hub downloads stories260K from Hugging Face", "[hub][network]") {
+    const char *flag = std::getenv("AGENT_TEST_HUB_NETWORK");
+    if (!flag || std::string_view(flag) != "1") {
+        SKIP("set AGENT_TEST_HUB_NETWORK=1 to run");
+    }
+    const auto dir = std::filesystem::temp_directory_path() / "agent_hub_network_test";
+    std::filesystem::remove_all(dir);
+
+    const HttpOptions http = http_options_from_env();
+
+    // Raw download with a cross-host redirect (huggingface.co -> CDN), no checksum.
+    const std::string raw = (dir / "raw" / "stories260K.gguf").string();
+    auto dl = download_file(http.endpoint + "/ggml-org/models/resolve/main/tinyllamas/stories260K.gguf", raw, http, {});
+    INFO(dl.error.message);
+    REQUIRE(dl.ok);
+    CHECK(std::filesystem::file_size(raw) == 1185376);
+    CHECK_FALSE(std::filesystem::exists(raw + ".part"));
+
+    // Resume: keep the first 100000 bytes as a .part file and pull through the catalogue.
+    const std::string catalog = (dir / "models.json").string();
+    const std::string expected = (dir / "ggml-org" / "models" / "tinyllamas" / "stories260K.gguf").string();
+    std::filesystem::create_directories(std::filesystem::path(expected).parent_path());
+    {
+        std::ifstream in(raw, std::ios::binary);
+        std::string head(100000, '\0');
+        in.read(head.data(), static_cast<std::streamsize>(head.size()));
+        write_file(expected + ".part", head);
+    }
+    struct Progress {
+        uint64_t calls = 0, last = 0, total = 0;
+    } progress;
+    PullOptions opts;
+    opts.models_dir = dir.string();
+    opts.catalog_path = catalog;
+    opts.http = http;
+    opts.progress_user_data = &progress;
+    opts.on_progress = [](uint64_t done, uint64_t total, void *user) {
+        auto *p = static_cast<Progress *>(user);
+        p->calls++;
+        p->last = done;
+        p->total = total;
+        return true;
+    };
+    auto pulled = pull_model("ggml-org/models:tinyllamas/stories260K.gguf", opts);
+    INFO(pulled.error.message);
+    REQUIRE(pulled.ok);
+    CHECK(pulled.value.name == "stories260K");
+    CHECK(pulled.value.size == 1185376);
+    CHECK(pulled.value.sha256 == "270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d");
+    CHECK(std::filesystem::file_size(pulled.value.path) == 1185376);
+    CHECK(progress.calls > 0);
+    CHECK(progress.last == 1185376);
+    CHECK(progress.total == 1185376);
+
+    auto listed = list_models(catalog);
+    REQUIRE(listed.ok);
+    REQUIRE(listed.value.size() == 1);
+    CHECK(listed.value[0].path == pulled.value.path);
+
+    REQUIRE(remove_model("stories260K", catalog).ok);
+    CHECK_FALSE(std::filesystem::exists(pulled.value.path));
+    std::filesystem::remove_all(dir);
+}

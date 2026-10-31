@@ -95,6 +95,26 @@ target_link_libraries(agent_store_sqlite PUBLIC agent PRIVATE Threads::Threads $
 target_compile_options(agent_store_sqlite PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 target_link_options(agent_store_sqlite PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 
+# Optional Hugging Face model hub (downloads + models.json catalogue). Used by the CLI only;
+# libagent has no network dependency. Needs OpenSSL for HTTPS and sha256.
+option(AGENT_BUILD_HUB "Build the agent_hub model downloader (requires OpenSSL)" ON)
+if(AGENT_BUILD_HUB)
+find_package(OpenSSL REQUIRED)
+add_library(agent_hub
+    tools/hub/src/hub.cpp
+    tools/hub/src/hub_http.cpp
+)
+target_include_directories(agent_hub PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/tools/hub/include)
+target_include_directories(agent_hub SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/vendor/cpp-httplib)
+target_compile_definitions(agent_hub PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT CPPHTTPLIB_NO_EXCEPTIONS)
+target_link_libraries(agent_hub PUBLIC agent PRIVATE OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
+if(WIN32)
+    target_link_libraries(agent_hub PRIVATE ws2_32 crypt32)
+endif()
+target_compile_options(agent_hub PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
+target_link_options(agent_hub PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
+endif()
+
 option(AGENT_ENABLE_ONNX "use ONNX Runtime for multimodal inference" OFF)
 option(AGENT_ENGINE_LLAMA "Build the llama.cpp engine plugin (engines/llama)" ON)
 
@@ -129,6 +149,13 @@ add_executable(agent_cli examples/agent_cli/agent_cli.cpp)
 target_link_libraries(agent_cli PRIVATE agent agent_store_sqlite)
 target_compile_options(agent_cli PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 target_link_options(agent_cli PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
+
+if(AGENT_BUILD_HUB)
+    add_executable(agent_pull examples/agent_pull/agent_pull.cpp)
+    target_link_libraries(agent_pull PRIVATE agent_hub)
+    target_compile_options(agent_pull PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
+    target_link_options(agent_pull PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
+endif()
 
 add_subdirectory(engines/mock)
 if(AGENT_ENGINE_LLAMA)
@@ -170,6 +197,10 @@ set_source_files_properties(
                COMPILE_DEFINITIONS "CATCH_AMALGAMATED_CUSTOM_MAIN"
 )
 target_link_libraries(test_agent PRIVATE agent agent_store_sqlite)
+if(AGENT_BUILD_HUB)
+    target_sources(test_agent PRIVATE tests/unit/test_hub.cpp)
+    target_link_libraries(test_agent PRIVATE agent_hub)
+endif()
 target_compile_definitions(test_agent PRIVATE AGENT_TEST_MOCK_ENGINE_PATH="$<TARGET_FILE:agent-engine-mock>")
 add_dependencies(test_agent agent-engine-mock)
 if(AGENT_ENGINE_LLAMA)

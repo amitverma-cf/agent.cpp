@@ -201,6 +201,9 @@ Watch list: audio.cpp as a meta-engine; llama.cpp native TTS / image gen when th
 - [ ] `agent setup` wizard: detect GPU (CUDA/Vulkan/CPU), pick capabilities (starter pack preselected), download matching **prebuilt** engine plugins from GitHub releases (checksum-verified)
 - [ ] Release pipeline that builds every engine plugin × backend (cpu/cuda/vulkan) × OS (win/linux)
 - [ ] `agent engine add|rm|ls`, `agent model pull|rm|ls` (HF download with resume + checksum, licence prompt)
+  - [x] model hub library `agent_hub` (`tools/hub/`, see [docs/api/hub.md](api/hub.md)): HF spec/quant resolution, download with redirects + Range resume + sha256, proxy/CA support, `models.json` catalogue, restricted-licence refusal; `agent_pull` example
+  - [ ] wire it into the `agent` binary as `agent model pull|rm|ls` with an interactive licence prompt
+  - [ ] `agent engine add|rm|ls`
 - [ ] `agent chat` / `agent run <agent.json>`: text TUI with streaming, tool-call display, approval prompts, multi-agent status; `open <artifact>` launches the OS app
 - [ ] Mic input / speaker output for voice agents (small C audio I/O library such as miniaudio, decided in Phase 0)
 - [ ] User config at `%APPDATA%\agent\` (Windows) and `~/.config/agent/` (Linux)
