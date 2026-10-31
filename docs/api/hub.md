@@ -12,6 +12,9 @@ All functions return `Result<T>`; nothing throws.
 
 ## Command-line example
 
+The `agent` CLI wraps the hub as `agent model pull|ls|rm` (see [../cli.md](../cli.md)). The
+standalone `agent_pull` example works the same way:
+
 ```sh
 agent_pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M            # pick the file by quant tag
 agent_pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf

@@ -211,14 +211,18 @@ Watch list: audio.cpp as a meta-engine; llama.cpp native TTS / image gen when th
 
 ### Phase 5: CLI release (3 weeks, can start mid-Phase 3)
 - [ ] `agent setup` wizard: detect GPU (CUDA/Vulkan/CPU), pick capabilities (starter pack preselected), download matching **prebuilt** engine plugins from GitHub releases (checksum-verified)
+  - [x] v1 (`tools/cli`, see [docs/cli.md](cli.md)): reports CPU cores / `nvidia-smi` / `/dev/nvidia0` / `/dev/dri` render nodes and suggests a backend, prompts on a TTY (flags otherwise), picks the starter pack, finds locally built plugins next to the binary or in `<prefix>/lib/agent/engines`, validates them by loading, writes `config.json` + `engines.json`
+  - [ ] download prebuilt plugins from GitHub releases (needs the release pipeline below)
 - [ ] Release pipeline that builds every engine plugin × backend (cpu/cuda/vulkan) × OS (win/linux)
-- [ ] `agent engine add|rm|ls`, `agent model pull|rm|ls` (HF download with resume + checksum, licence prompt)
+- [x] `agent engine add|rm|ls`, `agent model pull|rm|ls` (HF download with resume + checksum, licence prompt)
   - [x] model hub library `agent_hub` (`tools/hub/`, see [docs/api/hub.md](api/hub.md)): HF spec/quant resolution, download with redirects + Range resume + sha256, proxy/CA support, `models.json` catalogue, restricted-licence refusal; `agent_pull` example
-  - [ ] wire it into the `agent` binary as `agent model pull|rm|ls` with an interactive licence prompt
-  - [ ] `agent engine add|rm|ls`
+  - [x] wire it into the `agent` binary as `agent model pull|rm|ls` with an interactive licence prompt (progress bar, Ctrl-C cancel + resume)
+  - [x] `agent engine add|rm|ls` (plugins validated with `load_engine_plugin`)
 - [ ] `agent chat` / `agent run <agent.json>`: text TUI with streaming, tool-call display, approval prompts, multi-agent status; `open <artifact>` launches the OS app
+  - [x] `agent chat`: streaming, tool calls + results, y/n/always approval prompts (`default_permission_policy`), `/exit /clear /model /image /open /stats`, Ctrl-C cancels a turn, conversations persisted with `agent_store_sqlite` (`--resume ID`, `--list`), model by catalogue name or path, engine by file type or `--engine`
+  - [ ] `agent run <agent.json>` (stub until the graph loader lands), multi-agent status
 - [ ] Mic input / speaker output for voice agents (small C audio I/O library such as miniaudio, decided in Phase 0)
-- [ ] User config at `%APPDATA%\agent\` (Windows) and `~/.config/agent/` (Linux)
+- [x] User config at `%APPDATA%\agent\` (Windows) and `~/.config/agent/` (Linux) (`$AGENT_CONFIG_DIR` / `--config-dir` override; the Windows path is untested)
 - [ ] Release artifacts: Windows x64 (CPU/CUDA/Vulkan), Linux x64 (CPU/CUDA/Vulkan), macOS (CI only)
 
 ### Phase 6: SDK and docs (finalize at release)

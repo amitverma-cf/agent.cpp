@@ -80,11 +80,26 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+## The `agent` CLI
+
+The build also produces `build/agent`, the command-line app: a setup wizard, an engine and model
+manager (Hugging Face downloads) and a chat TUI with streaming and tool calls.
+
+```bash
+./build/agent setup --yes
+./build/agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M
+./build/agent chat
+```
+
+See [docs/cli.md](docs/cli.md).
+
 ### CMake options
 
 | Option | Default | Description |
 |---|---|---|
 | `AGENT_ENGINE_LLAMA` | `ON` | Build the llama.cpp engine plugin (`engines/llama`, GGUF models) |
+| `AGENT_BUILD_CLI` | `ON` | Build the `agent` CLI binary (`tools/cli`); needs `AGENT_BUILD_HUB` |
+| `AGENT_BUILD_HUB` | `ON` | Build `agent_hub`, the Hugging Face model downloader (needs OpenSSL) |
 | `AGENT_ENGINE_ONNX` | `OFF` | Build the ONNX Runtime engine plugin (`engines/onnx`); needs `-DONNXRUNTIME_ROOT=<prebuilt ORT>` |
 | `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UBSan |
 | `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |
@@ -157,7 +172,11 @@ src/hal/                       -- hardware/OS abstraction layer
   process.cpp                  -- shell command execution (CreateProcess / posix_spawn)
   log_file.cpp                 -- session log file open/write
 engines/
-  mock/ llama/ onnx/           -- engine plugins (agent-engine-<name>)
+  mock/ llama/ onnx/ sdcpp/ sherpa/  -- engine plugins (agent-engine-<name>)
+tools/
+  cli/                         -- the `agent` binary (docs/cli.md)
+  hub/                         -- agent_hub: Hugging Face downloads, models.json
+  store-sqlite/                -- agent_store_sqlite: SQLite KV store, sqlite-vec
 tests/
   unit/                        -- Catch2 tests: providers, memory, tools, hal, skills, permissions, ...
   integration/                 -- session lifecycle, conversation, FSM tests
