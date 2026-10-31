@@ -229,3 +229,66 @@ are serialized by a mutex inside the plugin.
 
 The core currently sends every request as `AGENT_CAP_TEXT_GEN`, so the sdcpp engine is driven
 through the C ABI directly until the core routes image tasks.
+
+## The sherpa engine
+
+`engines/sherpa` (`agent-engine-sherpa`) wraps [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) through
+its C API for speech: Kokoro text-to-speech and Whisper / NeMo transducer (Parakeet TDT) speech-to-text.
+Caps `AGENT_CAP_TTS | AGENT_CAP_ASR`, flags 0.
+
+Build against the official prebuilt shared release (`sherpa-onnx-v<ver>-linux-x64-shared.tar.bz2` from the
+GitHub releases page; tested with v2.0.1):
+
+```sh
+cmake -B build -DAGENT_ENGINE_SHERPA=ON -DSHERPA_ONNX_ROOT=/path/to/sherpa-onnx-v2.0.1-linux-x64-shared
+```
+
+The plugin's RPATH is `$ORIGIN`: `libsherpa-onnx-c-api.so` and `libonnxruntime.so` ship **next to**
+`agent-engine-sherpa.so` (the build copies them there). Keep the three files together when installing.
+
+`Config::model` may be empty. Everything comes from `Config::engine_options`; only the components that are
+configured get loaded:
+
+```json
+{
+  "threads": 2,
+  "provider": "cpu",
+  "tts": {
+    "kokoro": {"model": "kokoro-en-v0_19/model.onnx", "voices": "kokoro-en-v0_19/voices.bin",
+               "tokens": "kokoro-en-v0_19/tokens.txt", "lexicon": "lexicon-en-us.txt",
+               "data_dir": "kokoro-en-v0_19/espeak-ng-data", "lang": "en-us"},
+    "speaker_id": 0,
+    "speed": 1.0
+  },
+  "asr": {
+    "whisper": {"encoder": "tiny.en-encoder.int8.onnx", "decoder": "tiny.en-decoder.int8.onnx",
+                "tokens": "tiny.en-tokens.txt", "language": "en", "task": "transcribe"}
+  }
+}
+```
+
+`asr` takes exactly one family: `whisper` (`encoder`, `decoder`, `tokens`, optional `language`, `task`),
+`nemo_transducer` (Parakeet TDT: `encoder`, `decoder`, `joiner`, `tokens`) or `transducer` (same files, plus an
+optional `model_type`). `lexicon`, `data_dir` and `lang` are optional for Kokoro, but sherpa-onnx 2.x removed
+espeak-ng and ignores `data_dir`, so English text needs a lexicon
+([lexicon-en-us.txt](https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/lexicon-en-us.txt));
+words missing from it are skipped. Paths are checked at `create()`; a missing file fails with
+`AGENT_ERR_MODEL_LOAD_FAILED`.
+
+Requests are routed by task and content:
+
+| `task` | Last user message | Result |
+|---|---|---|
+| `TTS` | text | speech: WAV file in `output_dir` (`FILE`, `audio/wav`) + a short `TEXT` summary |
+| `ASR` or `TEXT_GEN` | audio `FILE`/`BYTES` part | transcript as a `TEXT` part |
+| `ASR` or `TEXT_GEN` | text, no audio | speech, as for `TTS` |
+
+A task whose component is not configured returns `AGENT_ERR_UNSUPPORTED`. Audio input must be a 16-bit PCM
+mono WAV; other sample rates are resampled to 16 kHz by sherpa-onnx. During synthesis each sentence is
+streamed through `on_chunk(AGENT_CHUNK_AUDIO, samples, n_samples * sizeof(float))` (mono f32 at the model's
+sample rate, which the `TEXT` part reports), progress goes to `on_progress(step, 1000)`, and `cancel` stops
+generation at the next sentence. ASR reports progress 0/1 and 1/1 and the transcript as one `TEXT` chunk.
+
+Limitation: sherpa-onnx validates configs and returns NULL for most errors, but some malformed model files
+(for example a corrupt tokens file) make it call `exit()` inside `create()`. Only point it at real model files.
+Licences: Kokoro (Apache-2.0) and Whisper (MIT) are fine for the catalogue.

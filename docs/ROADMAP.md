@@ -187,6 +187,8 @@ Priority wave A (v1 **starter pack**, installed by default by `agent setup`):
 - [ ] `llama`: + libmtmd (vision/audio/video in), OCR models, embeddings, rerank, **decision models** (choice/score/yes-no)
   - [x] libmtmd image + audio input (`engine_options.mmproj`); video input still open (needs ffmpeg)
 - [ ] `sherpa`: Kokoro TTS, Parakeet / Whisper STT, VAD, diarization (Windows-friendly breadth)
+  - [x] v1 (`engines/sherpa`, sherpa-onnx 2.0.1 prebuilt C API): Kokoro TTS (WAV artifact + streamed audio chunks, progress, cancel), Whisper / NeMo transducer (Parakeet) ASR; Linux x64 tested with kokoro-en-v0_19 + whisper-tiny.en
+  - [ ] VAD, diarization, VITS/Matcha/Kitten TTS, Windows build
 - [ ] `sdcpp`: stable-diffusion.cpp txt2img / img2img / video (Wan, LTX) with progress + cancel
   - [x] txt2img + img2img with progress + per-step cancel (`agent-engine-sdcpp`, stable-diffusion.cpp master-1028, opt-in `AGENT_ENGINE_SDCPP`)
   - [ ] video (Wan, LTX)
