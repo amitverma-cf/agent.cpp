@@ -35,8 +35,11 @@ owner/repo[@revision][:selector]
 - `selector` containing `.` or `/` is a **file path** inside the repo. A unique basename also works.
 - Any other `selector` is a **quant tag** such as `Q4_K_M` or `IQ2_XXS`. The hub matches it
   case-insensitively against `.gguf` basenames. An exact tag beats a longer one (`Q4_K` picks
-  `*-q4_k.gguf` over `*-q4_k_m.gguf`). `mmproj` files are ignored. Split GGUFs
-  (`-00001-of-0000N`) are reported as not supported yet.
+  `*-q4_k.gguf` over `*-q4_k_m.gguf`). `mmproj` files are ignored. For a split GGUF
+  (`-00001-of-0000N`), the first shard is selected and `pull_model` downloads every shard, each
+  size- and sha256-checked, into the same folder. The catalogue points at shard 1, which llama.cpp
+  loads together with the rest, and `remove_model` deletes all shards. This is unit-tested, but not
+  yet against a real split repo.
 - No selector: the repo must contain exactly one `.gguf`.
 - The prefixes `https://huggingface.co/`, `hf.co/` and `hf://` are stripped.
 
