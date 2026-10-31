@@ -198,8 +198,11 @@ more models than fit in memory at once. The default model is then only loaded if
 has no `"model"`.
 
 When the graph finishes, the CLI prints the status and the final state. When it is interrupted,
-it prints the reason, any pending tool calls and the command to resume. Checkpoints live in the
-workspace's SQLite store.
+it prints the reason, any paused parallel branches and pending tool calls, and the command to
+resume (`--input` answers every paused branch). Checkpoints and the graph event log live in
+`<workspace>/memory/checkpoints.sqlite3` (the SQLite checkpointer), unless the graph file says
+`"checkpointer": "memory"`. Runs checkpointed by earlier CLI versions in the workspace's key-value
+store cannot be resumed.
 
 ## Code layout
 

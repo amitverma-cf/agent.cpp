@@ -1043,6 +1043,8 @@ struct LoadedGraph {
     // Hints for the host (the CLI picks the engine/model from them); the loader does not act on them.
     std::string engine;
     std::string model;
+    // "sqlite", "memory" or "" (host default). The CLI's `agent run` opens the matching checkpointer.
+    std::string checkpointer;
     std::vector<McpServerConfig> mcp_servers; // as declared
     // Non-fatal findings: unknown fields, unreachable nodes, cycles without a conditional edge, ...
     std::vector<std::string> warnings;

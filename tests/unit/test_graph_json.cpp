@@ -83,6 +83,7 @@ TEST_CASE("agent.json: agent nodes, static edges and hints", "[graph_json]") {
         "name": "two_step",
         "engine": "llama",
         "model": "qwen3-4b",
+        "checkpointer": "sqlite",
         "description": "test graph",
         "nodes": [
             {"name": "first", "kind": "agent", "system_prompt": "be brief", "input_key": "topic", "output_key": "draft"},
@@ -96,6 +97,7 @@ TEST_CASE("agent.json: agent nodes, static edges and hints", "[graph_json]") {
     CHECK(lg.warnings.empty());
     CHECK(lg.engine == "llama");
     CHECK(lg.model == "qwen3-4b");
+    CHECK(lg.checkpointer == "sqlite");
     CHECK(lg.description == "test graph");
     CHECK(lg.graph.name == "two_step");
     CHECK(lg.graph.entry == "first");
@@ -116,6 +118,19 @@ TEST_CASE("agent.json: agent nodes, static edges and hints", "[graph_json]") {
     CHECK(run.state.histories.count("first") == 1);
     CHECK(run.state.histories.count("shared") == 1);
     CHECK(run.state.histories.count("second") == 0);
+}
+
+TEST_CASE("agent.json: checkpointer hint", "[graph_json]") {
+    auto memory = agent::parse_graph_json(R"({"checkpointer": "memory", "nodes": [{"name": "a", "kind": "agent"}]})");
+    REQUIRE(memory.ok);
+    CHECK(memory.value.checkpointer == "memory");
+    auto unset = agent::parse_graph_json(R"({"nodes": [{"name": "a", "kind": "agent"}]})");
+    REQUIRE(unset.ok);
+    CHECK(unset.value.checkpointer.empty());
+    auto bad = agent::parse_graph_json(R"({"checkpointer": "postgres", "nodes": [{"name": "a", "kind": "agent"}]})");
+    REQUIRE_FALSE(bad.ok);
+    CHECK(bad.error.code == agent::ErrorCode::InvalidConfig);
+    CHECK(bad.error.message.find("checkpointer") != std::string::npos);
 }
 
 TEST_CASE("agent.json: routes on state equality with a default", "[graph_json]") {
