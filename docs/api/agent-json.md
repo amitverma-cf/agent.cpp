@@ -13,6 +13,7 @@ struct LoadedGraph {
     std::string description;
     std::string engine;                       // hint for the host, not acted on
     std::string model;                        // hint for the host, not acted on
+    std::string checkpointer;                 // "sqlite", "memory" or "": hint for the host
     std::vector<McpServerConfig> mcp_servers; // as declared
     std::vector<std::string> warnings;        // non-fatal findings
     std::shared_ptr<void> storage;            // what graph's user_data pointers refer to
@@ -50,6 +51,7 @@ Keep the `LoadedGraph` alive while its `graph` is in use, because route tables, 
   "description": "free text",
   "engine": "llama",
   "model": "qwen3-4b-instruct",
+  "checkpointer": "sqlite",
   "entry": "research",
   "max_steps": 1000,
   "mcp_servers": [ { "name": "fs", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."] } ],
@@ -63,6 +65,7 @@ Keep the `LoadedGraph` alive while its `graph` is in use, because route tables, 
 | `name` | string | file stem, or `"graph"` for inline JSON | `Graph::name` |
 | `description` | string | | Copied to `LoadedGraph::description` |
 | `engine`, `model` | string | | Hints for the host (the CLI uses them to pick the engine plugin and model). The loader only returns them |
+| `checkpointer` | `"sqlite"` or `"memory"` | host default | Hint for where the host keeps [checkpoints](graph.md#checkpointers), copied to `LoadedGraph::checkpointer`; any other value is an error. `agent run` uses SQLite unless this says `"memory"` (then `--resume` cannot find the run in a later invocation). The loader does not open anything |
 | `entry` | string | first node | Entry node |
 | `max_steps` | integer >= 1 | 1000 | `Graph::max_steps` |
 | `mcp_servers` | array | | MCP servers to connect at load time; see below |

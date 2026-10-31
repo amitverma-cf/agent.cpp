@@ -513,8 +513,17 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
     auto graph = load_graph_json(*session, graph_path);
     if (!graph.ok) return report_error(graph.error);
 
+    // Checkpoints and the event log go to <workspace>/memory/checkpoints.sqlite3, so --resume works
+    // across invocations; "checkpointer": "memory" in the file keeps them in this process only.
+    const bool memory_checkpoints = graph.value.checkpointer == "memory";
+    CheckpointerConfig cp_config;
+    if (!memory_checkpoints) cp_config.path = (fs::path(base.workspace_dir) / "memory" / "checkpoints.sqlite3").string();
+    auto checkpointer = open_checkpointer(memory_checkpoints ? in_memory_checkpointer() : store::sqlite_checkpointer(), cp_config);
+    if (!checkpointer.ok) return report_error(checkpointer.error);
+
     GraphRun run;
     run.models = &registry;
+    run.checkpointer = checkpointer.value;
     const std::string_view resume_id = cl.get("resume");
     run.thread_id = std::string(resume_id.empty() ? cl.get("thread", "run") : resume_id);
     for (const Flag &f : cl.flags) {
@@ -538,6 +547,8 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
     std::printf("status: %s\n", status_name(run.status));
     if (run.status == GraphRunStatus::Interrupted) {
         std::printf("interrupted at %s: %s\n", run.interrupt_node.c_str(), run.interrupt_reason.c_str());
+        for (const GraphInterrupt &i : run.interrupts)
+            if (!i.branch.empty()) std::printf("  branch %s paused at %s: %s\n", i.branch.c_str(), i.node.c_str(), i.reason.c_str());
         for (const ToolCall &tc : run.pending_tool_calls) std::printf("  pending tool call: %s %s\n", tc.name.c_str(), tc.arguments.c_str());
         std::printf("resume with: agent run %s --resume %s --input \"<reply or approve>\"\n", graph_path.c_str(), run.thread_id.c_str());
     }

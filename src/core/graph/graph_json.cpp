@@ -428,14 +428,17 @@ Result<LoadedGraph> parse_document(Parser &p, simdjson::dom::element root, std::
 
     simdjson::dom::object top;
     if (root.get(top) != simdjson::SUCCESS) return failure(p.error("", "the top level must be a JSON object"));
-    p.check_fields(top, "", {"name", "entry", "engine", "model", "max_steps", "mcp_servers", "nodes", "edges"});
+    p.check_fields(top, "", {"name", "entry", "engine", "model", "checkpointer", "max_steps", "mcp_servers", "nodes", "edges"});
 
     g.name = std::move(default_name);
     if (!read_string(p, top, "name", g.name, "", err) || !read_string(p, top, "description", out.description, "", err) ||
         !read_string(p, top, "engine", out.engine, "", err) || !read_string(p, top, "model", out.model, "", err) ||
-        !read_string(p, top, "entry", g.entry, "", err) || !read_int(p, top, "max_steps", g.max_steps, "", err))
+        !read_string(p, top, "checkpointer", out.checkpointer, "", err) || !read_string(p, top, "entry", g.entry, "", err) ||
+        !read_int(p, top, "max_steps", g.max_steps, "", err))
         return failure(err);
     if (g.max_steps < 1) return failure(p.error("", "\"max_steps\" must be >= 1"));
+    if (!out.checkpointer.empty() && out.checkpointer != "sqlite" && out.checkpointer != "memory")
+        return failure(p.error("", "\"checkpointer\" must be \"sqlite\" or \"memory\""));
 
     // mcp_servers
     simdjson::dom::element servers_el;
