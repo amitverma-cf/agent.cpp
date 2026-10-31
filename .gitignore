@@ -69,3 +69,5 @@ Testing/
 .cache/
 local
 .workspace
+# Claude Code local state (subagent worktrees)
+.claude/
