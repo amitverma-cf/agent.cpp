@@ -6,6 +6,7 @@
 #include <agent-cpp/hub.hpp>
 #include <agent-cpp/store_sqlite.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -385,6 +386,46 @@ bool run_prompt(std::string_view name, std::string_view arguments, void *) {
     return ask_yes_no("allow this tool call?");
 }
 
+// ModelSpec::on_load for graph models: use the run's store (one SQLite connection for the whole run)
+// and the MCP tools load_graph_json connected on the run's Session.
+Result<void> share_home(Session &session, const ModelSpec &, void *user_data) {
+    const Session &home = *static_cast<const Session *>(user_data);
+    session.config.memory = home.config.memory;
+    session.memory_state = home.memory_state;
+    bool added = false;
+    for (const Tool &t : home.config.tools) {
+        if (t.name.find('.') == std::string_view::npos || session.tool_by_name.count(std::string(t.name))) continue; // "<server>.<tool>"
+        session.config.tools.push_back(t);
+        added = true;
+    }
+    if (added) rebuild_tool_index(session);
+    return ok();
+}
+
+// Registers a model named in the graph (catalogue name or file path, as written) with the registry.
+Result<void> register_graph_model(const Context &ctx, ModelRegistry &registry, const std::string &name, const Config &base, bool inprocess,
+                                  Session *home) {
+    if (has_model(registry, name)) return ok();
+    auto model = resolve_model(name, {}, catalog_refs(ctx), file_exists);
+    if (!model.ok) return fail(model.error.code, "model '" + name + "': " + model.error.message);
+    auto engine = load_engine_for(ctx, {}, model.value.path);
+    if (!engine.ok) return fail(engine.error.code, "model '" + name + "': " + engine.error.message);
+
+    ModelSpec spec;
+    spec.config = base;
+    spec.config.provider = AiProvider::Engine;
+    spec.config.model = model.value.path;
+    if (auto cat = agent::hub::load_catalog(catalog_path(ctx)); cat.ok)
+        for (const auto &entry : cat.value)
+            if (entry.name == model.value.name && entry.path == model.value.path) spec = agent::hub::model_spec_from_entry(entry, base);
+    spec.name = name;
+    spec.config.engine = engine.value.name;
+    spec.config.engine_isolation = cli_engine_isolation(inprocess, engine.value.isolation);
+    spec.on_load = share_home;
+    spec.on_load_user_data = home;
+    return register_model(registry, std::move(spec));
+}
+
 const char *status_name(GraphRunStatus s) {
     switch (s) {
     case GraphRunStatus::Pending: return "pending";
@@ -408,33 +449,72 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
     if (!hints.ok) return report_error(hints.error);
     for (const auto &w : hints.value.warnings) std::fprintf(stderr, "[warning] %s\n", w.c_str());
 
-    std::string_view model_spec = cl.get("model", hints.value.model);
-    const auto catalog = catalog_refs(ctx);
-    auto model = resolve_model(model_spec, ctx.config.default_model, catalog, file_exists);
-    if (!model.ok) return report_error(model.error);
-    auto engine = load_engine_for(ctx, cl.get("engine", hints.value.engine), model.value.path);
-    if (!engine.ok) return report_error(engine.error);
+    // Agent nodes with a "model" run on that model from the registry (memory_budget_mb, LRU unload). The
+    // default model is loaded only when some Agent node has no "model" (or there is no Agent node);
+    // otherwise the run's own Session is a model-less store/tool host.
+    std::vector<std::string> node_models;
+    bool needs_default = true;
+    bool any_agent = false;
+    for (const GraphNode &n : hints.value.graph.nodes) {
+        if (n.kind != GraphNodeKind::Agent) continue;
+        if (!any_agent) needs_default = false;
+        any_agent = true;
+        if (n.model.empty()) needs_default = true;
+        else if (std::find(node_models.begin(), node_models.end(), n.model) == node_models.end()) node_models.push_back(n.model);
+    }
 
-    Config cfg;
-    cfg.provider = AiProvider::Engine;
-    cfg.engine = engine.value.name;
-    cfg.engine_isolation = cli_engine_isolation(cl.has("inprocess"), engine.value.isolation);
-    cfg.engine_options = std::string(cl.get("engine-options"));
-    cfg.model = model.value.path;
-    cfg.workspace_dir = workspace_dir(ctx, cl.get("workspace"));
-    cfg.memory = {.store = store::sqlite_store()};
-    cfg.context_window = ctx.config.context_window;
-    cfg.max_tokens = ctx.config.max_tokens;
-    cfg.temperature = ctx.config.temperature;
-    cfg.permission_check = run_permission;
-    cfg.permission_prompt = run_prompt;
-    auto session = init(cfg);
-    if (!session.ok) return report_error(session.error);
+    Config base;
+    base.workspace_dir = workspace_dir(ctx, cl.get("workspace"));
+    base.context_window = ctx.config.context_window;
+    base.max_tokens = ctx.config.max_tokens;
+    base.temperature = ctx.config.temperature;
+    base.permission_check = run_permission;
+    base.permission_prompt = run_prompt;
 
-    auto graph = load_graph_json(session.value, graph_path);
+    ModelRegistry registry(ModelBudget{.ram_bytes = static_cast<uint64_t>(std::max<int64_t>(0, ctx.config.memory_budget_mb)) << 20});
+    ModelLease default_lease; // held for the whole run: the run's Session
+    Session plain;            // the run's Session when no default model is needed
+    Session *session = &plain;
+    std::string model_label = "no default model";
+    std::string engine_label = "-";
+    if (needs_default) {
+        std::string_view model_spec = cl.get("model", hints.value.model);
+        auto model = resolve_model(model_spec, ctx.config.default_model, catalog_refs(ctx), file_exists);
+        if (!model.ok) return report_error(model.error);
+        auto engine = load_engine_for(ctx, cl.get("engine", hints.value.engine), model.value.path);
+        if (!engine.ok) return report_error(engine.error);
+        ModelSpec spec;
+        spec.name = model.value.name;
+        spec.config = base;
+        spec.config.provider = AiProvider::Engine;
+        spec.config.engine = engine.value.name;
+        spec.config.engine_isolation = cli_engine_isolation(cl.has("inprocess"), engine.value.isolation);
+        spec.config.engine_options = std::string(cl.get("engine-options"));
+        spec.config.model = model.value.path;
+        spec.config.memory = {.store = store::sqlite_store()};
+        if (auto r = register_model(registry, std::move(spec)); !r.ok) return report_error(r.error);
+        auto lease = acquire_model(registry, model.value.name);
+        if (!lease.ok) return report_error(lease.error);
+        default_lease = std::move(lease.value);
+        session = default_lease.session;
+        model_label = model.value.name;
+        engine_label = engine.value.name;
+    } else {
+        Config cfg = base;
+        cfg.provider = AiProvider::Mock;
+        cfg.memory = {.store = store::sqlite_store()};
+        auto s = init(cfg);
+        if (!s.ok) return report_error(s.error);
+        plain = std::move(s.value);
+    }
+    for (const auto &name : node_models)
+        if (auto r = register_graph_model(ctx, registry, name, base, cl.has("inprocess"), session); !r.ok) return report_error(r.error);
+
+    auto graph = load_graph_json(*session, graph_path);
     if (!graph.ok) return report_error(graph.error);
 
     GraphRun run;
+    run.models = &registry;
     const std::string_view resume_id = cl.get("resume");
     run.thread_id = std::string(resume_id.empty() ? cl.get("thread", "run") : resume_id);
     for (const Flag &f : cl.flags) {
@@ -447,10 +527,11 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
         set_state(run.state, f.value.substr(0, eq), f.value.substr(eq + 1));
     }
 
-    std::fprintf(stderr, "running %s (thread %s) with %s on %s\n", graph_path.c_str(), run.thread_id.c_str(), model.value.name.c_str(),
-                 engine.value.name.c_str());
-    auto res = resume_id.empty() ? run_graph(session.value, graph.value.graph, run)
-                                 : resume_graph(session.value, graph.value.graph, resume_id, run, cl.get("input"));
+    std::fprintf(stderr, "running %s (thread %s) with %s on %s\n", graph_path.c_str(), run.thread_id.c_str(), model_label.c_str(),
+                 engine_label.c_str());
+    for (const auto &name : node_models) std::fprintf(stderr, "  node model: %s\n", name.c_str());
+    auto res = resume_id.empty() ? run_graph(*session, graph.value.graph, run)
+                                 : resume_graph(*session, graph.value.graph, resume_id, run, cl.get("input"));
 
     for (const GraphEvent &e : run.events)
         if (e.type == GraphEventType::NodeEnd) std::fprintf(stderr, "  done: %s\n", e.node.c_str());

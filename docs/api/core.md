@@ -68,6 +68,7 @@ enum class ErrorCode {
     SandboxViolation,     // path escapes workspace_dir in sandbox mode
     PermissionDenied,     // permission_check returned Deny, or an Ask was declined
     EngineCrashed,        // out-of-process engine host died, hit the watchdog, or hit the restart limit
+    OutOfMemory,          // a ModelRegistry could not fit a model in its budget (see models.md)
 };
 ```
 

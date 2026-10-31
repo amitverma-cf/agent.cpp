@@ -232,6 +232,36 @@ TEST_CASE("models.json round trip, escaping and remove", "[hub]") {
     std::filesystem::remove_all(dir);
 }
 
+TEST_CASE("model registry specs from models.json entries", "[hub][models]") {
+    const std::string dir = "/tmp/agent_test_hub_specs";
+    std::filesystem::create_directories(dir);
+    write_file(dir + "/chat.gguf", "gguf");
+    const std::vector<CatalogEntry> entries = {
+        {"chat", "o/r", "chat.gguf", dir + "/chat.gguf", 4, "", "apache-2.0"},
+        {"vision", "o/r", "v.onnx", dir + "/missing.onnx", 1234, "", ""},
+        {"sd", "o/r", "sd.SAFETENSORS", dir + "/sd.SAFETENSORS", 9, "", ""},
+    };
+    agent::Config base;
+    base.workspace_dir = "/tmp/ws";
+    base.context_window = 8192;
+    const std::vector<agent::ModelSpec> specs = model_specs_from_catalog(entries, base);
+    REQUIRE(specs.size() == 3);
+    CHECK(specs[0].name == "chat");
+    CHECK(specs[0].config.provider == agent::AiProvider::Engine);
+    CHECK(specs[0].config.engine == "llama");
+    CHECK(specs[0].config.model == dir + "/chat.gguf");
+    CHECK(specs[0].config.context_window == 8192);
+    CHECK(specs[0].config.workspace_dir == "/tmp/ws");
+    CHECK(specs[0].estimated_bytes == 0); // file present: the registry estimates it
+    CHECK(specs[1].config.engine == "onnx");
+    CHECK(specs[1].estimated_bytes == 1234); // file missing: catalogued size
+    CHECK(specs[2].config.engine == "sdcpp");
+
+    base.engine = "/opt/agent-engine-custom.so"; // an explicit engine wins
+    CHECK(model_spec_from_entry(entries[0], base).config.engine == "/opt/agent-engine-custom.so");
+    std::filesystem::remove_all(dir);
+}
+
 TEST_CASE("proxy URL parsing and NO_PROXY matching", "[hub]") {
     auto p = parse_proxy_url("http://127.0.0.1:39125");
     REQUIRE(p.ok);

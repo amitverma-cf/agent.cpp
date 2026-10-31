@@ -160,4 +160,14 @@ Result<std::vector<CatalogEntry>> list_models(const std::string &catalog_path);
 // Removes the catalogue entry and (when delete_file) the model file. KeyNotFound if absent.
 Result<void> remove_model(std::string_view name, const std::string &catalog_path, bool delete_file = true);
 
+// -------------------------- Model registry --------------------------
+
+// An agent::ModelSpec (see agent::register_model) for a catalogue entry: name = entry.name, config =
+// base with model = entry.path and provider = Engine. When base.engine is empty the engine is picked
+// from the file type (.gguf -> llama, .onnx -> onnx, .safetensors/.ckpt/.sft -> sdcpp). The memory
+// estimate is left to the registry (estimated_bytes = 0), except that a missing file falls back to
+// the catalogued size so the registry can still plan.
+agent::ModelSpec model_spec_from_entry(const CatalogEntry &entry, const Config &base);
+std::vector<agent::ModelSpec> model_specs_from_catalog(std::span<const CatalogEntry> entries, const Config &base);
+
 } // namespace agent::hub

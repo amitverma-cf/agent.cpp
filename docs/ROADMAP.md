@@ -149,7 +149,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 **Next up** (in order):
 - [ ] Engine host v2: concurrent requests (keep llama continuous batching under process isolation), shared memory for tensors/media
 - [ ] Explicit task on the public API (`InferRequest::task` / `run_task`) instead of the lowest-capability-bit heuristic
-- [ ] Model registry with RAM/VRAM budget and LRU unload
+- [x] Model registry with RAM/VRAM budget and LRU unload (`ModelRegistry`, `acquire_model` leases, `GraphNode::model`, CLI `memory_budget_mb`; see [docs/api/models.md](api/models.md))
 - [ ] ABI v2: `struct_size` fields for compatible growth (after the engine host lands)
 - [ ] `CheckpointerOps` + persisted event log; per-branch checkpoints and interrupts in parallel fan-outs
 - [ ] OS sandboxing follow-ups: test real engines under the default engine policy, macOS profile, Windows AppContainer (filesystem/network), `"sandbox"` for MCP servers in `agent.json`
@@ -184,7 +184,8 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 ### Phase 2: Core v1 (3 to 4 weeks)
 - [x] Engine registry: load plugins by path, ABI/version check, capability query (`AiProvider::Engine`, mock engine plugin)
 - [x] Engine discovery from `engines.json` (`load_engine_manifest`)
-- [ ] Model registry from `models.json`: lazy load, LRU unload under a RAM/VRAM budget
+- [x] Model registry from `models.json`: lazy load, LRU unload under a RAM/VRAM budget (see [docs/api/models.md](api/models.md))
+  - [ ] VRAM accounting beyond `gpu_layers > 0` (GPU query, partial offload); per-model RSS for out-of-process engines
 - [x] `StoreOps` key-value store + in-memory default
 - [ ] `CheckpointerOps` / `VectorStoreOps` + in-memory implementations
   - [x] `VectorStoreOps` + `in_memory_vector_store()` (brute-force cosine); sqlite-vec implementation in `agent-store-sqlite` (see [docs/api/rag.md](api/rag.md)). `CheckpointerOps` still open

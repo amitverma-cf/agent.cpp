@@ -95,6 +95,7 @@ TEST_CASE("cli: config.json round trip", "[cli]") {
     c.context_window = 8192;
     c.max_tokens = 256;
     c.temperature = 0.25f;
+    c.memory_budget_mb = 6144;
 
     auto back = config_from_json(config_to_json(c));
     REQUIRE(back.ok);
@@ -110,6 +111,7 @@ TEST_CASE("cli: config.json round trip", "[cli]") {
     CHECK(back.value.context_window == 8192);
     CHECK(back.value.max_tokens == 256);
     CHECK(back.value.temperature == Catch::Approx(0.25f));
+    CHECK(back.value.memory_budget_mb == 6144);
 
     // Unknown keys are ignored; missing keys keep their defaults.
     auto partial = config_from_json(R"({"workspace": "/w", "future_key": {"x": 1}, "temperature": 1})");
@@ -117,10 +119,12 @@ TEST_CASE("cli: config.json round trip", "[cli]") {
     CHECK(partial.value.workspace == "/w");
     CHECK(partial.value.context_window == 4096);
     CHECK(partial.value.temperature == Catch::Approx(1.0f));
+    CHECK(partial.value.memory_budget_mb == 0);
 
     CHECK_FALSE(config_from_json("[1,2]").ok);
     CHECK_FALSE(config_from_json("{\"context_window\": 0}").ok);
     CHECK_FALSE(config_from_json("not json").ok);
+    CHECK_FALSE(config_from_json("{\"memory_budget_mb\": -1}").ok);
 }
 
 TEST_CASE("cli: config and engines files on disk", "[cli]") {

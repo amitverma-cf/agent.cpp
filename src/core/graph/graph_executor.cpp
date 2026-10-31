@@ -102,6 +102,7 @@ struct Exec {
     const Exec *parent = nullptr;                      // enclosing chain (branches only)
     std::vector<std::string> *branch_writes = nullptr; // every key this branch wrote (branches only)
     ScopedIndex *scoped_index = nullptr;               // top level only: persists user:/app: writes
+    ModelRegistry *models = nullptr;                   // GraphRun::models (GraphNode::model)
 };
 
 // Approval for the tool calls an interrupt_before_tools Agent node paused on.
@@ -236,8 +237,8 @@ void fire_node_hooks(Session &session, FlowMemory &memory, const GraphNode &node
     }
 }
 
-std::string run_approved_call(Exec &x, FlowMemory &memory, const GraphNode &node, const ToolCall &tc, const PendingResume &resume) {
-    Session &session = x.session;
+std::string run_approved_call(Exec &x, Session &session, FlowMemory &memory, const GraphNode &node, const ToolCall &tc,
+                              const PendingResume &resume) {
     log_event(x.events, GraphEventType::ToolCall, node.name, tc.name, tc.arguments);
     trigger_event(session, EventType::OnToolCall, bytes_of(tc.name));
 
@@ -280,6 +281,22 @@ Result<NodeResult> run_agent_node(Exec &x, const GraphNode &node, const PendingR
         if (!extra.value.empty()) system_prompt = system_prompt.empty() ? std::move(extra.value) : extra.value + "\n" + system_prompt;
     }
 
+    // GraphNode::model: the turn runs on that model's Session, leased for the whole node. Every lease
+    // shares one Session, so turns on it are serialized.
+    Session *session = &x.session;
+    ModelLease lease;
+    std::unique_lock<std::mutex> turn_lock;
+    if (!node.model.empty()) {
+        if (!x.models)
+            return fail<NodeResult>(ErrorCode::InvalidConfig,
+                                    "agent node '" + node.name + "' names model '" + node.model + "' but GraphRun::models is not set");
+        auto acquired = acquire_model(*x.models, node.model);
+        if (!acquired.ok) return fail<NodeResult>(acquired.error.code, "agent node '" + node.name + "': " + acquired.error.message);
+        lease = std::move(acquired.value);
+        session = lease.session;
+        turn_lock = std::unique_lock<std::mutex>(*lease.turn_mutex);
+    }
+
     FlowMemory &memory = history_for(x, history_name(node));
     std::string prompt = node.prompt;
     if (!node.input_key.empty() && has_state(x.state, node.input_key)) prompt = std::string(get_state(x.state, node.input_key));
@@ -306,13 +323,13 @@ Result<NodeResult> run_agent_node(Exec &x, const GraphNode &node, const PendingR
         for (const auto &tc : resume->calls) {
             Message tool_msg;
             tool_msg.role = "tool";
-            tool_msg.content = run_approved_call(x, memory, node, tc, *resume);
+            tool_msg.content = run_approved_call(x, *session, memory, node, tc, *resume);
             tool_msg.tool_call_id = tc.id;
             memory.history.push_back(std::move(tool_msg));
         }
-        reply = run_turn(x.session, memory, "");
+        reply = run_turn(*session, memory, "");
     } else {
-        reply = run_turn(x.session, memory, prompt);
+        reply = run_turn(*session, memory, prompt);
     }
     if (!reply.ok) return fail<NodeResult>(reply.error.code, reply.error.message);
 
@@ -465,7 +482,8 @@ Result<NodeResult> run_parallel_node(Exec &x, const GraphNode &node) {
                 .events = b.events,
                 .parent = &x,
                 .branch_writes = &b.writes,
-                .scoped_index = nullptr};
+                .scoped_index = nullptr,
+                .models = x.models};
         b.result = run_branch(bx, node.branches[i], node.name);
     };
 
@@ -605,7 +623,8 @@ Result<void> drive(Session &session, const Graph &graph, GraphRun &run, ScopedIn
            .events = run.events,
            .parent = nullptr,
            .branch_writes = nullptr,
-           .scoped_index = &index};
+           .scoped_index = &index,
+           .models = run.models};
 
     auto seeded = drain_writes(x, {}); // caller seeds and human input
     if (!seeded.ok) return finish(session, graph, run, seeded.error);

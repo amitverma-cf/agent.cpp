@@ -338,7 +338,8 @@ std::string config_to_json(const CliConfig &c) {
            "},\n";
     out += "  \"context_window\": " + std::to_string(c.context_window) + ",\n";
     out += "  \"max_tokens\": " + std::to_string(c.max_tokens) + ",\n";
-    out += "  \"temperature\": " + std::string(temp) + "\n";
+    out += "  \"temperature\": " + std::string(temp) + ",\n";
+    out += "  \"memory_budget_mb\": " + std::to_string(c.memory_budget_mb) + "\n";
     out += "}\n";
     return out;
 }
@@ -365,6 +366,8 @@ Result<CliConfig> config_from_json(std::string_view json) {
     c.context_window = static_cast<int>(get_int(doc, "context_window", c.context_window));
     c.max_tokens = static_cast<int>(get_int(doc, "max_tokens", c.max_tokens));
     c.temperature = static_cast<float>(get_num(doc, "temperature", c.temperature));
+    c.memory_budget_mb = get_int(doc, "memory_budget_mb", 0);
+    if (c.memory_budget_mb < 0) return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: memory_budget_mb must be >= 0");
     if (c.context_window <= 0 || c.max_tokens <= 0)
         return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: context_window and max_tokens must be positive");
     return ok(std::move(c));

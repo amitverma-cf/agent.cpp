@@ -597,6 +597,31 @@ std::string default_models_dir() {
 
 Result<std::vector<CatalogEntry>> list_models(const std::string &catalog_path) { return load_catalog(catalog_path); }
 
+agent::ModelSpec model_spec_from_entry(const CatalogEntry &entry, const Config &base) {
+    agent::ModelSpec spec;
+    spec.name = entry.name;
+    spec.config = base;
+    spec.config.provider = AiProvider::Engine;
+    spec.config.model = entry.path;
+    if (spec.config.engine.empty()) {
+        std::string ext = std::filesystem::path(entry.path).extension().string();
+        for (char &c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (ext == ".gguf") spec.config.engine = "llama";
+        else if (ext == ".onnx") spec.config.engine = "onnx";
+        else if (ext == ".safetensors" || ext == ".ckpt" || ext == ".sft") spec.config.engine = "sdcpp";
+    }
+    std::error_code ec;
+    if (!std::filesystem::exists(entry.path, ec)) spec.estimated_bytes = entry.size;
+    return spec;
+}
+
+std::vector<agent::ModelSpec> model_specs_from_catalog(std::span<const CatalogEntry> entries, const Config &base) {
+    std::vector<agent::ModelSpec> out;
+    out.reserve(entries.size());
+    for (const auto &e : entries) out.push_back(model_spec_from_entry(e, base));
+    return out;
+}
+
 Result<void> remove_model(std::string_view name, const std::string &catalog_path, bool delete_file) {
     auto cat = load_catalog(catalog_path);
     if (!cat.ok) return fail(cat.error.code, cat.error.message);

@@ -35,6 +35,9 @@ enum class ErrorCode {
     // The out-of-process engine host died (crash, abort, exit, killed by the watchdog) or could not be
     // restarted. See Config::engine_isolation.
     EngineCrashed,
+    // A ModelRegistry could not fit a model in its RAM/VRAM budget (every other loaded model is in use
+    // or pinned). See acquire_model.
+    OutOfMemory,
 };
 
 struct Error {
@@ -654,6 +657,9 @@ struct GraphNode {
     // Agent: Pre/Post tool hooks active while this node runs. Inside a Parallel node's branches they
     // may be called from worker threads.
     std::vector<ToolHook> hooks;
+    // Agent: run the turn on this model of GraphRun::models (acquire_model) instead of the run's
+    // Session. Empty = the run's Session. The run fails when it is set and GraphRun::models is null.
+    std::string model;
 
     GraphFunctionFn function = nullptr; // Function
 
@@ -708,6 +714,8 @@ enum class GraphDurability { Exit, Async, Sync };
 
 enum class GraphRunStatus { Pending, Running, Completed, Interrupted, Failed };
 
+struct ModelRegistry; // model registry section below
+
 enum class GraphEventType { NodeStart, NodeEnd, StateWrite, ToolCall, ToolResult, Interrupt, Resume, Checkpoint, NodeFailed };
 
 struct GraphEvent {
@@ -736,6 +744,9 @@ struct GraphRun {
     std::vector<ToolCall> pending_tool_calls; // interrupt_before_tools: the calls awaiting approval
 
     std::vector<GraphEvent> events; // appended to by every run_graph / resume_graph call
+
+    // Resolves GraphNode::model. Not owned; must outlive the run_graph / resume_graph call.
+    ModelRegistry *models = nullptr;
 };
 
 // Runs graph from graph.entry. Per-thread state and Agent histories from this thread's latest
@@ -936,5 +947,114 @@ Result<LoadedGraph> parse_graph_json(std::string_view path_or_json);
 // same name is reused) and checks that every Tool node names a registered tool. On failure, servers
 // connected by this call are disconnected again.
 Result<LoadedGraph> load_graph_json(Session &session, std::string_view path_or_json);
+
+} // namespace agent
+
+// ============================================================================================
+// -------------------------- Model registry (Phase 2) --------------------------
+// Named model templates loaded lazily into Sessions under a RAM/VRAM budget. acquire_model returns
+// a lease on the model's Session, loading it with agent::init (and evicting least-recently-used idle,
+// unpinned models first) when needed. A leased or pinned model is never evicted. Thread-safe. Layered
+// on top of Session creation: a loaded model is an ordinary Session. See docs/api/models.md.
+// ============================================================================================
+
+namespace agent {
+
+struct ModelSpec;
+
+// Called once after a model's Session is created and before the first lease is handed out (e.g. to
+// register event hooks, add tools or share a store). An error unloads the model and fails the acquire.
+using ModelLoadFn = Result<void> (*)(Session &session, const ModelSpec &spec, void *user_data);
+
+struct ModelSpec {
+    std::string name; // unique per registry
+    // Template passed to agent::init: provider, engine, model path, engine_options, engine_isolation,
+    // context_window, max_tokens, workspace_dir, tools, permission gate, store, ...
+    Config config;
+    // Memory the loaded model needs. 0 = estimate_model_memory() from the file size(s) on disk.
+    uint64_t estimated_bytes = 0;
+    // Never evicted once loaded (unload_model still unloads it).
+    bool pinned = false;
+    ModelLoadFn on_load = nullptr;
+    void *on_load_user_data = nullptr;
+};
+
+struct ModelBudget {
+    uint64_t ram_bytes = 0;  // 0 = unlimited
+    uint64_t vram_bytes = 0; // 0 = unlimited. Best effort: only models with engine option gpu_layers > 0 count
+    // Load a model even when evicting every idle model does not make it fit (the acquire then
+    // succeeds over budget instead of failing with ErrorCode::OutOfMemory).
+    bool allow_overcommit = false;
+    // How long acquire_model waits for leases to be released when the model does not fit because the
+    // other models are in use. 0 = fail at once.
+    int wait_ms = 0;
+};
+
+struct ModelMemoryEstimate {
+    uint64_t file_bytes = 0; // model file(s) on disk: model path (a directory is summed), split-GGUF
+                             // shards, and files named by string values in engine_options (mmproj, ...)
+    uint64_t ram_bytes = 0;  // counted against ModelBudget::ram_bytes
+    uint64_t vram_bytes = 0; // counted against ModelBudget::vram_bytes (engine option gpu_layers > 0)
+};
+
+// The memory a spec will need once loaded: estimated_bytes when set, otherwise file size x a per-engine
+// factor (+ a KV-cache estimate for llama). Fails with FilesystemError when the model path is missing.
+// The factors are documented in docs/api/models.md.
+Result<ModelMemoryEstimate> estimate_model_memory(const ModelSpec &spec);
+
+// Resident set size of this process in bytes (/proc/self/statm, GetProcessMemoryInfo, task_info);
+// 0 when unavailable. Models running under EngineIsolation::Process live in agent-engine-host
+// children and do not show up here.
+uint64_t process_rss_bytes();
+
+// A handle: copies share one registry. The registry's state lives until the last handle and the last
+// lease are gone; models still loaded then are unloaded.
+struct ModelRegistry {
+    explicit ModelRegistry(ModelBudget budget = {});
+    std::shared_ptr<void> state;
+};
+
+// A model in use. The Session stays loaded (never evicted) while any copy of the lease exists;
+// destroying the last copy or release_model() returns it to the registry. One Session serves every
+// lease on the same model: concurrent run_turn calls on it need turn_mutex (or a graph Parallel node,
+// which uses the Session's worker arenas).
+struct ModelLease {
+    Session *session = nullptr;
+    std::string name;
+    std::shared_ptr<std::mutex> turn_mutex; // shared by every lease on this loaded model
+    std::shared_ptr<void> hold;             // internal: the lease count
+
+    Session &operator*() const { return *session; }
+    Session *operator->() const { return session; }
+    explicit operator bool() const { return session != nullptr; }
+};
+
+struct LoadedModelInfo {
+    std::string name;
+    uint64_t ram_bytes = 0;  // estimate counted against the RAM budget
+    uint64_t vram_bytes = 0; // estimate counted against the VRAM budget
+    bool pinned = false;
+    int leases = 0;           // outstanding leases (in use when > 0)
+    int64_t loaded_at_ms = 0; // wall clock, ms since the Unix epoch
+    int64_t last_used_ms = 0; // last acquire or release
+    int64_t load_time_ms = 0; // how long agent::init took
+};
+
+// Adds a model. Re-registering a name replaces the spec (an idle loaded model is unloaded first; a
+// leased one fails with InvalidConfig). Fails with InvalidConfig for an empty name.
+Result<void> register_model(ModelRegistry &registry, ModelSpec spec);
+bool has_model(const ModelRegistry &registry, std::string_view name);
+// Lease on the named model, loading it first if needed. KeyNotFound for an unregistered name;
+// OutOfMemory when it cannot fit (see ModelBudget); the agent::init error when loading fails.
+Result<ModelLease> acquire_model(ModelRegistry &registry, std::string_view name);
+// Returns the lease early (the same as destroying it). Safe to call twice.
+void release_model(ModelLease &lease);
+// Unloads a loaded model now. Not loaded = ok. InvalidConfig when it is leased.
+Result<void> unload_model(ModelRegistry &registry, std::string_view name);
+// Loaded (and loading) models, most recently used first.
+std::vector<LoadedModelInfo> loaded_models(const ModelRegistry &registry);
+// Replaces the budget and evicts idle, unpinned models until the loaded ones fit it.
+void set_budget(ModelRegistry &registry, const ModelBudget &budget);
+ModelBudget get_budget(const ModelRegistry &registry);
 
 } // namespace agent
