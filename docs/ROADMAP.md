@@ -140,12 +140,13 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 ### Status board (updated 2026-10-31)
 
 **In flight** (parallel worktrees, integrated to `main` one commit at a time after build + tests):
-- [ ] Out-of-process engine host (`agent-engine-host`, per-engine `isolation`, crash → `EngineCrashed` + auto-restart, hang watchdog, cross-process cancel). Fixes [LIMITATIONS](LIMITATIONS.md) §1
+- [x] Out-of-process engine host (`agent-engine-host`, per-engine `isolation`, crash → `EngineCrashed` + auto-restart, hang watchdog, cross-process cancel). Fixes [LIMITATIONS](LIMITATIONS.md) §1
 - [x] Remove `Flow`/`AgentScheduler`; the graph runtime becomes the only workflow API (tool hooks, shared/isolated history, context providers merged in)
-- [ ] `engines/trellis`: TRELLIS.2 image → GLB
+- [x] `engines/trellis`: TRELLIS.2 image → GLB (coarse path verified on CPU)
 - [x] `cmake --install` / `find_package(agent-cpp)` + Linux release tarball script ([docs/packaging.md](packaging.md))
 
 **Next up** (in order):
+- [ ] Engine host v2: concurrent requests (keep llama continuous batching under process isolation), shared memory for tensors/media
 - [ ] Explicit task on the public API (`InferRequest::task` / `run_task`) instead of the lowest-capability-bit heuristic
 - [ ] Model registry with RAM/VRAM budget and LRU unload
 - [ ] ABI v2: `struct_size` fields for compatible growth (after the engine host lands)
