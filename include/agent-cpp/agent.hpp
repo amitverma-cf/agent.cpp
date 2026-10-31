@@ -170,15 +170,46 @@ using PermissionCheckFn = PermissionDecision (*)(std::string_view tool_name, std
 // Resolves an Ask decision; returns true to approve the call.
 using PermissionPromptFn = bool (*)(std::string_view tool_name, std::string_view arguments, void *user_data);
 
+// OS-level sandbox for a child process (engine host, run_command, MCP server). See
+// docs/security-sandbox.md. Linux: Landlock + seccomp + rlimits + a new session; macOS: a
+// sandbox_init() profile (untested); Windows: a Job Object (untested; no filesystem/network rules).
+// Missing kernel features degrade to a logged warning, never to a failed spawn.
+enum class SandboxNetwork { Allow, Deny };
+
+struct SandboxPolicy {
+    bool enabled = false;
+    // false: leave the filesystem alone (network, rlimits and process-group parts still apply).
+    bool filesystem = true;
+    // Extra paths, on top of what each use adds (engine: plugin, model, workspace ro, artifacts rw;
+    // run_command: workspace rw; MCP: the server's program dir ro, working_directory rw).
+    std::vector<std::string> read_only_paths;
+    std::vector<std::string> read_write_paths;
+    // Read-only system dirs (/usr, /lib*, selected /etc files, /proc, /sys) and the basic device
+    // nodes plus GPUs read-write (/dev/null, /dev/urandom, /dev/dri, /dev/nvidia*, ...).
+    bool system_paths = true;
+    bool allow_tmp = true; // $TMPDIR (or /tmp) and /var/tmp read-write
+    SandboxNetwork network = SandboxNetwork::Allow;
+    uint64_t memory_limit_bytes = 0; // RLIMIT_AS / Job Object process memory; 0 = none
+    // RLIMIT_NPROC (Linux: counts every process and thread of the user, not just this tree; ignored
+    // for root) / Job Object active process limit. 0 = none.
+    int max_processes = 0;
+};
+
 namespace tools {
 
 struct WorkspaceContext {
     const std::string *workspace_dir = nullptr;
     bool sandbox = true;
+    // Applied to run_command when it is built from this context (get_terminal_tool(ctx)).
+    SandboxPolicy command_sandbox;
 };
 
 std::vector<Tool> get_filesystem_tools(std::shared_ptr<WorkspaceContext> ctx);
+// No OS sandbox (backward compatible); prefer the WorkspaceContext overload.
 Tool get_terminal_tool(const std::string *workspace_dir);
+// run_command under ctx->command_sandbox (workspace read-write when ctx->sandbox is true, the
+// whole filesystem otherwise). ctx must outlive the Tool. Used by the default tool set.
+Tool get_terminal_tool(std::shared_ptr<WorkspaceContext> ctx);
 
 // Opt-in example policy: Ask before run_command/delete_path/move_path, Allow everything else.
 // Not wired in automatically -- set Config::permission_check to it explicitly if wanted.
@@ -385,6 +416,15 @@ struct Config {
     // Process isolation: automatic host restarts allowed per rolling minute. Past it, calls fail with
     // ErrorCode::EngineCrashed until the window frees up.
     int engine_max_restarts = 3;
+
+    // OS sandbox for run_command (default tool set). The workspace is read-write and the rest of
+    // the filesystem is off-limits while sandbox_filesystem is true; the network is allowed by
+    // default (set network = SandboxNetwork::Deny to block it). See docs/security-sandbox.md.
+    SandboxPolicy tool_sandbox{.enabled = true};
+    // OS sandbox for the agent-engine-host (process isolation only): plugin dir, model path and
+    // engine_options paths read-only, workspace read-only, workspace/artifacts read-write, no
+    // network, no /tmp. memory_limit_bytes becomes the host's RLIMIT_AS.
+    SandboxPolicy engine_sandbox{.enabled = true, .allow_tmp = false, .network = SandboxNetwork::Deny};
 };
 
 struct DataSource {
@@ -844,6 +884,10 @@ struct McpServerConfig {
     std::map<std::string, std::string> env; // added to / overriding the inherited environment
     int timeout_ms = 30000;                 // per request (initialize, each tools/list page, tools/call)
     std::string working_directory;          // empty = inherit the host's
+    // Opt-in OS sandbox (off by default: servers such as filesystem or npx-launched ones need broad
+    // access). When enabled, the program's directory is added read-only and working_directory
+    // read-write; list everything else the server needs. See docs/security-sandbox.md.
+    SandboxPolicy sandbox;
 };
 
 // Starts the server, runs the initialize handshake and tools/list (following pagination), and

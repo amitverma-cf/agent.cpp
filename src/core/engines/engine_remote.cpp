@@ -297,11 +297,13 @@ struct RemoteEngine {
         hal::SpawnOptions spawn;
         spawn.program = options.host_path;
         spawn.args = {options.plugin_path};
+        spawn.sandbox = options.sandbox;
         auto c = hal::spawn_child(spawn);
         if (!c.ok)
             return fail(ErrorCode::ProviderInitFailed, "Cannot start the engine host '" + options.host_path + "': " + c.error.message +
                                                            " (set Config::engine_host_path or AGENT_ENGINE_HOST).");
         child = std::move(c.value);
+        for (const auto &w : child->sandbox_warnings()) log(LogLevel::Warning, w);
         ++starts;
         start_stderr_forwarding();
 

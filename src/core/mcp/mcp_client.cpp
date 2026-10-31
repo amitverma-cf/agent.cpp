@@ -5,6 +5,7 @@
 // "mcp:<server>" in Session::retained_data_sources, so the Session owns the process and moving the
 // Session moves only the shared_ptr. Tool::user_data points at a RemoteTool owned by the McpServer.
 
+#include "../sandbox/sandbox_policy.hpp"
 #include "../utils/utils.hpp"
 #include "hal/child_process.hpp"
 #include "hal/log_file.hpp"
@@ -369,9 +370,11 @@ Result<void> McpServer::start() {
     opts.args = config.args;
     opts.env = config.env;
     opts.working_directory = config.working_directory;
+    opts.sandbox = sandbox::mcp_policy(config.sandbox, config.command, config.working_directory);
     auto spawned = hal::spawn_child(opts);
     if (!spawned.ok) return fail(ErrorCode::ProviderInitFailed, prefix() + ": " + spawned.error.message);
     process_ = std::move(spawned.value);
+    for (const auto &w : process_->sandbox_warnings()) log.write(LogLevel::Warning, prefix() + ": " + w);
     stderr_thread_ = std::thread([this]() { drain_stderr(); });
 
     std::lock_guard<std::mutex> lock(mutex_);

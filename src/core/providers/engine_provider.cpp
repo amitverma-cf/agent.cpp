@@ -1,6 +1,7 @@
 #include "../engines/engine_registry.hpp"
 #include "../engines/engine_remote.hpp"
 #include "../executor/ambient_turn.hpp"
+#include "../sandbox/sandbox_policy.hpp"
 #include "../utils/utils.hpp"
 #include "provider_ops.hpp"
 
@@ -175,6 +176,12 @@ Result<void> init_engine(Session &session) {
         opts.max_restarts = cfg.engine_max_restarts;
         opts.logger = cfg.logger;
         opts.logger_user_data = cfg.logger_user_data;
+        opts.sandbox = sandbox::engine_policy(cfg.engine_sandbox, {.host_path = opts.host_path,
+                                                                   .plugin_path = plugin_path,
+                                                                   .model = cfg.model,
+                                                                   .engine_options = cfg.engine_options,
+                                                                   .workspace_dir = cfg.workspace_dir,
+                                                                   .artifacts_dir = state->output_dir});
         auto remote = engines::start_remote_engine(std::move(opts));
         if (!remote.ok) return fail(remote.error.code, remote.error.message);
         state->remote = std::move(remote.value);

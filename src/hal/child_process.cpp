@@ -1,6 +1,7 @@
 #include "hal/child_process.hpp"
 
 #include "hal/platform.hpp"
+#include "hal/sandbox.hpp"
 
 #include <chrono>
 #include <cstdlib>
@@ -48,6 +49,7 @@ struct ChildProcess::Impl {
     HANDLE in = nullptr;  // write end of the child's stdin
     HANDLE out = nullptr; // read end of the child's stdout
     HANDLE err = nullptr; // read end of the child's stderr
+    HANDLE job = nullptr; // sandbox Job Object (kill-on-close), if any
     bool reaped = false;
 };
 
@@ -170,8 +172,14 @@ Result<std::unique_ptr<ChildProcess>> spawn_child(const SpawnOptions &options) {
     si.hStdOutput = out_w;
     si.hStdError = err_w;
 
+    auto prepared = prepare_sandbox(options.sandbox);
+    if (!prepared.ok) {
+        cleanup();
+        return R{.ok = false, .value = {}, .error = prepared.error};
+    }
+
     PROCESS_INFORMATION pi{};
-    DWORD flags = CREATE_NO_WINDOW | (env_block.empty() ? 0 : CREATE_UNICODE_ENVIRONMENT);
+    DWORD flags = CREATE_NO_WINDOW | (env_block.empty() ? 0 : CREATE_UNICODE_ENVIRONMENT) | (prepared.value.active ? CREATE_SUSPENDED : 0);
     BOOL created = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, flags, env_block.empty() ? nullptr : env_block.data(),
                                   wdir.empty() ? nullptr : wdir.c_str(), &si, &pi);
     DWORD last_error = GetLastError();
@@ -185,14 +193,19 @@ Result<std::unique_ptr<ChildProcess>> spawn_child(const SpawnOptions &options) {
                  .error = make_error(ErrorCode::FilesystemError,
                                      "CreateProcess failed for '" + options.program + "' (error " + std::to_string(last_error) + ").")};
     }
+    HANDLE job = prepared.value.active ? static_cast<HANDLE>(attach_job_object(prepared.value, pi.hProcess)) : nullptr;
+    if (prepared.value.active) ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
 
     auto impl = std::make_unique<ChildProcess::Impl>();
+    impl->job = job;
     impl->process = pi.hProcess;
     impl->in = in_w;
     impl->out = out_r;
     impl->err = err_r;
-    return R{.ok = true, .value = std::unique_ptr<ChildProcess>(new ChildProcess(std::move(impl))), .error = {}};
+    auto child = std::unique_ptr<ChildProcess>(new ChildProcess(std::move(impl)));
+    child->sandbox_warnings_ = std::move(prepared.value.warnings);
+    return R{.ok = true, .value = std::move(child), .error = {}};
 }
 
 ChildProcess::ChildProcess(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -201,6 +214,7 @@ ChildProcess::~ChildProcess() {
     terminate(0);
     close_handle(impl_->out);
     close_handle(impl_->err);
+    close_handle(impl_->job); // kill-on-close: takes down anything the child left behind
     close_handle(impl_->process);
 }
 
@@ -271,6 +285,7 @@ struct ChildProcess::Impl {
     int in = -1;  // write end of the child's stdin (non-blocking)
     int out = -1; // read end of the child's stdout
     int err = -1; // read end of the child's stderr
+    bool own_group = false; // the child leads its own session / process group (sandboxed)
     bool reaped = false;
 };
 
@@ -357,6 +372,10 @@ Result<std::unique_ptr<ChildProcess>> spawn_child(const SpawnOptions &options) {
 
     const std::string wd = options.working_directory;
 
+    auto prepared = prepare_sandbox(options.sandbox);
+    if (!prepared.ok) return failure(prepared.error.code, prepared.error.message);
+    const PreparedSandbox &sandbox = prepared.value;
+
     int in[2] = {-1, -1}, out[2] = {-1, -1}, err[2] = {-1, -1}, status_pipe[2] = {-1, -1};
     auto close_all = [&]() {
         for (int *p : {in, out, err, status_pipe}) {
@@ -386,6 +405,7 @@ Result<std::unique_ptr<ChildProcess>> spawn_child(const SpawnOptions &options) {
         ::signal(SIGPIPE, SIG_DFL);
         int code = 0;
         if (!wd.empty() && ::chdir(wd.c_str()) != 0) code = errno;
+        else if (int e = apply_prepared_sandbox(sandbox); e != 0) code = -e; // negative: the sandbox failed
         else {
             ::execve(path.c_str(), argv.data(), envp.data());
             code = errno;
@@ -408,6 +428,8 @@ Result<std::unique_ptr<ChildProcess>> spawn_child(const SpawnOptions &options) {
         int status = 0;
         while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
         close_all();
+        if (child_errno < 0)
+            return failure(ErrorCode::SandboxViolation, "cannot sandbox '" + options.program + "': " + std::strerror(-child_errno));
         std::string what = (!wd.empty() ? "cannot start '" + options.program + "' in '" + wd + "': " : "cannot exec '" + path + "': ");
         return failure(ErrorCode::FilesystemError, what + std::strerror(child_errno));
     }
@@ -419,7 +441,10 @@ Result<std::unique_ptr<ChildProcess>> spawn_child(const SpawnOptions &options) {
     impl->in = in[1];
     impl->out = out[0];
     impl->err = err[0];
-    return R{.ok = true, .value = std::unique_ptr<ChildProcess>(new ChildProcess(std::move(impl))), .error = {}};
+    impl->own_group = sandbox.active && sandbox.new_session;
+    auto child = std::unique_ptr<ChildProcess>(new ChildProcess(std::move(impl)));
+    child->sandbox_warnings_ = std::move(prepared.value.warnings);
+    return R{.ok = true, .value = std::move(child), .error = {}};
 }
 
 ChildProcess::ChildProcess(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -534,9 +559,11 @@ int ChildProcess::terminate(int grace_ms) {
     };
     if (exited()) return exit_code_;
     if (grace_ms > 0 && wait_for_exit(grace_ms)) return exit_code_;
-    ::kill(impl_->pid, SIGTERM);
+    // A sandboxed child leads its own process group: stop whatever it started along with it.
+    const pid_t target = impl_->own_group ? -impl_->pid : impl_->pid;
+    ::kill(target, SIGTERM);
     if (wait_for_exit(grace_ms > 0 ? grace_ms : 200)) return exit_code_;
-    ::kill(impl_->pid, SIGKILL);
+    ::kill(target, SIGKILL);
     int status = 0;
     while (::waitpid(impl_->pid, &status, 0) < 0 && errno == EINTR) {}
     impl_->reaped = true;

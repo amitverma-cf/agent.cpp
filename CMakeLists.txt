@@ -97,12 +97,14 @@ add_library(agent
     src/core/rag/in_memory_vector_store.cpp
     src/core/rag/chunker.cpp
     src/core/rag/rag_pipeline.cpp
+    src/core/sandbox/sandbox_policy.cpp
     src/hal/time.cpp
     src/hal/path.cpp
     src/hal/process.cpp
     src/hal/child_process.cpp
     src/hal/log_file.cpp
     src/hal/dylib.cpp
+    src/hal/sandbox.cpp
     vendor/simdjson/singleheader/simdjson.cpp
 )
 add_library(agent-cpp::agent ALIAS agent)
@@ -270,6 +272,7 @@ add_executable(test_agent
     tests/unit/test_rag.cpp
     tests/unit/test_graph_json.cpp
     tests/unit/test_mcp.cpp
+    tests/unit/test_sandbox.cpp
     tests/integration/test_session.cpp
     tests/integration/test_turn.cpp
 )

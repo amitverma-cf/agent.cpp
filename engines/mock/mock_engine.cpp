@@ -12,8 +12,12 @@
 //     and ignores *cancel
 //   - TENSOR parts on the last user message come back unchanged as output TENSOR parts
 //   - "stream:N" streams N text chunks of one character each
+//   - sandbox probes (tests/unit/test_sandbox.cpp): "read:<path>" replies "read ok: <n> bytes" or
+//     "read denied: <strerror>"; "write:<path>" replies "write ok" or "write denied: <strerror>";
+//     "net" tries an AF_INET socket and replies "net ok" or "net denied: <strerror>"
 
 #include <agent-cpp/engine_abi.h>
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -24,7 +28,45 @@
 #include <thread>
 #include <vector>
 
+#if !defined(_WIN32)
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
 namespace {
+
+// The reply to a sandbox probe trigger, or empty when last_user is not one.
+std::string sandbox_probe(std::string_view last_user) {
+    if (last_user.starts_with("read:")) {
+        const std::string path(last_user.substr(5));
+        FILE *f = std::fopen(path.c_str(), "rb");
+        if (!f) return std::string("read denied: ") + std::strerror(errno);
+        size_t n = 0;
+        char buf[4096];
+        for (size_t got; (got = std::fread(buf, 1, sizeof(buf), f)) > 0;) n += got;
+        std::fclose(f);
+        return "read ok: " + std::to_string(n) + " bytes";
+    }
+    if (last_user.starts_with("write:")) {
+        const std::string path(last_user.substr(6));
+        FILE *f = std::fopen(path.c_str(), "wb");
+        if (!f) return std::string("write denied: ") + std::strerror(errno);
+        std::fputs("x", f);
+        std::fclose(f);
+        return "write ok";
+    }
+    if (last_user == "net") {
+#if defined(_WIN32)
+        return "net unsupported";
+#else
+        const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) return std::string("net denied: ") + std::strerror(errno);
+        ::close(fd);
+        return "net ok";
+#endif
+    }
+    return {};
+}
 
 struct MockInstance {
     std::string model;
@@ -116,6 +158,7 @@ int32_t mock_run(void *instance, const agent_request *req, agent_response *resp)
     }
 
     inst->reply = after_tool ? "tool done" : "echo: " + std::string(last_user) + media_lines;
+    if (std::string probe = sandbox_probe(last_user); !after_tool && !probe.empty()) inst->reply = std::move(probe);
     if (req->on_chunk) req->on_chunk(req->user_data, AGENT_CHUNK_TEXT, inst->reply.data(), inst->reply.size());
     inst->part = agent_part{};
     inst->part.kind = AGENT_PART_TEXT;

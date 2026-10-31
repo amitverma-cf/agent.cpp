@@ -8,6 +8,7 @@ namespace agent::tools {
 
 std::vector<Tool> get_filesystem_tools(std::shared_ptr<WorkspaceContext> ctx);
 Tool get_terminal_tool(const std::string *workspace_dir);
+Tool get_terminal_tool(std::shared_ptr<WorkspaceContext> ctx);
 Tool get_context_compressor_tool(Session **session_cell);
 
 namespace {
@@ -25,12 +26,13 @@ Result<void> default_init(Session &session) {
         auto fs_ctx = std::make_shared<WorkspaceContext>();
         fs_ctx->workspace_dir = session.workspace_path.get();
         fs_ctx->sandbox = session.config.sandbox_filesystem;
+        fs_ctx->command_sandbox = session.config.tool_sandbox;
         session.tool_context = fs_ctx;
 
         auto fs_tools = get_filesystem_tools(fs_ctx);
         for (auto &t : fs_tools) add_if_missing(session.config.tools, std::move(t));
 
-        add_if_missing(session.config.tools, get_terminal_tool(session.workspace_path.get()));
+        add_if_missing(session.config.tools, get_terminal_tool(fs_ctx));
         add_if_missing(session.config.tools, get_context_compressor_tool(session.session_ptr_cell.get()));
     }
 
