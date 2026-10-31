@@ -107,10 +107,22 @@ TEST_CASE("parse_repo_info and select_file", "[hub]") {
     REQUIRE(f.ok);
     CHECK(f.value.path == "qwen2.5-0.5b-instruct-q8_0.gguf");
 
-    spec.quant = "Q5_K_M"; // split shards only
+    spec.quant = "Q5_K_M"; // split GGUF only: the first shard is selected, split_set expands it
     f = select_file(info.value, spec);
-    CHECK_FALSE(f.ok);
-    CHECK(f.error.message.find("split") != std::string::npos);
+    REQUIRE(f.ok);
+    CHECK(f.value.path == "big/model-q5_k_m-00001-of-00002.gguf");
+    auto set = split_set(info.value, f.value);
+    REQUIRE(set.ok);
+    REQUIRE(set.value.size() == 2);
+    CHECK(set.value[1].path == "big/model-q5_k_m-00002-of-00002.gguf");
+
+    // A plain file is its own set; a set with a missing shard fails.
+    auto single = split_set(info.value, RemoteFile{.path = "qwen2.5-0.5b-instruct-q8_0.gguf"});
+    REQUIRE(single.ok);
+    CHECK(single.value.size() == 1);
+    RepoInfo partial = info.value;
+    std::erase_if(partial.files, [](const RemoteFile &rf) { return rf.path == "big/model-q5_k_m-00002-of-00002.gguf"; });
+    CHECK(split_set(partial, f.value).error.code == agent::ErrorCode::KeyNotFound);
 
     spec.quant = "Q2_K";
     CHECK(select_file(info.value, spec).error.code == agent::ErrorCode::KeyNotFound);

@@ -151,7 +151,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [ ] ABI v2: `struct_size` fields for compatible growth (after the engine host lands)
 - [ ] `CheckpointerOps` + persisted event log; per-branch checkpoints and interrupts in parallel fan-outs
 - [ ] OS sandboxing for the engine host, tool runner and MCP children (Landlock/seccomp, AppContainer)
-- [ ] Hub: split GGUF downloads, proxy auth, gated repos
+- [ ] Hub: proxy auth, gated repos (split GGUF downloads done)
 - [ ] Windows build + test pass (owner)
 - [ ] Voice loop: mic/speaker I/O + VAD (sherpa) → ASR → LLM → TTS example
 
