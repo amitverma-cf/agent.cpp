@@ -717,7 +717,8 @@ enum class GraphRunStatus { Pending, Running, Completed, Interrupted, Failed };
 
 struct ModelRegistry; // model registry section below
 
-enum class GraphEventType { NodeStart, NodeEnd, StateWrite, ToolCall, ToolResult, Interrupt, Resume, Checkpoint, NodeFailed };
+// Fork: first event of a thread created by fork_graph_run (key = "<source thread>:<step>").
+enum class GraphEventType { NodeStart, NodeEnd, StateWrite, ToolCall, ToolResult, Interrupt, Resume, Checkpoint, NodeFailed, Fork };
 
 struct GraphEvent {
     GraphEventType type = GraphEventType::NodeStart;
@@ -753,7 +754,12 @@ struct CheckpointerOps {
     using GetFn = Result<std::string> (*)(void *state, std::string_view thread_id, uint64_t step);
     // Every stored checkpoint of the thread, oldest step first (empty when there are none).
     using ListFn = Result<std::vector<GraphCheckpointInfo>> (*)(void *state, std::string_view thread_id);
+    // Deletes the thread's checkpoints and its events.
     using DeleteThreadFn = Result<void> (*)(void *state, std::string_view thread_id);
+    // Optional persisted event log (both or neither). append_events adds to the end of the thread's
+    // log; list_events returns it in order.
+    using AppendEventsFn = Result<void> (*)(void *state, std::string_view thread_id, std::span<const GraphEvent> events);
+    using ListEventsFn = Result<std::vector<GraphEvent>> (*)(void *state, std::string_view thread_id);
 
     OpenFn open = nullptr;
     PutFn put = nullptr;
@@ -761,6 +767,8 @@ struct CheckpointerOps {
     GetFn get = nullptr;
     ListFn list = nullptr;
     DeleteThreadFn delete_thread = nullptr;
+    AppendEventsFn append_events = nullptr;
+    ListEventsFn list_events = nullptr;
 };
 
 // Checkpoints kept in process memory (nothing persists past the Checkpointer). The optional
@@ -825,6 +833,17 @@ Result<std::vector<GraphCheckpointInfo>> list_graph_checkpoints(Session &session
                                                                 const Checkpointer &checkpointer = {});
 // Deletes a thread's checkpoints (and its persisted events); a later run_graph starts it fresh.
 Result<void> delete_graph_thread(Session &session, std::string_view thread_id, const Checkpointer &checkpointer = {});
+// The thread's persisted event log: every GraphEvent of every run_graph / resume_graph /
+// fork_graph_run call on it, in order. Events are appended with each checkpoint write (so a crash
+// loses the same window as checkpoints). UnsupportedProvider when the checkpointer has no event log.
+Result<std::vector<GraphEvent>> list_graph_events(Session &session, std::string_view thread_id, const Checkpointer &checkpointer = {});
+// Time travel: copies checkpoint `step` of thread_id to the new thread new_thread_id (which must
+// not have checkpoints yet) and continues it from there, like resume_graph, with
+// run.checkpointer. Values seeded in run.state override the checkpoint's. The source thread is not
+// changed. A checkpoint that was interrupted is copied but not run (resume_graph the new thread);
+// a completed one is copied and nothing runs. Nodes after `step` run again, with their side effects.
+Result<void> fork_graph_run(Session &session, const Graph &graph, std::string_view thread_id, uint64_t step, std::string_view new_thread_id,
+                            GraphRun &run);
 
 } // namespace agent
 

@@ -255,7 +255,9 @@ struct CheckpointerOps {
     GetLatestFn get_latest;      // highest step; KeyNotFound when none
     GetFn get;                   // (state, thread_id, step); KeyNotFound when missing
     ListFn list;                 // every step of a thread, oldest first
-    DeleteThreadFn delete_thread;
+    DeleteThreadFn delete_thread; // checkpoints and events
+    AppendEventsFn append_events; // optional event log (both or neither)
+    ListEventsFn list_events;
 };
 const CheckpointerOps *in_memory_checkpointer();
 const CheckpointerOps *store::sqlite_checkpointer();   // <agent-cpp/store_sqlite.hpp>, agent_store_sqlite
@@ -273,9 +275,9 @@ Result<void> delete_graph_thread(Session &, std::string_view thread_id, const Ch
 
 | Checkpointer | Where checkpoints go |
 |---|---|
-| `{}` (default, `ops == nullptr`) | The Session's `StoreOps`, as in v1: `checkpoint:<thread_id>:<step>` and `checkpoint:<thread_id>:latest`, plus `checkpoint_meta:<thread_id>:<step|latest>` for listing. `StoreOps` cannot delete keys, so `delete_graph_thread` overwrites them with empty values. |
+| `{}` (default, `ops == nullptr`) | The Session's `StoreOps`, as in v1: `checkpoint:<thread_id>:<step>` and `checkpoint:<thread_id>:latest`, plus `checkpoint_meta:<thread_id>:<step|latest>` for listing and `graph_events:<thread_id>:<n|count>` for the event log. `StoreOps` cannot delete keys, so `delete_graph_thread` overwrites them with empty values. |
 | `in_memory_checkpointer()` | Process memory; gone with the last copy of the `Checkpointer`. |
-| `store::sqlite_checkpointer()` | A SQLite file (`CheckpointerConfig::path`; empty or `":memory:"` = in memory). WAL journal, `synchronous=NORMAL` (a committed checkpoint survives a process crash; an OS crash or power loss can lose the last transactions), table `graph_checkpoints` keyed by `(thread_id, step)`. Several processes may open the same file. |
+| `store::sqlite_checkpointer()` | A SQLite file (`CheckpointerConfig::path`; empty or `":memory:"` = in memory). WAL journal, `synchronous=NORMAL` (a committed checkpoint survives a process crash; an OS crash or power loss can lose the last transactions), tables `graph_checkpoints` keyed by `(thread_id, step)` and `graph_events` keyed by `(thread_id, seq)`. Several processes may open the same file. |
 
 ```cpp
 #include <agent-cpp/store_sqlite.hpp>
@@ -309,6 +311,25 @@ agent::resume_graph(session, graph, "ticket-42", resumed);
 `resume_graph` loads the thread's latest checkpoint and continues at its next node. Nodes that already completed do not run again. If the thread has no checkpoint it returns `KeyNotFound`; if the thread already completed it returns `ok()` and does nothing.
 
 Like LangGraph, the runtime re-executes on resume. A node that failed or was interrupted runs again from its start, so tools should be idempotent. State a failing node wrote before returning its error stays in memory and in the failure checkpoint, but it is not logged or persisted to `user:`/`app:` storage.
+
+### Time travel (`fork_graph_run`)
+
+```cpp
+Result<void> fork_graph_run(Session &, const Graph &, std::string_view thread_id, uint64_t step,
+                            std::string_view new_thread_id, GraphRun &run);
+```
+
+Every checkpoint is kept, so a thread can be continued from any earlier step as a **new** thread, as in LangGraph's time travel. `fork_graph_run` copies checkpoint `step` of `thread_id` (pick one with `list_graph_checkpoints`; the checkpoint at step N holds the state after N nodes and names the node that runs next) to `new_thread_id`, applies the values seeded in `run.state` on top (to try a different input or correct a value), writes that as the new thread's first checkpoint (its metadata has `"forked_from": "<thread_id>:<step>"`, and its event log starts with a `Fork` event), then continues like `resume_graph`, through `run.checkpointer`. The source thread is not changed. `new_thread_id` must not have checkpoints yet (`InvalidConfig`; `delete_graph_thread` it first); a missing step returns `KeyNotFound`. Forking an interrupted checkpoint copies it and returns with `run.status == Interrupted`, so you answer it with `resume_graph(new_thread_id, ...)`; forking a completed one copies it and runs nothing.
+
+```cpp
+auto steps = agent::list_graph_checkpoints(session, "ticket-42", cp);   // pick a step
+agent::GraphRun alt;
+alt.checkpointer = cp;
+agent::set_state(alt.state, "topic", "a different topic");
+agent::fork_graph_run(session, graph, "ticket-42", 1, "ticket-42-alt", alt);
+```
+
+**Side effects on replay.** Forking and resuming re-execute nodes: every node after the forked step runs again, and on a resume the failed or interrupted node runs again from its start. Tool calls made by those nodes (Tool nodes, tool calls inside Agent turns, anything a Function node does) happen again: a file is rewritten, a message is sent twice, a command runs again. The runtime does not record or replay tool results. Make such tools idempotent (for example, key writes by thread id and step, or check before acting), or put a human approval in front of them (`interrupt_before_tools`). Agent turns also run again, so a non-deterministic model can answer differently on the new thread.
 
 Agent `FlowMemory` ids are `<thread_id>:<history>` (the node name or its `history_key`), so `run_turn` also saves them under `history:<thread_id>:<history>` in the Session's store, whichever checkpointer is used. Per-node `TurnStats` are not checkpointed.
 
@@ -366,7 +387,13 @@ struct GraphEvent {
 };
 ```
 
-Every call appends to `run.events`. The log records node start and end (or failure), every `set_state` write, every tool call and result (both Tool nodes and tool calls made inside Agent turns), interrupts, resumes and checkpoints. Events from parallel branches are appended branch by branch after the join; use the timestamps to see how they interleaved. The log lives in memory and is not persisted.
+Every call appends to `run.events`. The log records node start and end (or failure), every `set_state` write, every tool call and result (both Tool nodes and tool calls made inside Agent turns), interrupts, resumes, checkpoints and forks. Events from parallel branches are appended branch by branch after the join; use the timestamps to see how they interleaved.
+
+```cpp
+Result<std::vector<GraphEvent>> list_graph_events(Session &, std::string_view thread_id, const Checkpointer & = {});
+```
+
+The log is also **persisted** through the checkpointer: each checkpoint write appends the events logged since the previous one (through the Async writer when the durability is `Async`), and the final write of every call appends the rest, so after `run_graph` / `resume_graph` / `fork_graph_run` returns, `list_graph_events` returns every event of every call on the thread, in order. A crash loses the same window as checkpoints. A checkpointer without `append_events` / `list_events` keeps no log (`list_graph_events` returns `UnsupportedProvider`); all three built-in ones have it. Payloads are the same 200-character excerpts as in memory: the log is an audit trail, not a record that tool results could be replayed from.
 
 The existing `EventHook`s also fire: `OnStateTransition` with the node name when a node starts; `OnSubAgentComplete` with the branch's entry node name for each successful branch of a `Parallel` node (fired on the calling thread, in branch order, after the branches have joined); and `OnToolCall` / `OnToolResult` for Tool nodes and for approved pending calls (`run_turn` fires them itself for its own calls).
 
@@ -384,7 +411,6 @@ With the llama engine the parallelism comes from **continuous batching** inside 
 
 - Interrupts are not supported inside parallel branches: `request_interrupt` and `interrupt_before_tools` there fail the node with `InvalidConfig`.
 - A fan-out is checkpointed as one step. If a branch fails, the whole fan-out runs again on resume.
-- There is no replay or time travel to an older step, although every checkpoint is kept.
 - `hooks` and `context_provider` are C++ only; `agent.json` can set `history_key` but not these.
 
 ---
