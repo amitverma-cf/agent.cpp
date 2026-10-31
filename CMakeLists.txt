@@ -116,6 +116,8 @@ endif()
 
 option(AGENT_ENGINE_LLAMA "Build the llama.cpp engine plugin (engines/llama)" ON)
 option(AGENT_ENGINE_ONNX "Build the ONNX Runtime engine plugin (engines/onnx; needs a prebuilt ONNX Runtime, see ONNXRUNTIME_ROOT)" OFF)
+# Heavy (builds stable-diffusion.cpp + its own ggml), so off by default for now.
+option(AGENT_ENGINE_SDCPP "Build the stable-diffusion.cpp image generation engine plugin (engines/sdcpp)" OFF)
 
 add_executable(basic examples/basic/basic.cpp)
 target_link_libraries(basic PRIVATE agent)
@@ -142,6 +144,9 @@ endif()
 if(AGENT_ENGINE_ONNX)
     add_subdirectory(engines/onnx)
 endif()
+if(AGENT_ENGINE_SDCPP)
+    add_subdirectory(engines/sdcpp)
+endif()
 
 enable_testing()
 add_executable(test_agent
@@ -164,6 +169,7 @@ add_executable(test_agent
     tests/unit/test_skills.cpp
     tests/unit/test_permissions.cpp
     tests/unit/test_engines.cpp
+    tests/unit/test_engine_sdcpp.cpp
     tests/integration/test_session.cpp
     tests/integration/test_flow.cpp
 )
@@ -190,6 +196,10 @@ endif()
 if(AGENT_ENGINE_ONNX)
     target_compile_definitions(test_agent PRIVATE AGENT_TEST_ONNX_ENGINE_PATH="$<TARGET_FILE:agent-engine-onnx>")
     add_dependencies(test_agent agent-engine-onnx)
+endif()
+if(AGENT_ENGINE_SDCPP)
+    target_compile_definitions(test_agent PRIVATE AGENT_TEST_SDCPP_ENGINE_PATH="$<TARGET_FILE:agent-engine-sdcpp>")
+    add_dependencies(test_agent agent-engine-sdcpp)
 endif()
 target_compile_options(test_agent PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 target_link_options(test_agent PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})

@@ -188,6 +188,8 @@ Priority wave A (v1 **starter pack**, installed by default by `agent setup`):
   - [x] libmtmd image + audio input (`engine_options.mmproj`); video input still open (needs ffmpeg)
 - [ ] `sherpa`: Kokoro TTS, Parakeet / Whisper STT, VAD, diarization (Windows-friendly breadth)
 - [ ] `sdcpp`: stable-diffusion.cpp txt2img / img2img / video (Wan, LTX) with progress + cancel
+  - [x] txt2img + img2img with progress + per-step cancel (`agent-engine-sdcpp`, stable-diffusion.cpp master-1028, opt-in `AGENT_ENGINE_SDCPP`)
+  - [ ] video (Wan, LTX)
 - [ ] `trellis`: TRELLIS.2 image → GLB (3D gen)
 - [ ] `onnx`: generic ONNX Runtime engine (classifiers, detectors, custom models), grown from the existing provider
   - [x] v1: named tensors in/out (`AGENT_CAP_GENERIC`), concurrent `run()`, threads, graph optimization level, CPU/CUDA EP selection
