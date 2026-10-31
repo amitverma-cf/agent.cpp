@@ -5,7 +5,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -562,3 +565,29 @@ TEST_CASE("run_turn_with_media sends an image through the core to the llama engi
     REQUIRE(lower.find("red") != std::string::npos);
 }
 #endif
+
+TEST_CASE("load_engine_manifest loads plugins listed in engines.json", "[engines][manifest]") {
+    const std::filesystem::path dir = std::filesystem::path(kWorkspace) / "manifest";
+    std::filesystem::create_directories(dir);
+    // A relative path resolves against the manifest's directory.
+    const auto relative = std::filesystem::relative(AGENT_TEST_MOCK_ENGINE_PATH, dir);
+    {
+        std::ofstream f(dir / "engines.json");
+        f << "{\"engines\": [{\"path\": \"" << relative.generic_string() << "\"}]}";
+    }
+    auto res = agent::load_engine_manifest((dir / "engines.json").string());
+    INFO(res.error.message);
+    REQUIRE(res.ok);
+    REQUIRE(res.value == std::vector<std::string>{"mock"});
+
+    {
+        std::ofstream f(dir / "bad.json");
+        f << "{\"engines\": [{\"path\": \"missing-engine.so\"}]}";
+    }
+    auto bad = agent::load_engine_manifest((dir / "bad.json").string());
+    REQUIRE_FALSE(bad.ok);
+    REQUIRE(bad.error.code == agent::ErrorCode::ProviderInitFailed);
+
+    auto absent = agent::load_engine_manifest((dir / "nope.json").string());
+    REQUIRE(absent.error.code == agent::ErrorCode::FilesystemError);
+}
