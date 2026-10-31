@@ -3,6 +3,7 @@
 add_library(agent_cli_core STATIC
     src/cli_core.cpp
     src/cli_platform.cpp
+    src/audio.cpp
 )
 target_include_directories(agent_cli_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(agent_cli_core PUBLIC agent)
@@ -13,6 +14,25 @@ if(WIN32)
     target_link_libraries(agent_cli_core PRIVATE shell32)
 endif()
 target_compile_options(agent_cli_core PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
+
+# Microphone / speaker for `agent voice` through miniaudio (vendor/miniaudio, single header). Only the
+# CLI links it; libagent stays free of audio dependencies. OFF keeps just the WAV file backend.
+option(AGENT_CLI_AUDIO_DEVICE "Build sound device support (miniaudio) into the agent CLI" ON)
+if(AGENT_CLI_AUDIO_DEVICE)
+    target_sources(agent_cli_core PRIVATE src/miniaudio_impl.c)
+    target_include_directories(agent_cli_core SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/vendor/miniaudio)
+    set_source_files_properties(src/miniaudio_impl.c PROPERTIES COMPILE_OPTIONS "-w")
+    find_package(Threads REQUIRED)
+    target_link_libraries(agent_cli_core PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(agent_cli_core PRIVATE m)
+    endif()
+    if(APPLE)
+        target_link_libraries(agent_cli_core PRIVATE "-framework CoreFoundation" "-framework CoreAudio" "-framework AudioToolbox")
+    endif()
+else()
+    target_compile_definitions(agent_cli_core PRIVATE AGENT_CLI_NO_AUDIO_DEVICE)
+endif()
 
 # The library target is already called `agent`, so the executable target gets another name and
 # OUTPUT_NAME agent. It lands in the top of the build tree, where it finds engine plugins under
