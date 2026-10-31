@@ -142,14 +142,15 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [ ] Spike: C plugin ABI. Load two plugins with **different** ggml versions into one process on **Windows (MSVC)** and Linux; confirm no symbol clashes (use `-fvisibility=hidden` / `RTLD_LOCAL`)
 - [ ] Spike: llama.cpp `llama_batch_ext`/`llama_process` + libmtmd image input from inside a plugin
 - [ ] Spike: sherpa-onnx (Kokoro TTS + Parakeet STT) as a plugin on Windows
-- [ ] Draft `engine_abi.h` v1 and the capability taxonomy
+- [x] Draft `engine_abi.h` v1 and the capability taxonomy
 - [ ] Draft JSON schemas for `engines.json`, `models.json`, `agent.json`
 - [ ] Pin submodules; CI matrix Windows (MSVC) + Linux (GCC/Clang) + macOS (build only)
 
 ### Phase 1: Clean slate (1 to 2 weeks)
-- [ ] Remove the OpenAI-compatible provider, cron and `AgentScheduler` provider threading
+- [x] Remove the OpenAI-compatible provider and cron
+- [ ] Remove `AgentScheduler` provider-specific threading (replaced by the graph runtime in Phase 3)
 - [ ] Move the ONNX provider and its vendored ORT headers into `engines/onnx/` (kept, not deleted)
-- [ ] Move SQLite, sqlite-vec and the memory write-back cache out of `libagent` into `tools/store-sqlite/` (used by the CLI)
+- [x] Move SQLite, sqlite-vec and the memory write-back cache out of `libagent` into `tools/store-sqlite/` (used by the CLI)
 - [ ] Move llama.cpp out of core into `engines/llama/` (its own CMake project)
 - [ ] Move httplib/OpenSSL into `tools/hub/` (CLI only); `libagent` depends only on simdjson
 - [ ] New tree: `include/agent-cpp/{agent.hpp,engine_abi.h}`, `src/core/`, `engines/<name>/`, `tools/cli/`, `tools/hub/`, `tools/store-sqlite/`
@@ -157,9 +158,11 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [ ] Tests stay green on the Mock engine
 
 ### Phase 2: Core v1 (3 to 4 weeks)
-- [ ] Engine registry: discover/load plugins from `engines.json`, ABI/version check, capability query
+- [x] Engine registry: load plugins by path, ABI/version check, capability query (`AiProvider::Engine`, mock engine plugin)
+- [ ] Engine discovery from `engines.json`
 - [ ] Model registry from `models.json`: lazy load, LRU unload under a RAM/VRAM budget
-- [ ] `CheckpointerOps` / `StateStoreOps` / `VectorStoreOps` + in-memory implementations
+- [x] `StoreOps` key-value store + in-memory default
+- [ ] `CheckpointerOps` / `VectorStoreOps` + in-memory implementations
 - [ ] `Part`/`MediaRef` message model + artifact store
 - [ ] Run requests with cancel, progress and chunk streaming
 - [ ] Agent loop (pi-agent-core style) with tool-call limits

@@ -17,6 +17,11 @@ Result<int> count_tokens_llama_cpp(Session &session, std::string_view text);
 Result<void> clear_kv_cache_llama_cpp(Session &session);
 #endif
 
+Result<void> init_engine(Session &session);
+Result<InferResponse> infer_engine(Session &session, const InferRequest &request);
+Result<int> count_tokens_engine(Session &session, std::string_view text);
+Result<void> clear_kv_cache_engine(Session &session);
+
 #ifdef AGENT_HAS_ONNX
 Result<void> init_onnx(Session &session);
 Result<InferResponse> infer_onnx(Session &session, const InferRequest &request);
@@ -49,6 +54,11 @@ constexpr ProviderOps kProviderOps[] = {
                 .count_tokens = count_tokens_llama_cpp,
                 .clear_kv_cache = clear_kv_cache_llama_cpp},
 #endif
+    ProviderOps{.provider = AiProvider::Engine,
+                .init = init_engine,
+                .infer = infer_engine,
+                .count_tokens = count_tokens_engine,
+                .clear_kv_cache = clear_kv_cache_engine},
 #ifdef AGENT_HAS_ONNX
     ProviderOps{
         .provider = AiProvider::OnnxRuntime, .init = init_onnx, .infer = infer_onnx, .count_tokens = nullptr, .clear_kv_cache = nullptr},

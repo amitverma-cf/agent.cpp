@@ -20,6 +20,7 @@ The library is designed around three principles:
 | [Architecture](architecture.md) | System diagrams, memory model, data flow |
 | [API — Core Types](api/core.md) | `Result<T>`, `Error`, `ErrorCode`, `Arena` |
 | [API — Session](api/session.md) | `Config`, `Session`, `init()`, `AgentRuntime` |
+| [API — Engines](api/engines.md) | Engine plugins, `engine_abi.h`, `AiProvider::Engine` |
 | [API — Conversation](api/conversation.md) | `FlowMemory`, `run_turn`, pruning, compression |
 | [API — FSM](api/fsm.md) | `FlowState`, `Flow`, `FlowHook`, `step_flow`, `run_flow` |
 | [API — Scheduler](api/scheduler.md) | `AgentScheduler`, parallel subagents |
