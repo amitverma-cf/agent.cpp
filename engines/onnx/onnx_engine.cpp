@@ -305,7 +305,7 @@ const agent_part *find_tensor(const agent_request *req, std::string_view name) {
 int32_t onnx_run(void *instance, const agent_request *req, agent_response *resp) {
     auto *inst = static_cast<OnnxInstance *>(instance);
     const OrtApi *api = ort();
-    *resp = agent_response{};
+    agent_response_reset(resp);
     if (req->task != AGENT_CAP_GENERIC)
         return set_error(AGENT_ERR_UNSUPPORTED, "onnx: only AGENT_CAP_GENERIC (named tensors) is supported");
     if (req->cancel && *req->cancel) return set_error(AGENT_ERR_CANCELLED, "onnx: cancelled");
@@ -422,15 +422,25 @@ void onnx_free_response(void *instance, agent_response *resp) {
             }
         }
     }
-    *resp = agent_response{};
+    agent_response_reset(resp);
 }
 
 const char *onnx_last_error(void *) { return t_error.c_str(); }
 
 const agent_engine_v1 kOnnxEngine = {
-    AGENT_ENGINE_ABI_VERSION,     "onnx",          "1.0",        AGENT_CAP_GENERIC,
-    AGENT_ENGINE_FLAG_CONCURRENT, onnx_create,     onnx_destroy, onnx_run,
-    onnx_free_response,           onnx_last_error, nullptr,      nullptr,
+    AGENT_ENGINE_ABI_VERSION,
+    sizeof(agent_engine_v1),
+    "onnx",
+    "1.0",
+    AGENT_CAP_GENERIC,
+    AGENT_ENGINE_FLAG_CONCURRENT,
+    onnx_create,
+    onnx_destroy,
+    onnx_run,
+    onnx_free_response,
+    onnx_last_error,
+    nullptr,
+    nullptr,
 };
 
 } // namespace

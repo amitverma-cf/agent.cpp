@@ -138,12 +138,12 @@ TEST_CASE("onnx engine adds two [2,2] tensors through the C ABI", "[onnx][engine
         agent_message{.role = {"user", 4}, .parts = parts_a, .n_parts = 1},
         agent_message{.role = {"user", 4}, .parts = parts_b, .n_parts = 1},
     };
-    agent_request req{};
+    agent_request req{.struct_size = sizeof(agent_request)};
     req.task = AGENT_CAP_GENERIC;
     req.messages = msgs;
     req.n_messages = 2;
 
-    agent_response resp{};
+    agent_response resp{.struct_size = sizeof(agent_response)};
     REQUIRE(engine->run(inst, &req, &resp) == AGENT_OK);
     REQUIRE(resp.message.n_parts == 1);
     const agent_part &out = resp.message.parts[0];
@@ -189,11 +189,11 @@ TEST_CASE("onnx engine adds two [2,2] tensors through the C ABI", "[onnx][engine
                     const float tb[4] = {1, 2, 3, 4};
                     const agent_part tp[] = {tensor_part("a", ta), tensor_part("b", tb)};
                     const agent_message tm{.role = {"user", 4}, .parts = tp, .n_parts = 2};
-                    agent_request tr{};
+                    agent_request tr{.struct_size = sizeof(agent_request)};
                     tr.task = AGENT_CAP_GENERIC;
                     tr.messages = &tm;
                     tr.n_messages = 1;
-                    agent_response r{};
+                    agent_response r{.struct_size = sizeof(agent_response)};
                     if (engine->run(inst, &tr, &r) != AGENT_OK) {
                         ++failures[static_cast<size_t>(t)];
                         continue;

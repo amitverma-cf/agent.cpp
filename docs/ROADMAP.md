@@ -146,11 +146,12 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [x] `cmake --install` / `find_package(agent-cpp)` + Linux release tarball script ([docs/packaging.md](packaging.md))
 - [x] OS sandbox on Linux: Landlock + seccomp + rlimits + new session for the engine host (default on, no network) and `run_command` (default on), opt-in for MCP servers; macOS profile and Windows Job Object written, untested ([docs/security-sandbox.md](security-sandbox.md)). Fixes [LIMITATIONS](LIMITATIONS.md) §2 on Linux
 - [x] Explicit task on the public API (`InferRequest::task`, `run_task`, `Config::default_task`) instead of the lowest-capability-bit heuristic (still the automatic default)
+- [x] ABI v2: `struct_size` on the engine table, request and response (`AGENT_HAS_FIELD`, `agent_response_reset`), `AGENT_REQUEST_FLAG_AUTO_TASK`; every plugin in `engines/` updated (ABI 1 plugins are refused)
 
 **Next up** (in order):
 - [ ] Engine host v2: concurrent requests (keep llama continuous batching under process isolation), shared memory for tensors/media
 - [x] Model registry with RAM/VRAM budget and LRU unload (`ModelRegistry`, `acquire_model` leases, `GraphNode::model`, CLI `memory_budget_mb`; see [docs/api/models.md](api/models.md))
-- [ ] ABI v2: `struct_size` fields for compatible growth (after the engine host lands)
+- [x] ABI v2: `struct_size` fields for compatible growth (`AGENT_ENGINE_ABI_VERSION` 2, `AGENT_HAS_FIELD`)
 - [x] `CheckpointerOps` + persisted event log; per-branch checkpoints and interrupts in parallel fan-outs (SQLite checkpointer, background Async writer, `fork_graph_run`, nested fan-outs share the worker slots)
 - [ ] OS sandboxing follow-ups: test real engines under the default engine policy, macOS profile, Windows AppContainer (filesystem/network), `"sandbox"` for MCP servers in `agent.json`
 - [ ] Hub: proxy auth, gated repos (split GGUF downloads done)

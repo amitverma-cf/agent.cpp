@@ -69,6 +69,10 @@ Result<void> validate(const agent_engine_v1 *engine) {
     if (engine->abi_version != AGENT_ENGINE_ABI_VERSION)
         return fail(ErrorCode::UnsupportedProvider, "Engine ABI version " + std::to_string(engine->abi_version) +
                                                         " does not match host ABI version " + std::to_string(AGENT_ENGINE_ABI_VERSION) + ".");
+    if (engine->struct_size < AGENT_ENGINE_V2_SIZE)
+        return fail(ErrorCode::UnsupportedProvider, "Engine table is " + std::to_string(engine->struct_size) +
+                                                        " bytes, smaller than the ABI 2 baseline (" + std::to_string(AGENT_ENGINE_V2_SIZE) +
+                                                        "). Rebuild the engine against the current engine_abi.h.");
     if (!engine->name || !*engine->name) return fail(ErrorCode::InvalidConfig, "Engine has no name.");
     if (!engine->create || !engine->destroy || !engine->run || !engine->free_response || !engine->last_error)
         return fail(ErrorCode::InvalidConfig, std::string("Engine '") + engine->name + "' is missing a required function.");

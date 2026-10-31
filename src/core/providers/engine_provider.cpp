@@ -302,7 +302,8 @@ Result<InferResponse> to_infer_response(const agent_response &resp, Arena &arena
 Result<InferResponse> run_engine(Session &session, uint32_t task, const InferRequest &request, Arena &arena) {
     auto *state = static_cast<EngineState *>(session.provider_state.get());
     if (!state || !state->ready()) return fail<InferResponse>(ErrorCode::ProviderInitFailed, "Engine not initialized.");
-    if (task == 0) task = engine_task(state->caps);
+    const bool auto_task = task == 0;
+    if (auto_task) task = engine_task(state->caps);
 
     // --- request: MessageView -> agent_message (arena-backed, zero-copy for strings/tensors) ---
     auto msgs = arena.allocate_span<agent_message>(request.messages.size());
@@ -346,7 +347,9 @@ Result<InferResponse> run_engine(Session &session, uint32_t task, const InferReq
                                          static_cast<double>(temperature), request.stream ? "true" : "false");
 
     CallbackCtx cb_ctx{request.on_token, request.token_user_data, request.on_progress, request.progress_user_data};
-    agent_request req{.task = task,
+    agent_request req{.struct_size = sizeof(agent_request),
+                      .task = task,
+                      .flags = auto_task ? static_cast<uint32_t>(AGENT_REQUEST_FLAG_AUTO_TASK) : 0u,
                       .messages = msgs.data(),
                       .n_messages = msgs.size(),
                       // Tool definitions only matter for chat; embed / rerank / ... requests carry none.
@@ -362,6 +365,7 @@ Result<InferResponse> run_engine(Session &session, uint32_t task, const InferReq
     if (state->remote) {
         std::lock_guard<std::mutex> lk(engines::remote_mutex(*state->remote));
         agent_response resp{};
+        resp.struct_size = sizeof(resp);
         if (auto r = engines::remote_run(*state->remote, req, arena, resp); !r.ok)
             return fail<InferResponse>(r.error.code, r.error.message);
         return to_infer_response(resp, arena);
@@ -373,6 +377,7 @@ Result<InferResponse> run_engine(Session &session, uint32_t task, const InferReq
     if (!(engine->flags & AGENT_ENGINE_FLAG_CONCURRENT)) lk.lock();
 
     agent_response resp{};
+    resp.struct_size = sizeof(resp);
     if (const int32_t rc = engine->run(state->instance, &req, &resp); rc != AGENT_OK) {
         const char *e = engine->last_error(state->instance);
         return fail<InferResponse>(rc == AGENT_ERR_CANCELLED ? ErrorCode::Cancelled : ErrorCode::DecodeFailed,

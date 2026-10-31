@@ -293,18 +293,19 @@ int32_t conc_run(void *, const agent_request *req, agent_response *resp) {
     reply.part = agent_part{};
     reply.part.kind = AGENT_PART_TEXT;
     reply.part.text = agent_str{reply.text.data(), reply.text.size()};
-    *resp = agent_response{};
+    agent_response_reset(resp);
     resp->message.role = agent_str{"assistant", 9};
     resp->message.parts = &reply.part;
     resp->message.n_parts = 1;
     --g_inflight;
     return AGENT_OK;
 }
-void conc_free(void *, agent_response *resp) { *resp = agent_response{}; }
+void conc_free(void *, agent_response *resp) { agent_response_reset(resp); }
 const char *conc_error(void *) { return ""; }
 
 const agent_engine_v1 kConcurrentEngine = {
     AGENT_ENGINE_ABI_VERSION,
+    sizeof(agent_engine_v1),
     "graph_concurrent_test",
     "1.0",
     AGENT_CAP_TEXT_GEN,
@@ -682,17 +683,18 @@ int32_t rec_run(void *, const agent_request *req, agent_response *resp) {
     part = agent_part{};
     part.kind = AGENT_PART_TEXT;
     part.text = agent_str{reply.data(), reply.size()};
-    *resp = agent_response{};
+    agent_response_reset(resp);
     resp->message.role = agent_str{"assistant", 9};
     resp->message.parts = &part;
     resp->message.n_parts = 1;
     return AGENT_OK;
 }
-void rec_free(void *, agent_response *resp) { *resp = agent_response{}; }
+void rec_free(void *, agent_response *resp) { agent_response_reset(resp); }
 const char *rec_error(void *) { return ""; }
 
 const agent_engine_v1 kRecordingEngine = {
     AGENT_ENGINE_ABI_VERSION,
+    sizeof(agent_engine_v1),
     "graph_recording_test",
     "1.0",
     AGENT_CAP_TEXT_GEN,

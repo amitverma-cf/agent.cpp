@@ -643,7 +643,7 @@ void tensor_parts(CallOutput &out, const char *name, size_t n_rows, agent_respon
         p.data = out.floats.data() + r * static_cast<size_t>(out.shape);
         p.size = static_cast<size_t>(out.shape) * sizeof(float);
     }
-    *resp = agent_response{};
+    agent_response_reset(resp);
     resp->message.role = agent_str{"assistant", 9};
     resp->message.parts = out.parts.data();
     resp->message.n_parts = out.parts.size();
@@ -1018,7 +1018,7 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
                                             agent_str{c.arguments.data(), c.arguments.size()}});
     }
 
-    *resp = agent_response{};
+    agent_response_reset(resp);
     resp->message.role = agent_str{"assistant", 9};
     resp->usage = agent_usage{n_prompt, completion};
     out.part = agent_part{};
@@ -1035,7 +1035,7 @@ void llama_free_response(void *instance, agent_response *resp) {
     auto *inst = static_cast<Instance *>(instance);
     std::lock_guard<std::mutex> lk(inst->out_mu);
     inst->outputs.erase(std::this_thread::get_id());
-    *resp = agent_response{};
+    agent_response_reset(resp);
 }
 
 const char *llama_last_error(void *instance) {
@@ -1060,6 +1060,7 @@ int32_t llama_reset_cache(void *instance) {
 
 const agent_engine_v1 kLlamaEngine = {
     AGENT_ENGINE_ABI_VERSION,
+    sizeof(agent_engine_v1),
     "llama",
     "0.4",
     // Static: what the plugin can do. Image/audio input also needs options.mmproj (and audio a

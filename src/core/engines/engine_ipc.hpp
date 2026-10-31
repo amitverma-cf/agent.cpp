@@ -10,7 +10,7 @@
 // part:    u32 kind | str text | str path | str mime | str name | u32 dtype | u32 ndim | i64 shape[ndim] | blob data
 // call:    str id | str name | str arguments
 // message: str role | u32 n_parts | part* | u32 n_calls | call* | str tool_call_id
-// request: u32 task | u32 run_flags | u32 n_messages | message* | str tools_json | str params_json | str output_dir
+// request: u32 task | u32 request_flags | u32 run_flags | u32 n_messages | message* | str tools_json | str params_json | str output_dir
 // response: message | i32 prompt_tokens | i32 completion_tokens
 //
 // Every encoder appends to a caller-owned std::string whose capacity is reused across calls, and
@@ -127,6 +127,7 @@ class Writer {
 
     void request(const agent_request &r, uint32_t run_flags) {
         u32(r.task);
+        u32(r.flags);
         u32(run_flags);
         const size_t n = r.messages ? r.n_messages : 0;
         u32(static_cast<uint32_t>(n));
@@ -236,7 +237,9 @@ class Reader {
     // Fills everything but the callbacks, user_data and cancel.
     bool request(agent_request &out, uint32_t &run_flags, Arena &arena) {
         out = agent_request{};
+        out.struct_size = sizeof(agent_request);
         out.task = u32();
+        out.flags = u32();
         run_flags = u32();
         const uint32_t n = u32();
         if (!ok_ || n > (end_ - p_) / 16) return fail();
@@ -256,6 +259,7 @@ class Reader {
 
     bool response(agent_response &out, Arena &arena) {
         out = agent_response{};
+        out.struct_size = sizeof(agent_response);
         if (!message(out.message, arena)) return false;
         out.usage.prompt_tokens = i32();
         out.usage.completion_tokens = i32();

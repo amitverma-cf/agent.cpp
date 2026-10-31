@@ -212,7 +212,7 @@ TEST_CASE("trellis engine generates a GLB with real models", "[engines][trellis]
         uint64_t calls = 0;
     } progress;
     volatile int32_t cancel = 0;
-    agent_request req{};
+    agent_request req{.struct_size = sizeof(agent_request)};
     req.task = AGENT_CAP_MESH_GEN;
     req.messages = &msg;
     req.n_messages = 1;
@@ -222,7 +222,7 @@ TEST_CASE("trellis engine generates a GLB with real models", "[engines][trellis]
     req.cancel = &cancel;
 
     SECTION("image to GLB") {
-        agent_response resp{};
+        agent_response resp{.struct_size = sizeof(agent_response)};
         const int32_t rc = engine->run(inst, &req, &resp);
         INFO(engine->last_error(inst));
         REQUIRE(rc == AGENT_OK);
@@ -245,7 +245,7 @@ TEST_CASE("trellis engine generates a GLB with real models", "[engines][trellis]
 
     SECTION("a request without an image fails cleanly") {
         msg.n_parts = 1; // text only
-        agent_response resp{};
+        agent_response resp{.struct_size = sizeof(agent_response)};
         REQUIRE(engine->run(inst, &req, &resp) == AGENT_ERR_INVALID_CONFIG);
         REQUIRE(std::string(engine->last_error(inst)).find("image") != std::string::npos);
     }
@@ -253,19 +253,19 @@ TEST_CASE("trellis engine generates a GLB with real models", "[engines][trellis]
     SECTION("bad params_json is rejected") {
         const std::string params = R"({"pipeline":"huge"})";
         req.params_json = str(params);
-        agent_response resp{};
+        agent_response resp{.struct_size = sizeof(agent_response)};
         REQUIRE(engine->run(inst, &req, &resp) == AGENT_ERR_INVALID_CONFIG);
     }
 
     SECTION("a pre-set cancel flag stops the run") {
         cancel = 1;
-        agent_response resp{};
+        agent_response resp{.struct_size = sizeof(agent_response)};
         REQUIRE(engine->run(inst, &req, &resp) == AGENT_ERR_CANCELLED);
     }
 
     SECTION("non-mesh tasks are rejected") {
         req.task = AGENT_CAP_TEXT_GEN;
-        agent_response resp{};
+        agent_response resp{.struct_size = sizeof(agent_response)};
         REQUIRE(engine->run(inst, &req, &resp) == AGENT_ERR_UNSUPPORTED);
     }
 

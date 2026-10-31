@@ -165,10 +165,40 @@ Export one function:
 AGENT_ENGINE_EXPORT const agent_engine_v1 *agent_engine_get_v1(void);
 ```
 
-`agent_engine_v1` declares the ABI version, a name, capability bits (`AGENT_CAP_TEXT_GEN`,
-`AGENT_CAP_ASR`, `AGENT_CAP_TTS`, `AGENT_CAP_IMAGE_GEN`, `AGENT_CAP_MESH_GEN`, ...), and the functions
-`create`, `destroy`, `run`, `free_response` and `last_error`, plus the optional `count_tokens` and
-`reset_cache`.
+`agent_engine_v1` declares the ABI version (`AGENT_ENGINE_ABI_VERSION`, currently 2), its own
+`struct_size`, a name, capability bits (`AGENT_CAP_TEXT_GEN`, `AGENT_CAP_ASR`, `AGENT_CAP_TTS`,
+`AGENT_CAP_IMAGE_GEN`, `AGENT_CAP_MESH_GEN`, ...), and the functions `create`, `destroy`, `run`,
+`free_response` and `last_error`, plus the optional `count_tokens` and `reset_cache`:
+
+```c
+static const agent_engine_v1 kEngine = {
+    AGENT_ENGINE_ABI_VERSION, sizeof(agent_engine_v1), "mine", "1.0", AGENT_CAP_TEXT_GEN, 0,
+    my_create, my_destroy, my_run, my_free_response, my_last_error, NULL, NULL,
+};
+```
+
+Each request carries `agent_request::task` (one capability bit) and `flags`:
+`AGENT_REQUEST_FLAG_AUTO_TASK` means the caller did not choose the task and the core picked it
+(`TEXT_GEN` if declared, else the lowest declared bit), so an engine with several tasks may route by
+content instead (sherpa does).
+
+**Struct sizes (ABI 2).** `agent_engine_v1`, `agent_request` and `agent_response` start with (or, for
+the engine table, follow `abi_version` with) a `uint32_t struct_size`: the `sizeof` the writer was
+compiled with. Fields are only ever appended. Everything that exists in ABI 2 is the *v2 baseline*
+(`AGENT_ENGINE_V2_SIZE`, `AGENT_REQUEST_V2_SIZE`, `AGENT_RESPONSE_V2_SIZE`): the core refuses engine
+tables smaller than that and always passes requests and responses at least that large, so baseline
+fields need no check. The rule for later growth:
+
+- **Readers must check `struct_size` before touching any field past the v2 baseline**:
+  `if (AGENT_HAS_FIELD(req, agent_request, some_new_field)) ...`.
+- The host sets `response->struct_size` before `run()`. Engines never write it and never write past
+  it: clear the response with `agent_response_reset(resp)`, not `*resp = agent_response{}` (which
+  zeroes `struct_size` and, against an older host's smaller struct, would write past its end).
+- `agent_message`, `agent_part` and `agent_tool_call` are passed in arrays and have no size field;
+  they only change with a new `AGENT_ENGINE_ABI_VERSION`.
+
+An ABI 1 plugin (no `struct_size`) is refused at load with "ABI version 1 does not match"; rebuild it
+against the current header (the type and entry-point names kept their historical `_v1` suffix).
 
 Rules:
 
@@ -510,7 +540,8 @@ Requests are routed by task, and by content when the task was not chosen explici
 |---|---|---|
 | `TTS` | text | speech: WAV file in `output_dir` (`FILE`, `audio/wav`) + a short `TEXT` summary |
 | `ASR` | audio `FILE`/`BYTES` part, `asr` configured | transcript as a `TEXT` part |
-| automatic (no task set; the core sends `ASR`, the lowest bit) or `TEXT_GEN` | audio part, `asr` configured | transcript, as for `ASR` |
+| `ASR` | no audio part | `AGENT_ERR_INVALID_CONFIG` |
+| automatic (no task set: the core sends `ASR`, the lowest bit, with `AGENT_REQUEST_FLAG_AUTO_TASK`) or `TEXT_GEN` | audio part, `asr` configured | transcript, as for `ASR` |
 | automatic or `TEXT_GEN` | audio part, no `asr`, `vad` configured | speech segments, as for `VAD` |
 | automatic or `TEXT_GEN` | audio part, only `diarize` configured | speaker segments, as for `DIARIZE` |
 | automatic or `TEXT_GEN` | text, no audio | speech, as for `TTS` |
