@@ -144,6 +144,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [x] Remove `Flow`/`AgentScheduler`; the graph runtime becomes the only workflow API (tool hooks, shared/isolated history, context providers merged in)
 - [x] `engines/trellis`: TRELLIS.2 image → GLB (coarse path verified on CPU)
 - [x] `cmake --install` / `find_package(agent-cpp)` + Linux release tarball script ([docs/packaging.md](packaging.md))
+- [x] OS sandbox on Linux: Landlock + seccomp + rlimits + new session for the engine host (default on, no network) and `run_command` (default on), opt-in for MCP servers; macOS profile and Windows Job Object written, untested ([docs/security-sandbox.md](security-sandbox.md)). Fixes [LIMITATIONS](LIMITATIONS.md) §2 on Linux
 
 **Next up** (in order):
 - [ ] Engine host v2: concurrent requests (keep llama continuous batching under process isolation), shared memory for tensors/media
@@ -151,7 +152,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [ ] Model registry with RAM/VRAM budget and LRU unload
 - [ ] ABI v2: `struct_size` fields for compatible growth (after the engine host lands)
 - [ ] `CheckpointerOps` + persisted event log; per-branch checkpoints and interrupts in parallel fan-outs
-- [ ] OS sandboxing for the engine host, tool runner and MCP children (Landlock/seccomp, AppContainer)
+- [ ] OS sandboxing follow-ups: test real engines under the default engine policy, macOS profile, Windows AppContainer (filesystem/network), `"sandbox"` for MCP servers in `agent.json`
 - [ ] Hub: proxy auth, gated repos (split GGUF downloads done)
 - [ ] Windows build + test pass (owner)
 - [ ] Voice loop: mic/speaker I/O + VAD (sherpa) → ASR → LLM → TTS example
@@ -190,7 +191,8 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [x] Media on messages (`Media`/`MediaView`, `run_turn_with_media`); engine file outputs land in `<workspace>/artifacts/` and persist with history
 - [x] Run requests with cancel (`request_cancel`/`clear_cancel`), progress (`Config::on_progress`) and chunk streaming
 - [x] Out-of-process engines: `agent-engine-host` serves one plugin over a binary pipe protocol; `Config::engine_isolation` / engines.json `"isolation"`; crashes become `ErrorCode::EngineCrashed` with automatic restart (rate-limited), per-request watchdog, cancel escalates to kill; CLI default (see [docs/api/engines.md](api/engines.md#isolation))
-  - [ ] shared memory for large tensors, concurrent requests per host, OS sandboxing / rlimits for the host, Windows build
+  - [x] OS sandboxing / rlimits for the host (Linux; `Config::engine_sandbox`)
+  - [ ] shared memory for large tensors, concurrent requests per host, Windows build
 - [ ] Agent loop (pi-agent-core style) with tool-call limits
 - [ ] Tools return `{parts}` (text and/or artifacts)
 - [x] `llama` engine v1: llama.cpp b12020, Jinja chat templates + native tool-call parsing (common_chat), continuous batching

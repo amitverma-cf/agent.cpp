@@ -21,6 +21,7 @@ The library is designed around three principles:
 | [The `agent` CLI](cli.md) | `agent setup`, `engine`, `model`, `chat`: config files, permissions, slash commands |
 | [Architecture](architecture.md) | System diagrams, memory model, data flow |
 | [Limitations](LIMITATIONS.md) | Known limitations and planned fixes |
+| [OS sandbox](security-sandbox.md) | Landlock / seccomp / rlimits for the engine host, `run_command` and MCP servers; `SandboxPolicy`, defaults, platform status |
 | [API — Core Types](api/core.md) | `Result<T>`, `Error`, `ErrorCode`, `Arena` |
 | [API — Session](api/session.md) | `Config`, `Session`, `init()`, `AgentRuntime` |
 | [API — Engines](api/engines.md) | Engine plugins, `engine_abi.h`, `AiProvider::Engine` |

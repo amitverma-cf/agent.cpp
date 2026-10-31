@@ -18,6 +18,7 @@ struct McpServerConfig {
     std::map<std::string, std::string> env;  // added to / overriding the inherited environment
     int timeout_ms = 30000;                  // per request
     std::string working_directory;           // empty = inherit
+    SandboxPolicy sandbox;                   // OS sandbox, off by default (opt-in)
 };
 
 Result<std::vector<Tool>> connect_mcp_server(Session &session, const McpServerConfig &config);
@@ -86,6 +87,7 @@ There is no dedicated `ErrorCode` for MCP failures. `NetworkError` means the tra
 - **stderr** is drained by one background thread per server. Each line goes to `Config::logger` and to the session log file, at `Info` level with the prefix `[mcp:<server>]`. The last 2 KiB are kept for error messages.
 - **Shutdown** follows the stdio transport spec. The client closes the server's stdin and waits up to `min(timeout_ms, 2000)` ms for it to exit. Then it sends `SIGTERM` (on Windows, `TerminateProcess`), waits again, and finally sends `SIGKILL`.
 - **SIGPIPE.** Writing to a server that has died does not raise `SIGPIPE` in the host. The signal is blocked on the writing thread and the pending signal is consumed. The write then fails with `NetworkError`.
+- **Sandbox.** `McpServerConfig::sandbox` is off by default: servers like the filesystem server or anything launched through `npx`/`uvx` need broad access (their runtime, package caches, the directories they serve). When enabled, the program's directory is read-only, `working_directory` read-write, and everything else must be listed in `sandbox.read_only_paths` / `read_write_paths`; `sandbox.network = SandboxNetwork::Deny` keeps a local server offline. Sandboxed servers run in their own process group, and shutdown signals the whole group. What the kernel could not enforce is logged as a warning. See [../security-sandbox.md](../security-sandbox.md).
 - **Windows** support (`CreateProcessW`, an environment block merged with the parent's, polled anonymous pipes) is written but not yet tested in CI.
 
 ## Not supported yet
