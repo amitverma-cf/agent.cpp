@@ -1,0 +1,5 @@
+/* Linux: the plugin exports agent_engine_get_v1 only (std:: template instantiations would leak otherwise). */
+{
+    global: agent_engine_get_v1;
+    local: *;
+};

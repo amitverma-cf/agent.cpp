@@ -113,6 +113,7 @@ Library users: `find_package(agent-cpp)` and link `agent-cpp::agent` (plus `agen
 | `BUILD_SHARED_LIBS` | `OFF` | Build `libagent`, `agent_store_sqlite`, `agent_hub` as shared libraries |
 | `AGENT_INSTALL` | `ON` (top level) | Generate install rules and the `agent-cpp` CMake package |
 | `AGENT_ENGINE_ONNX` | `OFF` | Build the ONNX Runtime engine plugin (`engines/onnx`); needs `-DONNXRUNTIME_ROOT=<prebuilt ORT>` |
+| `AGENT_ENGINE_TRELLIS` | `OFF` | Build the TRELLIS.2 image-to-3D (GLB) engine plugin (`engines/trellis`); needs the `vendor/trellis2cpp` submodule and its ggml; `AGENT_TRELLIS_BUILD_JOBS` caps the nested build |
 | `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UBSan |
 | `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |
 
@@ -186,7 +187,7 @@ src/hal/                       -- hardware/OS abstraction layer
   process.cpp                  -- shell command execution (CreateProcess / posix_spawn)
   log_file.cpp                 -- session log file open/write
 engines/
-  mock/ llama/ onnx/ sdcpp/ sherpa/  -- engine plugins (agent-engine-<name>)
+  mock/ llama/ onnx/ sdcpp/ sherpa/ trellis/  -- engine plugins (agent-engine-<name>)
 tools/
   cli/                         -- the `agent` binary (docs/cli.md)
   hub/                         -- agent_hub: Hugging Face downloads, models.json
