@@ -399,16 +399,6 @@ agent_b.states    = states_b;
 agent_b.memory.id = "worker_b";
 scheduler.spawn("worker_b", std::move(agent_b));
 
-// Add a cron task that fires every 10 seconds
-scheduler.add_cron("heartbeat",
-    [](agent::Session &s, void *) -> agent::Result<void> {
-        agent::utils::log(s, agent::LogLevel::Info, "scheduler heartbeat");
-        return agent::ok();
-    },
-    nullptr,
-    std::chrono::seconds(0),      // delay before first fire
-    std::chrono::seconds(10));    // repeat interval (0 = one-shot)
-
 // Run until all subagents finish
 auto res = scheduler.run_until_done(session);
 
@@ -434,38 +424,6 @@ while (!scheduler.all_done()) {
 
 ---
 
-## Cron tasks
-
-Cron tasks are standalone callbacks attached to the scheduler. A one-shot task fires once after a delay; a recurring task fires repeatedly on an interval.
-
-```cpp
-// One-shot: fire after 5 seconds
-scheduler.add_cron("init_data",
-    [](agent::Session &s, void *ctx) -> agent::Result<void> {
-        auto *data = static_cast<MyData*>(ctx);
-        // load initial data
-        return agent::ok();
-    },
-    &my_data,
-    std::chrono::seconds(5),
-    std::chrono::milliseconds(0));   // interval = 0 means one-shot
-
-// Recurring: fire every minute
-scheduler.add_cron("monitor",
-    [](agent::Session &s, void *) -> agent::Result<void> {
-        // check system health
-        return agent::ok();
-    },
-    nullptr,
-    std::chrono::seconds(0),
-    std::chrono::minutes(1));
-
-// Cancel a cron task
-scheduler.cancel_cron("monitor");
-```
-
----
-
 ## Event hooks
 
 Event hooks observe lifecycle events without modifying behaviour. They are useful for telemetry, logging, and dashboards.
@@ -483,7 +441,7 @@ agent::register_event_hook(session, agent::EventType::OnInferenceComplete,
     });
 ```
 
-Available event types: `OnTurnStart`, `OnInferenceSubmit`, `OnInferenceComplete`, `OnToolCall`, `OnToolResult`, `OnStateTransition`, `OnCompression`, `OnPrune`, `OnCronFire`, `OnSubAgentComplete`.
+Available event types: `OnTurnStart`, `OnInferenceSubmit`, `OnInferenceComplete`, `OnToolCall`, `OnToolResult`, `OnStateTransition`, `OnCompression`, `OnPrune`, `OnSubAgentComplete`.
 
 ---
 

@@ -2,7 +2,7 @@
 
 `#include <agent-cpp/agent.hpp>`
 
-`AgentScheduler` runs multiple `Flow`s alongside time-triggered cron tasks. All agents share the same `Session`. How subagents advance depends on the provider:
+`AgentScheduler` runs multiple `Flow`s. All agents share the same `Session`. How subagents advance depends on the provider:
 
 - **`AiProvider::LlamaCpp`** — also dispatched across up to `max_parallel_subagents` threads, but the actual parallelism comes from **continuous batching** inside the provider, not from the threads themselves: one shared `llama_context` (created with `n_seq_max = max_parallel_subagents`) multiplexes every currently-active generation's next token into a single `llama_decode` call per round, tagged by `llama_seq_id`. A single `llama_context` can't run two `llama_decode` calls at once regardless of thread count, so the threads mostly block waiting on that shared batch rather than doing independent decode work — see [architecture.md](../architecture.md#continuous-batching) for the full design.
 - **`Mock` / `OnnxRuntime`** — strictly single-flight, cooperative round-robin, unchanged.
@@ -14,21 +14,18 @@
 ```
 AgentScheduler
   +-- subagents:  [WorkerA, WorkerB, WorkerC, ...]
-  +-- cron_jobs:  [Heartbeat(10s), Cleanup(1h), ...]
 
 pump(session):
-  1. Fire all cron tasks whose next_fire <= now
-  2. Advance pending subagents one Flow step each:
+  Advance pending subagents one Flow step each:
        - LlamaCpp: up to max_parallel_subagents at once, on real threads, joined
          before pump() returns
        - otherwise: one at a time, sequentially (today's round-robin, unchanged)
 
 run_until_done(session):
   while !all_done(): pump()
-  pump()   <- final pass
 ```
 
-For providers other than `LlamaCpp`, each `pump()` call still gives every pending subagent exactly one `Flow` state transition, then fires all due cron tasks — a subagent that blocks inside `on_transition` (e.g. doing a long local-model call) blocks the rest of that pump. For `LlamaCpp`, up to `max_parallel_subagents` subagents advance concurrently per pump, sharing one batched decode.
+For providers other than `LlamaCpp`, each `pump()` call still gives every pending subagent exactly one `Flow` state transition — a subagent that blocks inside `on_transition` (e.g. doing a long local-model call) blocks the rest of that pump. For `LlamaCpp`, up to `max_parallel_subagents` subagents advance concurrently per pump, sharing one batched decode.
 
 ---
 
@@ -73,64 +70,6 @@ scheduler.spawn("research_biotech",  make_flow("conv_3", "biotechnology"));
 
 ---
 
-## Cron tasks
-
-```cpp
-Result<void> AgentScheduler::add_cron(
-    std::string                id,
-    CronTask::TaskFn           fn,
-    void                      *user_data,
-    std::chrono::milliseconds  delay,
-    std::chrono::milliseconds  interval = std::chrono::milliseconds{0});
-```
-
-Adds a periodic or one-shot task. The task fires for the first time after `delay`, then every `interval` (or not again if `interval == 0`).
-
-**CronTask::TaskFn signature:**
-
-```cpp
-using TaskFn = Result<void> (*)(Session &session, void *user_data);
-```
-
-The function receives the shared session and the `user_data` pointer. Return `ok()` on success; `fail(...)` logs a warning but does not stop the scheduler.
-
-**Example — one-shot task:**
-
-```cpp
-scheduler.add_cron("warm_up",
-    [](agent::Session &s, void *) -> agent::Result<void> {
-        agent::utils::log(s, agent::LogLevel::Info, "warming up KV cache...");
-        return agent::ok();
-    },
-    nullptr,
-    std::chrono::seconds(2),              // fire after 2 seconds
-    std::chrono::milliseconds(0));        // one-shot
-```
-
-**Example — recurring task:**
-
-```cpp
-scheduler.add_cron("log_stats",
-    [](agent::Session &s, void *) -> agent::Result<void> {
-        auto st = agent::get_stats(s);
-        printf("turns=%d tokens=%d\n", st.total_turns, st.total_prompt_tokens);
-        return agent::ok();
-    },
-    nullptr,
-    std::chrono::seconds(0),             // fire immediately
-    std::chrono::seconds(30));           // then every 30 seconds
-```
-
-### Cancelling a cron task
-
-```cpp
-Result<void> AgentScheduler::cancel_cron(std::string_view id);
-```
-
-Marks the task as done. It will not fire again. Returns `KeyNotFound` if the `id` is not registered.
-
----
-
 ## Running the scheduler
 
 ### pump()
@@ -139,9 +78,9 @@ Marks the task as done. It will not fire again. Returns `KeyNotFound` if the `id
 Result<void> AgentScheduler::pump(Session &session);
 ```
 
-One tick of the scheduler. Fires all due cron tasks, then advances each pending subagent by one FSM step.
+One tick of the scheduler. Advances each pending subagent by one FSM step.
 
-Returns `ok()` unless the function itself fails internally (not if a subagent or cron task fails — those are recorded in their results and logged).
+Returns `ok()` unless the function itself fails internally (not if a subagent fails — those are recorded in their results and logged).
 
 Use `pump()` when you need to interleave scheduler ticks with other application work:
 
@@ -162,7 +101,7 @@ while (!scheduler.all_done()) {
 Result<void> AgentScheduler::run_until_done(Session &session);
 ```
 
-Loops `pump()` until `all_done()` returns `true`, then calls `pump()` one final time (to catch any cron tasks that became due concurrently with the last agent step). Cron tasks with `interval > 0` will fire indefinitely — `run_until_done` exits only when all *subagents* are done.
+Loops `pump()` until `all_done()` returns `true`.
 
 ```cpp
 auto res = scheduler.run_until_done(session);
@@ -176,7 +115,7 @@ if (!res.ok)
 bool AgentScheduler::all_done() const;
 ```
 
-Returns `true` when every spawned subagent (not cron tasks) has finished — either successfully or with an error.
+Returns `true` when every spawned subagent has finished — either successfully or with an error.
 
 ### results()
 
@@ -206,25 +145,6 @@ struct SubAgentResult {
     TurnStats   stats;        // conversation stats from the Flow's conversation
 };
 ```
-
----
-
-## CronTask internals
-
-```cpp
-struct CronTask {
-    std::string id;
-
-    using TaskFn = Result<void> (*)(Session &session, void *user_data);
-    TaskFn   callback  = nullptr;
-    void    *user_data = nullptr;
-
-    std::chrono::steady_clock::time_point next_fire;
-    std::chrono::milliseconds             interval{0};   // 0 = one-shot
-};
-```
-
-`next_fire` is set at registration to `now() + delay`. After each firing, `next_fire += interval`. If the scheduler falls behind (the task fires late and `next_fire + interval` is still in the past), `next_fire` is advanced to `now() + interval` to avoid a burst of catch-up firings.
 
 ---
 
@@ -273,16 +193,6 @@ int main() {
         scheduler.spawn(std::string("agent_") + topic, std::move(flow),
                         const_cast<char *>(topic));
     }
-
-    scheduler.add_cron("progress",
-        [](agent::Session &s, void *) -> agent::Result<void> {
-            auto st = agent::get_stats(s);
-            printf("[cron] turns so far: %d\n", st.total_turns);
-            return agent::ok();
-        },
-        nullptr,
-        std::chrono::seconds(0),
-        std::chrono::seconds(5));
 
     auto res = scheduler.run_until_done(session);
 

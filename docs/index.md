@@ -22,7 +22,7 @@ The library is designed around three principles:
 | [API — Session](api/session.md) | `Config`, `Session`, `init()`, `AgentRuntime` |
 | [API — Conversation](api/conversation.md) | `FlowMemory`, `run_turn`, pruning, compression |
 | [API — FSM](api/fsm.md) | `FlowState`, `Flow`, `FlowHook`, `step_flow`, `run_flow` |
-| [API — Scheduler](api/scheduler.md) | `AgentScheduler`, `CronTask`, parallel subagents |
+| [API — Scheduler](api/scheduler.md) | `AgentScheduler`, parallel subagents |
 | [API — Tools](api/tools.md) | Built-in tools, `Tool` struct, custom tools, Skills, permission gate |
 | [API — Memory](api/memory.md) | `MemoryConfig`, `store_memory`, `retrieve_memory` |
 | [API — Data Sources](api/data-sources.md) | `DataSource`, RAG/SQLite/GraphRAG integration |

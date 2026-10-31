@@ -55,10 +55,10 @@ TEST_CASE("Multiple hooks for the same event type all fire in registration order
     agent::Session session = std::move(session_result.value);
 
     HookRecord rec1, rec2;
-    agent::register_event_hook(session, agent::EventType::OnCronFire, record_hook, &rec1);
-    agent::register_event_hook(session, agent::EventType::OnCronFire, record_hook, &rec2);
+    agent::register_event_hook(session, agent::EventType::OnSubAgentComplete, record_hook, &rec1);
+    agent::register_event_hook(session, agent::EventType::OnSubAgentComplete, record_hook, &rec2);
 
-    agent::trigger_event(session, agent::EventType::OnCronFire, std::span<const uint8_t>());
+    agent::trigger_event(session, agent::EventType::OnSubAgentComplete, std::span<const uint8_t>());
 
     REQUIRE(rec1.fire_count == 1);
     REQUIRE(rec2.fire_count == 1);

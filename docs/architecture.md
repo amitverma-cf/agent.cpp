@@ -191,17 +191,10 @@ The save/restore pattern guarantees that each state receives exactly the tools a
 
 ## Scheduler concurrency
 
-`AgentScheduler` interleaves multiple `Flow`s and cron tasks. `pump()` fires all due cron tasks, then advances pending subagents — how it advances them depends on `session.config.provider`:
+`AgentScheduler` interleaves multiple `Flow`s. `pump()` advances pending subagents — how it advances them depends on `session.config.provider`:
 
 ```
 pump()
-  now = steady_clock::now()
-
-  for each CronEntry where now >= next_fire and !done:
-    task.callback(session, user_data)
-    if recurring:  next_fire += interval  (skip-ahead if still behind)
-    if one-shot:   done = true
-
   if provider == LlamaCpp:
     batch = up to max_parallel_subagents not-done SubEntry's
     spawn one std::thread per batch entry, each calling step_flow(session, ctx, flow)
@@ -214,7 +207,6 @@ pump()
 
 run_until_done()
   while !all_done():  pump()
-  pump()              (one final pass for last-moment crons)
 ```
 
 All subagents share the same `Session`. Three different concurrency mechanisms are used, one per provider family, because each has a genuinely different constraint:

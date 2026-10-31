@@ -141,7 +141,7 @@ add_executable(test_agent
     tests/unit/test_context_compressor.cpp
     tests/unit/test_tools_ops.cpp
     tests/unit/test_events.cpp
-    tests/unit/test_scheduler_cron.cpp
+    tests/unit/test_scheduler.cpp
     tests/unit/test_arena.cpp
     tests/unit/test_skills.cpp
     tests/unit/test_permissions.cpp
