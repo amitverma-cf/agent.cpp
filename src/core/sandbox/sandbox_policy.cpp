@@ -126,6 +126,12 @@ SandboxPolicy engine_policy(const SandboxPolicy &base, const EnginePaths &paths)
 
     if (!paths.workspace_dir.empty()) push_unique(p.read_only_paths, absolute_or_empty(paths.workspace_dir).string());
     if (!paths.artifacts_dir.empty()) push_unique(p.read_write_paths, absolute_or_empty(paths.artifacts_dir).string());
+    // Engine host v2 passes large tensors / media through POSIX shared memory (shm_open lives in
+    // /dev/shm). Without access it silently falls back to copying through the pipe.
+    {
+        std::error_code ec;
+        if (fs::is_directory("/dev/shm", ec)) push_unique(p.read_write_paths, "/dev/shm");
+    }
     return p;
 }
 
