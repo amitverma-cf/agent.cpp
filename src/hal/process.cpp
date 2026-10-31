@@ -139,7 +139,12 @@ Result<ProcessResult> run_shell_posix(std::string_view working_directory, std::s
         close(pipefd[1]);
 
         std::string wd(working_directory);
-        if (!wd.empty()) (void)chdir(wd.c_str());
+        // Never run the command somewhere other than the requested directory.
+        if (!wd.empty() && chdir(wd.c_str()) != 0) {
+            const char msg[] = "agent: cannot enter working directory\n";
+            (void)!write(STDERR_FILENO, msg, sizeof(msg) - 1);
+            _exit(126);
+        }
 
         std::string cmd(command);
         if (timeout_seconds > 0) {
