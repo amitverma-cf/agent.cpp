@@ -37,6 +37,7 @@ add_library(agent
     src/core/graph/graph_builders.cpp
     src/core/graph/graph_checkpoint.cpp
     src/core/graph/graph_executor.cpp
+    src/core/graph/graph_json.cpp
     src/core/mcp/mcp_client.cpp
     src/core/data/data_source_registry.cpp
     src/core/skills/skills_registry.cpp
@@ -185,6 +186,7 @@ add_executable(test_agent
     tests/unit/test_engine_sdcpp.cpp
     tests/unit/test_graph.cpp
     tests/unit/test_rag.cpp
+    tests/unit/test_graph_json.cpp
     tests/unit/test_mcp.cpp
     tests/integration/test_session.cpp
     tests/integration/test_flow.cpp
@@ -211,7 +213,8 @@ add_executable(fake_mcp_server tests/helpers/fake_mcp_server.cpp)
 target_link_libraries(fake_mcp_server PRIVATE agent)
 target_compile_options(fake_mcp_server PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS})
 target_link_options(fake_mcp_server PRIVATE ${SANITIZER_FLAGS})
-target_compile_definitions(test_agent PRIVATE AGENT_TEST_FAKE_MCP_SERVER_PATH="$<TARGET_FILE:fake_mcp_server>")
+target_compile_definitions(test_agent PRIVATE AGENT_TEST_FAKE_MCP_SERVER_PATH="$<TARGET_FILE:fake_mcp_server>"
+                                              AGENT_TEST_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples/graphs")
 add_dependencies(test_agent fake_mcp_server)
 if(AGENT_ENGINE_LLAMA)
     target_compile_definitions(test_agent PRIVATE AGENT_TEST_LLAMA_ENGINE_PATH="$<TARGET_FILE:agent-engine-llama>")

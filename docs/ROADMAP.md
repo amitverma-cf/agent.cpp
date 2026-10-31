@@ -181,7 +181,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [ ] `agent-store-sqlite`: SQLite checkpointer/state + sqlite-vec vector store (CLI and opt-in)
   - [x] sqlite-vec vector store (`store::sqlite_vector_store()`); SQLite checkpointer/state still open
 - [x] **Interrupts** for human approval (reuse the permission `Ask`)
-- [ ] Load graphs from `agent.json`
+- [x] Load graphs from `agent.json` (`load_graph_json`, see [docs/api/agent-json.md](api/agent-json.md))
 - [ ] Port skills, permissions, context compression, fs/terminal tools
 - [x] MCP stdio client (`connect_mcp_server`, see [docs/api/mcp.md](api/mcp.md))
 - [x] RAG pipeline: chunk → embed → `VectorStoreOps` → rerank → inject (`rag_index` / `rag_query` / `search_knowledge` tool via `make_rag_tool`; see [docs/api/rag.md](api/rag.md)). A dedicated graph node kind is not added: an Agent node with the tool, or a Function node calling `rag_query`, covers it

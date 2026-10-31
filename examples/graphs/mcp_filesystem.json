@@ -1,0 +1,36 @@
+{
+  "//": "An agent that uses tools from an MCP server (the reference filesystem server, run with npx). Every tool call pauses for approval first.",
+  "name": "mcp_filesystem",
+  "engine": "llama",
+  "model": "qwen3-4b-instruct",
+  "mcp_servers": [
+    {
+      "name": "fs",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "env": { "NODE_NO_WARNINGS": "1" },
+      "timeout_ms": 60000
+    }
+  ],
+  "nodes": [
+    {
+      "name": "list_files",
+      "kind": "tool",
+      "tool": "fs.list_directory",
+      "args": { "path": "." },
+      "output_key": "temp:listing"
+    },
+    {
+      "name": "assistant",
+      "kind": "agent",
+      "system_prompt": "You help the user with files in the current directory. Use the fs.* tools to read them.",
+      "input_key": "request",
+      "output_key": "answer",
+      "allowed_tools": ["fs.read_text_file", "fs.list_directory", "fs.search_files"],
+      "interrupt_before_tools": true
+    }
+  ],
+  "edges": [
+    { "from": "list_files", "to": "assistant" }
+  ]
+}

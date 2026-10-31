@@ -25,6 +25,7 @@ The library is designed around three principles:
 | [API — FSM](api/fsm.md) | `FlowState`, `Flow`, `FlowHook`, `step_flow`, `run_flow` |
 | [API — Scheduler](api/scheduler.md) | `AgentScheduler`, parallel subagents |
 | [API — Graph runtime](api/graph.md) | `Graph`, Agent/Function/Tool nodes, Sequential/Parallel/Loop, scoped state, checkpoints, interrupts |
+| [API — agent.json](api/agent-json.md) | Declarative graphs: `load_graph_json`, JSON schema, routes, workflow nodes, `register_graph_function` |
 | [API — Tools](api/tools.md) | Built-in tools, `Tool` struct, custom tools, Skills, permission gate |
 | [API — MCP client](api/mcp.md) | `connect_mcp_server`: MCP stdio servers as tools |
 | [API — Memory](api/memory.md) | `MemoryConfig`, `store_memory`, `retrieve_memory` |

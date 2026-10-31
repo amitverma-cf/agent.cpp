@@ -6,6 +6,8 @@ The graph runtime runs workflows built from named nodes and edges, in the style 
 
 It lives next to `Flow` / `AgentScheduler` ([fsm.md](fsm.md), [scheduler.md](scheduler.md)), which will later move onto it. Everything is plain structs and function pointers: no `std::function`, no virtual calls, no exceptions. A graph is built once at setup, so its nodes use owning strings. Inference inside Agent nodes goes through the usual arena-backed `run_turn`.
 
+You can also write graphs declaratively in JSON and load them with `load_graph_json`; see [agent-json.md](agent-json.md).
+
 ---
 
 ## Nodes and edges
