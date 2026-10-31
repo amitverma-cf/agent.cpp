@@ -30,4 +30,10 @@ bool supports_parallel(const Session &session);
 // format tools natively, nothing otherwise.
 std::string_view injected_system_text(const Session &session);
 
+// Runs request on the session's engine with an explicit task (one agent_capability bit, e.g.
+// AGENT_CAP_EMBED) instead of the engine's default. The converted request and the response views
+// live in arena, which the caller owns (infer() uses the session's per-turn arena). Fails with
+// UnsupportedProvider for non-engine sessions and engines that don't declare the capability.
+Result<InferResponse> infer_task(Session &session, uint32_t task, const InferRequest &request, Arena &arena);
+
 } // namespace agent::providers

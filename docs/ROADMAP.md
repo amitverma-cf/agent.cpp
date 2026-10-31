@@ -163,6 +163,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [ ] Model registry from `models.json`: lazy load, LRU unload under a RAM/VRAM budget
 - [x] `StoreOps` key-value store + in-memory default
 - [ ] `CheckpointerOps` / `VectorStoreOps` + in-memory implementations
+  - [x] `VectorStoreOps` + `in_memory_vector_store()` (brute-force cosine); sqlite-vec implementation in `agent-store-sqlite` (see [docs/api/rag.md](api/rag.md)). `CheckpointerOps` still open
 - [x] Media on messages (`Media`/`MediaView`, `run_turn_with_media`); engine file outputs land in `<workspace>/artifacts/` and persist with history
 - [x] Run requests with cancel (`request_cancel`/`clear_cancel`), progress (`Config::on_progress`) and chunk streaming
 - [ ] Agent loop (pi-agent-core style) with tool-call limits
@@ -178,16 +179,18 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [ ] Checkpointing by `thread_id` through `CheckpointerOps`; resume / replay; durability modes
   - [x] v1: checkpoints by `thread_id` through `StoreOps`, `resume_graph`, durability modes `Exit`/`Async`/`Sync`; `CheckpointerOps` and replay still open
 - [ ] `agent-store-sqlite`: SQLite checkpointer/state + sqlite-vec vector store (CLI and opt-in)
+  - [x] sqlite-vec vector store (`store::sqlite_vector_store()`); SQLite checkpointer/state still open
 - [x] **Interrupts** for human approval (reuse the permission `Ask`)
 - [ ] Load graphs from `agent.json`
 - [ ] Port skills, permissions, context compression, fs/terminal tools
 - [ ] MCP stdio client
-- [ ] RAG pipeline node: chunk → embed → `VectorStoreOps` → rerank → inject
+- [x] RAG pipeline: chunk → embed → `VectorStoreOps` → rerank → inject (`rag_index` / `rag_query` / `search_knowledge` tool via `make_rag_tool`; see [docs/api/rag.md](api/rag.md)). A dedicated graph node kind is not added: an Agent node with the tool, or a Function node calling `rag_query`, covers it
 
 ### Phase 4: Engine add-ons (ongoing; each is an independent task)
 Priority wave A (v1 **starter pack**, installed by default by `agent setup`):
 - [ ] `llama`: + libmtmd (vision/audio/video in), OCR models, embeddings, rerank, **decision models** (choice/score/yes-no)
   - [x] libmtmd image + audio input (`engine_options.mmproj`); video input still open (needs ffmpeg)
+  - [x] embeddings + rerank (`engine_options.mode` `"embed"` / `"rerank"`, `AGENT_CAP_EMBED` / `AGENT_CAP_RERANK`; tested with bge-small-en-v1.5, jina-reranker-v1-tiny-en, bge-reranker-v2-m3)
 - [ ] `sherpa`: Kokoro TTS, Parakeet / Whisper STT, VAD, diarization (Windows-friendly breadth)
   - [x] v1 (`engines/sherpa`, sherpa-onnx 2.0.1 prebuilt C API): Kokoro TTS (WAV artifact + streamed audio chunks, progress, cancel), Whisper / NeMo transducer (Parakeet) ASR; Linux x64 tested with kokoro-en-v0_19 + whisper-tiny.en
   - [ ] VAD, diarization, VITS/Matcha/Kitten TTS, Windows build

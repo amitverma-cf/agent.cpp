@@ -11,6 +11,11 @@ namespace agent::store {
 // <workspace>/memory/db.sqlite3.
 const StoreOps *sqlite_store();
 
+// sqlite-vec vector store for RAG (RagIndex::store). VectorStoreConfig::path: file path, or empty /
+// ":memory:". Tables <name>_vectors (vec0, cosine distance) and <name>_chunks; scores are
+// 1 - cosine distance. An existing table keeps the dimensions it was created with.
+const VectorStoreOps *sqlite_vector_store();
+
 } // namespace agent::store
 
 namespace agent {

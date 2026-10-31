@@ -159,11 +159,14 @@ Result<void> init_engine(Session &session) {
     return ok();
 }
 
-Result<InferResponse> infer_engine(Session &session, const InferRequest &request) {
+namespace {
+
+// task == 0: the engine's default task (engine_task()). The request and response live in arena.
+Result<InferResponse> run_engine(Session &session, uint32_t task, const InferRequest &request, Arena &arena) {
     auto *state = static_cast<EngineState *>(session.provider_state.get());
     if (!state || !state->instance) return fail<InferResponse>(ErrorCode::ProviderInitFailed, "Engine not initialized.");
     const agent_engine_v1 *engine = state->engine;
-    Arena &arena = ambient::current_arena(session);
+    if (task == 0) task = engine_task(engine);
 
     // --- request: MessageView -> agent_message (arena-backed, zero-copy for strings/tensors) ---
     auto msgs = arena.allocate_span<agent_message>(request.messages.size());
@@ -207,10 +210,11 @@ Result<InferResponse> infer_engine(Session &session, const InferRequest &request
                                          static_cast<double>(temperature), request.stream ? "true" : "false");
 
     CallbackCtx cb_ctx{request.on_token, request.token_user_data, request.on_progress, request.progress_user_data};
-    agent_request req{.task = engine_task(engine),
+    agent_request req{.task = task,
                       .messages = msgs.data(),
                       .n_messages = msgs.size(),
-                      .tools_json = to_c(build_tools_json(session)),
+                      // Tool definitions only matter for chat; embed / rerank / ... requests carry none.
+                      .tools_json = to_c(task == AGENT_CAP_TEXT_GEN ? build_tools_json(session) : std::string_view()),
                       .params_json = agent_str{params, static_cast<size_t>(params_len)},
                       .output_dir = to_c(state->output_dir),
                       .on_chunk = (request.stream && request.on_token) ? forward_chunk : nullptr,
@@ -288,6 +292,26 @@ Result<InferResponse> infer_engine(Session &session, const InferRequest &request
                                                 .completion_tokens = usage.completion_tokens,
                                                 .total_tokens = usage.prompt_tokens + usage.completion_tokens},
                             .output_tensors = tensors});
+}
+
+} // namespace
+
+Result<InferResponse> infer_engine(Session &session, const InferRequest &request) {
+    return run_engine(session, 0, request, ambient::current_arena(session));
+}
+
+Result<InferResponse> infer_task(Session &session, uint32_t task, const InferRequest &request, Arena &arena) {
+    if (session.config.provider != AiProvider::Engine)
+        return fail<InferResponse>(ErrorCode::UnsupportedProvider,
+                                   "This task needs an engine provider (Config::provider = AiProvider::Engine).");
+    auto *state = static_cast<EngineState *>(session.provider_state.get());
+    if (!state || !state->instance) return fail<InferResponse>(ErrorCode::ProviderInitFailed, "Engine not initialized.");
+    if (task == 0 || (task & (task - 1)) != 0)
+        return fail<InferResponse>(ErrorCode::InvalidConfig, "infer_task: task must be one capability bit.");
+    if ((state->engine->caps & task) == 0)
+        return fail<InferResponse>(ErrorCode::UnsupportedProvider,
+                                   std::string("Engine '") + state->engine->name + "' does not declare the requested capability.");
+    return run_engine(session, task, request, arena);
 }
 
 bool supports_parallel(const Session &session) {

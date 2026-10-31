@@ -48,6 +48,10 @@ add_library(agent
     src/core/tools/filesystem_tools.cpp
     src/core/tools/terminal_tools.cpp
     src/core/tools/context_compressor.cpp
+    src/core/rag/engine_tasks.cpp
+    src/core/rag/in_memory_vector_store.cpp
+    src/core/rag/chunker.cpp
+    src/core/rag/rag_pipeline.cpp
     src/hal/time.cpp
     src/hal/path.cpp
     src/hal/process.cpp
@@ -178,6 +182,7 @@ add_executable(test_agent
     tests/unit/test_engines.cpp
     tests/unit/test_engine_sdcpp.cpp
     tests/unit/test_graph.cpp
+    tests/unit/test_rag.cpp
     tests/integration/test_session.cpp
     tests/integration/test_flow.cpp
 )

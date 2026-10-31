@@ -1,4 +1,4 @@
-// agent-engine-llama: llama.cpp text generation as an agent.cpp engine plugin.
+// agent-engine-llama: llama.cpp text generation, embeddings and reranking as an agent.cpp engine plugin.
 //
 // One instance = one model + one llama_context with n_seq_max = "parallel" sequence slots.
 // Concurrent run() calls (AgentScheduler subagents) are continuously batched: each generation's
@@ -10,16 +10,20 @@
 // With a multimodal projector (options.mmproj) image and audio parts are fed through libmtmd: each
 // media part becomes mtmd's media marker in the rendered chat, and the prompt is prefilled with
 // mtmd_helper_eval_chunks on the request's sequence before generation joins the shared rounds.
+//
+// With options.mode "embed" / "rerank" the context is created in embedding mode with pooling (rank
+// pooling for rerankers) and run() serves AGENT_CAP_EMBED / AGENT_CAP_RERANK instead of chat.
 
 #include <agent-cpp/engine_abi.h>
-
 #include <algorithm>
 #include <cctype>
 #include <chat.h>
-#include <exception>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
+#include <exception>
 #include <llama.h>
 #include <memory>
 #include <mtmd-helper.h>
@@ -200,10 +204,20 @@ struct CallOutput {
     common_chat_msg parsed;
     std::vector<agent_tool_call> calls;
     agent_part part{};
+    // AGENT_CAP_EMBED / AGENT_CAP_RERANK: tensor parts pointing into floats.
+    std::vector<float> floats;
+    int64_t shape = 0;
+    std::vector<agent_part> parts;
 };
+
+// What the context was created for (create() option "mode"). Embedding and reranking models need a
+// context in embedding mode with pooling, which can't generate, so one instance does one of the three.
+enum class Mode { Generate, Embed, Rerank };
 
 struct Instance {
     Batcher batcher;
+    Mode mode = Mode::Generate;
+    std::mutex pool_mu;     // serializes embed / rerank decodes (they use every sequence slot)
     mtmd::context_ptr mtmd; // projector for image/audio input; null without options.mmproj. Freed before the model.
     common_chat_templates_ptr templates;
     std::mutex out_mu;
@@ -485,6 +499,252 @@ bool find_loose_tool_call(std::string_view text, common_chat_tool_call &call) {
     return false;
 }
 
+// ------------------------------------------------------------------ embeddings and reranking
+
+constexpr uint32_t kPoolSeqs = 16; // sequences packed into one embed / rerank decode
+
+std::vector<llama_token> tokenize_text(const llama_vocab *vocab, std::string_view text, bool add_special, bool parse_special) {
+    std::vector<llama_token> out(text.size() + 4);
+    const int32_t len = static_cast<int32_t>(text.size());
+    int32_t n = llama_tokenize(vocab, text.data(), len, out.data(), static_cast<int32_t>(out.size()), add_special, parse_special);
+    if (n < 0) {
+        out.resize(static_cast<size_t>(-n));
+        n = llama_tokenize(vocab, text.data(), len, out.data(), -n, add_special, parse_special);
+    }
+    out.resize(n < 0 ? 0 : static_cast<size_t>(n));
+    return out;
+}
+
+// Inputs longer than one batch are cut; a trailing EOS/SEP added by the tokenizer is kept.
+void truncate_tokens(const llama_vocab *vocab, std::vector<llama_token> &tokens, size_t max) {
+    if (tokens.size() <= max || max == 0) return;
+    const llama_token last = tokens.back();
+    tokens.resize(max);
+    if (last == llama_vocab_eos(vocab) || last == llama_vocab_sep(vocab)) tokens.back() = last;
+}
+
+// Rerank input for one (query, document) pair, as llama-server builds it: the model's "rerank" chat
+// template when it has one ({query} / {document} placeholders), otherwise
+// [BOS] query [EOS] [SEP] document [EOS] following the vocab's add_* flags. Template text may carry
+// special tokens; the query and document are tokenized as plain text so they can't inject any.
+std::vector<llama_token> rerank_tokens(const llama_model *model, const llama_vocab *vocab, std::string_view query, std::string_view doc,
+                                       size_t max) {
+    std::vector<llama_token> q = tokenize_text(vocab, query, false, false);
+    std::vector<llama_token> d = tokenize_text(vocab, doc, false, false);
+    // Fit the pair into one batch: cut the document first, then the query (leaving room for the
+    // template / special tokens).
+    const size_t reserve = std::min<size_t>(max / 4, 32);
+    const size_t budget = max > reserve ? max - reserve : max;
+    if (q.size() + d.size() > budget) {
+        const size_t q_max = std::max(budget / 2, budget - std::min(budget, d.size())); // a short document leaves the query more room
+        if (q.size() > q_max) q.resize(q_max);
+        d.resize(std::min(d.size(), budget - q.size()));
+    }
+
+    std::vector<llama_token> out;
+    auto append = [&](const std::vector<llama_token> &t) { out.insert(out.end(), t.begin(), t.end()); };
+    if (const char *tmpl = llama_model_chat_template(model, "rerank")) {
+        const std::string_view t(tmpl);
+        size_t lit = 0;
+        for (size_t pos = 0; pos < t.size();) {
+            const bool is_q = t.compare(pos, 7, "{query}") == 0, is_d = !is_q && t.compare(pos, 10, "{document}") == 0;
+            if (!is_q && !is_d) {
+                ++pos;
+                continue;
+            }
+            append(tokenize_text(vocab, t.substr(lit, pos - lit), false, true));
+            append(is_q ? q : d);
+            pos += is_q ? 7 : 10;
+            lit = pos;
+        }
+        append(tokenize_text(vocab, t.substr(lit), false, true));
+    } else {
+        llama_token eos = llama_vocab_eos(vocab);
+        if (eos == LLAMA_TOKEN_NULL) eos = llama_vocab_sep(vocab);
+        if (llama_vocab_get_add_bos(vocab)) out.push_back(llama_vocab_bos(vocab));
+        append(q);
+        if (llama_vocab_get_add_eos(vocab)) out.push_back(eos);
+        if (llama_vocab_get_add_sep(vocab)) out.push_back(llama_vocab_sep(vocab));
+        append(d);
+        if (llama_vocab_get_add_eos(vocab)) out.push_back(eos);
+    }
+    if (out.size() > max) out.resize(max);
+    return out;
+}
+
+// Runs every input on its own sequence, packing up to kPoolSeqs inputs (and at most n_batch tokens,
+// so a non-causal model sees each whole sequence in one micro-batch) into one decode, and copies
+// the first n_out floats of each sequence's pooled output into out[i * n_out].
+int32_t pooled_decode(Instance &inst, const std::vector<std::vector<llama_token>> &inputs, size_t n_out, const volatile int32_t *cancel,
+                      std::vector<float> &out, std::string &error) {
+    std::lock_guard<std::mutex> lock(inst.pool_mu);
+    llama_context *ctx = inst.batcher.ctx;
+    const size_t n_batch = llama_n_batch(ctx);
+    const size_t n_seq_max = std::min<size_t>(kPoolSeqs, llama_n_seq_max(ctx));
+    out.assign(inputs.size() * n_out, 0.0f);
+    llama_batch batch = llama_batch_init(static_cast<int32_t>(n_batch), 0, 1);
+    int32_t status = AGENT_OK;
+    for (size_t i = 0; i < inputs.size() && status == AGENT_OK;) {
+        if (cancel && *cancel) {
+            error = "llama: cancelled";
+            status = AGENT_ERR_CANCELLED;
+            break;
+        }
+        const size_t first = i;
+        batch.n_tokens = 0;
+        while (i < inputs.size() && i - first < n_seq_max && static_cast<size_t>(batch.n_tokens) + inputs[i].size() <= n_batch) {
+            const auto seq = static_cast<llama_seq_id>(i - first);
+            for (size_t j = 0; j < inputs[i].size(); ++j) {
+                const int32_t k = batch.n_tokens++;
+                batch.token[k] = inputs[i][j];
+                batch.pos[k] = static_cast<llama_pos>(j);
+                batch.n_seq_id[k] = 1;
+                batch.seq_id[k][0] = seq;
+                batch.logits[k] = true;
+            }
+            ++i;
+        }
+        if (i == first) { // callers truncate every input to n_batch, so this means an empty input
+            error = "llama: empty input";
+            status = AGENT_ERR_INVALID_CONFIG;
+            break;
+        }
+        llama_memory_clear(llama_get_memory(ctx), true);
+        if (llama_decode(ctx, batch) != 0) {
+            error = "llama: embedding decode failed";
+            status = AGENT_ERR_DECODE_FAILED;
+            break;
+        }
+        for (size_t s = 0; s < i - first; ++s) {
+            const float *e = llama_get_embeddings_seq(ctx, static_cast<llama_seq_id>(s));
+            if (!e) {
+                error = "llama: the context produced no pooled output";
+                status = AGENT_ERR_DECODE_FAILED;
+                break;
+            }
+            std::copy(e, e + n_out, out.begin() + static_cast<std::ptrdiff_t>((first + s) * n_out));
+        }
+    }
+    llama_memory_clear(llama_get_memory(ctx), true);
+    llama_batch_free(batch);
+    return status;
+}
+
+// One f32 tensor part per row of out.floats (rows of out.shape floats each), all with the same name.
+void tensor_parts(CallOutput &out, const char *name, size_t n_rows, agent_response *resp) {
+    out.parts.assign(n_rows, agent_part{});
+    for (size_t r = 0; r < n_rows; ++r) {
+        agent_part &p = out.parts[r];
+        p.kind = AGENT_PART_TENSOR;
+        p.name = agent_str{name, std::char_traits<char>::length(name)};
+        p.dtype = AGENT_DTYPE_F32;
+        p.shape = &out.shape;
+        p.ndim = 1;
+        p.data = out.floats.data() + r * static_cast<size_t>(out.shape);
+        p.size = static_cast<size_t>(out.shape) * sizeof(float);
+    }
+    *resp = agent_response{};
+    resp->message.role = agent_str{"assistant", 9};
+    resp->message.parts = out.parts.data();
+    resp->message.n_parts = out.parts.size();
+}
+
+int32_t reject_media(Instance &inst, const agent_request *req) {
+    for (size_t i = 0; i < req->n_messages; ++i)
+        for (size_t p = 0; p < req->messages[i].n_parts; ++p)
+            if (is_media(req->messages[i].parts[p])) return inst.fail(AGENT_ERR_UNSUPPORTED, "llama: embed / rerank take text parts only");
+    return AGENT_OK;
+}
+
+// AGENT_CAP_EMBED: one pooled, L2-normalized "embedding" tensor (f32 [n_embd]) per TEXT part, in order.
+int32_t run_embed(Instance &inst, const agent_request *req, agent_response *resp) {
+    if (int32_t rc = reject_media(inst, req); rc != AGENT_OK) return rc;
+    const llama_model *model = inst.batcher.model;
+    const llama_vocab *vocab = llama_model_get_vocab(model);
+    const size_t n_batch = llama_n_batch(inst.batcher.ctx);
+    std::vector<std::vector<llama_token>> inputs;
+    int32_t n_prompt = 0;
+    for (size_t i = 0; i < req->n_messages; ++i) {
+        const agent_message &m = req->messages[i];
+        for (size_t p = 0; p < m.n_parts; ++p) {
+            if (m.parts[p].kind != AGENT_PART_TEXT) continue;
+            std::vector<llama_token> t = tokenize_text(vocab, sv(m.parts[p].text), true, false);
+            if (t.empty()) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: cannot embed an empty text");
+            truncate_tokens(vocab, t, n_batch);
+            n_prompt += static_cast<int32_t>(t.size());
+            inputs.push_back(std::move(t));
+        }
+    }
+    const auto n_embd = static_cast<size_t>(llama_model_n_embd_out(model));
+    std::vector<float> floats;
+    std::string error;
+    if (int32_t rc = pooled_decode(inst, inputs, n_embd, req->cancel, floats, error); rc != AGENT_OK) return inst.fail(rc, error);
+    for (size_t r = 0; r < inputs.size(); ++r) {
+        float *v = floats.data() + r * n_embd;
+        double sum = 0.0;
+        for (size_t k = 0; k < n_embd; ++k) sum += static_cast<double>(v[k]) * static_cast<double>(v[k]);
+        const float inv = sum > 0.0 ? static_cast<float>(1.0 / std::sqrt(sum)) : 0.0f;
+        for (size_t k = 0; k < n_embd; ++k) v[k] *= inv;
+    }
+    CallOutput &out = inst.output();
+    out = CallOutput{};
+    out.floats = std::move(floats);
+    out.shape = static_cast<int64_t>(n_embd);
+    tensor_parts(out, "embedding", inputs.size(), resp);
+    resp->usage = agent_usage{n_prompt, 0};
+    return AGENT_OK;
+}
+
+// AGENT_CAP_RERANK: the first TEXT part is the query, every later one a document. Returns one
+// "scores" tensor (f32 [n_docs]) with the classifier's raw relevance score per document (higher =
+// more relevant), in document order.
+int32_t run_rerank(Instance &inst, const agent_request *req, agent_response *resp) {
+    if (int32_t rc = reject_media(inst, req); rc != AGENT_OK) return rc;
+    const llama_model *model = inst.batcher.model;
+    const llama_vocab *vocab = llama_model_get_vocab(model);
+    const size_t n_batch = llama_n_batch(inst.batcher.ctx);
+    std::string_view query;
+    bool have_query = false;
+    std::vector<std::vector<llama_token>> inputs;
+    int32_t n_prompt = 0;
+    for (size_t i = 0; i < req->n_messages; ++i) {
+        const agent_message &m = req->messages[i];
+        for (size_t p = 0; p < m.n_parts; ++p) {
+            if (m.parts[p].kind != AGENT_PART_TEXT) continue;
+            if (!have_query) {
+                query = sv(m.parts[p].text);
+                have_query = true;
+                continue;
+            }
+            std::vector<llama_token> t = rerank_tokens(model, vocab, query, sv(m.parts[p].text), n_batch);
+            n_prompt += static_cast<int32_t>(t.size());
+            inputs.push_back(std::move(t));
+        }
+    }
+    if (inputs.empty()) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: rerank needs a query and at least one document text part");
+    std::vector<float> scores;
+    std::string error;
+    if (int32_t rc = pooled_decode(inst, inputs, 1, req->cancel, scores, error); rc != AGENT_OK) return inst.fail(rc, error);
+    CallOutput &out = inst.output();
+    out = CallOutput{};
+    out.floats = std::move(scores);
+    out.shape = static_cast<int64_t>(inputs.size());
+    tensor_parts(out, "scores", 1, resp);
+    resp->usage = agent_usage{n_prompt, 0};
+    return AGENT_OK;
+}
+
+// llama.cpp has no public "has a classification head" query. Reranker GGUFs carry no
+// <arch>.pooling_type or declare rank pooling; embedding models declare mean / cls / last. So a
+// declared non-rank pooling type rules the model out.
+bool maybe_reranker(const llama_model *model) {
+    char arch[64], value[16];
+    if (llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch)) <= 0) return true;
+    const std::string key = std::string(arch) + ".pooling_type";
+    if (llama_model_meta_val_str(model, key.c_str(), value, sizeof(value)) <= 0) return true;
+    return std::strtol(value, nullptr, 10) == LLAMA_POOLING_TYPE_RANK;
+}
+
 // ------------------------------------------------------------------ ABI functions
 
 int32_t llama_create(agent_str config_json, void **out_instance, char *err, size_t err_cap) {
@@ -508,6 +768,8 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     const int n_seq = std::max(1, json_number<int>(cfg, "parallel", 1));
     int gpu_layers = -1, threads = 0;
     std::string chat_template, mmproj;
+    Mode mode = Mode::Generate;
+    enum llama_pooling_type pooling = LLAMA_POOLING_TYPE_UNSPECIFIED;
     simdjson::ondemand::object options;
     if (!cfg["options"].get_object().get(options)) {
         gpu_layers = json_number<int>(options, "gpu_layers", -1);
@@ -515,6 +777,27 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         std::string_view t;
         if (!options["chat_template"].get_string().get(t)) chat_template = std::string(t);
         if (!options["mmproj"].get_string().get(t)) mmproj = std::string(t);
+        if (!options["mode"].get_string().get(t)) {
+            if (t == "embed") mode = Mode::Embed;
+            else if (t == "rerank") mode = Mode::Rerank;
+            else if (t != "generate") {
+                std::snprintf(err, err_cap, "llama: options.mode must be \"generate\", \"embed\" or \"rerank\"");
+                return AGENT_ERR_INVALID_CONFIG;
+            }
+        }
+        if (!options["pooling"].get_string().get(t)) {
+            if (t == "mean") pooling = LLAMA_POOLING_TYPE_MEAN;
+            else if (t == "cls") pooling = LLAMA_POOLING_TYPE_CLS;
+            else if (t == "last") pooling = LLAMA_POOLING_TYPE_LAST;
+            else {
+                std::snprintf(err, err_cap, "llama: options.pooling must be \"mean\", \"cls\" or \"last\"");
+                return AGENT_ERR_INVALID_CONFIG;
+            }
+        }
+    }
+    if (mode != Mode::Generate && !mmproj.empty()) {
+        std::snprintf(err, err_cap, "llama: options.mmproj is only used in generate mode");
+        return AGENT_ERR_INVALID_CONFIG;
     }
 
     auto mparams = llama_model_default_params();
@@ -549,11 +832,39 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     // Projectors with non-causal attention over image tokens (e.g. Gemma 3) need a whole image in
     // one micro-batch.
     if (mctx && mtmd_decode_use_non_causal(mctx.get(), nullptr)) cparams.n_ubatch = cparams.n_batch;
+    if (mode != Mode::Generate) {
+        // Embed / rerank: pooled outputs, one decode per group of inputs, cleared after each. An input
+        // is at most one batch (and the model's training context: BERT-style position embeddings end
+        // there), and the batch is one micro-batch so non-causal models see whole sequences.
+        const int n_train = llama_model_n_ctx_train(model);
+        const auto seq_tokens = static_cast<uint32_t>(n_train > 0 ? std::min(n_ctx, n_train) : n_ctx);
+        cparams.embeddings = true;
+        cparams.pooling_type = mode == Mode::Rerank ? LLAMA_POOLING_TYPE_RANK : pooling;
+        cparams.n_ctx = seq_tokens;
+        cparams.n_batch = seq_tokens;
+        cparams.n_ubatch = seq_tokens;
+        cparams.n_seq_max = kPoolSeqs;
+        cparams.kv_unified = true;
+    }
     llama_context *ctx = llama_init_from_model(model, cparams);
+    if (ctx && mode == Mode::Embed && llama_pooling_type(ctx) == LLAMA_POOLING_TYPE_NONE) {
+        // The model declares no pooling (e.g. a generative model used as an embedder): mean-pool.
+        llama_free(ctx);
+        cparams.pooling_type = LLAMA_POOLING_TYPE_MEAN;
+        ctx = llama_init_from_model(model, cparams);
+    }
     if (!ctx) {
         mctx.reset();
         llama_model_free(model);
         std::snprintf(err, err_cap, "llama: failed to create context");
+        return AGENT_ERR_MODEL_LOAD_FAILED;
+    }
+    if (mode == Mode::Rerank &&
+        (llama_pooling_type(ctx) != LLAMA_POOLING_TYPE_RANK || llama_model_n_cls_out(model) < 1 || !maybe_reranker(model))) {
+        llama_free(ctx);
+        llama_model_free(model);
+        std::snprintf(err, err_cap, "llama: %s is not a reranker (no classification head); rerank mode needs a reranker model",
+                      model_str.c_str());
         return AGENT_ERR_MODEL_LOAD_FAILED;
     }
 
@@ -561,6 +872,11 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     inst->batcher.model = model;
     inst->batcher.ctx = ctx;
     inst->batcher.seq_ctx = n_ctx;
+    inst->mode = mode;
+    if (mode != Mode::Generate) { // no chat template or sequence slots needed
+        *out_instance = inst;
+        return AGENT_OK;
+    }
     inst->batcher.seed_free_list(n_seq);
     inst->mtmd = std::move(mctx);
     // Exception firewall (see start_session): template loading parses Jinja and may throw.
@@ -581,7 +897,15 @@ void llama_destroy(void *instance) { delete static_cast<Instance *>(instance); }
 
 int32_t llama_run(void *instance, const agent_request *req, agent_response *resp) {
     auto *inst = static_cast<Instance *>(instance);
-    if (req->task != AGENT_CAP_TEXT_GEN) return inst->fail(AGENT_ERR_UNSUPPORTED, "llama: only TEXT_GEN is supported");
+    if (inst->mode == Mode::Embed && req->task == AGENT_CAP_EMBED) return run_embed(*inst, req, resp);
+    if (inst->mode == Mode::Rerank && req->task == AGENT_CAP_RERANK) return run_rerank(*inst, req, resp);
+    if (inst->mode != Mode::Generate || req->task != AGENT_CAP_TEXT_GEN) {
+        static constexpr const char *kModeTask[] = {"TEXT_GEN", "EMBED", "RERANK"};
+        static constexpr const char *kModeName[] = {"generate", "embed", "rerank"};
+        const auto m = static_cast<size_t>(inst->mode);
+        return inst->fail(AGENT_ERR_UNSUPPORTED, std::string("llama: this instance was created with mode \"") + kModeName[m] +
+                                                     "\" and only runs " + kModeTask[m] + " requests (set options.mode)");
+    }
 
     int max_tokens = 512;
     float temperature = 0.7f;
@@ -737,10 +1061,12 @@ int32_t llama_reset_cache(void *instance) {
 const agent_engine_v1 kLlamaEngine = {
     AGENT_ENGINE_ABI_VERSION,
     "llama",
-    "0.3",
+    "0.4",
     // Static: what the plugin can do. Image/audio input also needs options.mmproj (and audio a
     // projector that supports it); otherwise run() returns AGENT_ERR_UNSUPPORTED for media parts.
-    AGENT_CAP_TEXT_GEN | AGENT_CAP_TOOL_CALL | AGENT_CAP_VISION_IN | AGENT_CAP_AUDIO_IN,
+    // EMBED / RERANK need an instance created with options.mode "embed" / "rerank"; an instance runs
+    // only its own mode's task.
+    AGENT_CAP_TEXT_GEN | AGENT_CAP_TOOL_CALL | AGENT_CAP_VISION_IN | AGENT_CAP_AUDIO_IN | AGENT_CAP_EMBED | AGENT_CAP_RERANK,
     AGENT_ENGINE_FLAG_CONCURRENT | AGENT_ENGINE_FLAG_NATIVE_TOOLS,
     llama_create,
     llama_destroy,
