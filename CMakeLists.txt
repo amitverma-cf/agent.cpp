@@ -34,6 +34,9 @@ add_library(agent
     src/core/executor/flow_executor.cpp
     src/core/executor/ambient_turn.cpp
     src/core/scheduler/scheduler.cpp
+    src/core/graph/graph_builders.cpp
+    src/core/graph/graph_checkpoint.cpp
+    src/core/graph/graph_executor.cpp
     src/core/data/data_source_registry.cpp
     src/core/skills/skills_registry.cpp
     src/core/providers/provider_ops.cpp
@@ -174,6 +177,7 @@ add_executable(test_agent
     tests/unit/test_permissions.cpp
     tests/unit/test_engines.cpp
     tests/unit/test_engine_sdcpp.cpp
+    tests/unit/test_graph.cpp
     tests/integration/test_session.cpp
     tests/integration/test_flow.cpp
 )

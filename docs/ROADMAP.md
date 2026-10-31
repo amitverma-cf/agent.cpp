@@ -171,12 +171,14 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [ ] Freeze public `agent.hpp` v1 and write `docs/api`
 
 ### Phase 3: Workflows, state, durability (3 weeks)
-- [ ] Graph runtime: agent/tool/function nodes, conditional edges, **Sequential / Parallel / Loop**
+- [x] Graph runtime: agent/tool/function nodes, conditional edges, **Sequential / Parallel / Loop** (see [docs/api/graph.md](api/graph.md))
 - [ ] Event log as the source of truth; hooks subscribe to events
-- [ ] Scoped state (`temp:`/session/`user:`/`app:`)
+  - [x] v1: in-memory per-run `GraphRun::events` (node start/end, state writes, tool calls, interrupts, checkpoints) + existing `EventHook`s; not yet persisted or used for replay
+- [x] Scoped state (`temp:`/session/`user:`/`app:`)
 - [ ] Checkpointing by `thread_id` through `CheckpointerOps`; resume / replay; durability modes
+  - [x] v1: checkpoints by `thread_id` through `StoreOps`, `resume_graph`, durability modes `Exit`/`Async`/`Sync`; `CheckpointerOps` and replay still open
 - [ ] `agent-store-sqlite`: SQLite checkpointer/state + sqlite-vec vector store (CLI and opt-in)
-- [ ] **Interrupts** for human approval (reuse the permission `Ask`)
+- [x] **Interrupts** for human approval (reuse the permission `Ask`)
 - [ ] Load graphs from `agent.json`
 - [ ] Port skills, permissions, context compression, fs/terminal tools
 - [ ] MCP stdio client
