@@ -25,7 +25,9 @@ const ProviderOps *find_provider_ops(AiProvider provider);
 // Capabilities of the active provider, valid after the provider's init().
 // true when concurrent infer() calls are safe and worthwhile (engine flag AGENT_ENGINE_FLAG_CONCURRENT).
 bool supports_parallel(const Session &session);
-// true when the core must inject its plain-text tool/skill instructions into the prompt.
-bool needs_text_tools(const Session &session);
+// Plain-text instructions the core folds into the system message for this provider: the tool list
+// and skills for engines without AGENT_ENGINE_FLAG_NATIVE_TOOLS, only the skills for engines that
+// format tools natively, nothing otherwise.
+std::string_view injected_system_text(const Session &session);
 
 } // namespace agent::providers

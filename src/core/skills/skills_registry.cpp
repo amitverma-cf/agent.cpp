@@ -65,7 +65,7 @@ Result<std::string> skill_loader_callback(std::string_view arguments, void *user
         if (!doc.get_object().get(obj)) {
             for (auto field : obj) {
                 auto k = field.unescaped_key();
-                if (!k.error() && k.value() == "name") (void)field.value().get_string().get(name_sv);
+                if (!k.error() && k.value() == "name") { if (field.value().get_string().get(name_sv)) name_sv = {}; }
             }
         }
     }

@@ -63,3 +63,16 @@ Rules:
 - Honour `agent_request::cancel` and report long jobs through `on_progress`.
 
 `engines/mock/mock_engine.cpp` is a complete minimal example.
+
+## The llama engine
+
+`engines/llama` (`agent-engine-llama`) renders prompts with the model's own Jinja chat template and
+parses replies into content + tool calls in the model's native format, using llama.cpp's `common_chat`.
+It sets `AGENT_ENGINE_FLAG_NATIVE_TOOLS` (the core only adds the skills list to the system message) and
+`AGENT_ENGINE_FLAG_CONCURRENT` (parallel subagents share one continuously batched decode).
+
+`Config::engine_options`: `gpu_layers`, `threads`, `chat_template` (overrides the template embedded in the GGUF).
+
+`common_chat` reports errors by throwing, and exceptions must not cross the plugin ABI. So the
+plugin catches at exactly those calls (template load/render, output parsing) and converts them to
+status codes. This is the only exception boundary in agent.cpp.

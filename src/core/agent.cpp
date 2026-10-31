@@ -132,6 +132,7 @@ void rebuild_tool_index(Session &session) {
     for (size_t i = 0; i < session.config.tools.size(); ++i) session.tool_by_name.emplace(std::string(session.config.tools[i].name), i);
 
     session.tools_system_prompt.clear();
+    session.skills_system_prompt.clear();
     if (!session.config.tools.empty()) {
         session.tools_system_prompt += "You have access to the following tools:\n";
         for (const auto &tool : session.config.tools) {
@@ -149,7 +150,7 @@ void rebuild_tool_index(Session &session) {
     }
 
     if (!session.skills.empty()) {
-        session.tools_system_prompt += "\n\nYou have access to the following skills. Call the "
+        session.skills_system_prompt += "You have access to the following skills. Call the "
                                        "use_skill tool with a skill's name to load its full "
                                        "instructions when relevant:\n";
 
@@ -164,12 +165,16 @@ void rebuild_tool_index(Session &session) {
 
         for (const std::string *name : names) {
             const Skill &skill = session.skills.at(*name);
-            session.tools_system_prompt += "- ";
-            session.tools_system_prompt += *name;
-            session.tools_system_prompt += ": ";
-            session.tools_system_prompt += skill.description;
-            session.tools_system_prompt += "\n";
+            session.skills_system_prompt += "- ";
+            session.skills_system_prompt += *name;
+            session.skills_system_prompt += ": ";
+            session.skills_system_prompt += skill.description;
+            session.skills_system_prompt += "\n";
         }
+    }
+    if (!session.skills_system_prompt.empty()) {
+        if (!session.tools_system_prompt.empty()) session.tools_system_prompt += "\n\n";
+        session.tools_system_prompt += session.skills_system_prompt;
     }
 }
 
