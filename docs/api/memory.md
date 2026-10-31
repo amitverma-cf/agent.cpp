@@ -2,7 +2,9 @@
 
 `#include <agent-cpp/agent.hpp>`
 
-agent.cpp includes a pluggable key-value memory backend, backed by SQLite with a bounded in-memory write-back cache in front of it. It is used automatically to persist conversation history after every turn, and you can use it directly to store any application data. (For RAG/vector search, see [data-sources.md](data-sources.md) — that's a deliberately separate mechanism, not part of this KV store.)
+`libagent` has a pluggable key-value store, selected through `MemoryConfig::store` (a `StoreOps` function-pointer table). It persists conversation history after every turn, and you can use it directly to store any application data. (For RAG/vector search, see [data-sources.md](data-sources.md); that's a separate mechanism, not part of this KV store.)
+
+The core library ships only an **in-memory** store, which is the default and has no dependencies; nothing persists past the `Session`. Durable storage comes from the optional **`agent_store_sqlite`** library (used by the agent CLI), or from your own `StoreOps`.
 
 ---
 
@@ -10,32 +12,47 @@ agent.cpp includes a pluggable key-value memory backend, backed by SQLite with a
 
 ```cpp
 struct MemoryConfig {
-    MemoryProvider provider = MemoryProvider::Sqlite;
-    std::string    db_path  = "memory/db.sqlite3";
+    const StoreOps *store = nullptr;   // nullptr = built-in in-memory store
+    std::string     db_path;           // backend-specific; empty = backend default
 
+    // Write-back cache tuning (used by the SQLite store)
     size_t max_cache_bytes             = 16 * 1024 * 1024;  // 16 MiB
     size_t flush_dirty_threshold_bytes = 4 * 1024 * 1024;   // 4 MiB
     int    flush_interval_ms           = 500;
 };
 ```
 
-`db_path` is auto-prefixed with `workspace_dir` at `init()` time when it equals the default `"memory/db.sqlite3"`. Set a custom path (or `":memory:"`) to override this.
-
----
-
-## MemoryProvider
+## StoreOps
 
 ```cpp
-enum class MemoryProvider {
-    Sqlite,   // the only backend; always compiled in
+struct StoreOps {
+    using OpenFn  = Result<std::shared_ptr<void>> (*)(const MemoryConfig &config, std::string_view workspace_dir);
+    using PutFn   = Result<void> (*)(void *state, std::string_view key, std::string_view value);
+    using GetFn   = Result<std::string> (*)(void *state, std::string_view key);   // KeyNotFound if missing
+    using ClearFn = Result<void> (*)(void *state);
+
+    OpenFn open; PutFn put; GetFn get; ClearFn clear;
 };
 ```
 
-There is one memory backend. `db_path = ":memory:"` gives you SQLite's own native ephemeral in-memory database (the old standalone `InMemory` provider's job, for free, through the same code path — no separate implementation to maintain); a real path gives durable, on-disk storage. There's no `AGENT_ENABLE_SQLITE` build flag — every `Session` needs a memory backend, so it's always compiled in, unlike the optional LLM providers.
+`open` runs once from `init()`. The state it returns is kept in `Session::memory_state` and passed to every other call. All four functions must be set, and they must be safe to call from multiple threads (`AgentScheduler` runs flows in parallel).
 
 ---
 
-## How it works: a bounded write-back cache in front of SQLite
+## SQLite store (`agent_store_sqlite`)
+
+```cpp
+#include <agent-cpp/store_sqlite.hpp>   // link agent_store_sqlite
+
+cfg.memory = {
+    .store   = agent::store::sqlite_store(),
+    .db_path = ".workspace/memory/db.sqlite3",   // empty = <workspace>/memory/db.sqlite3
+};
+```
+
+`db_path = ":memory:"` gives an ephemeral SQLite database through the same code path.
+
+### How it works: a bounded write-back cache in front of SQLite
 
 `store_memory`/`retrieve_memory` never talk to SQLite directly on the calling thread. Instead:
 
@@ -49,16 +66,10 @@ The durability guarantee underneath all of this is standard SQLite: the database
 
 ```cpp
 cfg.memory = {
-    .provider = agent::MemoryProvider::Sqlite,
-    .db_path  = ".workspace/memory/db.sqlite3",   // parent directory created automatically
-    .max_cache_bytes = 32 * 1024 * 1024,          // tune for your working-set size
+    .store   = agent::store::sqlite_store(),
+    .db_path = ".workspace/memory/db.sqlite3",   // parent directory created automatically
+    .max_cache_bytes = 32 * 1024 * 1024,         // tune for your working-set size
 };
-```
-
-For ephemeral/testing use (no persistence needed), use `:memory:`:
-
-```cpp
-cfg.memory = { .provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:" };
 ```
 
 **Concurrency**: the cache is protected by a single mutex, so `store_memory`/`retrieve_memory` are safe to call concurrently from multiple threads — including from multiple `Flow`s running in parallel under `AgentScheduler` (see [scheduler.md](scheduler.md)), which already calls `store_memory` after every turn via the conversation-history auto-persist below. This is built thread-safe uniformly rather than assuming a particular access pattern. That single mutex is also a shared serialization point across every concurrent `store_memory`/`retrieve_memory` call — fine at the default `Config::max_parallel_subagents = 4`, but worth keeping in mind as a scaling ceiling if that value is raised substantially for a larger deployment.

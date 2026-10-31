@@ -2,7 +2,7 @@
 
 `#include <agent-cpp/agent.hpp>`
 
-`DataSource` is a pluggable, open-ended registry for backends a `Flow` needs beyond the library's own conversation-history persistence — RAG/vector search, SQLite, GraphRAG, arbitrary files, or anything else. It is deliberately separate from `MemoryConfig`/`MemoryProvider` (see [memory.md](memory.md)), which stays a plain key-value store for the library's internal use.
+`DataSource` is a pluggable, open-ended registry for backends a `Flow` needs beyond the library's own conversation-history persistence — RAG/vector search, SQLite, GraphRAG, arbitrary files, or anything else. It is deliberately separate from `MemoryConfig`/`StoreOps` (see [memory.md](memory.md)), which stays a plain key-value store for the library's internal use.
 
 ---
 
@@ -143,9 +143,9 @@ Both can be used together — e.g. always inject a short summary via `context_pr
 
 ---
 
-## Built-in: sqlite-vec (RAG / vector search)
+## sqlite-vec (RAG / vector search), in `agent_store_sqlite`
 
-The `FakeVectorStore` above was illustrative — for real vector search, agent.cpp ships a `sqlite-vec`-backed `DataSource` out of the box (`sqlite3` + the `sqlite-vec` extension, statically compiled in, vendored under `vendor/sqlite`/`vendor/sqlite-vec`). It's queried directly on disk every time via `vec0`'s own nearest-neighbor search — **never** routed through the bounded write-back cache that `MemoryConfig`/`store_memory` uses (see [memory.md](memory.md)), since that cache is sized and designed for small conversation-history-shaped data, not a growing vector index.
+The `FakeVectorStore` above was illustrative — for real vector search, the optional `agent_store_sqlite` library ships a `sqlite-vec`-backed `DataSource` (`#include <agent-cpp/store_sqlite.hpp>`; `sqlite3` + the `sqlite-vec` extension, vendored under `vendor/sqlite`/`vendor/sqlite-vec`). `libagent` itself has no SQLite dependency. It's queried directly on disk every time via `vec0`'s own nearest-neighbor search — **never** routed through the bounded write-back cache that `MemoryConfig`/`store_memory` uses (see [memory.md](memory.md)), since that cache is sized and designed for small conversation-history-shaped data, not a growing vector index.
 
 ```cpp
 Result<std::shared_ptr<DataSource>> make_sqlite_vec_data_source(

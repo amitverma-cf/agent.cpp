@@ -1,6 +1,6 @@
 #include "hal/log_file.hpp"
 #include "hal/platform.hpp"
-#include "memory/memory_ops.hpp"
+#include "memory/memory_store.hpp"
 #include "providers/provider_ops.hpp"
 #include "tools/tools_ops.hpp"
 #include "utils/utils.hpp"
@@ -71,10 +71,6 @@ Result<Session> init(const Config &config) {
     auto init_res = ops->init(session);
     if (!init_res.ok) return fail<Session>(init_res.error.code, init_res.error.message);
 
-    if (session.config.memory.db_path == "memory/db.sqlite3") {
-        session.config.memory.db_path = (std::filesystem::path(config.workspace_dir) / "memory" / "db.sqlite3").string();
-    }
-
     auto mem_res = init_memory(session);
     if (!mem_res.ok) return fail<Session>(mem_res.error.code, mem_res.error.message);
 
@@ -95,27 +91,28 @@ Result<InferResponse> infer(Session &session, const InferRequest &request) {
 }
 
 Result<void> init_memory(Session &session) {
-    const memory::MemoryOps *ops = memory::find_memory_ops(session.config.memory.provider);
-    if (!ops || !ops->init) return fail(ErrorCode::UnsupportedProvider, "Memory provider not compiled into this build.");
-    return ops->init(session);
+    const StoreOps *ops = memory::active_store(session);
+    if (!ops->open || !ops->put || !ops->get || !ops->clear)
+        return fail(ErrorCode::InvalidConfig, "MemoryConfig::store is missing one of open/put/get/clear.");
+    auto res = ops->open(session.config.memory, session.config.workspace_dir);
+    if (!res.ok) return fail(res.error.code, res.error.message);
+    session.memory_state = std::move(res.value);
+    return ok();
 }
 
 Result<void> store_memory(Session &session, std::string_view key, std::string_view value) {
-    const memory::MemoryOps *ops = memory::find_memory_ops(session.config.memory.provider);
-    if (!ops || !ops->store) return fail(ErrorCode::UnsupportedProvider, "Memory provider not compiled into this build.");
-    return ops->store(session, key, value);
+    if (!session.memory_state) return fail(ErrorCode::ProviderInitFailed, "Memory store not initialized.");
+    return memory::active_store(session)->put(session.memory_state.get(), key, value);
 }
 
 Result<std::string> retrieve_memory(Session &session, std::string_view key) {
-    const memory::MemoryOps *ops = memory::find_memory_ops(session.config.memory.provider);
-    if (!ops || !ops->retrieve) return fail<std::string>(ErrorCode::UnsupportedProvider, "Memory provider not compiled into this build.");
-    return ops->retrieve(session, key);
+    if (!session.memory_state) return fail<std::string>(ErrorCode::ProviderInitFailed, "Memory store not initialized.");
+    return memory::active_store(session)->get(session.memory_state.get(), key);
 }
 
 Result<void> clear_memory(Session &session) {
-    const memory::MemoryOps *ops = memory::find_memory_ops(session.config.memory.provider);
-    if (!ops || !ops->clear) return fail(ErrorCode::UnsupportedProvider, "Memory provider not compiled into this build.");
-    return ops->clear(session);
+    if (!session.memory_state) return fail(ErrorCode::ProviderInitFailed, "Memory store not initialized.");
+    return memory::active_store(session)->clear(session.memory_state.get());
 }
 
 Result<void> init_tools(Session &session) {

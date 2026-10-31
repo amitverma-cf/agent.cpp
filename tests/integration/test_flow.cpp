@@ -7,8 +7,7 @@ const char *kWorkspace = "/tmp/agent_test_workspace";
 
 TEST_CASE("run_turn updates history and persists to memory", "[flow]") {
     auto session_result = agent::init({.provider = agent::AiProvider::Mock,
-                                       .workspace_dir = kWorkspace,
-                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+                                       .workspace_dir = kWorkspace});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
@@ -34,7 +33,6 @@ TEST_CASE("run_turn updates history and persists to memory", "[flow]") {
 TEST_CASE("Sliding window pruning drops oldest turns while preserving system + recent", "[flow][pruning]") {
     auto session_result = agent::init({.provider = agent::AiProvider::Mock,
                                        .workspace_dir = kWorkspace,
-                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"},
                                        .context_window = 400,
                                        .max_tokens = 50});
     REQUIRE(session_result.ok);
@@ -110,8 +108,7 @@ agent::Result<std::string_view> state_b_transition(agent::Session &session, agen
 
 TEST_CASE("Flow transitions between states and mutates system prompt per state", "[flow][fsm]") {
     auto session_result = agent::init({.provider = agent::AiProvider::Mock,
-                                       .workspace_dir = kWorkspace,
-                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+                                       .workspace_dir = kWorkspace});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
@@ -145,8 +142,7 @@ agent::Result<std::string_view> scheduler_single_shot(agent::Session &session, a
 
 TEST_CASE("AgentScheduler runs multiple Flows in parallel to completion", "[scheduler][flow]") {
     auto session_result = agent::init({.provider = agent::AiProvider::Mock,
-                                       .workspace_dir = kWorkspace,
-                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+                                       .workspace_dir = kWorkspace});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 

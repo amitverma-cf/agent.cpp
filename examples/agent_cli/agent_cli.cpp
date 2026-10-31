@@ -1,4 +1,5 @@
 #include <agent-cpp/agent.hpp>
+#include <agent-cpp/store_sqlite.hpp>
 
 #include <cstdio>
 #include <filesystem>
@@ -90,7 +91,7 @@ int main(int argc, char **argv) {
     cfg.provider = agent::AiProvider::LlamaCpp;
     cfg.model = model;
     cfg.workspace_dir = workspace_dir;
-    cfg.memory = {.provider = agent::MemoryProvider::Sqlite};
+    cfg.memory = {.store = agent::store::sqlite_store()};
     cfg.context_window = 4096;
     cfg.max_tokens = 512;
     cfg.temperature = 0.7f;

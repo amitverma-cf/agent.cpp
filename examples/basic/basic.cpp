@@ -41,10 +41,6 @@ int main() {
     cfg.provider = agent::AiProvider::Mock;
     cfg.workspace_dir = ".workspace";
     cfg.logger = log_message;
-    cfg.memory = {
-        .provider = agent::MemoryProvider::Sqlite,
-        .db_path = ":memory:",
-    };
 
     auto sess_res = agent::init(cfg);
     if (!sess_res.ok) {

@@ -1,19 +1,17 @@
-#include "memory_ops.hpp"
-
 #include <agent-cpp/agent.hpp>
+#include <agent-cpp/store_sqlite.hpp>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
 #include <list>
 #include <mutex>
-#include <sqlite-vec.h>
 #include <sqlite3.h>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
 
-namespace agent::memory {
+namespace agent::store {
 
 namespace {
 
@@ -74,8 +72,6 @@ struct SqliteMemoryState {
 };
 
 namespace {
-
-std::shared_ptr<SqliteMemoryState> get_state(Session &session) { return std::static_pointer_cast<SqliteMemoryState>(session.memory_state); }
 
 void evict_if_needed_locked(SqliteMemoryState &state) {
     while (state.cache_bytes > state.max_cache_bytes && !state.lru.empty()) {
@@ -178,11 +174,10 @@ void writer_loop(SqliteMemoryState *state) {
     }
 }
 
-} // namespace
-
-Result<void> init_sqlite(Session &session) {
-    const std::string &db_path = session.config.memory.db_path;
-    if (db_path.empty()) return fail(ErrorCode::InvalidConfig, "SQLite memory requires a non-empty db_path.");
+Result<std::shared_ptr<void>> open_sqlite(const MemoryConfig &config, std::string_view workspace_dir) {
+    using R = Result<std::shared_ptr<void>>;
+    const std::string db_path =
+        config.db_path.empty() ? (std::filesystem::path(workspace_dir) / "memory" / "db.sqlite3").string() : config.db_path;
 
     std::string open_uri = db_path;
     int open_flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
@@ -194,40 +189,36 @@ Result<void> init_sqlite(Session &session) {
         if (p.has_parent_path()) {
             std::error_code ec;
             std::filesystem::create_directories(p.parent_path(), ec);
-            if (ec) return fail(ErrorCode::FilesystemError, "Failed to create memory directory: " + ec.message());
+            if (ec) return fail<std::shared_ptr<void>>(ErrorCode::FilesystemError, "Failed to create memory directory: " + ec.message());
         }
     }
 
     auto state = std::make_shared<SqliteMemoryState>();
-    state->max_cache_bytes = session.config.memory.max_cache_bytes;
-    state->flush_dirty_threshold_bytes = session.config.memory.flush_dirty_threshold_bytes;
-    state->flush_interval = std::chrono::milliseconds(session.config.memory.flush_interval_ms);
+    state->max_cache_bytes = config.max_cache_bytes;
+    state->flush_dirty_threshold_bytes = config.flush_dirty_threshold_bytes;
+    state->flush_interval = std::chrono::milliseconds(config.flush_interval_ms);
 
     if (sqlite3_open_v2(open_uri.c_str(), &state->write_conn, open_flags, nullptr) != SQLITE_OK) {
         std::string err = state->write_conn ? sqlite3_errmsg(state->write_conn) : "unknown error";
-        return fail(ErrorCode::ProviderInitFailed, "Failed to open SQLite db (write): " + err);
+        return fail<std::shared_ptr<void>>(ErrorCode::ProviderInitFailed, "Failed to open SQLite db (write): " + err);
     }
-    sqlite3_vec_init(state->write_conn, nullptr, nullptr);
 
-    if (auto r = exec_simple(state->write_conn, "PRAGMA journal_mode=WAL;"); !r.ok) return r;
-    if (auto r = exec_simple(state->write_conn, "PRAGMA synchronous=NORMAL;"); !r.ok) return r;
-    if (auto r = exec_simple(state->write_conn, "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);"); !r.ok) return r;
+    if (auto r = exec_simple(state->write_conn, "PRAGMA journal_mode=WAL;"); !r.ok) return fail<std::shared_ptr<void>>(r.error.code, r.error.message);
+    if (auto r = exec_simple(state->write_conn, "PRAGMA synchronous=NORMAL;"); !r.ok) return fail<std::shared_ptr<void>>(r.error.code, r.error.message);
+    if (auto r = exec_simple(state->write_conn, "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);"); !r.ok) return fail<std::shared_ptr<void>>(r.error.code, r.error.message);
 
     if (sqlite3_open_v2(open_uri.c_str(), &state->read_conn, open_flags, nullptr) != SQLITE_OK) {
         std::string err = state->read_conn ? sqlite3_errmsg(state->read_conn) : "unknown error";
-        return fail(ErrorCode::ProviderInitFailed, "Failed to open SQLite db (read): " + err);
+        return fail<std::shared_ptr<void>>(ErrorCode::ProviderInitFailed, "Failed to open SQLite db (read): " + err);
     }
-    sqlite3_vec_init(state->read_conn, nullptr, nullptr);
 
     state->writer_thread = std::thread(writer_loop, state.get());
 
-    session.memory_state = state;
-    return ok();
+    return R{.ok = true, .value = std::move(state), .error = {}};
 }
 
-Result<void> store_sqlite(Session &session, std::string_view key, std::string_view value) {
-    auto state = get_state(session);
-    if (!state) return fail(ErrorCode::ProviderInitFailed, "SQLite memory not initialized.");
+Result<void> put_sqlite(void *state_ptr, std::string_view key, std::string_view value) {
+    auto *state = static_cast<SqliteMemoryState *>(state_ptr);
 
     std::string k(key);
     bool need_wake = false;
@@ -268,9 +259,8 @@ Result<void> store_sqlite(Session &session, std::string_view key, std::string_vi
     return ok();
 }
 
-Result<std::string> retrieve_sqlite(Session &session, std::string_view key) {
-    auto state = get_state(session);
-    if (!state) return fail<std::string>(ErrorCode::ProviderInitFailed, "SQLite memory not initialized.");
+Result<std::string> get_sqlite(void *state_ptr, std::string_view key) {
+    auto *state = static_cast<SqliteMemoryState *>(state_ptr);
 
     std::string k(key);
     {
@@ -316,9 +306,8 @@ Result<std::string> retrieve_sqlite(Session &session, std::string_view key) {
     return ok(value);
 }
 
-Result<void> clear_sqlite(Session &session) {
-    auto state = get_state(session);
-    if (!state) return fail(ErrorCode::ProviderInitFailed, "SQLite memory not initialized.");
+Result<void> clear_sqlite(void *state_ptr) {
+    auto *state = static_cast<SqliteMemoryState *>(state_ptr);
 
     {
         std::lock_guard<std::mutex> lk(state->cache_mutex);
@@ -339,4 +328,10 @@ Result<void> clear_sqlite(Session &session) {
     return result;
 }
 
-} // namespace agent::memory
+constexpr StoreOps kSqliteStore{.open = open_sqlite, .put = put_sqlite, .get = get_sqlite, .clear = clear_sqlite};
+
+} // namespace
+
+const StoreOps *sqlite_store() { return &kSqliteStore; }
+
+} // namespace agent::store

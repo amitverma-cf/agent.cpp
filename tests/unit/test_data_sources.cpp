@@ -20,8 +20,7 @@ agent::Result<std::string> fake_query(void *state, std::string_view query, void 
 
 TEST_CASE("register_data_source and query_data_source", "[data_sources]") {
     auto session_result = agent::init({.provider = agent::AiProvider::Mock,
-                                       .workspace_dir = kWorkspace,
-                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+                                       .workspace_dir = kWorkspace});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
@@ -42,8 +41,7 @@ TEST_CASE("register_data_source and query_data_source", "[data_sources]") {
 
 TEST_CASE("bind_data_source_tool wraps a DataSource as a Tool", "[data_sources][tools]") {
     auto session_result = agent::init({.provider = agent::AiProvider::Mock,
-                                       .workspace_dir = kWorkspace,
-                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+                                       .workspace_dir = kWorkspace});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 

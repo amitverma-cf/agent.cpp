@@ -474,19 +474,15 @@ if (r.ok) printf("%s\n", r.value.c_str());
 agent::clear_memory(session);
 ```
 
-### Sqlite (the only provider)
-
-A bounded in-memory write-back cache in front of a SQLite database. Reads/writes always hit the cache first; a background thread flushes dirty entries on a size-or-time trigger. See [docs/api/memory.md](api/memory.md) for the full design.
+By default the store is in-memory (nothing persists past the `Session`). For durable storage, link the optional `agent_store_sqlite` library or plug in your own `StoreOps`. See [docs/api/memory.md](api/memory.md).
 
 ```cpp
-// Durable, on disk:
-cfg.memory = {
-    .provider = agent::MemoryProvider::Sqlite,
-    .db_path  = ".workspace/memory/db.sqlite3",  // auto-set if left as the default
-};
+#include <agent-cpp/store_sqlite.hpp>
 
-// Ephemeral, for tests/short-lived agents -- data is lost when the session is destroyed:
-cfg.memory = { .provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:" };
+cfg.memory = {
+    .store   = agent::store::sqlite_store(),
+    .db_path = ".workspace/memory/db.sqlite3",  // empty = <workspace>/memory/db.sqlite3
+};
 ```
 
 ---

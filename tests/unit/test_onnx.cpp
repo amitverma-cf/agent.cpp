@@ -3,8 +3,7 @@
 
 TEST_CASE("ONNX missing model path returns error", "[onnx]") {
     auto result = agent::init({.provider = agent::AiProvider::OnnxRuntime,
-                               .workspace_dir = "/tmp/agent_test_ws",
-                               .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+                               .workspace_dir = "/tmp/agent_test_ws"});
     REQUIRE_FALSE(result.ok);
 #ifdef AGENT_HAS_ONNX
     REQUIRE(result.error.code == agent::ErrorCode::InvalidConfig);
@@ -17,8 +16,7 @@ TEST_CASE("ONNX bad model path returns ModelLoadFailed", "[onnx]") {
 #ifdef AGENT_HAS_ONNX
     auto result = agent::init({.provider = agent::AiProvider::OnnxRuntime,
                                .model = "/nonexistent/model.onnx",
-                               .workspace_dir = "/tmp/agent_test_ws",
-                               .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+                               .workspace_dir = "/tmp/agent_test_ws"});
     REQUIRE_FALSE(result.ok);
     REQUIRE(result.error.code == agent::ErrorCode::ModelLoadFailed);
 #else

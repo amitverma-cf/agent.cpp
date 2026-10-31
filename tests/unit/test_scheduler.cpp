@@ -15,8 +15,7 @@ agent::Result<std::string_view> single_shot_transition(agent::Session &session, 
 
 TEST_CASE("OnSubAgentComplete fires during scheduling", "[scheduler][events]") {
     auto session_result = agent::init({.provider = agent::AiProvider::Mock,
-                                       .workspace_dir = kWorkspace,
-                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = ":memory:"}});
+                                       .workspace_dir = kWorkspace});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 

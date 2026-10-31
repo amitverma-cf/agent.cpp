@@ -134,7 +134,6 @@ src/core/
     ambient_turn.cpp           -- thread_local turn/hook/tool-allowlist/arena/json_parser state
   data/
     data_source_registry.cpp   -- register_data_source, query_data_source, bind_data_source_tool
-    sqlite_vec_data_source.cpp -- sqlite-vec RAG/vector search DataSource
   skills/
     skills_registry.cpp        -- load_skills_dir, read_skill_body, use_skill tool
   scheduler/
@@ -142,7 +141,7 @@ src/core/
   providers/
     mock / llama / onnx
   memory/
-    sqlite_provider.cpp        -- bounded write-back cache in front of SQLite
+    in_memory_store.cpp        -- default StoreOps (no persistence)
   tools/
     tools_ops.cpp              -- dispatch table, permission gate (Allow/Ask/Deny)
     filesystem_tools.cpp       -- read_file, write_file, ...
