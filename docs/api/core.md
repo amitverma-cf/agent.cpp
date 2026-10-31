@@ -67,6 +67,7 @@ enum class ErrorCode {
     ToolCallLimitExceeded,// max_tool_call_rounds limit reached in one turn
     SandboxViolation,     // path escapes workspace_dir in sandbox mode
     PermissionDenied,     // permission_check returned Deny, or an Ask was declined
+    EngineCrashed,        // out-of-process engine host died, hit the watchdog, or hit the restart limit
 };
 ```
 

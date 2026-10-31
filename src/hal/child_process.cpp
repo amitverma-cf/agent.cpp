@@ -514,7 +514,10 @@ bool ChildProcess::exited() {
     impl_->reaped = true;
     if (r == impl_->pid) {
         if (WIFEXITED(status)) exit_code_ = WEXITSTATUS(status);
-        else if (WIFSIGNALED(status)) exit_code_ = 128 + WTERMSIG(status);
+        else if (WIFSIGNALED(status)) {
+            term_signal_ = WTERMSIG(status);
+            exit_code_ = 128 + term_signal_;
+        }
     }
     return true;
 }
@@ -537,6 +540,7 @@ int ChildProcess::terminate(int grace_ms) {
     int status = 0;
     while (::waitpid(impl_->pid, &status, 0) < 0 && errno == EINTR) {}
     impl_->reaped = true;
+    term_signal_ = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
     exit_code_ = WIFSIGNALED(status) ? 128 + WTERMSIG(status) : (WIFEXITED(status) ? WEXITSTATUS(status) : -1);
     return exit_code_;
 }

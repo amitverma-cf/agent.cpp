@@ -1,7 +1,19 @@
 #include "hal/path.hpp"
 
+#include "hal/platform.hpp"
+
 #include <cctype>
 #include <system_error>
+
+#if defined(AGENT_HAL_WINDOWS)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(AGENT_HAL_MACOS)
+#include <cstdint>
+#include <mach-o/dyld.h>
+#endif
 
 namespace agent::hal {
 namespace {
@@ -63,6 +75,26 @@ bool is_safe_identifier(std::string_view name) {
         if (!(std::isalnum(c) || c == '_')) return false;
     }
     return true;
+}
+
+std::filesystem::path current_executable_path() {
+    std::error_code ec;
+#if defined(AGENT_HAL_WINDOWS)
+    wchar_t buf[32768];
+    const DWORD cap = static_cast<DWORD>(sizeof(buf) / sizeof(buf[0]));
+    const DWORD n = GetModuleFileNameW(nullptr, buf, cap);
+    if (n == 0 || n >= cap) return {};
+    return std::filesystem::path(std::wstring(buf, n));
+#elif defined(AGENT_HAL_MACOS)
+    char buf[4096];
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) != 0) return {};
+    auto p = std::filesystem::canonical(buf, ec);
+    return ec ? std::filesystem::path() : p;
+#else
+    auto p = std::filesystem::read_symlink("/proc/self/exe", ec);
+    return ec ? std::filesystem::path() : p;
+#endif
 }
 
 } // namespace agent::hal

@@ -26,6 +26,8 @@ set_target_properties(agent_cli_bin PROPERTIES OUTPUT_NAME agent RUNTIME_OUTPUT_
 target_link_libraries(agent_cli_bin PRIVATE agent_cli_core agent_hub agent_store_sqlite)
 target_compile_options(agent_cli_bin PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 target_link_options(agent_cli_bin PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
+# The engine host runs engines out of process (the default for `agent chat` / `agent run`).
+add_dependencies(agent_cli_bin agent-engine-host)
 
 if(AGENT_INSTALL)
     # A static libagent leaves the binary with no RPATH at all; a shared one is found in ../lib.

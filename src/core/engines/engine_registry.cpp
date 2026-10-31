@@ -1,3 +1,5 @@
+#include "engine_registry.hpp"
+
 #include "hal/dylib.hpp"
 
 #include <agent-cpp/agent.hpp>
@@ -22,6 +24,38 @@ std::mutex &registry_mutex() {
 std::vector<const agent_engine_v1 *> &registry() {
     static std::vector<const agent_engine_v1 *> engines;
     return engines;
+}
+
+// Where plugins came from, by engine name (load_engine_plugin / load_engine_manifest), and the
+// engines.json isolation preference. Process-isolated manifest entries are recorded here without
+// being loaded into this process.
+struct PluginRecord {
+    std::string name;
+    std::string path;
+    EngineIsolation isolation = EngineIsolation::Default;
+};
+
+std::vector<PluginRecord> &plugin_records() {
+    static std::vector<PluginRecord> records;
+    return records;
+}
+
+void record_plugin(std::string_view name, std::string_view path, EngineIsolation isolation) {
+    std::lock_guard<std::mutex> lk(registry_mutex());
+    for (PluginRecord &r : plugin_records())
+        if (r.name == name) {
+            r.path = std::string(path);
+            if (isolation != EngineIsolation::Default) r.isolation = isolation;
+            return;
+        }
+    plugin_records().push_back(PluginRecord{std::string(name), std::string(path), isolation});
+}
+
+// "agent-engine-llama.so" -> "llama"; other file names -> their stem.
+std::string name_from_plugin_path(const std::filesystem::path &path) {
+    std::string stem = path.stem().string();
+    constexpr std::string_view prefix = "agent-engine-";
+    return stem.rfind(prefix, 0) == 0 ? stem.substr(prefix.size()) : stem;
 }
 
 const agent_engine_v1 *find_locked(std::string_view name) {
@@ -65,6 +99,7 @@ Result<std::string> load_engine_plugin(std::string_view path) {
 
     const agent_engine_v1 *engine = get();
     if (auto r = register_engine(engine); !r.ok) return fail<std::string>(r.error.code, r.error.message);
+    record_plugin(engine->name, path, EngineIsolation::Default);
     return ok(std::string(engine->name));
 }
 
@@ -90,8 +125,37 @@ Result<std::vector<std::string>> load_engine_manifest(std::string_view manifest_
             return fail<std::vector<std::string>>(ErrorCode::ParseError, manifest.string() + ": every engine needs a \"path\".");
         std::filesystem::path plugin(path_sv);
         if (plugin.is_relative()) plugin = manifest.parent_path() / plugin;
+
+        // Optional "isolation": "process" | "inprocess" (see Config::engine_isolation).
+        EngineIsolation isolation = EngineIsolation::Default;
+        std::string_view isolation_sv;
+        if (!entry["isolation"].get_string().get(isolation_sv)) {
+            if (isolation_sv == "process") isolation = EngineIsolation::Process;
+            else if (isolation_sv == "inprocess") isolation = EngineIsolation::InProcess;
+            else
+                return fail<std::vector<std::string>>(ErrorCode::ParseError,
+                                                      manifest.string() + ": \"isolation\" must be \"process\" or \"inprocess\", got \"" +
+                                                          std::string(isolation_sv) + "\".");
+        }
+
+        if (isolation == EngineIsolation::Process) {
+            // Not loaded into this process: agent-engine-host loads it when a session uses it. The
+            // name comes from "name", else from the file name (agent-engine-<name>.<ext>).
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(plugin, ec))
+                return fail<std::vector<std::string>>(ErrorCode::FilesystemError,
+                                                      manifest.string() + ": engine plugin not found: " + plugin.string());
+            std::string_view name_sv;
+            std::string name =
+                (!entry["name"].get_string().get(name_sv) && !name_sv.empty()) ? std::string(name_sv) : name_from_plugin_path(plugin);
+            record_plugin(name, plugin.string(), isolation);
+            loaded.push_back(std::move(name));
+            continue;
+        }
+
         auto name = load_engine_plugin(plugin.string());
         if (!name.ok) return fail<std::vector<std::string>>(name.error.code, name.error.message);
+        if (isolation != EngineIsolation::Default) record_plugin(name.value, plugin.string(), isolation);
         loaded.push_back(std::move(name.value));
     }
     return R{.ok = true, .value = std::move(loaded), .error = {}};
@@ -101,5 +165,20 @@ const agent_engine_v1 *find_engine(std::string_view name) {
     std::lock_guard<std::mutex> lk(registry_mutex());
     return find_locked(name);
 }
+
+namespace engines {
+
+bool find_plugin_record(std::string_view name, std::string &path, EngineIsolation &isolation) {
+    std::lock_guard<std::mutex> lk(registry_mutex());
+    for (const PluginRecord &r : plugin_records())
+        if (r.name == name) {
+            path = r.path;
+            isolation = r.isolation;
+            return true;
+        }
+    return false;
+}
+
+} // namespace engines
 
 } // namespace agent

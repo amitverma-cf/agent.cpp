@@ -44,6 +44,8 @@ class ChildProcess {
     // Non-blocking check; true once the child has exited (exit_code is then valid).
     bool exited();
     int exit_code() const { return exit_code_; }
+    // POSIX: the signal that terminated the child (exit_code is then 128 + signal), 0 otherwise.
+    int term_signal() const { return term_signal_; }
 
     // Clean shutdown: closes stdin, waits up to grace_ms for the child to exit, then asks it to stop
     // (SIGTERM; TerminateProcess on Windows), waits again, and finally kills it. Returns the exit code.
@@ -56,6 +58,7 @@ class ChildProcess {
     explicit ChildProcess(std::unique_ptr<Impl> impl);
     std::unique_ptr<Impl> impl_;
     int exit_code_ = -1;
+    int term_signal_ = 0;
 };
 
 Result<std::unique_ptr<ChildProcess>> spawn_child(const SpawnOptions &options);

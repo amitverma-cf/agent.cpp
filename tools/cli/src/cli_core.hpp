@@ -90,6 +90,7 @@ struct EngineEntry {
     std::string version;
     std::vector<std::string> caps;
     std::string backend = "cpu";
+    std::string isolation; // "process" | "inprocess" | empty (= process in the CLI)
 };
 
 std::string engines_to_json(std::span<const EngineEntry> engines);
@@ -100,6 +101,9 @@ Result<void> save_engines(const std::string &path, std::span<const EngineEntry> 
 void upsert_engine(std::vector<EngineEntry> &engines, EngineEntry entry);
 bool remove_engine(std::vector<EngineEntry> &engines, std::string_view name);
 const EngineEntry *find_engine_entry(std::span<const EngineEntry> engines, std::string_view name);
+// The CLI runs engines out of process unless --inprocess is given or engines.json marks the engine
+// "isolation": "inprocess".
+EngineIsolation cli_engine_isolation(bool inprocess_flag, std::string_view entry_isolation);
 
 // Names of the agent_capability bits set in caps ("text_gen", "tool_call", ...).
 std::vector<std::string> caps_to_names(uint64_t caps);

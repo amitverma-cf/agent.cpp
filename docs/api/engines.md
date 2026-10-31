@@ -61,6 +61,79 @@ Engines are process-wide and stay loaded until exit. Loading the same plugin twi
 ```
 
 Relative paths resolve against the manifest's directory. Loading stops at the first plugin that fails.
+An entry may also carry `"isolation": "process"` or `"inprocess"` (see [Isolation](#isolation)) and a
+`"name"`. `"process"` entries are not loaded into this process at all: the manifest only records the
+path, under `"name"` or the name derived from `agent-engine-<name>.<ext>`.
+
+## Isolation
+
+```cpp
+enum class EngineIsolation { Default, InProcess, Process };
+
+cfg.engine_isolation       = agent::EngineIsolation::Process;
+cfg.engine_host_path       = "";    // default: $AGENT_ENGINE_HOST, next to the executable, <exe>/../bin, PATH
+cfg.engine_timeout_ms      = 0;     // per-request watchdog, 0 = none
+cfg.engine_cancel_grace_ms = 2000;  // after request_cancel(), then the host is killed
+cfg.engine_max_restarts    = 3;     // automatic restarts per rolling minute
+```
+
+- **InProcess**: the plugin is `dlopen`ed into this process and called directly. Lowest latency, but a
+  segfault, `abort()` (`GGML_ASSERT`), `exit()` (sherpa-onnx on a corrupt model), an escaped C++
+  exception or an OOM kill in the engine takes the whole process down.
+- **Process**: `init()` starts `agent-engine-host <plugin>`, a small executable that loads the plugin
+  and serves the same ABI over its stdin/stdout. The plugin is never loaded into the calling process.
+  `infer()`, `count_tokens` and the KV-cache reset go over the pipe; name, version, caps and flags come
+  from the host at startup.
+- **Default** (the `Config` default): the engines.json `"isolation"` of the engine if it was loaded with
+  `load_engine_manifest`, otherwise InProcess, so library users and the test suite keep the old
+  behaviour. The `agent` CLI defaults to Process (`--inprocess` or `"isolation": "inprocess"` in its
+  engines.json opts out).
+
+Failure semantics under Process isolation:
+
+| Event | In-flight call | Next call |
+|---|---|---|
+| Host dies (signal, `abort()`, `exit()`, OOM kill, pipe closed) | `ErrorCode::EngineCrashed`; the message names the exit status or signal and quotes the last lines of the host's stderr | the host is restarted and the engine re-created (same create config; the KV cache is lost) |
+| Request exceeds `engine_timeout_ms` (run, token count, cache reset; not model loading) | host killed, `EngineCrashed` ("... killed by the watchdog") | restart |
+| `request_cancel()` | a Cancel message sets the flag the engine polls (`agent_request::cancel`); a cooperative engine returns `Cancelled` and the host lives on | normal |
+| Engine ignores the cancel for `engine_cancel_grace_ms` | host killed, `Cancelled` | restart (not counted against the limit) |
+| More than `engine_max_restarts` restarts in the last minute | — | `EngineCrashed` ("restarts in the last minute ...") until the window frees up |
+| `create()` fails | `init()` returns `ModelLoadFailed` (as in-process) | — |
+| Host missing / plugin fails to load | `init()` returns `ProviderInitFailed` | — |
+
+The session itself always survives: memory, history and tools are untouched, and the failed turn can
+simply be retried.
+
+The host's stderr (the engine's logs, and anything it prints to stdout, which the host redirects) is
+forwarded to this process's stderr, so redirecting fd 2 captures it as it would for an in-process
+engine. The host ignores SIGINT (Ctrl-C in a terminal reaches the whole process group; cancellation
+goes through the protocol) and exits when its stdin closes.
+
+**Protocol** (`src/core/engines/engine_ipc.hpp`, internal; both ends come from the same build):
+length-prefixed binary frames (`u32 size | u32 type | payload`, native byte order), no JSON on the
+hot path. core → host: `Create`, `Run`, `Cancel` (out of band, handled by the host's reader thread
+while `run()` is busy), `CountTokens`, `ResetCache`, `Destroy`, `Shutdown`. host → core: `Ready`
+(protocol/ABI version, caps, flags, name, version), `Created`, `Chunk`, `Progress`, `Response`,
+`Count`, `Done`, `Error` (status + message). Requests and responses carry the full `agent_request` /
+`agent_response`: messages, text / FILE / BYTES / TENSOR parts, tool calls, `tools_json`,
+`params_json`, `output_dir`, usage.
+
+v1 limits:
+
+- Tensors and BYTES parts travel **inline** in the frames (copied through the pipe, max 1 GiB per
+  frame); FILE parts pass paths only, and the host writes outputs straight to `<workspace>/artifacts/`.
+  Shared memory for large tensors is future work.
+- **One request at a time per host**, even for `AGENT_ENGINE_FLAG_CONCURRENT` engines (the session
+  serializes calls; `supports_parallel` reports false, so parallel graph branches run one after the
+  other). Use InProcess for llama's continuous batching across subagents.
+- Engines linked in with `register_engine` have no plugin file and can't run out of process
+  (`InvalidConfig`).
+- Windows: written (CreateProcess + pipes via `src/hal/child_process`), not yet compiled or tested.
+
+Cost (`test_agent "Process isolation per-turn overhead"`, mock engine, Linux, Release build on 4
+shared and busy cores): a whole turn takes ~1 µs in process and 10-90 µs out of process (a pipe round trip
+and its context switches; the spread is scheduler noise); streaming 65 chunks costs
+40-230 µs. Negligible next to real inference, but in-process stays available for the lowest latency.
 
 ## Writing an engine
 

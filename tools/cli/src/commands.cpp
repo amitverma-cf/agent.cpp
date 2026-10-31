@@ -151,6 +151,7 @@ Result<LoadedEngine> load_engine_for(const Context &ctx, std::string_view engine
     if (!ref.value.name.empty() && loaded.value.name != ref.value.name)
         return fail<LoadedEngine>(ErrorCode::InvalidConfig,
                                   path + " is the '" + loaded.value.name + "' engine, not '" + ref.value.name + "'");
+    if (const EngineEntry *entry = find_engine_entry(engines.value, loaded.value.name)) loaded.value.isolation = entry->isolation;
     return loaded;
 }
 
@@ -417,6 +418,7 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
     Config cfg;
     cfg.provider = AiProvider::Engine;
     cfg.engine = engine.value.name;
+    cfg.engine_isolation = cli_engine_isolation(cl.has("inprocess"), engine.value.isolation);
     cfg.engine_options = std::string(cl.get("engine-options"));
     cfg.model = model.value.path;
     cfg.workspace_dir = workspace_dir(ctx, cl.get("workspace"));

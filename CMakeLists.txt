@@ -86,6 +86,7 @@ add_library(agent
     src/core/providers/provider_ops.cpp
     src/core/providers/engine_provider.cpp
     src/core/engines/engine_registry.cpp
+    src/core/engines/engine_remote.cpp
     src/core/utils/utils.cpp
     src/core/memory/in_memory_store.cpp
     src/core/tools/tools_ops.cpp
@@ -208,6 +209,24 @@ if(AGENT_BUILD_HUB)
     target_link_options(agent_pull PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 endif()
 
+# Out-of-process engine host (EngineIsolation::Process). Lands next to the agent CLI and the tests,
+# where the core looks for it.
+add_executable(agent-engine-host tools/engine-host/engine_host.cpp)
+target_include_directories(agent-engine-host PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(agent-engine-host PRIVATE agent Threads::Threads ${CMAKE_DL_LIBS})
+set_target_properties(agent-engine-host PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+target_compile_options(agent-engine-host PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
+target_link_options(agent-engine-host PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
+if(AGENT_INSTALL)
+    # agent / libagent look for the host next to the running executable, so it goes beside the CLI.
+    if(BUILD_SHARED_LIBS AND NOT APPLE)
+        set_target_properties(agent-engine-host PROPERTIES INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+    elseif(BUILD_SHARED_LIBS)
+        set_target_properties(agent-engine-host PROPERTIES INSTALL_RPATH "@executable_path/../${CMAKE_INSTALL_LIBDIR}")
+    endif()
+    install(TARGETS agent-engine-host RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+
 add_subdirectory(engines/mock)
 if(AGENT_ENGINE_LLAMA)
     add_subdirectory(engines/llama)
@@ -245,6 +264,7 @@ add_executable(test_agent
     tests/unit/test_skills.cpp
     tests/unit/test_permissions.cpp
     tests/unit/test_engines.cpp
+    tests/unit/test_engine_host.cpp
     tests/unit/test_engine_sdcpp.cpp
     tests/unit/test_graph.cpp
     tests/unit/test_rag.cpp
@@ -271,8 +291,9 @@ if(AGENT_BUILD_CLI)
     target_sources(test_agent PRIVATE tests/unit/test_cli.cpp)
     target_link_libraries(test_agent PRIVATE agent_cli_core)
 endif()
-target_compile_definitions(test_agent PRIVATE AGENT_TEST_MOCK_ENGINE_PATH="$<TARGET_FILE:agent-engine-mock>")
-add_dependencies(test_agent agent-engine-mock)
+target_compile_definitions(test_agent PRIVATE AGENT_TEST_MOCK_ENGINE_PATH="$<TARGET_FILE:agent-engine-mock>"
+                                              AGENT_TEST_ENGINE_HOST_PATH="$<TARGET_FILE:agent-engine-host>")
+add_dependencies(test_agent agent-engine-mock agent-engine-host)
 
 # Tiny MCP stdio server the MCP client tests talk to.
 add_executable(fake_mcp_server tests/helpers/fake_mcp_server.cpp)

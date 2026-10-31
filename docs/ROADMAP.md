@@ -188,6 +188,8 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
   - [x] `VectorStoreOps` + `in_memory_vector_store()` (brute-force cosine); sqlite-vec implementation in `agent-store-sqlite` (see [docs/api/rag.md](api/rag.md)). `CheckpointerOps` still open
 - [x] Media on messages (`Media`/`MediaView`, `run_turn_with_media`); engine file outputs land in `<workspace>/artifacts/` and persist with history
 - [x] Run requests with cancel (`request_cancel`/`clear_cancel`), progress (`Config::on_progress`) and chunk streaming
+- [x] Out-of-process engines: `agent-engine-host` serves one plugin over a binary pipe protocol; `Config::engine_isolation` / engines.json `"isolation"`; crashes become `ErrorCode::EngineCrashed` with automatic restart (rate-limited), per-request watchdog, cancel escalates to kill; CLI default (see [docs/api/engines.md](api/engines.md#isolation))
+  - [ ] shared memory for large tensors, concurrent requests per host, OS sandboxing / rlimits for the host, Windows build
 - [ ] Agent loop (pi-agent-core style) with tool-call limits
 - [ ] Tools return `{parts}` (text and/or artifacts)
 - [x] `llama` engine v1: llama.cpp b12020, Jinja chat templates + native tool-call parsing (common_chat), continuous batching

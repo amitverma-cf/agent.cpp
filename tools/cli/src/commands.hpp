@@ -33,6 +33,7 @@ struct LoadedEngine {
     std::string path;
     std::string version;
     uint64_t caps = 0;
+    std::string isolation; // engines.json "isolation" of the entry, if any
 };
 // Resolves the engine for a model (engines.json first, then the plugin search dirs) and loads it.
 Result<LoadedEngine> load_engine_for(const Context &ctx, std::string_view engine_flag, std::string_view model_path);
