@@ -513,6 +513,10 @@ Result<std::string> read_skill_body(Session &session, std::string_view name);
 Result<void> register_engine(const agent_engine_v1 *engine);
 Result<std::string> load_engine_plugin(std::string_view path);
 const agent_engine_v1 *find_engine(std::string_view name);
+// Loads every plugin listed in an engines.json manifest: {"engines": [{"path": "agent-engine-llama.so"}, ...]}.
+// Relative paths resolve against the manifest's directory. Returns the loaded engine names; stops at
+// the first plugin that fails to load.
+Result<std::vector<std::string>> load_engine_manifest(std::string_view manifest_path);
 
 void register_event_hook(Session &session, EventType type, EventHookFn callback, void *user_data = nullptr);
 void trigger_event(Session &session, EventType type, std::span<const uint8_t> payload);

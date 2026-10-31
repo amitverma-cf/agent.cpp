@@ -159,7 +159,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 
 ### Phase 2: Core v1 (3 to 4 weeks)
 - [x] Engine registry: load plugins by path, ABI/version check, capability query (`AiProvider::Engine`, mock engine plugin)
-- [ ] Engine discovery from `engines.json`
+- [x] Engine discovery from `engines.json` (`load_engine_manifest`)
 - [ ] Model registry from `models.json`: lazy load, LRU unload under a RAM/VRAM budget
 - [x] `StoreOps` key-value store + in-memory default
 - [ ] `CheckpointerOps` / `VectorStoreOps` + in-memory implementations

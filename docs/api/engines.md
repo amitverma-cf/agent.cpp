@@ -49,6 +49,14 @@ const agent_engine_v1 *find_engine(std::string_view name);
 
 Engines are process-wide and stay loaded until exit. Loading the same plugin twice is a no-op.
 
+`load_engine_manifest("engines.json")` loads every plugin listed in a manifest and returns their names:
+
+```json
+{"engines": [{"path": "agent-engine-llama.so"}, {"path": "/opt/agent/engines/agent-engine-sdcpp.so"}]}
+```
+
+Relative paths resolve against the manifest's directory. Loading stops at the first plugin that fails.
+
 ## Writing an engine
 
 Export one function:
