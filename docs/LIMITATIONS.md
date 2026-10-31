@@ -43,8 +43,8 @@ Status as of 2026-10-31. Each entry says what breaks, why, and the planned fix. 
 
 | Limitation | Fix |
 |---|---|
-| Interrupts inside parallel branches are not supported. | Per-branch checkpoints. |
-| A parallel fan-out is checkpointed as one step, so a resume re-runs the whole fan-out. | Same. |
+| ~~Interrupts inside parallel branches are not supported.~~ **Resolved** for fan-outs on the top-level chain: a branch may pause, the run reports every paused branch (`GraphRun::interrupts`) and `resume_graph(..., std::span<const GraphBranchInput>)` answers them one by one. | Interrupts inside nested fan-outs still fail with `InvalidConfig`. |
+| ~~A parallel fan-out is checkpointed as one step, so a resume re-runs the whole fan-out.~~ **Resolved**: per-branch progress is checkpointed after every branch node; a resume re-runs only unfinished branches, from the node they stopped at. | A nested fan-out is still one node of its branch (re-run whole). |
 | ~~`Async` durability writes synchronously (it behaves like `Sync`).~~ **Resolved**: a background writer thread per checkpointer with a bounded queue, flushed before `run_graph` / `resume_graph` return. A crash can lose the checkpoints still queued (see [api/graph.md](api/graph.md#durability-modes)). | Use `Sync` when re-running a few nodes after a crash is not acceptable. |
 | ~~Checkpoints go through `StoreOps`; there is no `CheckpointerOps`~~ **Resolved**: `CheckpointerOps` with in-memory and SQLite (`store::sqlite_checkpointer()`) implementations; the StoreOps layout stays the default. ~~There is no time-travel replay, and the event log is in memory only.~~ **Resolved**: the event log is persisted through the checkpointer (`list_graph_events`) and `fork_graph_run` continues any stored step as a new thread. | Replay re-executes tool side effects (see [api/graph.md](api/graph.md#time-travel-fork_graph_run)); tools must be idempotent. |
 

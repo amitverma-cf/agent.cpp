@@ -58,7 +58,7 @@ struct Graph {
 | `Agent` | Calls `run_turn` on the node's `FlowMemory` (`state.histories[history_key]`, by default `state.histories[name]`). It installs `system_prompt` (prefixed by `context_provider`'s text, if any) for the node's turn only, limits tools to `allowed_tools`, and activates its `hooks`. The user message is `state[input_key]` if that key is set, otherwise `prompt`. The final reply is written to `state[output_key]`. See [Agent nodes](#agent-nodes). |
 | `Function` | `Result<void> fn(Session &, GraphState &, void *user_data)`. Returning an error fails the node. |
 | `Tool` | Calls `execute_tool(tool_name, args)`. `args` comes from `tool_args(session, state, user_data)`, else `state[input_key]`, else `"{}"`. The result goes to `state[output_key]`. A tool error fails the node. |
-| `Parallel` | Runs every branch, joins them, then follows its own outgoing edge. Built by `make_parallel`. |
+| `Parallel` | Runs every branch, joins them, then follows its own outgoing edge. Built by `make_parallel`. Branch progress is checkpointed; branches may interrupt (see [Parallel execution](#parallel-execution)). |
 | `Loop` | Loop controller. Built by `make_loop`. |
 
 **Edges.** A static edge is `from -> to`. A conditional edge has a router, `Result<std::string_view> router(Session &, const GraphState &, void *)`, which returns the next node name or `kGraphEnd`. Each node has at most one outgoing edge; to fan out, use a `Parallel` node. A node with no outgoing edge goes to `kGraphEnd`. When a transition reaches `kGraphEnd` and the node has an `exit_to`, the run goes there instead; this is how the builders compose sub-graphs.
@@ -221,6 +221,7 @@ struct GraphRun {
     Error error;
     std::string interrupt_node, interrupt_reason;
     std::vector<ToolCall> pending_tool_calls;
+    std::vector<GraphInterrupt> interrupts;   // one per paused node / parallel branch
     std::vector<GraphEvent> events;
     ModelRegistry *models = nullptr;          // resolves GraphNode::model; see models.md
 };
@@ -401,16 +402,52 @@ The existing `EventHook`s also fire: `OnStateTransition` with the node name when
 
 ## Parallel execution
 
-When `providers::supports_parallel(session)` is true (an engine with `AGENT_ENGINE_FLAG_CONCURRENT`) and the Session has worker arenas, a top-level fan-out runs its branches on threads, at most `Config::max_parallel_subagents` at a time. Each thread uses its own `Session::worker_arenas` slot (`ambient::worker_arena_index`). More branches than slots run in batches of `max_parallel_subagents`. Otherwise the branches run one after another on the calling thread. A `Parallel` node nested inside a branch always runs its branches sequentially.
+When `providers::supports_parallel(session)` is true (an engine with `AGENT_ENGINE_FLAG_CONCURRENT`) and the Session has worker arenas, a fan-out runs its branches on threads. The `Session::worker_arenas` slots (`Config::max_parallel_subagents` of them) are one pool shared by every fan-out of the run: each branch thread holds one slot (`ambient::worker_arena_index`) and pulls branches from the fan-out's queue until none are left, so more branches than slots simply wait for a free thread. A `Parallel` node nested inside a branch borrows whatever slots are free at that moment, and the branch thread that reached it runs nested branches too; with no free slot the nested branches run one after another on that thread. So at most `max_parallel_subagents` branches run at once, nested or not. Without a concurrent engine every branch runs on the calling thread, one after another.
+
+### Per-branch checkpoints
+
+Branches of a fan-out on the top-level chain (a `Parallel` node not nested inside another fan-out's branch) are checkpointed individually. While the fan-out runs, its checkpoint (still at the step of the node before it, with `next` = the `Parallel` node) carries every branch's progress: its status (`pending`, `running`, `done`, `interrupted`, `failed`), the node it continues at, its state relative to the fan-out's input (changed values, removed keys, keys written for the join check, Agent histories) and any interrupt. With `Sync` or `Async` durability it is rewritten after every node of every branch; with `Exit`, when the call returns.
+
+If a branch fails, the other branches still run to their end (or their own interrupt) before the call returns the failure. `resume_graph` then rebuilds each branch from its progress: finished branches are not run again, and a failed or unfinished branch continues at the node it stopped at (nodes it had already completed do not run again). The join happens once every branch is done. A nested fan-out is one node of its branch: if one of its branches fails, the whole nested fan-out runs again.
+
+### Interrupts inside parallel branches
+
+A node in a branch of a top-level fan-out may interrupt (`request_interrupt`, `interrupt_before_tools`). The branch pauses; the others keep going. When all branches have finished or paused, the run returns `Interrupted` with:
+
+- `run.interrupts`: one `GraphInterrupt {branch, node, reason, pending_tool_calls}` per paused branch (`branch` is the branch's entry node);
+- `run.interrupt_node` = the `Parallel` node, `run.interrupt_reason` = the reasons joined (`branch 'ask': need a name; branch 'worker': approval required ...`), `run.pending_tool_calls` = all pending calls.
+
+(An interrupt outside a fan-out also fills `run.interrupts`, with one entry whose `branch` is empty.)
+
+```cpp
+struct GraphBranchInput {
+    std::string branch;       // GraphInterrupt::branch
+    std::string human_input;  // the branch's "temp:human_input"
+    PermissionDecision decision = PermissionDecision::Ask; // Allow / Deny, or Ask = decide from human_input
+};
+Result<void> resume_graph(Session &, const Graph &, std::string_view thread_id, GraphRun &,
+                          std::span<const GraphBranchInput> inputs);
+```
+
+The span overload resumes only the listed branches, each with its own input and approval; branches not listed stay paused, and the run reports them again once the resumed ones are done. A branch that is not paused is `InvalidConfig`. The string and `PermissionDecision` overloads give the same answer to every paused branch. Each resumed branch re-runs its paused node, as at the top level. If the checkpoint is a failure rather than an interrupt, those overloads leave paused branches paused and only re-run the failed ones.
+
+```cpp
+// run_graph(...) -> Interrupted; run.interrupts = {{"ask", ...}, {"worker", ..., pending ping}}
+const agent::GraphBranchInput name[] = {{.branch = "ask", .human_input = "Ava"}};
+agent::resume_graph(session, g, thread, run, name);      // still Interrupted: "worker" is waiting
+const agent::GraphBranchInput ok[] = {{.branch = "worker", .decision = agent::PermissionDecision::Allow}};
+agent::resume_graph(session, g, thread, run, ok);        // Completed
+```
+
+Interrupts inside **nested** fan-outs are still rejected (`InvalidConfig`). A fresh `run_graph` on the thread discards an unfinished fan-out's branch progress.
 
 With the llama engine the parallelism comes from **continuous batching** inside the plugin, not from the threads themselves: one shared `llama_context` (created with `n_seq_max = max_parallel_subagents`) folds every active generation's next token into a single `llama_decode` per round, so the branch threads mostly wait on that shared batch. See [architecture.md](../architecture.md#continuous-batching).
 
 ---
 
-## v1 limitations
+## Limitations
 
-- Interrupts are not supported inside parallel branches: `request_interrupt` and `interrupt_before_tools` there fail the node with `InvalidConfig`.
-- A fan-out is checkpointed as one step. If a branch fails, the whole fan-out runs again on resume.
+- Interrupts inside nested fan-outs (a `Parallel` node inside another fan-out's branch) fail the node with `InvalidConfig`, and a nested fan-out is checkpointed as one node of its branch.
 - `hooks` and `context_provider` are C++ only; `agent.json` can set `history_key` but not these.
 
 ---

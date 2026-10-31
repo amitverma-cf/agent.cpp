@@ -348,6 +348,45 @@ TEST_CASE("graph: parallel branches run concurrently on a concurrent engine", "[
     REQUIRE(completed == 3);
 }
 
+TEST_CASE("graph: nested parallel branches run concurrently when worker slots are free", "[graph]") {
+    REQUIRE(agent::register_engine(&kConcurrentEngine).ok);
+    agent::Config cfg;
+    cfg.engine = "graph_concurrent_test";
+    cfg.max_parallel_subagents = 4;
+    agent::Session session = make_session(cfg);
+
+    g_max_inflight = 0;
+    // outer: [inner: [n1, n2], n3]. The inner fan-out's branch thread takes part and borrows a free
+    // slot, so all three agent nodes overlap.
+    agent::Graph g = agent::make_parallel("outer", {agent::make_parallel("inner", {agent::make_graph(agent_node("n1", "q1", "a1")),
+                                                                                   agent::make_graph(agent_node("n2", "q2", "a2"))}),
+                                                    agent::make_graph(agent_node("n3", "q3", "a3"))});
+    agent::GraphRun run;
+    run.thread_id = "nested-concurrent";
+    agent::set_state(run.state, "q1", "one");
+    agent::set_state(run.state, "q2", "two");
+    agent::set_state(run.state, "q3", "three");
+    REQUIRE(agent::run_graph(session, g, run).ok);
+    REQUIRE(agent::get_state(run.state, "a1") == "conc: one");
+    REQUIRE(agent::get_state(run.state, "a2") == "conc: two");
+    REQUIRE(agent::get_state(run.state, "a3") == "conc: three");
+    REQUIRE(g_max_inflight.load() == 3);
+
+    // With one slot, the inner branches run one after another on the branch thread.
+    agent::Config one = cfg;
+    one.max_parallel_subagents = 1;
+    agent::Session narrow = make_session(one);
+    g_max_inflight = 0;
+    agent::GraphRun run2;
+    run2.thread_id = "nested-narrow";
+    agent::set_state(run2.state, "q1", "one");
+    agent::set_state(run2.state, "q2", "two");
+    agent::set_state(run2.state, "q3", "three");
+    REQUIRE(agent::run_graph(narrow, g, run2).ok);
+    REQUIRE(agent::get_state(run2.state, "a3") == "conc: three");
+    REQUIRE(g_max_inflight.load() == 1);
+}
+
 TEST_CASE("graph: scoped state - temp discarded, user/app persisted, thread state per thread", "[graph]") {
     agent::Session session = make_session();
 

@@ -555,3 +555,175 @@ TEST_CASE("graph durability: forking an interrupted checkpoint leaves the new th
     REQUIRE(agent::resume_graph(session, g, "paused", original, agent::PermissionDecision::Deny).ok);
     REQUIRE(g_ping_calls == 1);
 }
+
+namespace {
+int g_b1 = 0, g_b2 = 0, g_b3a = 0, g_b3b = 0, g_after = 0;
+
+agent::Result<void> count_ok(agent::Session &, agent::GraphState &state, void *ud) {
+    auto *counter = static_cast<int *>(ud);
+    ++*counter;
+    std::string key = counter == &g_b1 ? "b1" : counter == &g_b3a ? "b3a" : "after";
+    agent::set_state(state, key, "ran");
+    return agent::ok();
+}
+
+// Fails the first time it runs.
+agent::Result<void> flaky_once(agent::Session &, agent::GraphState &state, void *ud) {
+    auto *counter = static_cast<int *>(ud);
+    if (++*counter == 1) return agent::fail(agent::ErrorCode::NetworkError, "flaky");
+    agent::set_state(state, counter == &g_b2 ? "b2" : "b3b", "ran");
+    return agent::ok();
+}
+} // namespace
+
+TEST_CASE("graph durability: a resumed fan-out re-runs only the branches that did not finish", "[graph][durability][parallel]") {
+    const std::string path = temp_db("branches.sqlite3");
+    g_b1 = g_b2 = g_b3a = g_b3b = g_after = 0;
+    agent::Graph g = agent::make_sequential(
+        "fanout",
+        {agent::make_parallel("fan", {agent::make_graph(function_node("b1", count_ok, &g_b1)),
+                                      agent::make_graph(function_node("b2", flaky_once, &g_b2)),
+                                      agent::make_sequential("b3", {agent::make_graph(function_node("b3a", count_ok, &g_b3a)),
+                                                                    agent::make_graph(function_node("b3b", flaky_once, &g_b3b))})}),
+         agent::make_graph(function_node("after", count_ok, &g_after))});
+
+    {
+        agent::Session first = make_session();
+        auto cp = agent::open_checkpointer(agent::store::sqlite_checkpointer(), {.path = path});
+        REQUIRE(cp.ok);
+        agent::GraphRun run;
+        run.thread_id = "fan";
+        run.checkpointer = cp.value;
+        auto res = agent::run_graph(first, g, run);
+        REQUIRE_FALSE(res.ok);
+        REQUIRE(res.error.message.find("branch 'b2'") != std::string::npos);
+        REQUIRE(run.next_node == "fan");
+        REQUIRE(g_b1 == 1);
+        REQUIRE(g_b2 == 1);
+        REQUIRE(g_b3a == 1);
+        REQUIRE(g_b3b == 1);
+        REQUIRE_FALSE(agent::has_state(run.state, "b1")); // not joined
+    }
+
+    // New Session and checkpointer: as after a process restart.
+    agent::Session second = make_session();
+    auto cp = agent::open_checkpointer(agent::store::sqlite_checkpointer(), {.path = path});
+    REQUIRE(cp.ok);
+    agent::GraphRun resumed;
+    resumed.checkpointer = cp.value;
+    auto res = agent::resume_graph(second, g, "fan", resumed);
+    REQUIRE(res.ok);
+    REQUIRE(resumed.status == agent::GraphRunStatus::Completed);
+    REQUIRE(g_b1 == 1);  // finished branch: not re-run
+    REQUIRE(g_b2 == 2);  // failed branch: re-run
+    REQUIRE(g_b3a == 1); // completed node of the failed branch: not re-run
+    REQUIRE(g_b3b == 2);
+    REQUIRE(g_after == 1);
+    for (const char *key : {"b1", "b2", "b3a", "b3b", "after"}) REQUIRE(agent::get_state(resumed.state, key) == "ran");
+    REQUIRE(count_events(resumed.events, agent::GraphEventType::NodeStart, "b1") == 0);
+    REQUIRE(count_events(resumed.events, agent::GraphEventType::NodeStart, "b3a") == 0);
+}
+
+namespace {
+int g_plain = 0;
+} // namespace
+
+TEST_CASE("graph durability: parallel branches pause and resume per branch", "[graph][durability][parallel]") {
+    agent::Session session = make_session();
+    g_ping_calls = 0;
+    g_plain = 0;
+
+    auto ask = function_node("ask", [](agent::Session &, agent::GraphState &state, void *) -> agent::Result<void> {
+        if (!agent::has_state(state, "temp:human_input")) {
+            agent::request_interrupt(state, "need a name");
+            return agent::ok();
+        }
+        agent::set_state(state, "name", std::string(agent::get_state(state, "temp:human_input")));
+        return agent::ok();
+    });
+    auto worker = agent_node("worker", "", "out");
+    worker.prompt = "call:ping";
+    worker.allowed_tools = {"ping"};
+    worker.interrupt_before_tools = true;
+    auto plain = function_node("plain", [](agent::Session &, agent::GraphState &state, void *) -> agent::Result<void> {
+        ++g_plain;
+        agent::set_state(state, "plain", "done");
+        return agent::ok();
+    });
+    auto join = function_node("join", [](agent::Session &, agent::GraphState &state, void *) -> agent::Result<void> {
+        agent::set_state(state, "joined", std::string(agent::get_state(state, "name")) + "/" + std::string(agent::get_state(state, "out")));
+        return agent::ok();
+    });
+    agent::Graph g = agent::make_sequential(
+        "hitl_fan", {agent::make_parallel("fan", {agent::make_graph(ask), agent::make_graph(worker), agent::make_graph(plain)}),
+                     agent::make_graph(join)});
+
+    SECTION("per-branch inputs") {
+        agent::GraphRun run;
+        run.thread_id = "branch-hitl";
+        REQUIRE(agent::run_graph(session, g, run).ok);
+        REQUIRE(run.status == agent::GraphRunStatus::Interrupted);
+        REQUIRE(run.interrupt_node == "fan");
+        REQUIRE(run.interrupts.size() == 2);
+        REQUIRE(run.interrupts[0].branch == "ask");
+        REQUIRE(run.interrupts[0].reason == "need a name");
+        REQUIRE(run.interrupts[1].branch == "worker");
+        REQUIRE(run.interrupts[1].pending_tool_calls.size() == 1);
+        REQUIRE(run.pending_tool_calls.size() == 1);
+        REQUIRE(g_plain == 1);
+        REQUIRE(g_ping_calls == 0);
+
+        // Answer only the "ask" branch: the worker stays paused, plain does not run again.
+        const agent::GraphBranchInput name_only[] = {{.branch = "ask", .human_input = "Ava"}};
+        agent::GraphRun second;
+        REQUIRE(agent::resume_graph(session, g, "branch-hitl", second, name_only).ok);
+        REQUIRE(second.status == agent::GraphRunStatus::Interrupted);
+        REQUIRE(second.interrupts.size() == 1);
+        REQUIRE(second.interrupts[0].branch == "worker");
+        REQUIRE(g_plain == 1);
+        REQUIRE(g_ping_calls == 0);
+
+        // Unknown or not-paused branches are rejected.
+        const agent::GraphBranchInput wrong[] = {{.branch = "ask", .human_input = "again"}};
+        agent::GraphRun bad;
+        REQUIRE(agent::resume_graph(session, g, "branch-hitl", bad, wrong).error.code == agent::ErrorCode::InvalidConfig);
+
+        const agent::GraphBranchInput approve[] = {{.branch = "worker", .human_input = {}, .decision = agent::PermissionDecision::Allow}};
+        agent::GraphRun third;
+        REQUIRE(agent::resume_graph(session, g, "branch-hitl", third, approve).ok);
+        REQUIRE(third.status == agent::GraphRunStatus::Completed);
+        REQUIRE(g_ping_calls == 1);
+        REQUIRE(g_plain == 1);
+        REQUIRE(agent::get_state(third.state, "joined") == "Ava/tool done");
+        REQUIRE(third.state.histories.at("worker").history.size() == 4);
+    }
+
+    SECTION("one answer for every paused branch") {
+        agent::GraphRun run;
+        run.thread_id = "branch-hitl-all";
+        REQUIRE(agent::run_graph(session, g, run).ok);
+        REQUIRE(run.interrupts.size() == 2);
+        agent::GraphRun resumed;
+        REQUIRE(agent::resume_graph(session, g, "branch-hitl-all", resumed, "yes").ok);
+        REQUIRE(resumed.status == agent::GraphRunStatus::Completed);
+        REQUIRE(g_ping_calls == 1);
+        REQUIRE(agent::get_state(resumed.state, "joined") == "yes/tool done");
+    }
+}
+
+TEST_CASE("graph durability: interrupts in nested parallel branches are still rejected", "[graph][durability][parallel]") {
+    agent::Session session = make_session();
+    auto ask = function_node("deep_ask", [](agent::Session &, agent::GraphState &state, void *) -> agent::Result<void> {
+        agent::request_interrupt(state, "deep");
+        return agent::ok();
+    });
+    agent::Graph g = agent::make_parallel(
+        "outer", {agent::make_parallel("inner", {agent::make_graph(ask), agent::make_graph(kv_node("deep_kv", "k=v"))}),
+                  agent::make_graph(kv_node("side", "s=1"))});
+    agent::GraphRun run;
+    run.thread_id = "nested-interrupt";
+    auto res = agent::run_graph(session, g, run);
+    REQUIRE_FALSE(res.ok);
+    REQUIRE(res.error.code == agent::ErrorCode::InvalidConfig);
+    REQUIRE(res.error.message.find("nested") != std::string::npos);
+}
