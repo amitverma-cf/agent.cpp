@@ -17,7 +17,7 @@ When generating or suggesting code, AI agents must adhere to:
 
 1.  **Zero Hot-Path Allocations**: Do not suggest using `std::string`, `std::vector`, or `new` inside the per-turn dispatch path -- building `MessageView`/`ToolCallView`/`TensorView` for a provider call, or the token-generation loop itself. Use `std::string_view` and `std::span` pointing into the `Arena` there. This does **not** extend to a `Flow`'s persistent state (`FlowMemory::history` and friends): the `Arena` resets every turn, so anything that must survive across turns -- conversation history, KV-store-backed memory -- necessarily owns its storage (`std::string`/`std::vector`) and lives outside it.
 2.  **No C++ Exceptions**: All error handling must be monadic (status codes or `std::expected`). Do not use `try`, `catch`, or `throw`.
-3.  **No vtables**: Provider, memory, and tools subsystems are selected through data-oriented dispatch — `constexpr` arrays of function pointers (`ProviderOps`, `MemoryOps`, `ToolsOps`) — instead of virtual tables.
+3.  **No vtables**: Provider, memory, and tools subsystems are selected through data-oriented dispatch — `constexpr` arrays of function pointers (`ProviderOps`, `StoreOps`, `ToolsOps`) — instead of virtual tables.
 4.  **Single public header**: The entire public API surface is `include/agent-cpp/agent.hpp` — idiomatic modern C++ (`Result<T>`, `std::string_view`/`std::span` views into the `Arena`, PascalCase types, snake_case free functions), not a C-ABI. Avoid gratuitous breaking changes to existing struct fields or function signatures.
 
 ### Considerations for Maintainer Workload

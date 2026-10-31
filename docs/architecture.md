@@ -4,7 +4,7 @@ agent.cpp is structured around three core principles that inform every design de
 
 ## Core principles
 
-- **No vtables.** Provider and memory backends are selected via data-oriented function-pointer tables (`ProviderOps`, `MemoryOps`). Zero overhead beyond a single pointer dereference.
+- **No vtables.** Provider and memory backends are selected via data-oriented function-pointer tables (`ProviderOps`, `StoreOps`). Zero overhead beyond a single pointer dereference.
 - **No hot-path allocation.** A bump-pointer `Arena` owns all per-turn storage. `MessageView`, `TensorView`, `ToolCallView` are zero-copy views into it. The arena resets in O(1) at the start of each turn.
 - **No exceptions.** All fallible operations return `Result<T>`. Callers branch on `.ok`.
 - **Single header.** `agent.hpp` is the entire public API surface. Backend headers (`llama.h`, `httplib.h`, `sqlite3.h`) are confined to their implementation files.
@@ -93,9 +93,8 @@ ProviderOps kProviderOps[] = {
     { /* Onnx     */ init_onnx,    infer_onnx,    ... },
 };
 
-MemoryOps kMemoryOps[] = {
-    { /* Sqlite */ init_sqlite,  store_sqlite,  retrieve_sqlite,  clear_sqlite  },
-};
+// Memory: Config::memory.store points at a StoreOps table (nullptr = in-memory default).
+constexpr StoreOps kInMemoryStore{ open_in_memory, put_in_memory, get_in_memory, clear_in_memory };
 ```
 
 `find_provider_ops(AiProvider::LlamaCpp)` does a 4-element linear scan. Branch predictor handles it in a single cycle. No heap, no map, no virtual dispatch.
@@ -273,11 +272,11 @@ All provider state is heap-allocated and type-erased as `shared_ptr<void>` in `S
 
 ## Memory backend
 
-`sqlite_provider.cpp` implements the single `MemoryProvider::Sqlite` backend: a bounded write-back cache (`unordered_map` + LRU list, protected by one mutex) in front of a SQLite database (WAL journal mode, `synchronous=NORMAL`). Reads and writes always hit the cache first; a background writer thread flushes dirty entries to SQLite on a size-or-time trigger and evicts LRU clean entries once over the configured byte budget. `db_path = ":memory:"` (opened with SQLite's URI shared-cache form so both the writer and reader connections see the same data) gives the old standalone InMemory provider's ephemeral behavior through the same code path. See [docs/api/memory.md](api/memory.md) for the full design.
+`MemoryConfig::store` selects a `StoreOps` table. The core ships only `in_memory_store.cpp` (the default). The optional `agent_store_sqlite` library (`tools/store-sqlite/`) provides `sqlite_store()`: a bounded write-back cache (`unordered_map` + LRU list, protected by one mutex) in front of a SQLite database (WAL journal mode, `synchronous=NORMAL`). Reads and writes always hit the cache first; a background writer thread flushes dirty entries to SQLite on a size-or-time trigger and evicts LRU clean entries once over the configured byte budget. `db_path = ":memory:"` (opened with SQLite's URI shared-cache form so both the writer and reader connections see the same data) gives the old standalone InMemory provider's ephemeral behavior through the same code path. See [docs/api/memory.md](api/memory.md) for the full design.
 
 Keys are arbitrary UTF-8 strings. Conversation history is serialised as a JSON array and stored under `"history:<FlowMemory::id>"` after every turn.
 
-RAG/vector search is a separate concern, never routed through this cache — see `sqlite_vec_data_source.cpp` and [docs/api/data-sources.md](api/data-sources.md).
+RAG/vector search is a separate concern, never routed through this cache — see `tools/store-sqlite/src/sqlite_vec_data_source.cpp` and [docs/api/data-sources.md](api/data-sources.md).
 
 ---
 

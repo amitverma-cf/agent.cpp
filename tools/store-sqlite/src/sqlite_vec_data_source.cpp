@@ -1,7 +1,8 @@
-#include "../utils/utils.hpp"
+#include "core/utils/utils.hpp"
 #include "hal/path.hpp"
 
 #include <agent-cpp/agent.hpp>
+#include <agent-cpp/store_sqlite.hpp>
 #include <filesystem>
 #include <mutex>
 #include <simdjson.h>

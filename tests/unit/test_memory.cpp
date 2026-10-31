@@ -1,4 +1,5 @@
 #include <agent-cpp/agent.hpp>
+#include <agent-cpp/store_sqlite.hpp>
 #include <catch_amalgamated.hpp>
 #include <chrono>
 #include <filesystem>
@@ -6,8 +7,26 @@
 #include <thread>
 #include <vector>
 
-TEST_CASE("SQLite memory provider basic store/retrieve/clear", "[memory][sqlite]") {
+TEST_CASE("Default in-memory store basic store/retrieve/clear", "[memory]") {
     auto session_result = agent::init({.provider = agent::AiProvider::Mock, .workspace_dir = "/tmp/agent_test_ws"});
+    REQUIRE(session_result.ok);
+    agent::Session session = std::move(session_result.value);
+
+    REQUIRE(agent::store_memory(session, "key", "val").ok);
+    auto res = agent::retrieve_memory(session, "key");
+    REQUIRE(res.ok);
+    REQUIRE(res.value == "val");
+
+    REQUIRE(agent::clear_memory(session).ok);
+    auto res2 = agent::retrieve_memory(session, "key");
+    REQUIRE_FALSE(res2.ok);
+    REQUIRE(res2.error.code == agent::ErrorCode::KeyNotFound);
+}
+
+TEST_CASE("SQLite memory provider basic store/retrieve/clear", "[memory][sqlite]") {
+    auto session_result = agent::init({.provider = agent::AiProvider::Mock,
+                                       .workspace_dir = "/tmp/agent_test_ws",
+                                       .memory = {.store = agent::store::sqlite_store(), .db_path = ":memory:"}});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
@@ -33,7 +52,7 @@ TEST_CASE("SQLite memory provider persists across reopen", "[memory][sqlite]") {
     {
         auto session_result = agent::init({.provider = agent::AiProvider::Mock,
                                            .workspace_dir = "/tmp/agent_test_ws",
-                                           .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = db_path}});
+                                           .memory = {.store = agent::store::sqlite_store(), .db_path = db_path}});
         REQUIRE(session_result.ok);
         agent::Session session = std::move(session_result.value);
 
@@ -43,7 +62,7 @@ TEST_CASE("SQLite memory provider persists across reopen", "[memory][sqlite]") {
 
     auto session_result2 = agent::init({.provider = agent::AiProvider::Mock,
                                         .workspace_dir = "/tmp/agent_test_ws",
-                                        .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = db_path}});
+                                        .memory = {.store = agent::store::sqlite_store(), .db_path = db_path}});
     REQUIRE(session_result2.ok);
     agent::Session session2 = std::move(session_result2.value);
 
@@ -66,7 +85,7 @@ TEST_CASE("SQLite memory provider bounded cache evicts and reads through", "[mem
 
     auto session_result = agent::init({.provider = agent::AiProvider::Mock,
                                        .workspace_dir = "/tmp/agent_test_ws",
-                                       .memory = {.provider = agent::MemoryProvider::Sqlite,
+                                       .memory = {.store = agent::store::sqlite_store(),
                                                   .db_path = db_path,
                                                   .max_cache_bytes = 256,
                                                   .flush_dirty_threshold_bytes = 64,
@@ -106,7 +125,7 @@ TEST_CASE("SQLite memory provider handles concurrent writes from multiple thread
 
     auto session_result = agent::init({.provider = agent::AiProvider::Mock,
                                        .workspace_dir = "/tmp/agent_test_ws",
-                                       .memory = {.provider = agent::MemoryProvider::Sqlite, .db_path = db_path}});
+                                       .memory = {.store = agent::store::sqlite_store(), .db_path = db_path}});
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 

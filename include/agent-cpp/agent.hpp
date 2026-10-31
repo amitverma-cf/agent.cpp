@@ -189,12 +189,30 @@ struct InferResponse {
     std::span<const TensorView> output_tensors;
 };
 
-enum class MemoryProvider { Sqlite };
+struct MemoryConfig;
+
+// Pluggable key-value store behind store_memory/retrieve_memory/clear_memory and conversation
+// persistence. open() runs once from init(); the state it returns is passed to every other call.
+struct StoreOps {
+    using OpenFn = Result<std::shared_ptr<void>> (*)(const MemoryConfig &config, std::string_view workspace_dir);
+    using PutFn = Result<void> (*)(void *state, std::string_view key, std::string_view value);
+    using GetFn = Result<std::string> (*)(void *state, std::string_view key);
+    using ClearFn = Result<void> (*)(void *state);
+
+    OpenFn open = nullptr;
+    PutFn put = nullptr;
+    GetFn get = nullptr;
+    ClearFn clear = nullptr;
+};
 
 struct MemoryConfig {
-    MemoryProvider provider = MemoryProvider::Sqlite;
-    std::string db_path = "memory/db.sqlite3";
+    // nullptr = built-in in-memory store (nothing persists past the Session). The optional
+    // agent-store-sqlite library provides agent::store::sqlite_store().
+    const StoreOps *store = nullptr;
+    // Backend-specific location. Empty = backend default (SQLite: <workspace>/memory/db.sqlite3).
+    std::string db_path;
 
+    // Write-back cache tuning, used by caching stores (SQLite).
     size_t max_cache_bytes = 16 * 1024 * 1024;
     size_t flush_dirty_threshold_bytes = 4 * 1024 * 1024;
     int flush_interval_ms = 500;
@@ -444,10 +462,6 @@ Result<std::string> query_data_source(Session &session, std::string_view name, s
 
 Tool bind_data_source_tool(Session &session, std::shared_ptr<DataSource> source, std::string_view description,
                            std::string_view parameter_schema);
-
-Result<std::shared_ptr<DataSource>> make_sqlite_vec_data_source(std::string name, std::string db_path, int dimensions);
-
-Result<void> sqlite_vec_insert(DataSource &source, std::string_view text, std::span<const float> embedding);
 
 // Scans skills_dir for one subdirectory per skill (each containing a SKILL.md), populates
 // session.skills, and folds each skill's name+description into the tools system prompt.

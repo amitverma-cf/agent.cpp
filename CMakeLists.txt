@@ -40,9 +40,7 @@ add_library(agent
     src/core/providers/llama_provider.cpp
     src/core/providers/onnx_provider.cpp
     src/core/utils/utils.cpp
-    src/core/memory/memory_ops.cpp
-    src/core/memory/sqlite_provider.cpp
-    src/core/data/sqlite_vec_data_source.cpp
+    src/core/memory/in_memory_store.cpp
     src/core/tools/tools_ops.cpp
     src/core/tools/filesystem_tools.cpp
     src/core/tools/terminal_tools.cpp
@@ -52,8 +50,6 @@ add_library(agent
     src/hal/process.cpp
     src/hal/log_file.cpp
     vendor/simdjson/singleheader/simdjson.cpp
-    vendor/sqlite/sqlite3.c
-    vendor/sqlite-vec/sqlite-vec.c
 )
 target_include_directories(agent PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -62,23 +58,40 @@ target_include_directories(agent PUBLIC
 target_include_directories(agent PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-target_include_directories(agent SYSTEM PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/sqlite
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/sqlite-vec
-)
 target_compile_options(agent PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 target_link_options(agent PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 
 set_source_files_properties(
-    vendor/sqlite/sqlite3.c
-    vendor/sqlite-vec/sqlite-vec.c
     vendor/simdjson/singleheader/simdjson.cpp
     PROPERTIES COMPILE_OPTIONS "-w"
 )
 
-target_compile_definitions(agent PRIVATE SQLITE_THREADSAFE=1 SQLITE_CORE SQLITE_VEC_STATIC)
 find_package(Threads REQUIRED)
 target_link_libraries(agent PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+
+# Optional SQLite storage (KV store + sqlite-vec data source). Used by the CLI; library users opt in
+# by linking agent_store_sqlite. libagent itself has no SQLite dependency.
+add_library(agent_store_sqlite
+    tools/store-sqlite/src/sqlite_store.cpp
+    tools/store-sqlite/src/sqlite_vec_data_source.cpp
+    vendor/sqlite/sqlite3.c
+    vendor/sqlite-vec/sqlite-vec.c
+)
+target_include_directories(agent_store_sqlite PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/tools/store-sqlite/include)
+target_include_directories(agent_store_sqlite PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(agent_store_sqlite SYSTEM PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/sqlite
+    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/sqlite-vec
+)
+set_source_files_properties(
+    vendor/sqlite/sqlite3.c
+    vendor/sqlite-vec/sqlite-vec.c
+    PROPERTIES COMPILE_OPTIONS "-w"
+)
+target_compile_definitions(agent_store_sqlite PRIVATE SQLITE_THREADSAFE=1 SQLITE_CORE SQLITE_VEC_STATIC)
+target_link_libraries(agent_store_sqlite PUBLIC agent PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+target_compile_options(agent_store_sqlite PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
+target_link_options(agent_store_sqlite PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 
 option(AGENT_ENABLE_LLAMACPP "use llama.cpp (local LLM provider)" ON)
 option(AGENT_ENABLE_ONNX "use ONNX Runtime for multimodal inference" OFF)
@@ -121,7 +134,7 @@ target_compile_options(basic PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVE
 target_link_options(basic PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 
 add_executable(agent_cli examples/agent_cli/agent_cli.cpp)
-target_link_libraries(agent_cli PRIVATE agent)
+target_link_libraries(agent_cli PRIVATE agent agent_store_sqlite)
 target_compile_options(agent_cli PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 target_link_options(agent_cli PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 
@@ -157,7 +170,7 @@ set_source_files_properties(
     PROPERTIES COMPILE_OPTIONS "-w"
                COMPILE_DEFINITIONS "CATCH_AMALGAMATED_CUSTOM_MAIN"
 )
-target_link_libraries(test_agent PRIVATE agent)
+target_link_libraries(test_agent PRIVATE agent agent_store_sqlite)
 target_compile_options(test_agent PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 target_link_options(test_agent PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 

@@ -279,19 +279,25 @@ struct InferResponse {
 
 ## Memory backend
 
-### `MemoryProvider`
+### `StoreOps`
 
 ```cpp
-enum class MemoryProvider { Sqlite };
+struct StoreOps {
+    using OpenFn  = Result<std::shared_ptr<void>> (*)(const MemoryConfig &config, std::string_view workspace_dir);
+    using PutFn   = Result<void> (*)(void *state, std::string_view key, std::string_view value);
+    using GetFn   = Result<std::string> (*)(void *state, std::string_view key);
+    using ClearFn = Result<void> (*)(void *state);
+    OpenFn open; PutFn put; GetFn get; ClearFn clear;
+};
 ```
 
 ### `MemoryConfig`
 
 ```cpp
 struct MemoryConfig {
-    MemoryProvider provider = MemoryProvider::Sqlite;
-    std::string    db_path  = "memory/db.sqlite3";    // auto-prefixed with workspace_dir at init;
-                                                       // ":memory:" for ephemeral storage
+    const StoreOps *store = nullptr;   // nullptr = built-in in-memory store;
+                                       // agent::store::sqlite_store() from agent_store_sqlite
+    std::string     db_path;           // backend-specific; empty = backend default
     size_t max_cache_bytes             = 16 * 1024 * 1024;
     size_t flush_dirty_threshold_bytes = 4 * 1024 * 1024;
     int    flush_interval_ms           = 500;
@@ -500,7 +506,7 @@ Result<std::string> query_data_source(Session &session, std::string_view name, s
 Tool bind_data_source_tool(Session &session, std::shared_ptr<DataSource> source,
                            std::string_view description, std::string_view parameter_schema);
 
-// Built-in sqlite-vec backend for RAG/vector search.
+// sqlite-vec backend for RAG/vector search (agent_store_sqlite, <agent-cpp/store_sqlite.hpp>).
 Result<std::shared_ptr<DataSource>> make_sqlite_vec_data_source(
     std::string name, std::string db_path, int dimensions);
 Result<void> sqlite_vec_insert(DataSource &source, std::string_view text,

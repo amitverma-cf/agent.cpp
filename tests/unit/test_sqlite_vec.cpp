@@ -1,4 +1,5 @@
 #include <agent-cpp/agent.hpp>
+#include <agent-cpp/store_sqlite.hpp>
 #include <catch_amalgamated.hpp>
 #include <filesystem>
 #include <string>

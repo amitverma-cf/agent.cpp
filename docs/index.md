@@ -9,7 +9,7 @@ agent.cpp gives you a complete runtime for building AI agents on top of local in
 The library is designed around three principles:
 
 - **Zero hot-path allocations.** A session-owned bump-pointer `Arena` allocator handles all inference-time memory. Only conversation history (owned `Message` objects) lives on the heap. The arena resets between turns in O(1).
-- **Data-oriented dispatch.** Providers, memory backends, and tool registries are resolved through constexpr function-pointer tables (`ProviderOps`, `MemoryOps`, `ToolsOps`) — no virtual dispatch, no RTTI.
+- **Data-oriented dispatch.** Providers, memory backends, and tool registries are resolved through constexpr function-pointer tables (`ProviderOps`, `StoreOps`, `ToolsOps`) — no virtual dispatch, no RTTI.
 - **Monadic error handling.** Every fallible function returns `Result<T>`. There are no exceptions anywhere in the library. Callers check `.ok` and inspect `.error.code` / `.error.message`.
 
 ## Documentation Map

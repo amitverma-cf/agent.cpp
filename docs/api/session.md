@@ -115,11 +115,10 @@ Creates a `Session` from `config`. On success, returns a fully-initialised sessi
 4. Allocates the `Arena` slab.
 5. Opens the log file if `enable_file_logging = true`.
 6. Initialises the provider (`ProviderOps::init`).
-7. Adjusts `memory.db_path` if it equals the default `"memory/db.sqlite3"` (prepends `workspace_dir`).
-8. Initialises the memory backend (`MemoryOps::init`).
-9. Registers default tools if `auto_default_tools = true`.
-10. Builds the O(1) `tool_by_name` index.
-11. Logs `"Session initialised."` at `Info` level.
+7. Opens the memory store (`MemoryConfig::store->open`, or the built-in in-memory store).
+8. Registers default tools if `auto_default_tools = true`.
+9. Builds the O(1) `tool_by_name` index.
+10. Logs `"Session initialised."` at `Info` level.
 
 **Example:**
 
@@ -133,7 +132,6 @@ auto res = agent::init({
     .context_window = 8192,
     .max_tokens     = 1024,
     .temperature    = 0.7f,
-    .memory         = { .provider = agent::MemoryProvider::Sqlite },
     .enable_file_logging = true,
 });
 
