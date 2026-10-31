@@ -6,14 +6,23 @@
 //   - media parts on the last user message are acknowledged as "media: <mime> <path>" lines
 //   - "draw" writes a small file to output_dir and returns it as a FILE part
 //   - "slow" reports 100 progress steps and stops early when *cancel is set
+//   - debug triggers for the engine host tests (they take the whole process down, so only send
+//     them to an out-of-process engine): "crash:segv" raises SIGSEGV, "crash:abort" calls abort(),
+//     "crash:exit" calls exit(3) (like sherpa-onnx on a corrupt model), "hang" never returns
+//     and ignores *cancel
+//   - TENSOR parts on the last user message come back unchanged as output TENSOR parts
+//   - "stream:N" streams N text chunks of one character each
 
 #include <agent-cpp/engine_abi.h>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -26,6 +35,12 @@ struct MockInstance {
     agent_part parts[2]{};
     agent_tool_call call{};
     std::string error;
+    // Echoed tensors: copies of the inputs, owned until the next run().
+    std::vector<std::string> tensor_names;
+    std::vector<std::vector<int64_t>> tensor_shapes;
+    std::vector<std::vector<uint8_t>> tensor_data;
+    std::vector<uint32_t> tensor_dtypes;
+    std::vector<agent_part> out_parts;
 };
 
 std::string_view sv(agent_str s) { return s.data ? std::string_view(s.data, s.size) : std::string_view(); }
@@ -53,15 +68,27 @@ int32_t mock_run(void *instance, const agent_request *req, agent_response *resp)
 
     std::string_view last_user;
     std::string media_lines;
+    const agent_message *last_user_msg = nullptr;
     for (size_t i = 0; i < req->n_messages; ++i) {
         const agent_message &m = req->messages[i];
         if (sv(m.role) != "user") continue;
+        last_user_msg = &m;
         media_lines.clear();
         for (size_t p = 0; p < m.n_parts; ++p) {
             if (m.parts[p].kind == AGENT_PART_TEXT) last_user = sv(m.parts[p].text);
             else if (m.parts[p].kind == AGENT_PART_FILE)
                 media_lines += "\nmedia: " + std::string(sv(m.parts[p].mime)) + " " + std::string(sv(m.parts[p].path));
         }
+    }
+
+    if (last_user == "crash:segv") std::raise(SIGSEGV);
+    if (last_user == "crash:abort") std::abort();
+    if (last_user == "crash:exit") std::exit(3);
+    if (last_user == "hang")
+        for (;;) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    if (last_user.starts_with("stream:") && req->on_chunk) {
+        const int n = std::atoi(std::string(last_user.substr(7)).c_str());
+        for (int i = 0; i < n; ++i) req->on_chunk(req->user_data, AGENT_CHUNK_TEXT, "x", 1);
     }
 
     if (last_user == "slow") {
@@ -110,6 +137,36 @@ int32_t mock_run(void *instance, const agent_request *req, agent_response *resp)
         inst->parts[1].mime = agent_str{"text/plain", 10};
         resp->message.parts = inst->parts;
         resp->message.n_parts = 2;
+    }
+
+    inst->tensor_names.clear();
+    inst->tensor_shapes.clear();
+    inst->tensor_data.clear();
+    inst->tensor_dtypes.clear();
+    for (size_t p = 0; last_user_msg && p < last_user_msg->n_parts; ++p) {
+        const agent_part &in = last_user_msg->parts[p];
+        if (in.kind != AGENT_PART_TENSOR) continue;
+        inst->tensor_names.emplace_back(sv(in.name));
+        inst->tensor_shapes.emplace_back(in.shape, in.shape + in.ndim);
+        const auto *bytes = static_cast<const uint8_t *>(in.data);
+        inst->tensor_data.emplace_back(bytes, bytes + (bytes ? in.size : 0));
+        inst->tensor_dtypes.push_back(in.dtype);
+    }
+    if (!inst->tensor_names.empty()) {
+        inst->out_parts.assign(resp->message.parts, resp->message.parts + resp->message.n_parts);
+        for (size_t t = 0; t < inst->tensor_names.size(); ++t) {
+            agent_part out{};
+            out.kind = AGENT_PART_TENSOR;
+            out.name = agent_str{inst->tensor_names[t].data(), inst->tensor_names[t].size()};
+            out.dtype = inst->tensor_dtypes[t];
+            out.shape = inst->tensor_shapes[t].data();
+            out.ndim = inst->tensor_shapes[t].size();
+            out.data = inst->tensor_data[t].data();
+            out.size = inst->tensor_data[t].size();
+            inst->out_parts.push_back(out);
+        }
+        resp->message.parts = inst->out_parts.data();
+        resp->message.n_parts = inst->out_parts.size();
     }
     return AGENT_OK;
 }

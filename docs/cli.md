@@ -46,7 +46,7 @@ next to itself, in `engines/` and its subdirectories (so the build tree works as
 ```
 
 `engines.json` is the manifest that `agent::load_engine_manifest` reads. The CLI also records each engine's
-name, version, capabilities and backend:
+name, version, capabilities and backend, and keeps an optional `"isolation": "process" | "inprocess"`:
 
 ```json
 {
@@ -122,6 +122,13 @@ Other options are `--workspace DIR`, `--ctx N`, `--max-tokens N`, `--engine-opti
 to the engine, for example `{"mmproj": "mmproj.gguf"}` for image input with llama), `--yes` and
 `--verbose`.
 
+**Engine isolation.** The engine runs in a separate `agent-engine-host` process (installed next to the
+`agent` binary), so an engine crash, `abort()` or `exit()` fails the turn with an error instead of
+killing the chat; the next message restarts the engine (the conversation is kept, the KV cache is not).
+`--inprocess` loads the engine into the CLI instead (slightly lower latency, no crash protection), as
+does `"isolation": "inprocess"` on the engine's `engines.json` entry. See
+[api/engines.md](api/engines.md#isolation).
+
 **Engine choice.** Unless you pass `--engine`, the engine follows from the model file type: `.gguf`
 uses `llama`, `.onnx` uses `onnx`, and `.safetensors` / `.ckpt` use `sdcpp`. The engine's path comes
 from `engines.json`. If the engine is not listed there, the CLI looks in the default plugin directories.
@@ -182,7 +189,7 @@ agent run examples/graphs/research_pipeline.json --model qwen2.5-0.5b --set "top
 | `--thread ID` | checkpoint thread (default `run`) |
 | `--resume ID [--input TEXT]` | continue an interrupted or failed run; `TEXT` is the human reply, or `approve` for pending tool calls |
 | `--yes` | approve tool calls the permission policy would ask about |
-| `--model`, `--engine`, `--engine-options`, `--workspace` | as for `agent chat` |
+| `--model`, `--engine`, `--engine-options`, `--workspace`, `--inprocess` | as for `agent chat` |
 
 When the graph finishes, the CLI prints the status and the final state. When it is interrupted,
 it prints the reason, any pending tool calls and the command to resume. Checkpoints live in the

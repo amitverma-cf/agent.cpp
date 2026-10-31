@@ -32,6 +32,9 @@ enum class ErrorCode {
     ToolCallLimitExceeded,
     SandboxViolation,
     PermissionDenied,
+    // The out-of-process engine host died (crash, abort, exit, killed by the watchdog) or could not be
+    // restarted. See Config::engine_isolation.
+    EngineCrashed,
 };
 
 struct Error {
@@ -242,6 +245,13 @@ struct MemoryConfig {
 // Engine = an engine plugin (see <agent-cpp/engine_abi.h>), selected by Config::engine.
 enum class AiProvider { Mock, Engine };
 
+// Where an engine plugin runs (AiProvider::Engine). InProcess: dlopen'ed into this process (fastest;
+// a crash in the engine takes the process down). Process: in an agent-engine-host child process
+// speaking the engine ABI over pipes; a crash fails the in-flight call with ErrorCode::EngineCrashed
+// and the next call restarts the host. Default: the engines.json "isolation" of the engine when it
+// was loaded with load_engine_manifest, else InProcess.
+enum class EngineIsolation { Default, InProcess, Process };
+
 enum class EventType {
     OnTurnStart,
     OnInferenceSubmit,
@@ -361,6 +371,20 @@ struct Config {
     // returns PermissionDecision::Ask; if nullptr, Ask is treated as Deny.
     PermissionPromptFn permission_prompt = nullptr;
     void *permission_user_data = nullptr;
+
+    // Engine isolation (AiProvider::Engine). See docs/api/engines.md, "Isolation".
+    EngineIsolation engine_isolation = EngineIsolation::Default;
+    // Process isolation: the agent-engine-host executable. Empty = $AGENT_ENGINE_HOST, else next to
+    // the current executable, else <exe dir>/../bin, else PATH.
+    std::string engine_host_path;
+    // Process isolation: per-request watchdog (run / count_tokens / reset_cache, not create). When a
+    // request takes longer the host is killed and the call fails with ErrorCode::EngineCrashed. 0 = none.
+    int engine_timeout_ms = 0;
+    // Process isolation: after request_cancel(), how long the engine gets to stop before the host is killed.
+    int engine_cancel_grace_ms = 2000;
+    // Process isolation: automatic host restarts allowed per rolling minute. Past it, calls fail with
+    // ErrorCode::EngineCrashed until the window frees up.
+    int engine_max_restarts = 3;
 };
 
 struct DataSource {
@@ -465,7 +489,9 @@ Result<std::string> load_engine_plugin(std::string_view path);
 const agent_engine_v1 *find_engine(std::string_view name);
 // Loads every plugin listed in an engines.json manifest: {"engines": [{"path": "agent-engine-llama.so"}, ...]}.
 // Relative paths resolve against the manifest's directory. Returns the loaded engine names; stops at
-// the first plugin that fails to load.
+// the first plugin that fails to load. An entry may set "isolation": "process" | "inprocess" (the
+// EngineIsolation::Default for sessions using it) and "name"; "process" entries are only recorded,
+// not loaded into this process.
 Result<std::vector<std::string>> load_engine_manifest(std::string_view manifest_path);
 
 void register_event_hook(Session &session, EventType type, EventHookFn callback, void *user_data = nullptr);

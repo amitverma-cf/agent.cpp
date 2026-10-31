@@ -13,4 +13,7 @@ bool is_workspace_root(std::string_view workspace_dir, const std::filesystem::pa
 
 bool is_safe_identifier(std::string_view name);
 
+// Absolute path of the running executable; empty if the platform can't tell.
+std::filesystem::path current_executable_path();
+
 } // namespace agent::hal

@@ -58,10 +58,10 @@ constexpr std::string_view kModelValue[] = {"name"};
 constexpr std::string_view kModelBool[] = {"allow-restricted", "keep-file"};
 
 constexpr std::string_view kChatValue[] = {"model", "engine", "resume", "workspace", "ctx", "max-tokens", "engine-options"};
-constexpr std::string_view kChatBool[] = {"yes", "list", "verbose"};
+constexpr std::string_view kChatBool[] = {"yes", "list", "verbose", "inprocess"};
 
 constexpr std::string_view kRunValue[] = {"model", "engine", "workspace", "thread", "set", "resume", "input", "engine-options"};
-constexpr std::string_view kRunBool[] = {"yes"};
+constexpr std::string_view kRunBool[] = {"yes", "inprocess"};
 
 constexpr CommandSpec kCommands[] = {
     {"setup", {}, 0, 0, kSetupValue, kSetupBool},
@@ -194,10 +194,15 @@ std::string usage_text() {
            "  chat                       interactive chat with streaming and tools\n"
            "        [-m|--model NAME|PATH] [-e|--engine NAME|PATH] [--resume ID] [--list]\n"
            "        [--workspace DIR] [--ctx N] [--max-tokens N] [--engine-options JSON] [-y|--yes] [--verbose]\n"
-           "  run <graph.json>           run a declarative graph (not implemented yet)\n"
+           "        [--inprocess]\n"
+           "  run <graph.json>           run a declarative graph\n"
+           "        [-m|--model NAME|PATH] [-e|--engine NAME|PATH] [--workspace DIR] [--thread ID] [--set k=v]\n"
+           "        [--resume ID] [--input TEXT] [--engine-options JSON] [-y|--yes] [--inprocess]\n"
            "  version                    print the version\n"
            "\n"
            "global options: -h|--help, --config-dir DIR (default: $AGENT_CONFIG_DIR or the platform config dir)\n"
+           "engines run in a separate agent-engine-host process (a crash fails the turn, not the CLI);\n"
+           "--inprocess, or \"isolation\": \"inprocess\" in engines.json, loads them into the CLI instead\n"
            "chat commands: /exit /clear /model [NAME] /image <path> [prompt] /open [n] /stats /help\n";
 }
 
@@ -385,7 +390,9 @@ std::string engines_to_json(std::span<const EngineEntry> engines) {
         const auto &e = engines[i];
         out += i ? ",\n    " : "\n    ";
         out += "{\"name\": " + json_str(e.name) + ", \"path\": " + json_str(e.path) + ", \"version\": " + json_str(e.version) +
-               ", \"backend\": " + json_str(e.backend) + ", \"caps\": " + string_array(e.caps) + "}";
+               ", \"backend\": " + json_str(e.backend) + ", \"caps\": " + string_array(e.caps);
+        if (!e.isolation.empty()) out += ", \"isolation\": " + json_str(e.isolation);
+        out += "}";
     }
     out += engines.empty() ? "]\n}\n" : "\n  ]\n}\n";
     return out;
@@ -414,6 +421,9 @@ Result<std::vector<EngineEntry>> engines_from_json(std::string_view json) {
         entry.version = get_str(e, "version");
         entry.backend = get_str(e, "backend", "cpu");
         entry.caps = get_str_array(e, "caps");
+        entry.isolation = get_str(e, "isolation");
+        if (!entry.isolation.empty() && entry.isolation != "process" && entry.isolation != "inprocess")
+            return fail<R>(ErrorCode::ParseError, "engines.json: \"isolation\" must be \"process\" or \"inprocess\"");
         out.push_back(std::move(entry));
     }
     return ok(std::move(out));
@@ -447,6 +457,10 @@ bool remove_engine(std::vector<EngineEntry> &engines, std::string_view name) {
     const auto before = engines.size();
     std::erase_if(engines, [&](const EngineEntry &e) { return e.name == name; });
     return engines.size() != before;
+}
+
+EngineIsolation cli_engine_isolation(bool inprocess_flag, std::string_view entry_isolation) {
+    return inprocess_flag || entry_isolation == "inprocess" ? EngineIsolation::InProcess : EngineIsolation::Process;
 }
 
 const EngineEntry *find_engine_entry(std::span<const EngineEntry> engines, std::string_view name) {

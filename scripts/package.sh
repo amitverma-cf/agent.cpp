@@ -66,7 +66,7 @@ version=$(sed -n 's/^project("agent.cpp" VERSION \([0-9][0-9.]*\).*/\1/p' "$src_
 # Engine selection -> CMake options and build targets.
 cmake_args=(-DCMAKE_BUILD_TYPE=Release -DAGENT_BUILD_CLI=ON -DAGENT_BUILD_HUB=ON -DBUILD_SHARED_LIBS=OFF
     -DAGENT_ENGINE_LLAMA=OFF -DAGENT_ENGINE_ONNX=OFF -DAGENT_ENGINE_SDCPP=OFF -DAGENT_ENGINE_SHERPA=OFF)
-targets=(agent agent_store_sqlite agent_hub agent_cli_bin)
+targets=(agent agent_store_sqlite agent_hub agent_cli_bin agent-engine-host)
 IFS=, read -r -a engine_list <<<"$engines"
 for e in "${engine_list[@]}"; do
     case "$e" in

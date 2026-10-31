@@ -78,6 +78,7 @@ struct ChatState {
     int max_tokens = 512;
     bool verbose = false;
     bool auto_approve = false;
+    bool inprocess = false; // --inprocess: load the engine into the CLI instead of agent-engine-host
     bool interactive = false;
 
     std::vector<std::string> always_allowed;
@@ -154,6 +155,7 @@ Result<void> open_session(ChatState &st) {
     Config cfg;
     cfg.provider = AiProvider::Engine;
     cfg.engine = st.engine.name;
+    cfg.engine_isolation = cli_engine_isolation(st.inprocess, st.engine.isolation);
     cfg.engine_options = st.engine_options;
     cfg.model = st.model.path;
     cfg.workspace_dir = st.workspace;
@@ -350,6 +352,7 @@ int cmd_chat(const CommandLine &cl, Context &ctx) {
 
     st.verbose = cl.has("verbose");
     st.auto_approve = cl.has("yes");
+    st.inprocess = cl.has("inprocess");
     st.interactive = stdin_is_tty();
     st.engine_flag = std::string(cl.get("engine"));
     st.engine_options = std::string(cl.get("engine-options"));
@@ -412,7 +415,8 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
 
     std::printf("agent chat  (%s)\n", st.memory.id.c_str());
     std::printf("  model:     %s  %s\n", st.model.name.c_str(), st.model.path.c_str());
-    std::printf("  engine:    %s %s  %s\n", st.engine.name.c_str(), st.engine.version.c_str(), st.engine.path.c_str());
+    std::printf("  engine:    %s %s  %s  (%s)\n", st.engine.name.c_str(), st.engine.version.c_str(), st.engine.path.c_str(),
+                cli_engine_isolation(st.inprocess, st.engine.isolation) == EngineIsolation::Process ? "agent-engine-host" : "in-process");
     std::printf("  workspace: %s\n", st.workspace.c_str());
     if (!engine_log.empty()) std::printf("  engine log: %s (--verbose prints it here)\n", engine_log.c_str());
     std::string tool_names;

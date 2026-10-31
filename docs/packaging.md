@@ -19,6 +19,7 @@ Installed layout:
 | Path | What |
 |---|---|
 | `bin/agent` | the CLI |
+| `bin/agent-engine-host` | runs engines out of process (found next to `agent`) |
 | `lib/agent/engines/agent-engine-*.so` | engine plugins, plus the runtime libraries they load through their `$ORIGIN` RPATH (`libonnxruntime.so.1`, `libsherpa-onnx-c-api.so`, ...) |
 | `lib/libagent.a` (or `.so`) | the library |
 | `lib/libagent_store_sqlite.a`, `lib/libagent_hub.a` | the optional SQLite store and Hugging Face hub libraries |
@@ -89,7 +90,7 @@ only the installed targets, installs with `--strip` into a staging directory and
 
 ```
 agent-<version>-linux-<arch>[-<backend>]/
-  bin/agent
+  bin/agent, bin/agent-engine-host
   lib/agent/engines/agent-engine-*.so  (+ bundled runtime libraries)
   share/doc/agent/README.md, LICENSE, cli.md, licenses/<third party>.LICENSE
 ```

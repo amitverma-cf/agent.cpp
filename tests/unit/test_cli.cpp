@@ -188,6 +188,28 @@ TEST_CASE("cli: engines.json round trip and edits", "[cli]") {
     CHECK_FALSE(engines_from_json(R"({"plugins": []})").ok);
 }
 
+TEST_CASE("cli: engines run out of process unless --inprocess or engines.json say otherwise", "[cli]") {
+    CHECK(cli_engine_isolation(false, "") == agent::EngineIsolation::Process);
+    CHECK(cli_engine_isolation(false, "process") == agent::EngineIsolation::Process);
+    CHECK(cli_engine_isolation(false, "inprocess") == agent::EngineIsolation::InProcess);
+    CHECK(cli_engine_isolation(true, "process") == agent::EngineIsolation::InProcess);
+
+    EngineEntry trusted{"llama", "/a/agent-engine-llama.so", "1", {"text_gen"}, "cpu"};
+    trusted.isolation = "inprocess";
+    const std::vector<EngineEntry> engines = {trusted};
+    auto back = engines_from_json(engines_to_json(engines));
+    REQUIRE(back.ok);
+    CHECK(back.value[0].isolation == "inprocess");
+    CHECK_FALSE(engines_from_json(R"({"engines": [{"path": "a.so", "isolation": "maybe"}]})").ok);
+
+    auto chat = parse_command_line(std::vector<std::string_view>{"chat", "--inprocess"});
+    REQUIRE(chat.ok);
+    CHECK(chat.value.has("inprocess"));
+    auto run = parse_command_line(std::vector<std::string_view>{"run", "g.json", "--inprocess"});
+    REQUIRE(run.ok);
+    CHECK(run.value.has("inprocess"));
+}
+
 TEST_CASE("cli: model spec resolution", "[cli]") {
     const std::vector<ModelRef> catalog = {{"stories260K", "/models/stories260K.gguf"},
                                            {"sd-turbo", "/models/sd-turbo.safetensors"},

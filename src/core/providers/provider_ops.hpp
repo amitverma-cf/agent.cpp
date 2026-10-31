@@ -29,6 +29,9 @@ bool supports_parallel(const Session &session);
 // and skills for engines without AGENT_ENGINE_FLAG_NATIVE_TOOLS, only the skills for engines that
 // format tools natively, nothing otherwise.
 std::string_view injected_system_text(const Session &session);
+// Process isolation: how many times the session's agent-engine-host was started (1 + restarts);
+// -1 when the engine runs in-process. For tests and diagnostics.
+int engine_host_starts(const Session &session);
 
 // Runs request on the session's engine with an explicit task (one agent_capability bit, e.g.
 // AGENT_CAP_EMBED) instead of the engine's default. The converted request and the response views

@@ -1,3 +1,5 @@
+#include "../engines/engine_registry.hpp"
+#include "../engines/engine_remote.hpp"
 #include "../executor/ambient_turn.hpp"
 #include "../utils/utils.hpp"
 #include "provider_ops.hpp"
@@ -14,11 +16,20 @@ namespace agent::providers {
 
 namespace {
 
+// One of two shapes: an in-process engine (engine + instance) or an engine running in an
+// agent-engine-host child process (remote). name / caps / flags are valid for both.
 struct EngineState {
     const agent_engine_v1 *engine = nullptr;
     void *instance = nullptr;
+    std::shared_ptr<engines::RemoteEngine> remote;
     std::mutex run_mutex; // serializes run() unless the engine sets AGENT_ENGINE_FLAG_CONCURRENT
     std::string output_dir;
+
+    std::string name;
+    uint64_t caps = 0;
+    uint32_t flags = 0;
+
+    bool ready() const { return remote || (engine && instance); }
 
     ~EngineState() {
         if (engine && instance) engine->destroy(instance);
@@ -106,9 +117,9 @@ void forward_progress(void *user_data, uint64_t step, uint64_t total) {
 
 // The task sent with every request: text generation when the engine supports it, otherwise the
 // engine's lowest capability bit (e.g. AGENT_CAP_GENERIC for the onnx engine).
-uint32_t engine_task(const agent_engine_v1 *engine) {
-    if ((engine->caps & AGENT_CAP_TEXT_GEN) || engine->caps == 0) return AGENT_CAP_TEXT_GEN;
-    return static_cast<uint32_t>(engine->caps & (~engine->caps + 1));
+uint32_t engine_task(uint64_t caps) {
+    if ((caps & AGENT_CAP_TEXT_GEN) || caps == 0) return AGENT_CAP_TEXT_GEN;
+    return static_cast<uint32_t>(caps & (~caps + 1));
 }
 
 Result<InferResponse> arena_full() {
@@ -118,35 +129,77 @@ Result<InferResponse> arena_full() {
 } // namespace
 
 Result<void> init_engine(Session &session) {
-    const std::string &spec = session.config.engine;
+    const Config &cfg = session.config;
+    const std::string &spec = cfg.engine;
     if (spec.empty()) return fail(ErrorCode::InvalidConfig, "AiProvider::Engine requires Config::engine (engine name or plugin path).");
 
-    const agent_engine_v1 *engine = nullptr;
-    if (looks_like_path(spec)) {
-        auto loaded = load_engine_plugin(spec);
-        if (!loaded.ok) return fail(loaded.error.code, loaded.error.message);
-        engine = find_engine(loaded.value);
-    } else {
-        engine = find_engine(spec);
-        if (!engine) return fail(ErrorCode::UnsupportedProvider, "No engine named '" + spec + "' is registered.");
-    }
+    // Which plugin file, and where it runs.
+    const bool spec_is_path = looks_like_path(spec);
+    std::string plugin_path = spec_is_path ? spec : std::string();
+    EngineIsolation manifest_isolation = EngineIsolation::Default;
+    if (!spec_is_path) engines::find_plugin_record(spec, plugin_path, manifest_isolation);
+    const EngineIsolation isolation = cfg.engine_isolation != EngineIsolation::Default ? cfg.engine_isolation
+                                      : manifest_isolation == EngineIsolation::Process ? EngineIsolation::Process
+                                                                                       : EngineIsolation::InProcess;
 
     auto state = std::make_shared<EngineState>();
-    state->engine = engine;
-    state->output_dir = (std::filesystem::path(session.config.workspace_dir) / "artifacts").string();
+    state->output_dir = (std::filesystem::path(cfg.workspace_dir) / "artifacts").string();
     std::error_code ec;
     std::filesystem::create_directories(state->output_dir, ec);
     if (ec) return fail(ErrorCode::FilesystemError, "Failed to create " + state->output_dir + ": " + ec.message());
 
     std::string config = "{\"model\":\"";
-    utils::escape_json_string(session.config.model, config);
-    config += "\",\"context_window\":" + std::to_string(session.config.context_window);
-    config += ",\"max_tokens\":" + std::to_string(session.config.max_tokens);
-    config += ",\"temperature\":" + std::to_string(session.config.temperature);
-    config += ",\"parallel\":" + std::to_string(session.config.max_parallel_subagents);
+    utils::escape_json_string(cfg.model, config);
+    config += "\",\"context_window\":" + std::to_string(cfg.context_window);
+    config += ",\"max_tokens\":" + std::to_string(cfg.max_tokens);
+    config += ",\"temperature\":" + std::to_string(cfg.temperature);
+    config += ",\"parallel\":" + std::to_string(cfg.max_parallel_subagents);
     config += ",\"options\":";
-    config += session.config.engine_options.empty() ? std::string("{}") : session.config.engine_options;
+    config += cfg.engine_options.empty() ? std::string("{}") : cfg.engine_options;
     config += '}';
+
+    if (isolation == EngineIsolation::Process) {
+        if (plugin_path.empty()) {
+            if (find_engine(spec))
+                return fail(ErrorCode::InvalidConfig, "Engine '" + spec +
+                                                          "' is linked into this process (register_engine); process isolation needs a "
+                                                          "plugin file. Use EngineIsolation::InProcess or a plugin path.");
+            return fail(ErrorCode::UnsupportedProvider, "No engine named '" + spec + "' is registered.");
+        }
+        engines::RemoteOptions opts;
+        opts.host_path = engines::resolve_engine_host_path(cfg.engine_host_path);
+        opts.plugin_path = plugin_path;
+        opts.create_config = std::move(config);
+        opts.timeout_ms = cfg.engine_timeout_ms;
+        opts.cancel_grace_ms = cfg.engine_cancel_grace_ms;
+        opts.max_restarts = cfg.engine_max_restarts;
+        opts.logger = cfg.logger;
+        opts.logger_user_data = cfg.logger_user_data;
+        auto remote = engines::start_remote_engine(std::move(opts));
+        if (!remote.ok) return fail(remote.error.code, remote.error.message);
+        state->remote = std::move(remote.value);
+        const engines::RemoteInfo &info = engines::remote_info(*state->remote);
+        state->name = info.name;
+        state->caps = info.caps;
+        state->flags = info.flags;
+        session.provider_state = state;
+        utils::log(session, LogLevel::Info, "Engine '" + info.name + "' " + info.version + " loaded in agent-engine-host.");
+        return ok();
+    }
+
+    const agent_engine_v1 *engine = spec_is_path ? nullptr : find_engine(spec);
+    if (!engine && !plugin_path.empty()) {
+        // A path, or a manifest entry marked "process" that this session runs in-process anyway.
+        auto loaded = load_engine_plugin(plugin_path);
+        if (!loaded.ok) return fail(loaded.error.code, loaded.error.message);
+        engine = find_engine(loaded.value);
+    }
+    if (!engine) return fail(ErrorCode::UnsupportedProvider, "No engine named '" + spec + "' is registered.");
+
+    state->engine = engine;
+    state->name = engine->name;
+    state->caps = engine->caps;
+    state->flags = engine->flags;
 
     char err[512] = {0};
     if (engine->create(to_c(config), &state->instance, err, sizeof(err)) != AGENT_OK || !state->instance) {
@@ -161,12 +214,72 @@ Result<void> init_engine(Session &session) {
 
 namespace {
 
+// Copies a response (engine-owned, or views into the remote engine's receive buffer) into arena.
+// Text parts are concatenated into content; file parts become media; tensor parts become tensors.
+Result<InferResponse> to_infer_response(const agent_response &resp, Arena &arena) {
+    size_t text_bytes = 0, n_tensors = 0, n_media = 0;
+    for (size_t i = 0; i < resp.message.n_parts; ++i) {
+        const agent_part &pt = resp.message.parts[i];
+        if (pt.kind == AGENT_PART_TEXT) text_bytes += pt.text.size;
+        else if (pt.kind == AGENT_PART_FILE) ++n_media;
+        else if (pt.kind == AGENT_PART_TENSOR) ++n_tensors;
+    }
+
+    MessageView out{};
+    out.role = "assistant";
+    char *text = static_cast<char *>(arena.allocate(text_bytes + 1, 1));
+    auto tensors = arena.allocate_span<TensorView>(n_tensors);
+    auto media = arena.allocate_span<MediaView>(n_media);
+    auto calls = arena.allocate_span<ToolCallView>(resp.message.n_tool_calls);
+    bool overflow = !text || tensors.size() != n_tensors || media.size() != n_media || calls.size() != resp.message.n_tool_calls;
+
+    size_t off = 0, t = 0, m = 0;
+    for (size_t i = 0; !overflow && i < resp.message.n_parts; ++i) {
+        const agent_part &pt = resp.message.parts[i];
+        if (pt.kind == AGENT_PART_TEXT) {
+            if (pt.text.size) std::memcpy(text + off, pt.text.data, pt.text.size);
+            off += pt.text.size;
+        } else if (pt.kind == AGENT_PART_FILE) {
+            media[m++] = MediaView{arena.allocate_string(from_c(pt.path)), arena.allocate_string(from_c(pt.mime))};
+        } else if (pt.kind == AGENT_PART_TENSOR) {
+            auto shape = arena.allocate_span<int64_t>(pt.ndim);
+            auto *bytes = static_cast<uint8_t *>(arena.allocate(pt.size ? pt.size : 1, alignof(std::max_align_t)));
+            if (shape.size() != pt.ndim || !bytes) {
+                overflow = true;
+                break;
+            }
+            if (pt.ndim) std::memcpy(shape.data(), pt.shape, pt.ndim * sizeof(int64_t));
+            if (pt.size) std::memcpy(bytes, pt.data, pt.size);
+            tensors[t++] = TensorView{.name = arena.allocate_string(from_c(pt.name)),
+                                      .dtype = from_c_dtype(pt.dtype),
+                                      .shape = shape,
+                                      .data = std::span<const uint8_t>(bytes, pt.size)};
+        }
+    }
+    for (size_t j = 0; !overflow && j < resp.message.n_tool_calls; ++j) {
+        const agent_tool_call &c = resp.message.tool_calls[j];
+        calls[j] = ToolCallView{arena.allocate_string(from_c(c.id)), arena.allocate_string(from_c(c.name)),
+                                arena.allocate_string(from_c(c.arguments))};
+    }
+    const agent_usage usage = resp.usage;
+    if (overflow) return arena_full();
+
+    out.content = std::string_view(text, off);
+    out.tool_calls = calls;
+    out.tensors = tensors;
+    out.media = media;
+    return ok(InferResponse{.message = out,
+                            .usage = TokenUsage{.prompt_tokens = usage.prompt_tokens,
+                                                .completion_tokens = usage.completion_tokens,
+                                                .total_tokens = usage.prompt_tokens + usage.completion_tokens},
+                            .output_tensors = tensors});
+}
+
 // task == 0: the engine's default task (engine_task()). The request and response live in arena.
 Result<InferResponse> run_engine(Session &session, uint32_t task, const InferRequest &request, Arena &arena) {
     auto *state = static_cast<EngineState *>(session.provider_state.get());
-    if (!state || !state->instance) return fail<InferResponse>(ErrorCode::ProviderInitFailed, "Engine not initialized.");
-    const agent_engine_v1 *engine = state->engine;
-    if (task == 0) task = engine_task(engine);
+    if (!state || !state->ready()) return fail<InferResponse>(ErrorCode::ProviderInitFailed, "Engine not initialized.");
+    if (task == 0) task = engine_task(state->caps);
 
     // --- request: MessageView -> agent_message (arena-backed, zero-copy for strings/tensors) ---
     auto msgs = arena.allocate_span<agent_message>(request.messages.size());
@@ -222,7 +335,17 @@ Result<InferResponse> run_engine(Session &session, uint32_t task, const InferReq
                       .user_data = &cb_ctx,
                       .cancel = request.cancel};
 
+    // --- process isolation: the same request over IPC; the response views live in the remote's buffers ---
+    if (state->remote) {
+        std::lock_guard<std::mutex> lk(engines::remote_mutex(*state->remote));
+        agent_response resp{};
+        if (auto r = engines::remote_run(*state->remote, req, arena, resp); !r.ok)
+            return fail<InferResponse>(r.error.code, r.error.message);
+        return to_infer_response(resp, arena);
+    }
+
     // --- run, then copy the engine-owned response into the arena before freeing it ---
+    const agent_engine_v1 *engine = state->engine;
     std::unique_lock<std::mutex> lk(state->run_mutex, std::defer_lock);
     if (!(engine->flags & AGENT_ENGINE_FLAG_CONCURRENT)) lk.lock();
 
@@ -232,66 +355,9 @@ Result<InferResponse> run_engine(Session &session, uint32_t task, const InferReq
         return fail<InferResponse>(rc == AGENT_ERR_CANCELLED ? ErrorCode::Cancelled : ErrorCode::DecodeFailed,
                                    std::string("Engine '") + engine->name + "': " + (e ? e : "run failed"));
     }
-
-    // Text parts are concatenated into content; file parts become media; tensor parts become tensors.
-    size_t text_bytes = 0, n_tensors = 0, n_media = 0;
-    for (size_t i = 0; i < resp.message.n_parts; ++i) {
-        const agent_part &pt = resp.message.parts[i];
-        if (pt.kind == AGENT_PART_TEXT) text_bytes += pt.text.size;
-        else if (pt.kind == AGENT_PART_FILE) ++n_media;
-        else if (pt.kind == AGENT_PART_TENSOR) ++n_tensors;
-    }
-
-    MessageView out{};
-    out.role = "assistant";
-    char *text = static_cast<char *>(arena.allocate(text_bytes + 1, 1));
-    auto tensors = arena.allocate_span<TensorView>(n_tensors);
-    auto media = arena.allocate_span<MediaView>(n_media);
-    auto calls = arena.allocate_span<ToolCallView>(resp.message.n_tool_calls);
-    bool overflow = !text || tensors.size() != n_tensors || media.size() != n_media || calls.size() != resp.message.n_tool_calls;
-
-    size_t off = 0, t = 0, m = 0;
-    for (size_t i = 0; !overflow && i < resp.message.n_parts; ++i) {
-        const agent_part &pt = resp.message.parts[i];
-        if (pt.kind == AGENT_PART_TEXT) {
-            if (pt.text.size) std::memcpy(text + off, pt.text.data, pt.text.size);
-            off += pt.text.size;
-        } else if (pt.kind == AGENT_PART_FILE) {
-            media[m++] = MediaView{arena.allocate_string(from_c(pt.path)), arena.allocate_string(from_c(pt.mime))};
-        } else if (pt.kind == AGENT_PART_TENSOR) {
-            auto shape = arena.allocate_span<int64_t>(pt.ndim);
-            auto *bytes = static_cast<uint8_t *>(arena.allocate(pt.size ? pt.size : 1, alignof(std::max_align_t)));
-            if (shape.size() != pt.ndim || !bytes) {
-                overflow = true;
-                break;
-            }
-            if (pt.ndim) std::memcpy(shape.data(), pt.shape, pt.ndim * sizeof(int64_t));
-            if (pt.size) std::memcpy(bytes, pt.data, pt.size);
-            tensors[t++] = TensorView{.name = arena.allocate_string(from_c(pt.name)),
-                                      .dtype = from_c_dtype(pt.dtype),
-                                      .shape = shape,
-                                      .data = std::span<const uint8_t>(bytes, pt.size)};
-        }
-    }
-    for (size_t j = 0; !overflow && j < resp.message.n_tool_calls; ++j) {
-        const agent_tool_call &c = resp.message.tool_calls[j];
-        calls[j] = ToolCallView{arena.allocate_string(from_c(c.id)), arena.allocate_string(from_c(c.name)),
-                                arena.allocate_string(from_c(c.arguments))};
-    }
-    const agent_usage usage = resp.usage;
+    auto out = to_infer_response(resp, arena);
     engine->free_response(state->instance, &resp);
-    lk = {};
-    if (overflow) return arena_full();
-
-    out.content = std::string_view(text, off);
-    out.tool_calls = calls;
-    out.tensors = tensors;
-    out.media = media;
-    return ok(InferResponse{.message = out,
-                            .usage = TokenUsage{.prompt_tokens = usage.prompt_tokens,
-                                                .completion_tokens = usage.completion_tokens,
-                                                .total_tokens = usage.prompt_tokens + usage.completion_tokens},
-                            .output_tensors = tensors});
+    return out;
 }
 
 } // namespace
@@ -305,32 +371,43 @@ Result<InferResponse> infer_task(Session &session, uint32_t task, const InferReq
         return fail<InferResponse>(ErrorCode::UnsupportedProvider,
                                    "This task needs an engine provider (Config::provider = AiProvider::Engine).");
     auto *state = static_cast<EngineState *>(session.provider_state.get());
-    if (!state || !state->instance) return fail<InferResponse>(ErrorCode::ProviderInitFailed, "Engine not initialized.");
+    if (!state || !state->ready()) return fail<InferResponse>(ErrorCode::ProviderInitFailed, "Engine not initialized.");
     if (task == 0 || (task & (task - 1)) != 0)
         return fail<InferResponse>(ErrorCode::InvalidConfig, "infer_task: task must be one capability bit.");
-    if ((state->engine->caps & task) == 0)
+    if ((state->caps & task) == 0)
         return fail<InferResponse>(ErrorCode::UnsupportedProvider,
-                                   std::string("Engine '") + state->engine->name + "' does not declare the requested capability.");
+                                   "Engine '" + state->name + "' does not declare the requested capability.");
     return run_engine(session, task, request, arena);
 }
 
 bool supports_parallel(const Session &session) {
     if (session.config.provider != AiProvider::Engine) return false;
     auto *state = static_cast<EngineState *>(session.provider_state.get());
-    return state && (state->engine->flags & AGENT_ENGINE_FLAG_CONCURRENT);
+    // Process isolation serializes requests per host (v1), so parallel branches would only queue.
+    return state && !state->remote && (state->flags & AGENT_ENGINE_FLAG_CONCURRENT);
 }
 
 std::string_view injected_system_text(const Session &session) {
     if (session.config.provider != AiProvider::Engine) return {};
     auto *state = static_cast<EngineState *>(session.provider_state.get());
     if (!state) return {};
-    return (state->engine->flags & AGENT_ENGINE_FLAG_NATIVE_TOOLS) ? std::string_view(session.skills_system_prompt)
-                                                                   : std::string_view(session.tools_system_prompt);
+    return (state->flags & AGENT_ENGINE_FLAG_NATIVE_TOOLS) ? std::string_view(session.skills_system_prompt)
+                                                           : std::string_view(session.tools_system_prompt);
+}
+
+int engine_host_starts(const Session &session) {
+    if (session.config.provider != AiProvider::Engine) return -1;
+    auto *state = static_cast<EngineState *>(session.provider_state.get());
+    if (!state || !state->remote) return -1;
+    std::lock_guard<std::mutex> lk(engines::remote_mutex(*state->remote));
+    return engines::remote_start_count(*state->remote);
 }
 
 Result<int> count_tokens_engine(Session &session, std::string_view text) {
     auto *state = static_cast<EngineState *>(session.provider_state.get());
-    if (!state || !state->engine->count_tokens) return fail<int>(ErrorCode::UnsupportedProvider, "Engine does not count tokens.");
+    if (state && state->remote) return engines::remote_count_tokens(*state->remote, text);
+    if (!state || !state->engine || !state->engine->count_tokens)
+        return fail<int>(ErrorCode::UnsupportedProvider, "Engine does not count tokens.");
     int32_t n = 0;
     if (state->engine->count_tokens(state->instance, to_c(text), &n) != AGENT_OK)
         return fail<int>(ErrorCode::DecodeFailed, "Engine token count failed.");
@@ -339,7 +416,8 @@ Result<int> count_tokens_engine(Session &session, std::string_view text) {
 
 Result<void> clear_kv_cache_engine(Session &session) {
     auto *state = static_cast<EngineState *>(session.provider_state.get());
-    if (!state || !state->engine->reset_cache) return ok();
+    if (state && state->remote) return engines::remote_reset_cache(*state->remote);
+    if (!state || !state->engine || !state->engine->reset_cache) return ok();
     if (state->engine->reset_cache(state->instance) != AGENT_OK) return fail(ErrorCode::DecodeFailed, "Engine cache reset failed.");
     return ok();
 }
