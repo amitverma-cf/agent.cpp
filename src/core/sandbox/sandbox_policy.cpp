@@ -110,7 +110,12 @@ SandboxPolicy engine_policy(const SandboxPolicy &base, const EnginePaths &paths)
     if (!host.empty()) {
         add_file_dirs(p.read_only_paths, host);
         const fs::path prefix = host.parent_path().parent_path();
-        for (const char *lib : {"lib", "lib64"}) push_unique(p.read_only_paths, (prefix / lib).string());
+        // Only directories that exist: a build tree has no ../lib, and warning about it on every
+        // host start is noise.
+        for (const char *lib : {"lib", "lib64"}) {
+            std::error_code ec;
+            if (std::filesystem::is_directory(prefix / lib, ec)) push_unique(p.read_only_paths, (prefix / lib).string());
+        }
     }
     add_file_dirs(p.read_only_paths, paths.plugin_path);
 
