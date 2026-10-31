@@ -145,10 +145,10 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [x] `engines/trellis`: TRELLIS.2 image → GLB (coarse path verified on CPU)
 - [x] `cmake --install` / `find_package(agent-cpp)` + Linux release tarball script ([docs/packaging.md](packaging.md))
 - [x] OS sandbox on Linux: Landlock + seccomp + rlimits + new session for the engine host (default on, no network) and `run_command` (default on), opt-in for MCP servers; macOS profile and Windows Job Object written, untested ([docs/security-sandbox.md](security-sandbox.md)). Fixes [LIMITATIONS](LIMITATIONS.md) §2 on Linux
+- [x] Explicit task on the public API (`InferRequest::task`, `run_task`, `Config::default_task`) instead of the lowest-capability-bit heuristic (still the automatic default)
 
 **Next up** (in order):
 - [ ] Engine host v2: concurrent requests (keep llama continuous batching under process isolation), shared memory for tensors/media
-- [ ] Explicit task on the public API (`InferRequest::task` / `run_task`) instead of the lowest-capability-bit heuristic
 - [x] Model registry with RAM/VRAM budget and LRU unload (`ModelRegistry`, `acquire_model` leases, `GraphNode::model`, CLI `memory_budget_mb`; see [docs/api/models.md](api/models.md))
 - [ ] ABI v2: `struct_size` fields for compatible growth (after the engine host lands)
 - [x] `CheckpointerOps` + persisted event log; per-branch checkpoints and interrupts in parallel fan-outs (SQLite checkpointer, background Async writer, `fork_graph_run`, nested fan-outs share the worker slots)

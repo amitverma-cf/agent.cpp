@@ -35,7 +35,7 @@ Status as of 2026-10-31. Each entry says what breaks, why, and the planned fix. 
 
 | Limitation | Fix |
 |---|---|
-| The task for non-chat engines is inferred as "TEXT_GEN, else the lowest capability bit". Multi-capability engines (sherpa: ASR+TTS) route by content as a workaround. | Explicit task on the public API (e.g. `InferRequest::task`, `run_task(...)`), which already exists internally as `providers::infer_task`. |
+| ~~The task for non-chat engines is inferred as "TEXT_GEN, else the lowest capability bit".~~ **Resolved**: `InferRequest::task`, `agent::run_task(session, task, request)` and `Config::default_task` (for `run_turn`) pick the task explicitly; 0 keeps the automatic rule. | sherpa still routes by content when no task is set. |
 | `agent_engine_v1` has no struct-size field, so it can't grow compatibly. | Add `struct_size` to the request/response/engine structs in ABI v2. |
 | Cancel granularity differs per engine: ONNX only before `Run()`, llama per token, sd.cpp per step, sherpa per sentence. | Document per engine. Under process isolation a cancel the engine doesn't honour within `engine_cancel_grace_ms` kills the host (hard cancel). |
 

@@ -123,6 +123,17 @@ uint32_t engine_task(uint64_t caps) {
     return static_cast<uint32_t>(caps & (~caps + 1));
 }
 
+// An explicit task (InferRequest::task, Config::default_task, infer_task) must be one capability bit
+// the engine declares.
+Result<void> check_task(const EngineState &state, uint32_t task) {
+    if (task == 0 || (task & (task - 1)) != 0)
+        return fail(ErrorCode::InvalidConfig, "Engine task must be exactly one AGENT_CAP_* bit (got " + std::to_string(task) + ").");
+    if ((state.caps & task) == 0)
+        return fail(ErrorCode::UnsupportedProvider,
+                    "Engine '" + state.name + "' does not declare the requested capability (task " + std::to_string(task) + ").");
+    return ok();
+}
+
 Result<InferResponse> arena_full() {
     return fail<InferResponse>(ErrorCode::DecodeFailed, "Arena capacity exhausted. Increase Config::arena_capacity.");
 }
@@ -189,6 +200,8 @@ Result<void> init_engine(Session &session) {
         state->name = info.name;
         state->caps = info.caps;
         state->flags = info.flags;
+        if (cfg.default_task)
+            if (auto t = check_task(*state, cfg.default_task); !t.ok) return fail(t.error.code, "Config::default_task: " + t.error.message);
         session.provider_state = state;
         utils::log(session, LogLevel::Info, "Engine '" + info.name + "' " + info.version + " loaded in agent-engine-host.");
         return ok();
@@ -207,6 +220,8 @@ Result<void> init_engine(Session &session) {
     state->name = engine->name;
     state->caps = engine->caps;
     state->flags = engine->flags;
+    if (cfg.default_task)
+        if (auto t = check_task(*state, cfg.default_task); !t.ok) return fail(t.error.code, "Config::default_task: " + t.error.message);
 
     char err[512] = {0};
     if (engine->create(to_c(config), &state->instance, err, sizeof(err)) != AGENT_OK || !state->instance) {
@@ -282,7 +297,8 @@ Result<InferResponse> to_infer_response(const agent_response &resp, Arena &arena
                             .output_tensors = tensors});
 }
 
-// task == 0: the engine's default task (engine_task()). The request and response live in arena.
+// task == 0: automatic (engine_task()); otherwise an already checked capability bit. The request and
+// response live in arena.
 Result<InferResponse> run_engine(Session &session, uint32_t task, const InferRequest &request, Arena &arena) {
     auto *state = static_cast<EngineState *>(session.provider_state.get());
     if (!state || !state->ready()) return fail<InferResponse>(ErrorCode::ProviderInitFailed, "Engine not initialized.");
@@ -370,7 +386,9 @@ Result<InferResponse> run_engine(Session &session, uint32_t task, const InferReq
 } // namespace
 
 Result<InferResponse> infer_engine(Session &session, const InferRequest &request) {
-    return run_engine(session, 0, request, ambient::current_arena(session));
+    const uint32_t task = request.task ? request.task : session.config.default_task;
+    if (task == 0) return run_engine(session, 0, request, ambient::current_arena(session));
+    return infer_task(session, task, request, ambient::current_arena(session));
 }
 
 Result<InferResponse> infer_task(Session &session, uint32_t task, const InferRequest &request, Arena &arena) {
@@ -379,11 +397,7 @@ Result<InferResponse> infer_task(Session &session, uint32_t task, const InferReq
                                    "This task needs an engine provider (Config::provider = AiProvider::Engine).");
     auto *state = static_cast<EngineState *>(session.provider_state.get());
     if (!state || !state->ready()) return fail<InferResponse>(ErrorCode::ProviderInitFailed, "Engine not initialized.");
-    if (task == 0 || (task & (task - 1)) != 0)
-        return fail<InferResponse>(ErrorCode::InvalidConfig, "infer_task: task must be one capability bit.");
-    if ((state->caps & task) == 0)
-        return fail<InferResponse>(ErrorCode::UnsupportedProvider,
-                                   "Engine '" + state->name + "' does not declare the requested capability.");
+    if (auto t = check_task(*state, task); !t.ok) return fail<InferResponse>(t.error.code, t.error.message);
     return run_engine(session, task, request, arena);
 }
 
