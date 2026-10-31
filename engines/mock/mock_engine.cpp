@@ -1,0 +1,100 @@
+// Reference engine plugin used by the test suite. Shows the minimum an engine implements.
+//   - echoes the last user text back as "echo: <text>"
+//   - a user message starting with "call:<tool>" produces a tool call to <tool> with {}
+//   - streams the reply as one text chunk when on_chunk is set
+//   - a model path of "fail" makes create() fail
+
+#include <agent-cpp/engine_abi.h>
+
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <string_view>
+
+namespace {
+
+struct MockInstance {
+    std::string model;
+    std::string reply;
+    std::string tool_name;
+    agent_part part{};
+    agent_tool_call call{};
+    std::string error;
+};
+
+std::string_view sv(agent_str s) { return s.data ? std::string_view(s.data, s.size) : std::string_view(); }
+
+int32_t mock_create(agent_str config_json, void **out_instance, char *err, size_t err_cap) {
+    std::string_view cfg = sv(config_json);
+    if (cfg.find("\"model\":\"fail\"") != std::string_view::npos) {
+        std::snprintf(err, err_cap, "mock: refusing model 'fail'");
+        return AGENT_ERR_MODEL_LOAD_FAILED;
+    }
+    auto *inst = new MockInstance();
+    inst->model = std::string(cfg);
+    *out_instance = inst;
+    return AGENT_OK;
+}
+
+void mock_destroy(void *instance) { delete static_cast<MockInstance *>(instance); }
+
+int32_t mock_run(void *instance, const agent_request *req, agent_response *resp) {
+    auto *inst = static_cast<MockInstance *>(instance);
+    if (req->task != AGENT_CAP_TEXT_GEN) {
+        inst->error = "mock: only TEXT_GEN is supported";
+        return AGENT_ERR_UNSUPPORTED;
+    }
+
+    std::string_view last_user;
+    for (size_t i = 0; i < req->n_messages; ++i) {
+        const agent_message &m = req->messages[i];
+        if (sv(m.role) != "user") continue;
+        for (size_t p = 0; p < m.n_parts; ++p)
+            if (m.parts[p].kind == AGENT_PART_TEXT) last_user = sv(m.parts[p].text);
+    }
+
+    *resp = agent_response{};
+    resp->message.role = agent_str{"assistant", 9};
+    resp->usage = agent_usage{static_cast<int32_t>(last_user.size()), 1};
+
+    const bool after_tool = req->n_messages > 0 && sv(req->messages[req->n_messages - 1].role) == "tool";
+    if (!after_tool && last_user.starts_with("call:")) {
+        inst->tool_name = std::string(last_user.substr(5));
+        inst->call = agent_tool_call{agent_str{"call_0", 6}, agent_str{inst->tool_name.data(), inst->tool_name.size()}, agent_str{"{}", 2}};
+        resp->message.tool_calls = &inst->call;
+        resp->message.n_tool_calls = 1;
+        return AGENT_OK;
+    }
+
+    inst->reply = after_tool ? "tool done" : "echo: " + std::string(last_user);
+    if (req->on_chunk) req->on_chunk(req->user_data, AGENT_CHUNK_TEXT, inst->reply.data(), inst->reply.size());
+    inst->part = agent_part{};
+    inst->part.kind = AGENT_PART_TEXT;
+    inst->part.text = agent_str{inst->reply.data(), inst->reply.size()};
+    resp->message.parts = &inst->part;
+    resp->message.n_parts = 1;
+    return AGENT_OK;
+}
+
+void mock_free_response(void *, agent_response *resp) { *resp = agent_response{}; }
+
+const char *mock_last_error(void *instance) { return static_cast<MockInstance *>(instance)->error.c_str(); }
+
+const agent_engine_v1 kMockEngine = {
+    AGENT_ENGINE_ABI_VERSION,
+    "mock",
+    "1.0",
+    AGENT_CAP_TEXT_GEN | AGENT_CAP_TOOL_CALL,
+    0,
+    mock_create,
+    mock_destroy,
+    mock_run,
+    mock_free_response,
+    mock_last_error,
+    nullptr,
+    nullptr,
+};
+
+} // namespace
+
+extern "C" AGENT_ENGINE_EXPORT const agent_engine_v1 *agent_engine_get_v1(void) { return &kMockEngine; }

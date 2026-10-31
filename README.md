@@ -97,6 +97,7 @@ ctest --test-dir build --output-on-failure
 | Mock | `AiProvider::Mock` | Fixed response; always available; for testing |
 | llama.cpp | `AiProvider::LlamaCpp` | Local GGUF models; offline |
 | ONNX Runtime | `AiProvider::OnnxRuntime` | Multimodal; `.onnx` models |
+| Engine plugin | `AiProvider::Engine` | Any engine shared library built against `engine_abi.h` (see [docs/api/engines.md](docs/api/engines.md)) |
 
 ---
 

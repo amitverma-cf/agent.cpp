@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+struct agent_engine_v1; // <agent-cpp/engine_abi.h>
+
 namespace agent {
 
 // -------------------------- Errors --------------------------
@@ -218,7 +220,8 @@ struct MemoryConfig {
     int flush_interval_ms = 500;
 };
 
-enum class AiProvider { Mock, LlamaCpp, OnnxRuntime };
+// Engine = an engine plugin (see <agent-cpp/engine_abi.h>), selected by Config::engine.
+enum class AiProvider { Mock, LlamaCpp, OnnxRuntime, Engine };
 
 enum class EventType {
     OnTurnStart,
@@ -322,6 +325,11 @@ struct Config {
     AiProvider provider = AiProvider::Mock;
     std::string model;
     std::string workspace_dir;
+
+    // AiProvider::Engine only: a registered engine name, or a path to an engine shared library.
+    std::string engine;
+    // AiProvider::Engine only: JSON object forwarded to the engine as "options" in its create() config.
+    std::string engine_options;
     MemoryConfig memory;
     std::vector<Tool> tools;
 
@@ -468,6 +476,13 @@ Tool bind_data_source_tool(Session &session, std::shared_ptr<DataSource> source,
 Result<void> load_skills_dir(Session &session, std::string_view skills_dir);
 // Full SKILL.md content for a loaded skill, read on demand (not kept in context otherwise).
 Result<std::string> read_skill_body(Session &session, std::string_view name);
+
+// Engine plugins. Engines are process-wide and stay loaded until exit.
+// register_engine adds an engine linked into the host; load_engine_plugin dlopens a shared library
+// exporting agent_engine_get_v1 and returns the engine's name.
+Result<void> register_engine(const agent_engine_v1 *engine);
+Result<std::string> load_engine_plugin(std::string_view path);
+const agent_engine_v1 *find_engine(std::string_view name);
 
 void register_event_hook(Session &session, EventType type, EventHookFn callback, void *user_data = nullptr);
 void trigger_event(Session &session, EventType type, std::span<const uint8_t> payload);

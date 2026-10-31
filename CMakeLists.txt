@@ -37,6 +37,8 @@ add_library(agent
     src/core/data/data_source_registry.cpp
     src/core/skills/skills_registry.cpp
     src/core/providers/provider_ops.cpp
+    src/core/providers/engine_provider.cpp
+    src/core/engines/engine_registry.cpp
     src/core/providers/llama_provider.cpp
     src/core/providers/onnx_provider.cpp
     src/core/utils/utils.cpp
@@ -49,6 +51,7 @@ add_library(agent
     src/hal/path.cpp
     src/hal/process.cpp
     src/hal/log_file.cpp
+    src/hal/dylib.cpp
     vendor/simdjson/singleheader/simdjson.cpp
 )
 target_include_directories(agent PUBLIC
@@ -138,6 +141,8 @@ target_link_libraries(agent_cli PRIVATE agent agent_store_sqlite)
 target_compile_options(agent_cli PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 target_link_options(agent_cli PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 
+add_subdirectory(engines/mock)
+
 enable_testing()
 add_executable(test_agent
     vendor/catch2/catch_amalgamated.cpp
@@ -158,6 +163,7 @@ add_executable(test_agent
     tests/unit/test_arena.cpp
     tests/unit/test_skills.cpp
     tests/unit/test_permissions.cpp
+    tests/unit/test_engines.cpp
     tests/integration/test_session.cpp
     tests/integration/test_flow.cpp
 )
@@ -171,6 +177,8 @@ set_source_files_properties(
                COMPILE_DEFINITIONS "CATCH_AMALGAMATED_CUSTOM_MAIN"
 )
 target_link_libraries(test_agent PRIVATE agent agent_store_sqlite)
+target_compile_definitions(test_agent PRIVATE AGENT_TEST_MOCK_ENGINE_PATH="$<TARGET_FILE:agent-engine-mock>")
+add_dependencies(test_agent agent-engine-mock)
 target_compile_options(test_agent PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 target_link_options(test_agent PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 
