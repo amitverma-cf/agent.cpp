@@ -187,8 +187,9 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [x] Model registry from `models.json`: lazy load, LRU unload under a RAM/VRAM budget (see [docs/api/models.md](api/models.md))
   - [ ] VRAM accounting beyond `gpu_layers > 0` (GPU query, partial offload); per-model RSS for out-of-process engines
 - [x] `StoreOps` key-value store + in-memory default
-- [ ] `CheckpointerOps` / `VectorStoreOps` + in-memory implementations
-  - [x] `VectorStoreOps` + `in_memory_vector_store()` (brute-force cosine); sqlite-vec implementation in `agent-store-sqlite` (see [docs/api/rag.md](api/rag.md)). `CheckpointerOps` still open
+- [x] `CheckpointerOps` / `VectorStoreOps` + in-memory implementations
+  - [x] `VectorStoreOps` + `in_memory_vector_store()` (brute-force cosine); sqlite-vec implementation in `agent-store-sqlite` (see [docs/api/rag.md](api/rag.md))
+  - [x] `CheckpointerOps` + `in_memory_checkpointer()`; SQLite implementation in `agent-store-sqlite` (see [docs/api/graph.md](api/graph.md#checkpointers))
 - [x] Media on messages (`Media`/`MediaView`, `run_turn_with_media`); engine file outputs land in `<workspace>/artifacts/` and persist with history
 - [x] Run requests with cancel (`request_cancel`/`clear_cancel`), progress (`Config::on_progress`) and chunk streaming
 - [x] Out-of-process engines: `agent-engine-host` serves one plugin over a binary pipe protocol; `Config::engine_isolation` / engines.json `"isolation"`; crashes become `ErrorCode::EngineCrashed` with automatic restart (rate-limited), per-request watchdog, cancel escalates to kill; CLI default (see [docs/api/engines.md](api/engines.md#isolation))
@@ -205,9 +206,10 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
   - [x] v1: in-memory per-run `GraphRun::events` (node start/end, state writes, tool calls, interrupts, checkpoints) + existing `EventHook`s; not yet persisted or used for replay
 - [x] Scoped state (`temp:`/session/`user:`/`app:`)
 - [ ] Checkpointing by `thread_id` through `CheckpointerOps`; resume / replay; durability modes
-  - [x] v1: checkpoints by `thread_id` through `StoreOps`, `resume_graph`, durability modes `Exit`/`Async`/`Sync`; `CheckpointerOps` and replay still open
+  - [x] v1: checkpoints by `thread_id` through `StoreOps`, `resume_graph`, durability modes `Exit`/`Async`/`Sync`
+  - [x] v2: `CheckpointerOps` (`GraphRun::checkpointer`; the StoreOps layout stays the default), real `Async` durability (background writer, bounded queue, flushed on return); replay still open
 - [ ] `agent-store-sqlite`: SQLite checkpointer/state + sqlite-vec vector store (CLI and opt-in)
-  - [x] sqlite-vec vector store (`store::sqlite_vector_store()`); SQLite checkpointer/state still open
+  - [x] sqlite-vec vector store (`store::sqlite_vector_store()`) and SQLite checkpointer (`store::sqlite_checkpointer()`, WAL); a SQLite `StateStoreOps` is still open (`user:`/`app:` state uses `StoreOps`)
 - [x] **Interrupts** for human approval (reuse the permission `Ask`)
 - [x] Load graphs from `agent.json` (`load_graph_json`, see [docs/api/agent-json.md](api/agent-json.md))
 - [ ] Port skills, permissions, context compression, fs/terminal tools
