@@ -6,14 +6,24 @@
 // protocol in src/core/engines/engine_ipc.hpp. The plugin can segfault, abort() or exit() without
 // taking the parent down: the parent sees the pipe close, reports the exit status and restarts us.
 //
-// Threads: a reader thread pulls frames off the protocol input and turns Cancel into the cancel flag
-// the engine polls (so cancel works while run() is busy); the main thread executes one command at a
-// time. Chunk / progress frames may be written from engine threads; writes are serialized.
+// Threads: a reader thread pulls frames off the protocol input. Run requests go to a pool of worker
+// threads, each executing one run() at a time: up to one worker for ordinary engines, as many as there
+// are requests in flight for AGENT_ENGINE_FLAG_CONCURRENT engines (workers are created on demand and
+// then reused). Cancel <id> sets the cancel flag of that request, so cancel works while run() is busy.
+// Every other command (create, token count, cache reset, destroy, shutdown) runs on the main thread in
+// arrival order. Frames are written from several threads (workers, engine callbacks); writes are
+// serialized.
+//
+// Large tensor / BYTES payloads arrive and leave in shared-memory segments (engine_shm.hpp), which both
+// sides map once and reuse: each core call slot has a request segment (mapped here on first use, dropped
+// when the core retires it), and response segments created here are reused once the core has sent
+// Release for the response that used them. The core removes the names once both sides have them mapped.
 //
 // The engine's own stdout output is redirected to stderr (stdout carries the protocol), and stdin
 // is replaced by the null device. The parent forwards our stderr to its own.
 
 #include "core/engines/engine_ipc.hpp"
+#include "core/engines/engine_shm.hpp"
 #include "hal/dylib.hpp"
 #include "hal/platform.hpp"
 
@@ -26,9 +36,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #if defined(AGENT_HAL_WINDOWS)
 #ifndef NOMINMAX
@@ -46,7 +59,11 @@
 namespace {
 
 namespace ipc = agent::engine_ipc;
+namespace shm = agent::engine_shm;
 using ipc::Msg;
+
+// Worker threads for AGENT_ENGINE_FLAG_CONCURRENT engines (requests beyond that queue).
+constexpr int kMaxConcurrentRuns = 256;
 
 // ------------------------------------------------------------------ protocol I/O
 
@@ -93,6 +110,8 @@ bool write_all(const void *src, size_t n) {
     }
     return true;
 }
+
+long current_pid() { return static_cast<long>(GetCurrentProcessId()); }
 #else
 int g_in = -1;
 int g_out = -1;
@@ -141,9 +160,13 @@ bool write_all(const void *src, size_t n) {
     }
     return true;
 }
+
+long current_pid() { return static_cast<long>(::getpid()); }
 #endif
 
-std::mutex g_write_mutex;
+// Shared state lives on the heap and is never destroyed: an engine may call exit() on a worker thread,
+// and static destructors must not tear down a mutex or condition variable another thread is blocked on.
+std::mutex &g_write_mutex = *new std::mutex;
 
 // The parent is gone if it stops reading; nothing left to do but leave.
 void send(const std::string &frame) {
@@ -151,43 +174,251 @@ void send(const std::string &frame) {
     if (!write_all(frame.data(), frame.size())) std::_Exit(1);
 }
 
-void send_error(int32_t status, std::string_view message) {
+void send_error(uint64_t id, int32_t status, std::string_view message) {
     thread_local std::string buf;
     buf.clear();
     ipc::Writer w(buf);
-    w.begin(Msg::Error);
+    w.begin(Msg::Error, id);
     w.i32(status);
     w.str(message);
     w.finish();
     send(buf);
 }
 
-void send_empty(Msg type) {
+void send_empty(Msg type, uint64_t id) {
     thread_local std::string buf;
     buf.clear();
     ipc::Writer w(buf);
-    w.begin(type);
+    w.begin(type, id);
     w.finish();
     send(buf);
 }
 
-// ------------------------------------------------------------------ command mailbox
+// ------------------------------------------------------------------ requests
 
-// The parent sends one command at a time and waits for its reply, so one slot is enough; Cancel
-// bypasses it. Buffers are swapped, not copied, so their capacity is reused.
-struct Mailbox {
-    std::mutex mutex;
-    std::condition_variable cv;
-    bool full = false;
-    bool eof = false;
+// One received command. Jobs are pooled: buffers (payload, arena, response encoding) keep their capacity.
+struct Job {
+    uint64_t id = 0;
     Msg type{};
     std::string payload;
+    alignas(4) int32_t cancel = 0; // polled by the engine through agent_request::cancel
+    agent::Arena arena;
+    size_t arena_capacity = 0;
+    std::string out;
+    std::string retire; // a response segment the core should unmap (sent with this job's Response)
 };
 
-Mailbox g_mailbox;
-alignas(4) int32_t g_cancel = 0; // polled by the engine through agent_request::cancel
+// A response segment, reused across responses: busy from the Response that uses it until the core's
+// Release for that request.
+struct ResponseSegment {
+    shm::Segment segment;
+    uint64_t busy_id = 0;
+    bool busy = false;
+};
 
-void set_cancel(int32_t v) { std::atomic_ref<int32_t>(g_cancel).store(v, std::memory_order_relaxed); }
+const agent_engine_v1 *g_engine = nullptr;
+std::atomic<void *> g_instance{nullptr};
+std::atomic<bool> g_shm{false}; // both sides can map shared memory
+int g_max_workers = 1;
+
+std::mutex &g_mutex = *new std::mutex;                             // everything below
+std::condition_variable &g_run_cv = *new std::condition_variable;  // run queue / eof
+std::condition_variable &g_ctl_cv = *new std::condition_variable;  // control queue / eof
+std::condition_variable &g_idle_cv = *new std::condition_variable; // a run finished
+std::deque<Job *> &g_run_queue = *new std::deque<Job *>;
+std::deque<Job *> &g_ctl_queue = *new std::deque<Job *>;
+std::vector<Job *> &g_running = *new std::vector<Job *>;
+std::vector<std::unique_ptr<Job>> &g_jobs = *new std::vector<std::unique_ptr<Job>>; // every job ever created
+std::vector<Job *> &g_free_jobs = *new std::vector<Job *>;
+// Request segments the core announced: each belongs to one of its call slots and is reused for that
+// slot's calls, so it is mapped once and kept until the core retires it.
+std::vector<std::unique_ptr<shm::Segment>> &g_request_segments = *new std::vector<std::unique_ptr<shm::Segment>>;
+std::vector<std::unique_ptr<ResponseSegment>> &g_response_segments = *new std::vector<std::unique_ptr<ResponseSegment>>;
+int g_workers = 0;
+int g_idle_workers = 0;
+bool g_eof = false;
+
+void set_cancel(Job &job, int32_t v) { std::atomic_ref<int32_t>(job.cancel).store(v, std::memory_order_relaxed); }
+
+Job *take_job() { // holds g_mutex
+    if (!g_free_jobs.empty()) {
+        Job *j = g_free_jobs.back();
+        g_free_jobs.pop_back();
+        return j;
+    }
+    return g_jobs.emplace_back(std::make_unique<Job>()).get();
+}
+
+// ------------------------------------------------------------------ engine callbacks
+
+void on_chunk(void *user_data, uint32_t kind, const void *data, size_t size) {
+    thread_local std::string buf;
+    buf.clear();
+    ipc::Writer w(buf);
+    w.begin(Msg::Chunk, static_cast<Job *>(user_data)->id);
+    w.u32(kind);
+    w.blob(data, size);
+    if (w.finish()) send(buf);
+}
+
+void on_progress(void *user_data, uint64_t step, uint64_t total) {
+    thread_local std::string buf;
+    buf.clear();
+    ipc::Writer w(buf);
+    w.begin(Msg::Progress, static_cast<Job *>(user_data)->id);
+    w.u64(step);
+    w.u64(total);
+    w.finish();
+    send(buf);
+}
+
+const char *last_error(void *instance, const char *fallback) {
+    const char *e = instance ? g_engine->last_error(instance) : nullptr;
+    return e && *e ? e : fallback;
+}
+
+// Executes one Run on the calling worker thread.
+void run_job(Job &job) {
+    void *instance = g_instance.load();
+    if (!instance) {
+        send_error(job.id, AGENT_ERR_INIT_FAILED, "agent-engine-host: no engine instance");
+        return;
+    }
+    ipc::Reader r(job.payload.data(), job.payload.size());
+    const agent_str seg_name = r.str();
+    const uint64_t seg_size = r.u64();
+    const agent_str retire = r.str();
+    if (!r.ok()) {
+        send_error(job.id, AGENT_ERR_PARSE, "agent-engine-host: malformed Run frame");
+        return;
+    }
+    const shm::Segment *request_shm = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(g_mutex);
+        if (retire.size) {
+            const std::string_view old(retire.data, retire.size);
+            std::erase_if(g_request_segments, [&](const std::unique_ptr<shm::Segment> &s) { return s->name() == old; });
+        }
+        if (seg_name.size) {
+            const std::string_view name(seg_name.data, seg_name.size);
+            for (const auto &s : g_request_segments)
+                if (s->name() == name) request_shm = s.get();
+            if (!request_shm) {
+                auto seg = std::make_unique<shm::Segment>();
+                if (seg->open(name, static_cast<size_t>(seg_size))) request_shm = g_request_segments.emplace_back(std::move(seg)).get();
+            }
+        }
+    }
+    if (seg_name.size) {
+        if (!request_shm || request_shm->size() < seg_size) {
+            send_error(job.id, AGENT_ERR_INIT_FAILED, "agent-engine-host: cannot map the request's shared memory");
+            return;
+        }
+        r.set_shm(request_shm->data(), static_cast<size_t>(seg_size));
+    }
+    const size_t need = ipc::decode_arena_bound(job.payload.size());
+    if (need > job.arena_capacity) {
+        job.arena_capacity = need * 2;
+        job.arena = agent::Arena(job.arena_capacity);
+    }
+    job.arena.reset();
+    agent_request req{};
+    uint32_t run_flags = 0;
+    if (!r.request(req, run_flags, job.arena)) {
+        send_error(job.id, AGENT_ERR_PARSE, "agent-engine-host: malformed Run frame");
+        return;
+    }
+    req.on_chunk = (run_flags & ipc::kRunStream) ? on_chunk : nullptr;
+    req.on_progress = (run_flags & ipc::kRunProgress) ? on_progress : nullptr;
+    req.user_data = &job;
+    req.cancel = &job.cancel;
+
+    agent_response resp{};
+    resp.struct_size = sizeof(resp);
+    const int32_t rc = g_engine->run(instance, &req, &resp);
+    if (rc != AGENT_OK) {
+        send_error(job.id, rc, last_error(instance, "run failed"));
+        return;
+    }
+
+    // Large output payloads go through a free response segment (a new one when none is big enough;
+    // inline if it can't be created). Marked busy before sending, so the core's Release can't arrive first.
+    ResponseSegment *segment = nullptr;
+    ipc::ShmOut out_shm;
+    job.retire.clear();
+    if (g_shm.load()) {
+        const size_t bytes = ipc::shm_bytes(resp.message, out_shm.threshold);
+        if (bytes) {
+            std::lock_guard<std::mutex> lk(g_mutex);
+            for (const auto &s : g_response_segments)
+                if (!s->busy && s->segment.size() >= bytes && (!segment || s->segment.size() < segment->segment.size())) segment = s.get();
+            if (!segment) {
+                // Replace one free segment that is too small (the core unmaps it when told), then grow.
+                for (auto it = g_response_segments.begin(); it != g_response_segments.end(); ++it)
+                    if (!(*it)->busy) {
+                        job.retire.assign((*it)->segment.name());
+                        shm::unlink(job.retire); // in case the core never mapped it
+                        g_response_segments.erase(it);
+                        break;
+                    }
+                constexpr size_t kGrain = 1u << 20;
+                auto fresh = std::make_unique<ResponseSegment>();
+                if (fresh->segment.create((bytes + kGrain - 1) / kGrain * kGrain, 'h'))
+                    segment = g_response_segments.emplace_back(std::move(fresh)).get();
+            }
+            if (segment) {
+                segment->busy = true;
+                segment->busy_id = job.id;
+                out_shm.base = segment->segment.data();
+                out_shm.size = segment->segment.size();
+            }
+        }
+    }
+    job.out.clear();
+    ipc::Writer w(job.out);
+    w.begin(Msg::Response, job.id);
+    w.str(segment ? segment->segment.name() : std::string_view());
+    w.u64(segment ? segment->segment.size() : 0);
+    w.str(job.retire);
+    w.set_shm(segment ? &out_shm : nullptr);
+    w.response(resp);
+    const bool fits = w.finish();
+    g_engine->free_response(instance, &resp);
+    if (!fits) {
+        if (segment) {
+            std::lock_guard<std::mutex> lk(g_mutex);
+            segment->busy = false;
+        }
+        send_error(job.id, AGENT_ERR_DECODE_FAILED, "agent-engine-host: response exceeds the 1 GiB frame limit");
+        return;
+    }
+    send(job.out);
+}
+
+void worker_main() {
+    for (;;) {
+        Job *job = nullptr;
+        {
+            std::unique_lock<std::mutex> lk(g_mutex);
+            ++g_idle_workers;
+            g_run_cv.wait(lk, [] { return !g_run_queue.empty() || g_eof; });
+            --g_idle_workers;
+            if (g_run_queue.empty()) return; // EOF
+            job = g_run_queue.front();
+            g_run_queue.pop_front();
+            g_running.push_back(job);
+        }
+        run_job(*job);
+        {
+            std::lock_guard<std::mutex> lk(g_mutex);
+            std::erase(g_running, job);
+            g_free_jobs.push_back(job);
+        }
+        g_idle_cv.notify_all();
+    }
+}
+
+// ------------------------------------------------------------------ reader
 
 void reader_main() {
     std::string body;
@@ -198,179 +429,148 @@ void reader_main() {
         if (h.size > ipc::kMaxFrame) break;
         body.resize(h.size);
         if (h.size && !read_exact(body.data(), h.size)) break;
+
+        std::unique_lock<std::mutex> lk(g_mutex);
         if (h.type == Msg::Cancel) {
-            set_cancel(1);
+            for (Job *j : g_running)
+                if (j->id == h.id) set_cancel(*j, 1);
+            for (Job *j : g_run_queue)
+                if (j->id == h.id) set_cancel(*j, 1);
             continue;
         }
-        // Reset in stream order, so a Cancel that follows this Run is never lost.
-        if (h.type == Msg::Run) set_cancel(0);
-        std::unique_lock<std::mutex> lk(g_mailbox.mutex);
-        g_mailbox.cv.wait(lk, [] { return !g_mailbox.full; });
-        g_mailbox.type = h.type;
-        g_mailbox.payload.swap(body);
-        g_mailbox.full = true;
-        g_mailbox.cv.notify_all();
+        if (h.type == Msg::Release) {
+            for (const auto &s : g_response_segments)
+                if (s->busy && s->busy_id == h.id) s->busy = false;
+            continue;
+        }
+        Job *job = take_job();
+        job->id = h.id;
+        job->type = h.type;
+        job->payload.swap(body);
+        set_cancel(*job, 0);
+        if (h.type == Msg::Run) {
+            g_run_queue.push_back(job);
+            // Every queued run gets a worker, up to the engine's limit.
+            if (static_cast<int>(g_run_queue.size()) > g_idle_workers && g_workers < g_max_workers) {
+                ++g_workers;
+                std::thread(worker_main).detach();
+            }
+            g_run_cv.notify_one();
+        } else {
+            g_ctl_queue.push_back(job);
+            g_ctl_cv.notify_one();
+        }
     }
     {
-        std::lock_guard<std::mutex> lk(g_mailbox.mutex);
-        g_mailbox.eof = true;
+        std::lock_guard<std::mutex> lk(g_mutex);
+        g_eof = true;
     }
-    g_mailbox.cv.notify_all();
+    g_run_cv.notify_all();
+    g_ctl_cv.notify_all();
     // EOF means the parent closed the pipe or died. Give an idle main thread time to destroy the
     // engine cleanly; if it is stuck in run(), leave anyway.
     std::this_thread::sleep_for(std::chrono::seconds(2));
     std::_Exit(0);
 }
 
-// ------------------------------------------------------------------ engine callbacks
+// ------------------------------------------------------------------ control commands (main thread)
 
-void on_chunk(void *, uint32_t kind, const void *data, size_t size) {
-    thread_local std::string buf;
-    buf.clear();
-    ipc::Writer w(buf);
-    w.begin(Msg::Chunk);
-    w.u32(kind);
-    w.blob(data, size);
-    if (w.finish()) send(buf);
+// Destroys the instance once no run is using it (false: runs still busy after 2 s).
+bool destroy_instance() {
+    void *instance = g_instance.load();
+    if (!instance) return true;
+    std::unique_lock<std::mutex> lk(g_mutex);
+    if (!g_idle_cv.wait_for(lk, std::chrono::seconds(2), [] { return g_running.empty() && g_run_queue.empty(); })) return false;
+    g_instance.store(nullptr);
+    lk.unlock();
+    g_engine->destroy(instance);
+    return true;
 }
 
-void on_progress(void *, uint64_t step, uint64_t total) {
-    thread_local std::string buf;
-    buf.clear();
-    ipc::Writer w(buf);
-    w.begin(Msg::Progress);
-    w.u64(step);
-    w.u64(total);
-    w.finish();
-    send(buf);
-}
-
-const char *last_error(const agent_engine_v1 *engine, void *instance, const char *fallback) {
-    const char *e = instance ? engine->last_error(instance) : nullptr;
-    return e && *e ? e : fallback;
-}
-
-int serve(const agent_engine_v1 *engine) {
-    void *instance = nullptr;
-    agent::Arena arena;
-    size_t arena_capacity = 0;
-    std::string work;
+int serve() {
     std::string out;
-
     for (;;) {
-        Msg type{};
+        Job *job = nullptr;
         {
-            std::unique_lock<std::mutex> lk(g_mailbox.mutex);
-            g_mailbox.cv.wait(lk, [] { return g_mailbox.full || g_mailbox.eof; });
-            if (!g_mailbox.full) break; // EOF
-            type = g_mailbox.type;
-            work.swap(g_mailbox.payload);
-            g_mailbox.full = false;
-            g_mailbox.cv.notify_all();
+            std::unique_lock<std::mutex> lk(g_mutex);
+            g_ctl_cv.wait(lk, [] { return !g_ctl_queue.empty() || g_eof; });
+            if (g_ctl_queue.empty()) break; // EOF
+            job = g_ctl_queue.front();
+            g_ctl_queue.pop_front();
         }
-        ipc::Reader r(work.data(), work.size());
+        ipc::Reader r(job->payload.data(), job->payload.size());
+        const uint64_t id = job->id;
 
-        switch (type) {
+        switch (job->type) {
         case Msg::Create: {
+            const uint32_t client_flags = r.u32();
             const agent_str config = r.str();
             if (!r.ok()) {
-                send_error(AGENT_ERR_PARSE, "agent-engine-host: malformed Create frame");
+                send_error(id, AGENT_ERR_PARSE, "agent-engine-host: malformed Create frame");
                 break;
             }
-            if (instance) engine->destroy(instance);
-            instance = nullptr;
+            g_shm.store((client_flags & ipc::kShmCapable) && shm::available());
+            if (!destroy_instance()) {
+                send_error(id, AGENT_ERR_INIT_FAILED, "agent-engine-host: runs still busy");
+                break;
+            }
+            void *instance = nullptr;
             char err[1024] = {0};
-            const int32_t rc = engine->create(config, &instance, err, sizeof(err));
+            const int32_t rc = g_engine->create(config, &instance, err, sizeof(err));
             if (rc != AGENT_OK || !instance) {
-                instance = nullptr;
-                send_error(rc != AGENT_OK ? rc : AGENT_ERR_INIT_FAILED, err[0] ? err : "unknown error");
+                send_error(id, rc != AGENT_OK ? rc : AGENT_ERR_INIT_FAILED, err[0] ? err : "unknown error");
             } else {
-                send_empty(Msg::Created);
+                g_instance.store(instance);
+                send_empty(Msg::Created, id);
             }
-            break;
-        }
-        case Msg::Run: {
-            if (!instance) {
-                send_error(AGENT_ERR_INIT_FAILED, "agent-engine-host: no engine instance");
-                break;
-            }
-            const size_t need = ipc::decode_arena_bound(work.size());
-            if (need > arena_capacity) {
-                arena_capacity = need * 2;
-                arena = agent::Arena(arena_capacity);
-            }
-            arena.reset();
-            agent_request req{};
-            uint32_t run_flags = 0;
-            if (!r.request(req, run_flags, arena)) {
-                send_error(AGENT_ERR_PARSE, "agent-engine-host: malformed Run frame");
-                break;
-            }
-            req.on_chunk = (run_flags & ipc::kRunStream) ? on_chunk : nullptr;
-            req.on_progress = (run_flags & ipc::kRunProgress) ? on_progress : nullptr;
-            req.user_data = nullptr;
-            req.cancel = &g_cancel;
-
-            agent_response resp{};
-            resp.struct_size = sizeof(resp);
-            const int32_t rc = engine->run(instance, &req, &resp);
-            if (rc != AGENT_OK) {
-                send_error(rc, last_error(engine, instance, "run failed"));
-                break;
-            }
-            out.clear();
-            ipc::Writer w(out);
-            w.begin(Msg::Response);
-            w.response(resp);
-            const bool fits = w.finish();
-            engine->free_response(instance, &resp);
-            if (fits) send(out);
-            else send_error(AGENT_ERR_DECODE_FAILED, "agent-engine-host: response exceeds the 1 GiB frame limit");
             break;
         }
         case Msg::CountTokens: {
             const agent_str text = r.str();
-            if (!instance || !engine->count_tokens) {
-                send_error(AGENT_ERR_UNSUPPORTED, "engine does not count tokens");
+            void *instance = g_instance.load();
+            if (!instance || !g_engine->count_tokens) {
+                send_error(id, AGENT_ERR_UNSUPPORTED, "engine does not count tokens");
                 break;
             }
             int32_t n = 0;
-            const int32_t rc = engine->count_tokens(instance, text, &n);
+            const int32_t rc = g_engine->count_tokens(instance, text, &n);
             if (rc != AGENT_OK) {
-                send_error(rc, last_error(engine, instance, "token count failed"));
+                send_error(id, rc, last_error(instance, "token count failed"));
                 break;
             }
             out.clear();
             ipc::Writer w(out);
-            w.begin(Msg::Count);
+            w.begin(Msg::Count, id);
             w.i32(n);
             w.finish();
             send(out);
             break;
         }
         case Msg::ResetCache: {
-            if (instance && engine->reset_cache) {
-                const int32_t rc = engine->reset_cache(instance);
+            void *instance = g_instance.load();
+            if (instance && g_engine->reset_cache) {
+                const int32_t rc = g_engine->reset_cache(instance);
                 if (rc != AGENT_OK) {
-                    send_error(rc, last_error(engine, instance, "cache reset failed"));
+                    send_error(id, rc, last_error(instance, "cache reset failed"));
                     break;
                 }
             }
-            send_empty(Msg::Done);
+            send_empty(Msg::Done, id);
             break;
         }
         case Msg::Destroy:
-            if (instance) engine->destroy(instance);
-            instance = nullptr;
-            send_empty(Msg::Done);
+            if (!destroy_instance()) send_error(id, AGENT_ERR_INIT_FAILED, "agent-engine-host: runs still busy");
+            else send_empty(Msg::Done, id);
             break;
-        case Msg::Shutdown:
-            if (instance) engine->destroy(instance);
-            return 0;
-        default: send_error(AGENT_ERR_PARSE, "agent-engine-host: unknown message " + std::to_string(static_cast<uint32_t>(type))); break;
+        case Msg::Shutdown: (void)destroy_instance(); return 0;
+        default:
+            send_error(id, AGENT_ERR_PARSE, "agent-engine-host: unknown message " + std::to_string(static_cast<uint32_t>(job->type)));
+            break;
         }
+        std::lock_guard<std::mutex> lk(g_mutex);
+        g_free_jobs.push_back(job);
     }
-    if (instance) engine->destroy(instance);
+    (void)destroy_instance();
     return 0;
 }
 
@@ -418,9 +618,11 @@ int main(int argc, char **argv) {
     std::string error;
     const agent_engine_v1 *engine = load(argv[1], error);
     if (!engine) {
-        send_error(AGENT_ERR_INIT_FAILED, "Failed to load engine plugin '" + std::string(argv[1]) + "': " + error);
+        send_error(0, AGENT_ERR_INIT_FAILED, "Failed to load engine plugin '" + std::string(argv[1]) + "': " + error);
         return 3;
     }
+    g_engine = engine;
+    g_max_workers = (engine->flags & AGENT_ENGINE_FLAG_CONCURRENT) ? kMaxConcurrentRuns : 1;
 
     std::string ready;
     ipc::Writer w(ready);
@@ -430,13 +632,15 @@ int main(int argc, char **argv) {
     w.u64(engine->caps);
     w.u32(engine->flags);
     w.u32((engine->count_tokens ? ipc::kHasCountTokens : 0u) | (engine->reset_cache ? ipc::kHasResetCache : 0u));
+    w.u32(shm::available() ? ipc::kShmCapable : 0u);
+    w.u64(static_cast<uint64_t>(current_pid()));
     w.str(std::string_view(engine->name));
     w.str(std::string_view(engine->version ? engine->version : ""));
     w.finish();
     send(ready);
 
     std::thread(reader_main).detach();
-    const int rc = serve(engine);
+    const int rc = serve();
     std::fflush(nullptr);
     std::_Exit(rc);
 }

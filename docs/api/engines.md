@@ -131,31 +131,53 @@ forwarded to this process's stderr, so redirecting fd 2 captures it as it would 
 engine. The host ignores SIGINT (Ctrl-C in a terminal reaches the whole process group; cancellation
 goes through the protocol) and exits when its stdin closes.
 
+**Concurrent requests.** For engines with `AGENT_ENGINE_FLAG_CONCURRENT` (llama, onnx) several
+requests run at once through one host, exactly as in process: parallel graph branches get their own
+threads (`supports_parallel` is true) and llama's continuous batching shares one decode across them.
+Every frame carries its request's id. In the host a reader thread queues `Run`s to a pool of worker
+threads (created on demand, then reused), each executing one `run()`; `Cancel <id>` flags just that
+request. In the core, whichever waiting caller is free reads the pipe and hands the other callers
+their frames, so a lone call reads its own replies with no thread hop, and streaming callbacks run on
+the calling thread. Engines without the flag still get one `run()` at a time. When the host dies,
+every call in flight fails with `EngineCrashed`; an ignored cancel or the watchdog kills the host
+the same way (the request that triggered it gets `Cancelled` / the watchdog message, the others
+`EngineCrashed`).
+
+**Shared memory.** Tensor and BYTES payloads of at least 64 KiB travel in shared memory (POSIX
+`shm_open` + `mmap`; on Windows a named `CreateFileMapping`, written but untested) instead of through
+the pipe, in both directions. Segments are mapped once and reused: each core call slot has a request
+segment and the host keeps a pool of response segments, handed back with a `Release` frame once the
+core has copied the response out, so steady-state calls make no shm syscalls. Names are removed as
+soon as both sides have them mapped, so nothing stays in `/dev/shm` when a process dies (names of a
+crashed host are swept). Both sides check at startup that they can map segments; otherwise, or with
+`AGENT_ENGINE_SHM=0`, payloads go inline through the pipe (max 1 GiB per frame). FILE parts pass paths
+only, and the host writes outputs straight to `<workspace>/artifacts/`. A sandboxed host needs
+`/dev/shm` (Linux) to use shared memory.
+
 **Protocol** (`src/core/engines/engine_ipc.hpp`, internal; both ends come from the same build):
-length-prefixed binary frames (`u32 size | u32 type | payload`, native byte order), no JSON on the
-hot path. core → host: `Create`, `Run`, `Cancel` (out of band, handled by the host's reader thread
-while `run()` is busy), `CountTokens`, `ResetCache`, `Destroy`, `Shutdown`. host → core: `Ready`
-(protocol/ABI version, caps, flags, name, version), `Created`, `Chunk`, `Progress`, `Response`,
-`Count`, `Done`, `Error` (status + message). Requests and responses carry the full `agent_request` /
-`agent_response`: messages, text / FILE / BYTES / TENSOR parts, tool calls, `tools_json`,
-`params_json`, `output_dir`, usage.
+length-prefixed binary frames (`u32 size | u32 type | u64 request id | payload`, native byte order),
+no JSON on the hot path. core → host: `Create`, `Run`, `Cancel` (out of band, handled by the host's
+reader thread while `run()` is busy), `CountTokens`, `ResetCache`, `Destroy`, `Shutdown`, `Release`.
+host → core: `Ready` (protocol/ABI version, caps, flags, shared-memory support, pid, name, version),
+`Created`, `Chunk`, `Progress`, `Response`, `Count`, `Done`, `Error` (status + message). Requests and
+responses carry the full `agent_request` / `agent_response`: messages, text / FILE / BYTES / TENSOR
+parts, tool calls, `tools_json`, `params_json`, `output_dir`, usage.
 
-v1 limits:
+Limits:
 
-- Tensors and BYTES parts travel **inline** in the frames (copied through the pipe, max 1 GiB per
-  frame); FILE parts pass paths only, and the host writes outputs straight to `<workspace>/artifacts/`.
-  Shared memory for large tensors is future work.
-- **One request at a time per host**, even for `AGENT_ENGINE_FLAG_CONCURRENT` engines (the session
-  serializes calls; `supports_parallel` reports false, so parallel graph branches run one after the
-  other). Use InProcess for llama's continuous batching across subagents.
 - Engines linked in with `register_engine` have no plugin file and can't run out of process
   (`InvalidConfig`).
-- Windows: written (CreateProcess + pipes via `src/hal/child_process`), not yet compiled or tested.
+- Windows: written (CreateProcess + pipes via `src/hal/child_process`, file mappings), not yet compiled
+  or tested.
 
 Cost (`test_agent "Process isolation per-turn overhead"`, mock engine, Linux, Release build on 4
 shared and busy cores): a whole turn takes ~1 µs in process and 10-90 µs out of process (a pipe round trip
 and its context switches; the spread is scheduler noise); streaming 65 chunks costs
 40-230 µs. Negligible next to real inference, but in-process stays available for the lowest latency.
+An 8 MiB tensor in and 8 MiB out per call (`test_agent "Large tensor round trip cost" -s`) costs
+~1.3 ms in process, ~2.8 ms through the host with shared memory and 15-28 ms inline through the pipe.
+Three parallel graph branches on llama (qwen2.5-0.5b Q4_K_M, 48 tokens each, CPU) take the same time in
+process and through the host (3.57 s vs 3.59 s, ~33 tok/s), i.e. continuous batching works out of process.
 
 ## Writing an engine
 

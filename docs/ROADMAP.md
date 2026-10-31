@@ -147,9 +147,10 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [x] OS sandbox on Linux: Landlock + seccomp + rlimits + new session for the engine host (default on, no network) and `run_command` (default on), opt-in for MCP servers; macOS profile and Windows Job Object written, untested ([docs/security-sandbox.md](security-sandbox.md)). Fixes [LIMITATIONS](LIMITATIONS.md) §2 on Linux
 - [x] Explicit task on the public API (`InferRequest::task`, `run_task`, `Config::default_task`) instead of the lowest-capability-bit heuristic (still the automatic default)
 - [x] ABI v2: `struct_size` on the engine table, request and response (`AGENT_HAS_FIELD`, `agent_response_reset`), `AGENT_REQUEST_FLAG_AUTO_TASK`; every plugin in `engines/` updated (ABI 1 plugins are refused)
+- [x] Engine host v2: request ids + worker pool for concurrent requests (llama continuous batching works under process isolation), reused shared-memory segments for tensors/BYTES >= 64 KiB
 
 **Next up** (in order):
-- [ ] Engine host v2: concurrent requests (keep llama continuous batching under process isolation), shared memory for tensors/media
+- [x] Engine host v2: concurrent requests (llama continuous batching works under process isolation), shared memory for tensors/media
 - [x] Model registry with RAM/VRAM budget and LRU unload (`ModelRegistry`, `acquire_model` leases, `GraphNode::model`, CLI `memory_budget_mb`; see [docs/api/models.md](api/models.md))
 - [x] ABI v2: `struct_size` fields for compatible growth (`AGENT_ENGINE_ABI_VERSION` 2, `AGENT_HAS_FIELD`)
 - [x] `CheckpointerOps` + persisted event log; per-branch checkpoints and interrupts in parallel fan-outs (SQLite checkpointer, background Async writer, `fork_graph_run`, nested fan-outs share the worker slots)
@@ -195,7 +196,8 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [x] Run requests with cancel (`request_cancel`/`clear_cancel`), progress (`Config::on_progress`) and chunk streaming
 - [x] Out-of-process engines: `agent-engine-host` serves one plugin over a binary pipe protocol; `Config::engine_isolation` / engines.json `"isolation"`; crashes become `ErrorCode::EngineCrashed` with automatic restart (rate-limited), per-request watchdog, cancel escalates to kill; CLI default (see [docs/api/engines.md](api/engines.md#isolation))
   - [x] OS sandboxing / rlimits for the host (Linux; `Config::engine_sandbox`)
-  - [ ] shared memory for large tensors, concurrent requests per host, Windows build
+  - [x] shared memory for large tensors, concurrent requests per host (engine host v2)
+  - [ ] Windows build
 - [ ] Agent loop (pi-agent-core style) with tool-call limits
 - [ ] Tools return `{parts}` (text and/or artifacts)
 - [x] `llama` engine v1: llama.cpp b12020, Jinja chat templates + native tool-call parsing (common_chat), continuous batching

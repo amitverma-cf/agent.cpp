@@ -15,14 +15,24 @@
 //   - sandbox probes (tests/unit/test_sandbox.cpp): "read:<path>" replies "read ok: <n> bytes" or
 //     "read denied: <strerror>"; "write:<path>" replies "write ok" or "write denied: <strerror>";
 //     "net" tries an AF_INET socket and replies "net ok" or "net denied: <strerror>"
+//   - "sleep:N" takes N ms (stops early with AGENT_ERR_CANCELLED when *cancel is set)
+//   - "barrier:<tag>:N" returns only once N runs with the same tag are inside run() at the same time
+//     (fails after 5 s): proof that requests overlap
+//
+// Built twice: agent-engine-mock (flags 0, run() serialized by the host) and, with
+// AGENT_MOCK_CONCURRENT, agent-engine-mock-concurrent (name "mock_concurrent",
+// AGENT_ENGINE_FLAG_CONCURRENT). run() keeps its output per thread, so both are thread-safe.
 
 #include <agent-cpp/engine_abi.h>
 #include <cerrno>
 #include <chrono>
+#include <condition_variable>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -70,6 +80,10 @@ std::string sandbox_probe(std::string_view last_user) {
 
 struct MockInstance {
     std::string model;
+};
+
+// Everything a run() returns, owned by the calling thread until its next run() / free_response().
+struct MockOutput {
     std::string reply;
     std::string tool_name;
     std::string out_path;
@@ -85,7 +99,27 @@ struct MockInstance {
     std::vector<agent_part> out_parts;
 };
 
+MockOutput &thread_output() {
+    thread_local MockOutput out;
+    return out;
+}
+
 std::string_view sv(agent_str s) { return s.data ? std::string_view(s.data, s.size) : std::string_view(); }
+
+// "barrier:<tag>:N": waits until N callers with tag are inside at once.
+bool barrier(std::string_view spec) {
+    static std::mutex mu;
+    static std::condition_variable cv;
+    static std::map<std::string, int> arrived;
+    const size_t colon = spec.rfind(':');
+    if (colon == std::string_view::npos) return false;
+    const std::string tag(spec.substr(0, colon));
+    const int n = std::atoi(std::string(spec.substr(colon + 1)).c_str());
+    std::unique_lock<std::mutex> lk(mu);
+    const int me = ++arrived[tag];
+    cv.notify_all();
+    return me >= n || cv.wait_for(lk, std::chrono::seconds(5), [&] { return arrived[tag] >= n; });
+}
 
 int32_t mock_create(agent_str config_json, void **out_instance, char *err, size_t err_cap) {
     std::string_view cfg = sv(config_json);
@@ -101,8 +135,9 @@ int32_t mock_create(agent_str config_json, void **out_instance, char *err, size_
 
 void mock_destroy(void *instance) { delete static_cast<MockInstance *>(instance); }
 
-int32_t mock_run(void *instance, const agent_request *req, agent_response *resp) {
-    auto *inst = static_cast<MockInstance *>(instance);
+int32_t mock_run(void *, const agent_request *req, agent_response *resp) {
+    MockOutput *inst = &thread_output();
+    inst->error.clear();
     if (req->task != AGENT_CAP_TEXT_GEN) {
         inst->error = "mock: only TEXT_GEN is supported";
         return AGENT_ERR_UNSUPPORTED;
@@ -128,6 +163,21 @@ int32_t mock_run(void *instance, const agent_request *req, agent_response *resp)
     if (last_user == "crash:exit") std::exit(3);
     if (last_user == "hang")
         for (;;) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    if (last_user.starts_with("sleep:")) {
+        const auto until =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(std::atoi(std::string(last_user.substr(6)).c_str()));
+        while (std::chrono::steady_clock::now() < until) {
+            if (req->cancel && *req->cancel) {
+                inst->error = "mock: cancelled";
+                return AGENT_ERR_CANCELLED;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    }
+    if (last_user.starts_with("barrier:") && !barrier(last_user.substr(8))) {
+        inst->error = "mock: barrier timed out (runs did not overlap)";
+        return AGENT_ERR_DECODE_FAILED;
+    }
     if (last_user.starts_with("stream:") && req->on_chunk) {
         const int n = std::atoi(std::string(last_user.substr(7)).c_str());
         for (int i = 0; i < n; ++i) req->on_chunk(req->user_data, AGENT_CHUNK_TEXT, "x", 1);
@@ -216,15 +266,23 @@ int32_t mock_run(void *instance, const agent_request *req, agent_response *resp)
 
 void mock_free_response(void *, agent_response *resp) { agent_response_reset(resp); }
 
-const char *mock_last_error(void *instance) { return static_cast<MockInstance *>(instance)->error.c_str(); }
+const char *mock_last_error(void *) { return thread_output().error.c_str(); }
+
+#if defined(AGENT_MOCK_CONCURRENT)
+constexpr const char *kName = "mock_concurrent";
+constexpr uint32_t kFlags = AGENT_ENGINE_FLAG_CONCURRENT;
+#else
+constexpr const char *kName = "mock";
+constexpr uint32_t kFlags = 0;
+#endif
 
 const agent_engine_v1 kMockEngine = {
     AGENT_ENGINE_ABI_VERSION,
     sizeof(agent_engine_v1),
-    "mock",
+    kName,
     "1.0",
     AGENT_CAP_TEXT_GEN | AGENT_CAP_TOOL_CALL,
-    0,
+    kFlags,
     mock_create,
     mock_destroy,
     mock_run,

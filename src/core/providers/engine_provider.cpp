@@ -361,14 +361,16 @@ Result<InferResponse> run_engine(Session &session, uint32_t task, const InferReq
                       .user_data = &cb_ctx,
                       .cancel = request.cancel};
 
-    // --- process isolation: the same request over IPC; the response views live in the remote's buffers ---
+    // --- process isolation: the same request over IPC; the response views live in the call's buffers
+    // until remote_release. Concurrent engines get several calls in flight through one host. ---
     if (state->remote) {
-        std::lock_guard<std::mutex> lk(engines::remote_mutex(*state->remote));
         agent_response resp{};
         resp.struct_size = sizeof(resp);
-        if (auto r = engines::remote_run(*state->remote, req, arena, resp); !r.ok)
-            return fail<InferResponse>(r.error.code, r.error.message);
-        return to_infer_response(resp, arena);
+        engines::RemoteCall call;
+        auto r = engines::remote_run(*state->remote, req, arena, resp, call);
+        Result<InferResponse> out = r.ok ? to_infer_response(resp, arena) : fail<InferResponse>(r.error.code, r.error.message);
+        engines::remote_release(*state->remote, call);
+        return out;
     }
 
     // --- run, then copy the engine-owned response into the arena before freeing it ---
@@ -409,8 +411,8 @@ Result<InferResponse> infer_task(Session &session, uint32_t task, const InferReq
 bool supports_parallel(const Session &session) {
     if (session.config.provider != AiProvider::Engine) return false;
     auto *state = static_cast<EngineState *>(session.provider_state.get());
-    // Process isolation serializes requests per host (v1), so parallel branches would only queue.
-    return state && !state->remote && (state->flags & AGENT_ENGINE_FLAG_CONCURRENT);
+    // In process or out of process alike: the engine host runs concurrent engines' requests in parallel.
+    return state && (state->flags & AGENT_ENGINE_FLAG_CONCURRENT);
 }
 
 std::string_view injected_system_text(const Session &session) {
@@ -425,8 +427,19 @@ int engine_host_starts(const Session &session) {
     if (session.config.provider != AiProvider::Engine) return -1;
     auto *state = static_cast<EngineState *>(session.provider_state.get());
     if (!state || !state->remote) return -1;
-    std::lock_guard<std::mutex> lk(engines::remote_mutex(*state->remote));
-    return engines::remote_start_count(*state->remote);
+    return engines::remote_stats(*state->remote).starts;
+}
+
+EngineHostStats engine_host_stats(const Session &session) {
+    if (session.config.provider != AiProvider::Engine) return {};
+    auto *state = static_cast<EngineState *>(session.provider_state.get());
+    if (!state || !state->remote) return {};
+    const engines::RemoteStats s = engines::remote_stats(*state->remote);
+    return EngineHostStats{.starts = s.starts,
+                           .shm_requests = s.shm_requests,
+                           .shm_responses = s.shm_responses,
+                           .max_in_flight = s.max_in_flight,
+                           .shm = engines::remote_info(*state->remote).shm};
 }
 
 Result<int> count_tokens_engine(Session &session, std::string_view text) {
