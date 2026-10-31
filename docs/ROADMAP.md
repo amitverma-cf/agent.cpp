@@ -220,7 +220,8 @@ Watch list: audio.cpp as a meta-engine; llama.cpp native TTS / image gen when th
   - [x] `agent engine add|rm|ls` (plugins validated with `load_engine_plugin`)
 - [ ] `agent chat` / `agent run <agent.json>`: text TUI with streaming, tool-call display, approval prompts, multi-agent status; `open <artifact>` launches the OS app
   - [x] `agent chat`: streaming, tool calls + results, y/n/always approval prompts (`default_permission_policy`), `/exit /clear /model /image /open /stats`, Ctrl-C cancels a turn, conversations persisted with `agent_store_sqlite` (`--resume ID`, `--list`), model by catalogue name or path, engine by file type or `--engine`
-  - [ ] `agent run <agent.json>` (stub until the graph loader lands), multi-agent status
+  - [x] `agent run <agent.json>`: `--set`, `--thread`, `--resume/--input`, final state + interrupt report
+  - [ ] multi-agent status view
 - [ ] Mic input / speaker output for voice agents (small C audio I/O library such as miniaudio, decided in Phase 0)
 - [x] User config at `%APPDATA%\agent\` (Windows) and `~/.config/agent/` (Linux) (`$AGENT_CONFIG_DIR` / `--config-dir` override; the Windows path is untested)
 - [ ] Release artifacts: Windows x64 (CPU/CUDA/Vulkan), Linux x64 (CPU/CUDA/Vulkan), macOS (CI only)

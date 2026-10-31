@@ -168,8 +168,25 @@ printf 'List the files in the workspace.\n/stats\n' | agent chat --model qwen
 
 ## agent run
 
-`agent run <graph.json>` is reserved for declarative graphs. It is not implemented yet: it depends on
-the `agent.json` graph loader.
+`agent run <graph.json>` runs a declarative graph (see [api/agent-json.md](api/agent-json.md) and
+`examples/graphs/`). It uses the same model and engine resolution as `agent chat`, with the
+graph's `"model"` / `"engine"` hints as defaults that `--model` / `--engine` override.
+
+```bash
+agent run examples/graphs/research_pipeline.json --model qwen2.5-0.5b --set "topic=Why is the sky blue?"
+```
+
+| Flag | |
+|---|---|
+| `--set key=value` | seed graph state (repeatable) |
+| `--thread ID` | checkpoint thread (default `run`) |
+| `--resume ID [--input TEXT]` | continue an interrupted or failed run; `TEXT` is the human reply, or `approve` for pending tool calls |
+| `--yes` | approve tool calls the permission policy would ask about |
+| `--model`, `--engine`, `--engine-options`, `--workspace` | as for `agent chat` |
+
+When the graph finishes, the CLI prints the status and the final state. When it is interrupted,
+it prints the reason, any pending tool calls and the command to resume. Checkpoints live in the
+workspace's SQLite store.
 
 ## Code layout
 

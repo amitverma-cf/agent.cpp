@@ -60,12 +60,15 @@ constexpr std::string_view kModelBool[] = {"allow-restricted", "keep-file"};
 constexpr std::string_view kChatValue[] = {"model", "engine", "resume", "workspace", "ctx", "max-tokens", "engine-options"};
 constexpr std::string_view kChatBool[] = {"yes", "list", "verbose"};
 
+constexpr std::string_view kRunValue[] = {"model", "engine", "workspace", "thread", "set", "resume", "input", "engine-options"};
+constexpr std::string_view kRunBool[] = {"yes"};
+
 constexpr CommandSpec kCommands[] = {
     {"setup", {}, 0, 0, kSetupValue, kSetupBool},
     {"engine", kEngineSubs, 0, 0, {}, {}},
     {"model", kModelSubs, 0, 0, kModelValue, kModelBool},
     {"chat", {}, 0, 0, kChatValue, kChatBool},
-    {"run", {}, 1, 1, {}, {}},
+    {"run", {}, 1, 1, kRunValue, kRunBool},
     {"help", {}, 0, 1, {}, {}},
     {"version", {}, 0, 0, {}, {}},
 };

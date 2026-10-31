@@ -4,6 +4,7 @@
 
 #include <agent-cpp/engine_abi.h>
 #include <agent-cpp/hub.hpp>
+#include <agent-cpp/store_sqlite.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -367,9 +368,99 @@ int cmd_model(const CommandLine &cl, Context &ctx) {
 
 // -------------------------- agent run --------------------------
 
-int cmd_run(const CommandLine &cl, Context &) {
-    std::fprintf(stderr, "agent run %s: not implemented yet: depends on the agent.json loader\n", cl.positionals[0].c_str());
-    return 1;
+namespace {
+
+bool g_run_yes = false;
+
+PermissionDecision run_permission(std::string_view name, std::string_view arguments, void *) {
+    PermissionDecision d = tools::default_permission_policy(name, arguments, nullptr);
+    if (d == PermissionDecision::Ask && g_run_yes) return PermissionDecision::Allow;
+    return d;
+}
+
+bool run_prompt(std::string_view name, std::string_view arguments, void *) {
+    std::fprintf(stderr, "[permission] %.*s %.*s\n", static_cast<int>(name.size()), name.data(), static_cast<int>(arguments.size()),
+                 arguments.data());
+    return ask_yes_no("allow this tool call?");
+}
+
+const char *status_name(GraphRunStatus s) {
+    switch (s) {
+    case GraphRunStatus::Pending: return "pending";
+    case GraphRunStatus::Running: return "running";
+    case GraphRunStatus::Completed: return "completed";
+    case GraphRunStatus::Interrupted: return "interrupted";
+    case GraphRunStatus::Failed: return "failed";
+    }
+    return "?";
+}
+
+} // namespace
+
+// agent run graph.json [--set key=value ...] [--thread ID] [--resume ID [--input TEXT]]
+int cmd_run(const CommandLine &cl, Context &ctx) {
+    const std::string &graph_path = cl.positionals[0];
+    g_run_yes = cl.has("yes");
+
+    // Engine/model hints come from the file; flags override them.
+    auto hints = parse_graph_json(graph_path);
+    if (!hints.ok) return report_error(hints.error);
+    for (const auto &w : hints.value.warnings) std::fprintf(stderr, "[warning] %s\n", w.c_str());
+
+    std::string_view model_spec = cl.get("model", hints.value.model);
+    const auto catalog = catalog_refs(ctx);
+    auto model = resolve_model(model_spec, ctx.config.default_model, catalog, file_exists);
+    if (!model.ok) return report_error(model.error);
+    auto engine = load_engine_for(ctx, cl.get("engine", hints.value.engine), model.value.path);
+    if (!engine.ok) return report_error(engine.error);
+
+    Config cfg;
+    cfg.provider = AiProvider::Engine;
+    cfg.engine = engine.value.name;
+    cfg.engine_options = std::string(cl.get("engine-options"));
+    cfg.model = model.value.path;
+    cfg.workspace_dir = workspace_dir(ctx, cl.get("workspace"));
+    cfg.memory = {.store = store::sqlite_store()};
+    cfg.context_window = ctx.config.context_window;
+    cfg.max_tokens = ctx.config.max_tokens;
+    cfg.temperature = ctx.config.temperature;
+    cfg.permission_check = run_permission;
+    cfg.permission_prompt = run_prompt;
+    auto session = init(cfg);
+    if (!session.ok) return report_error(session.error);
+
+    auto graph = load_graph_json(session.value, graph_path);
+    if (!graph.ok) return report_error(graph.error);
+
+    GraphRun run;
+    const std::string_view resume_id = cl.get("resume");
+    run.thread_id = std::string(resume_id.empty() ? cl.get("thread", "run") : resume_id);
+    for (const Flag &f : cl.flags) {
+        if (f.name != "set") continue;
+        const size_t eq = f.value.find('=');
+        if (eq == std::string::npos || eq == 0) {
+            std::fprintf(stderr, "agent run: --set expects key=value, got '%s'\n", f.value.c_str());
+            return 2;
+        }
+        set_state(run.state, f.value.substr(0, eq), f.value.substr(eq + 1));
+    }
+
+    std::fprintf(stderr, "running %s (thread %s) with %s on %s\n", graph_path.c_str(), run.thread_id.c_str(), model.value.name.c_str(),
+                 engine.value.name.c_str());
+    auto res = resume_id.empty() ? run_graph(session.value, graph.value.graph, run)
+                                 : resume_graph(session.value, graph.value.graph, resume_id, run, cl.get("input"));
+
+    for (const GraphEvent &e : run.events)
+        if (e.type == GraphEventType::NodeEnd) std::fprintf(stderr, "  done: %s\n", e.node.c_str());
+    std::printf("status: %s\n", status_name(run.status));
+    if (run.status == GraphRunStatus::Interrupted) {
+        std::printf("interrupted at %s: %s\n", run.interrupt_node.c_str(), run.interrupt_reason.c_str());
+        for (const ToolCall &tc : run.pending_tool_calls) std::printf("  pending tool call: %s %s\n", tc.name.c_str(), tc.arguments.c_str());
+        std::printf("resume with: agent run %s --resume %s --input \"<reply or approve>\"\n", graph_path.c_str(), run.thread_id.c_str());
+    }
+    for (const auto &[key, value] : run.state.values) std::printf("%s = %s\n", key.c_str(), value.c_str());
+    if (!res.ok) return report_error(res.error);
+    return run.status == GraphRunStatus::Completed || run.status == GraphRunStatus::Interrupted ? 0 : 1;
 }
 
 } // namespace agent::cli
