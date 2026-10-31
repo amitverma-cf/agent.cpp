@@ -89,6 +89,13 @@ cfg.engine_max_restarts    = 3;     // automatic restarts per rolling minute
   behaviour. The `agent` CLI defaults to Process (`--inprocess` or `"isolation": "inprocess"` in its
   engines.json opts out).
 
+Under Process isolation the host also runs in an **OS sandbox** (`Config::engine_sandbox`, on by
+default; Linux enforces it): the plugin, the model's directory and paths named in `engine_options`
+are read-only, the workspace is read-only, `workspace/artifacts` is read-write, the network and
+`/tmp` are off, and `engine_sandbox.memory_limit_bytes` becomes the host's `RLIMIT_AS`. An engine
+that needs more must have it listed in `engine_sandbox.read_only_paths` / `read_write_paths`. See
+[../security-sandbox.md](../security-sandbox.md).
+
 Failure semantics under Process isolation:
 
 | Event | In-flight call | Next call |

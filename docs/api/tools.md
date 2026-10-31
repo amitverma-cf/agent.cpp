@@ -251,6 +251,12 @@ To allow unrestricted filesystem access:
 cfg.sandbox_filesystem = false;
 ```
 
+`run_command` is a shell, so path checks cannot contain it. It runs under an **OS sandbox**
+(`Config::tool_sandbox`, on by default): on Linux, Landlock limits it to the workspace (read-write),
+the system directories (read-only) and `/tmp`, absolute paths and symlinks included, while
+`sandbox_filesystem` is true; seccomp can block the network (`tool_sandbox.network =
+SandboxNetwork::Deny`; allowed by default). See [../security-sandbox.md](../security-sandbox.md).
+
 ## Disabling default tools
 
 ```cpp
@@ -268,10 +274,12 @@ namespace agent::tools {
 struct WorkspaceContext {
     const std::string *workspace_dir = nullptr;
     bool               sandbox       = true;
+    SandboxPolicy      command_sandbox;          // run_command's OS sandbox (get_terminal_tool(ctx))
 };
 
 std::vector<Tool> get_filesystem_tools(std::shared_ptr<WorkspaceContext> ctx);
-Tool              get_terminal_tool   (const std::string *workspace_dir);
+Tool              get_terminal_tool   (std::shared_ptr<WorkspaceContext> ctx); // sandboxed per ctx
+Tool              get_terminal_tool   (const std::string *workspace_dir);       // no OS sandbox (legacy)
 
 }
 ```
