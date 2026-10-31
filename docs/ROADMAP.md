@@ -163,8 +163,8 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [ ] Model registry from `models.json`: lazy load, LRU unload under a RAM/VRAM budget
 - [x] `StoreOps` key-value store + in-memory default
 - [ ] `CheckpointerOps` / `VectorStoreOps` + in-memory implementations
-- [ ] `Part`/`MediaRef` message model + artifact store
-- [ ] Run requests with cancel, progress and chunk streaming
+- [x] Media on messages (`Media`/`MediaView`, `run_turn_with_media`); engine file outputs land in `<workspace>/artifacts/` and persist with history
+- [x] Run requests with cancel (`request_cancel`/`clear_cancel`), progress (`Config::on_progress`) and chunk streaming
 - [ ] Agent loop (pi-agent-core style) with tool-call limits
 - [ ] Tools return `{parts}` (text and/or artifacts)
 - [x] `llama` engine v1: llama.cpp b12020, Jinja chat templates + native tool-call parsing (common_chat), continuous batching

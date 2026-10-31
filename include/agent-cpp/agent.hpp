@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -116,6 +117,21 @@ struct TensorData {
     std::vector<uint8_t> data;
 };
 
+// Media referenced by file path: images, audio, video, meshes. Inputs can live anywhere; files that
+// engines generate are written to <workspace>/artifacts/. mime e.g. "image/png", "audio/wav".
+struct MediaView {
+    std::string_view path;
+    std::string_view mime;
+};
+
+struct Media {
+    std::string path;
+    std::string mime;
+};
+
+// Progress of a long-running engine job (image/video/3D generation). total may be 0 if unknown.
+using ProgressFn = void (*)(uint64_t step, uint64_t total, void *user_data);
+
 enum class LogLevel { Debug, Info, Warning, Error };
 using LogFn = void (*)(LogLevel level, std::string_view message, void *user_data);
 
@@ -174,6 +190,7 @@ struct MessageView {
     std::span<const ToolCallView> tool_calls;
     std::string_view tool_call_id;
     std::span<const TensorView> tensors;
+    std::span<const MediaView> media;
 };
 
 struct InferRequest {
@@ -183,6 +200,9 @@ struct InferRequest {
     bool stream = false;
     TokenStreamFn on_token = nullptr;
     void *token_user_data = nullptr;
+    ProgressFn on_progress = nullptr;
+    void *progress_user_data = nullptr;
+    const volatile int32_t *cancel = nullptr; // engines stop with ErrorCode::Cancelled when *cancel != 0
 };
 
 struct InferResponse {
@@ -272,6 +292,7 @@ struct Message {
     std::vector<ToolCall> tool_calls;
     std::string tool_call_id;
     std::vector<TensorData> tensors;
+    std::vector<Media> media;
     mutable int token_count = -1;
 };
 
@@ -349,6 +370,10 @@ struct Config {
     LogFn logger = nullptr;
     void *logger_user_data = nullptr;
 
+    // Progress reports from long-running engine jobs during run_turn.
+    ProgressFn on_progress = nullptr;
+    void *progress_user_data = nullptr;
+
     // Directory of skill subdirectories (each containing a SKILL.md). Empty = feature inert.
     std::string skills_dir;
 
@@ -408,6 +433,9 @@ struct Session {
     std::shared_ptr<FILE> log_file;
 
     std::shared_ptr<Session *> session_ptr_cell;
+
+    // Set by request_cancel(); read by engines mid-job. Shared so it survives Session moves.
+    std::shared_ptr<int32_t> cancel_flag = std::make_shared<int32_t>(0);
 
     Session() = default;
     ~Session() = default;
@@ -491,6 +519,16 @@ void trigger_event(Session &session, EventType type, std::span<const uint8_t> pa
 
 Result<std::string> run_turn(Session &session, FlowMemory &memory, std::string_view user_prompt, bool stream = false,
                              TokenStreamFn on_token = nullptr, void *token_user_data = nullptr);
+
+// Like run_turn, but the user message also carries media (images, audio, ...) for engines that accept them.
+// (A separate name, not an overload: a Media array would otherwise silently convert to run_turn's `bool stream`.)
+Result<std::string> run_turn_with_media(Session &session, FlowMemory &memory, std::string_view user_prompt, std::span<const Media> media,
+                                        bool stream = false, TokenStreamFn on_token = nullptr, void *token_user_data = nullptr);
+
+// Cancels in-flight engine work and makes every later inference on this Session fail with
+// ErrorCode::Cancelled until clear_cancel() is called. Safe to call from any thread.
+void request_cancel(Session &session);
+void clear_cancel(Session &session);
 
 Result<void> run_flow(Session &session, void *context, Flow &flow);
 Result<bool> step_flow(Session &session, void *context, Flow &flow);
