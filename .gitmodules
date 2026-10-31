@@ -7,3 +7,6 @@
 [submodule "vendor/stable-diffusion.cpp"]
 	path = vendor/stable-diffusion.cpp
 	url = https://github.com/leejet/stable-diffusion.cpp
+[submodule "vendor/trellis2cpp"]
+	path = vendor/trellis2cpp
+	url = https://github.com/localai-org/trellis2cpp.git

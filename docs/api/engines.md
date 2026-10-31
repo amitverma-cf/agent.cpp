@@ -268,6 +268,79 @@ are serialized by a mutex inside the plugin.
 The core currently sends every request as `AGENT_CAP_TEXT_GEN`, so the sdcpp engine is driven
 through the C ABI directly until the core routes image tasks.
 
+## The trellis engine
+
+`engines/trellis` (`agent-engine-trellis`) wraps [trellis2.cpp](https://github.com/localai-org/trellis2cpp)
+(`vendor/trellis2cpp`, MIT, pinned to commit `2f3e6e2` of its default `pbr-textures` branch; the repo has no
+tags) for [TRELLIS.2](https://github.com/microsoft/TRELLIS.2) image-to-3D. It goes through the port's
+flat C API (`trellis2_capi.h`), so none of the port's C++ crosses the plugin boundary.
+
+It is opt-in because it builds a third copy of ggml (the port's own fork):
+
+```sh
+git submodule update --init vendor/trellis2cpp
+git -C vendor/trellis2cpp submodule update --init --depth 1 ggml
+cmake -B build -G Ninja -DAGENT_ENGINE_TRELLIS=ON [-DAGENT_TRELLIS_BUILD_JOBS=4]
+```
+
+Like sdcpp it is a nested `ExternalProject` (target names clash with llama.cpp's ggml), linked statically
+with hidden visibility; on Linux `-Wl,--exclude-libs,ALL` plus a version script leave `agent_engine_get_v1`
+as the only exported symbol. The nested build is CPU-only (CGAL print remeshing and Metal are off).
+`AGENT_TRELLIS_BUILD_JOBS` caps its parallelism.
+
+- Name `trellis`, caps `AGENT_CAP_MESH_GEN`, flags `0`.
+- `MESH_GEN`: the input is the last image `FILE` (or `BYTES`) part of the last user message (anything
+  stb_image decodes: PNG, JPEG, BMP, ...). No image fails with `AGENT_ERR_INVALID_CONFIG`; other tasks
+  with `AGENT_ERR_UNSUPPORTED`.
+- The mesh is written as `<output_dir>/trellis-<unix ms>-<n>.glb` and returned as a `FILE` part
+  (`model/gltf-binary`) followed by a text part `generated 3D model: <path> (<v> vertices, <t> triangles)`.
+
+`create()` config: `model` is a directory with the GGUFs, found by their published names
+(`<name>_f16.gguf`, else `_f32.gguf`, else `.gguf`). Which files exist decides what the pipeline can do:
+
+| Option (file) | Needed for | Source |
+|---|---|---|
+| `dino` (`dino_f16.gguf`, 0.6 GB) | always | [LocalAI-io/dinov3-vitl16-pretrain-lvd1689m-GGUF](https://huggingface.co/LocalAI-io/dinov3-vitl16-pretrain-lvd1689m-GGUF) (DINOv3 License) |
+| `ss_flow` (`ss_flow_f16.gguf`, 2.6 GB) | always | [LocalAI-io/TRELLIS.2-4B-GGUF](https://huggingface.co/LocalAI-io/TRELLIS.2-4B-GGUF) (MIT) |
+| `ss_dec` (`ss_dec_f16.gguf`, 0.15 GB) | always | [LocalAI-io/TRELLIS-image-large-GGUF](https://huggingface.co/LocalAI-io/TRELLIS-image-large-GGUF) (MIT) |
+| `slat_flow` + `shape_dec` (2.6 + 0.95 GB) | 512³ fine mesh | TRELLIS.2-4B-GGUF |
+| `slat_flow_1024` (2.6 GB) | 1024³ cascade | TRELLIS.2-4B-GGUF |
+| `shape_enc`, `tex_dec`, `tex_flow` (`tex_slat_flow_512`), `tex_flow_1024` | PBR vertex colours | TRELLIS.2-4B-GGUF |
+
+The three required files alone give the coarse path (64³ occupancy, marching cubes, untextured). Each
+option may also be set explicitly (relative paths resolve against `model`); `""` disables auto-discovery
+of that file, e.g. `"slat_flow_1024": ""` to skip loading the 1024 model. Missing files fail with
+`AGENT_ERR_MODEL_LOAD_FAILED`. There is no learned background-removal model: the port turns a
+border-connected near-white/near-black background into alpha (or uses the image's own alpha).
+
+Other options: `threads` (CPU threads; default all cores; applied through the port's
+`TRELLIS2_N_THREADS` environment variable while loading/generating) and the generation defaults below.
+`params_json` per request accepts the same generation keys:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `seed` | `-1` (random) | sampler seed |
+| `steps` | `0` = 12 | flow sampler steps (all geometry stages) |
+| `guidance` | `-1` = 7.5 | classifier-free guidance strength |
+| `texture_steps` | `0` = 12 | texture flow steps |
+| `pipeline` | `auto` | `auto` (best loaded), `coarse`, `512`, `1024` |
+| `background` | `auto` | `auto`, `keep`, `black`, `white` |
+| `components` | `remove_tiny` | GLB component cleanup: `remove_tiny`, `largest`, `all` |
+| `texture_size` | `0` = 2048 | atlas size; only used when `T2GLB_XATLAS` is set (the default GLB uses vertex colours) |
+
+The port has no mesh simplification on its CPU export path, so there is no simplify-ratio option; the GLB
+keeps the generated polygon count.
+
+Progress goes to `on_progress(step, total)` for every flow-sampling step; the counter restarts per
+sampling phase (sparse structure, shape SLAT, HR SLAT, texture), and `1/1` is sent when the GLB is
+written. trellis2.cpp has no cancellation hook inside a generation: `cancel` is checked before starting
+and between generation and GLB export, then `run()` returns `AGENT_ERR_CANCELLED`.
+
+trellis2.cpp itself does not throw (only its optional CGAL path does, and that is compiled out), but it is
+C++ underneath: an out-of-memory `std::bad_alloc` inside it is not caught, and ggml asserts abort.
+CPU generation is slow: the 512/1024 paths run two or three 1.3B-parameter DiTs over thousands of
+tokens and the 1024³ decode needs ~14 GB of host RAM.
+
 ## The sherpa engine
 
 `engines/sherpa` (`agent-engine-sherpa`) wraps [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) through

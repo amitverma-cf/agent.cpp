@@ -46,7 +46,7 @@ Platforms: **Windows and Linux are first class** (CI + manual testing). macOS bu
 | **TTS** | Qwen3-TTS via `qwen3-tts.cpp` / `qwentts.cpp` (ggml) | Voice cloning |
 | **Audio multi-model** | `audio.cpp` (ggml framework) | Several TTS/STT families behind one API: candidate "meta-engine" |
 | **Image + video gen** | **stable-diffusion.cpp** | SD/SDXL, FLUX.2/3 Klein, Qwen-Image 2.1, Z-Image; video: Wan 2.1/2.2, LTX-2.3/2.5, HunyuanVideo 1.5, MiniMax-H3 |
-| **3D** | TRELLIS.2 ggml ports (`trellis2cpp` with C ABI, `trellis.cpp`) | Image → GLB |
+| **3D** | TRELLIS.2 ggml ports: **`trellis2cpp`** (localai-org, MIT, flat C ABI; used by `engines/trellis`), `trellis.cpp` (pwilkin, MIT, C++ only, no library C API) | Image → GLB. TRELLIS.2 weights are MIT, but the required DINOv3 conditioning encoder is under the custom DINOv3 License: check it against the catalogue policy below before listing |
 | **Long tail** | ONNX Runtime (generic graph runner) | Classifiers, detectors, custom models |
 
 Licences vary per **model**, not just per engine. Policy for v1: the built-in catalogue lists **only free, open-source models with no usage restrictions** (Apache-2.0, MIT, BSD, CC-BY and similar). Paid/proprietary models and models whose licences restrict use (non-commercial, research-only, custom "open-weight" terms) are **not shipped or listed**. Users can still add any model they are entitled to use through their own `models.json` entry, at their own responsibility. The model manifest carries a licence field, and the CLI shows it before download.
@@ -220,6 +220,8 @@ Priority wave A (v1 **starter pack**, installed by default by `agent setup`):
   - [x] txt2img + img2img with progress + per-step cancel (`agent-engine-sdcpp`, stable-diffusion.cpp master-1028, opt-in `AGENT_ENGINE_SDCPP`)
   - [ ] video (Wan, LTX)
 - [ ] `trellis`: TRELLIS.2 image → GLB (3D gen)
+  - [x] image → GLB through trellis2.cpp's C API (`agent-engine-trellis`, localai-org/trellis2cpp `2f3e6e2`, opt-in `AGENT_ENGINE_TRELLIS`): coarse / 512 / 1024 / PBR paths chosen by the GGUFs present, seed/steps/guidance overrides, per-step progress; real generation verified on CPU for the coarse path only (2 steps, ~13 min on 4 shared cores)
+  - [ ] verify the 512 / 1024 / textured paths end to end (needs a GPU or much more CPU time), cancel inside a generation (no hook in the port), GPU backends (nested build is CPU-only)
 - [ ] `onnx`: generic ONNX Runtime engine (classifiers, detectors, custom models), grown from the existing provider
   - [x] v1: named tensors in/out (`AGENT_CAP_GENERIC`), concurrent `run()`, threads, graph optimization level, CPU/CUDA EP selection
   - [ ] IoBinding / device-resident outputs, more EPs (DirectML, CoreML, TensorRT), cancel during `Run()`, task-specific pre/post-processing (classify, embed, detect)
