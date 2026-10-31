@@ -151,7 +151,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [ ] Explicit task on the public API (`InferRequest::task` / `run_task`) instead of the lowest-capability-bit heuristic
 - [x] Model registry with RAM/VRAM budget and LRU unload (`ModelRegistry`, `acquire_model` leases, `GraphNode::model`, CLI `memory_budget_mb`; see [docs/api/models.md](api/models.md))
 - [ ] ABI v2: `struct_size` fields for compatible growth (after the engine host lands)
-- [ ] `CheckpointerOps` + persisted event log; per-branch checkpoints and interrupts in parallel fan-outs
+- [x] `CheckpointerOps` + persisted event log; per-branch checkpoints and interrupts in parallel fan-outs (SQLite checkpointer, background Async writer, `fork_graph_run`, nested fan-outs share the worker slots)
 - [ ] OS sandboxing follow-ups: test real engines under the default engine policy, macOS profile, Windows AppContainer (filesystem/network), `"sandbox"` for MCP servers in `agent.json`
 - [ ] Hub: proxy auth, gated repos (split GGUF downloads done)
 - [ ] Windows build + test pass (owner)
@@ -211,7 +211,8 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
   - [x] v2: `CheckpointerOps` (`GraphRun::checkpointer`; the StoreOps layout stays the default), real `Async` durability (background writer, bounded queue, flushed on return); time travel via `fork_graph_run` (continue any stored step as a new thread)
 - [ ] `agent-store-sqlite`: SQLite checkpointer/state + sqlite-vec vector store (CLI and opt-in)
   - [x] sqlite-vec vector store (`store::sqlite_vector_store()`) and SQLite checkpointer (`store::sqlite_checkpointer()`, WAL); a SQLite `StateStoreOps` is still open (`user:`/`app:` state uses `StoreOps`)
-- [x] **Interrupts** for human approval (reuse the permission `Ask`)
+- [x] **Interrupts** for human approval (reuse the permission `Ask`), including inside top-level parallel branches (`GraphRun::interrupts`, per-branch `resume_graph`)
+- [x] Per-branch checkpoints: a resumed fan-out re-runs only unfinished branches
 - [x] Load graphs from `agent.json` (`load_graph_json`, see [docs/api/agent-json.md](api/agent-json.md))
 - [ ] Port skills, permissions, context compression, fs/terminal tools
 - [x] MCP stdio client (`connect_mcp_server`, see [docs/api/mcp.md](api/mcp.md))

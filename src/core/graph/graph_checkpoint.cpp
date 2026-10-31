@@ -52,9 +52,249 @@ void append_string_field(std::string &json, std::string_view name, std::string_v
     json += '"';
 }
 
+void encode_calls(std::string &json, const std::vector<ToolCall> &calls) {
+    json += '[';
+    for (size_t i = 0; i < calls.size(); ++i) {
+        if (i > 0) json += ',';
+        const ToolCall &tc = calls[i];
+        json += '{';
+        append_string_field(json, "id", tc.id);
+        json += ',';
+        append_string_field(json, "name", tc.name);
+        json += ',';
+        append_string_field(json, "arguments", tc.arguments);
+        json += '}';
+    }
+    json += ']';
+}
+
+void encode_values(std::string &json, const std::map<std::string, std::string, std::less<>> &values) {
+    json += '{';
+    bool first = true;
+    for (const auto &[key, value] : values) {
+        if (is_temp_key(key)) continue;
+        if (!first) json += ',';
+        first = false;
+        json += '"';
+        utils::escape_json_string(key, json);
+        json += "\":\"";
+        utils::escape_json_string(value, json);
+        json += '"';
+    }
+    json += '}';
+}
+
+void encode_strings(std::string &json, const std::vector<std::string> &items) {
+    json += '[';
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (i > 0) json += ',';
+        json += '"';
+        utils::escape_json_string(items[i], json);
+        json += '"';
+    }
+    json += ']';
+}
+
+void encode_histories(std::string &json, const std::map<std::string, FlowMemory, std::less<>> &histories) {
+    json += '{';
+    bool first = true;
+    for (const auto &[node, memory] : histories) {
+        if (!first) json += ',';
+        first = false;
+        json += '"';
+        utils::escape_json_string(node, json);
+        json += "\":";
+        encode_history_json(memory, json);
+    }
+    json += '}';
+}
+
+std::string_view branch_status_name(BranchStatus s) {
+    switch (s) {
+    case BranchStatus::Pending: return "pending";
+    case BranchStatus::Running: return "running";
+    case BranchStatus::Done: return "done";
+    case BranchStatus::Interrupted: return "interrupted";
+    case BranchStatus::Failed: return "failed";
+    }
+    return "pending";
+}
+
+BranchStatus parse_branch_status(std::string_view s) {
+    if (s == "running") return BranchStatus::Running;
+    if (s == "done") return BranchStatus::Done;
+    if (s == "interrupted") return BranchStatus::Interrupted;
+    if (s == "failed") return BranchStatus::Failed;
+    return BranchStatus::Pending;
+}
+
+void encode_progress(std::string &json, const ParallelProgress &progress) {
+    json += '{';
+    append_string_field(json, "node", progress.node);
+    json += ",\"branches\":[";
+    for (size_t i = 0; i < progress.branches.size(); ++i) {
+        const BranchProgress &b = progress.branches[i];
+        if (i > 0) json += ',';
+        json += '{';
+        append_string_field(json, "entry", b.entry);
+        json += ',';
+        append_string_field(json, "status", branch_status_name(b.status));
+        json += ',';
+        append_string_field(json, "next", b.next);
+        json += ",\"values\":";
+        encode_values(json, b.values);
+        json += ",\"erased\":";
+        encode_strings(json, b.erased);
+        json += ",\"writes\":";
+        encode_strings(json, b.writes);
+        json += ",\"histories\":";
+        encode_histories(json, b.histories);
+        json += ',';
+        append_string_field(json, "interrupt_node", b.interrupt_node);
+        json += ',';
+        append_string_field(json, "interrupt_reason", b.interrupt_reason);
+        json += ",\"pending_tool_calls\":";
+        encode_calls(json, b.pending_tool_calls);
+        json += ',';
+        append_string_field(json, "error", b.error);
+        json += '}';
+    }
+    json += "]}";
+}
+
+// ---- decoding (simdjson on demand) ----
+
+using RawHistories = std::vector<std::pair<std::string, std::string>>; // name -> raw history JSON
+
+Result<void> bad(std::string what) { return fail(ErrorCode::ParseError, "graph checkpoint: " + std::move(what)); }
+
+Result<void> decode_calls(simdjson::ondemand::value value, std::vector<ToolCall> &out) {
+    simdjson::ondemand::array calls;
+    if (value.get_array().get(calls)) return bad("bad pending_tool_calls.");
+    out.clear();
+    for (auto item : calls) {
+        simdjson::ondemand::object obj;
+        if (item.get_object().get(obj)) continue;
+        ToolCall call;
+        std::string_view id, tool, arguments;
+        if (!obj["id"].get_string().get(id)) call.id = std::string(id);
+        if (!obj["name"].get_string().get(tool)) call.name = std::string(tool);
+        if (!obj["arguments"].get_string().get(arguments)) call.arguments = std::string(arguments);
+        out.push_back(std::move(call));
+    }
+    return ok();
+}
+
+Result<void> decode_values(simdjson::ondemand::value value, std::map<std::string, std::string, std::less<>> &out) {
+    simdjson::ondemand::object obj;
+    if (value.get_object().get(obj)) return bad("bad state.");
+    for (auto entry : obj) {
+        std::string_view k, v;
+        if (entry.unescaped_key().get(k)) return bad("bad state key.");
+        std::string key(k);
+        if (entry.value().get_string().get(v)) return bad("bad state value: " + key);
+        out.insert_or_assign(std::move(key), std::string(v));
+    }
+    return ok();
+}
+
+Result<void> decode_strings(simdjson::ondemand::value value, std::vector<std::string> &out) {
+    simdjson::ondemand::array items;
+    if (value.get_array().get(items)) return bad("bad string array.");
+    for (auto item : items) {
+        std::string_view text;
+        if (item.get_string().get(text)) return bad("bad string array item.");
+        out.emplace_back(text);
+    }
+    return ok();
+}
+
+Result<void> collect_histories(simdjson::ondemand::value value, RawHistories &out) {
+    simdjson::ondemand::object obj;
+    if (value.get_object().get(obj)) return bad("bad histories.");
+    for (auto entry : obj) {
+        std::string_view k, raw;
+        if (entry.unescaped_key().get(k)) return bad("bad history key.");
+        std::string node(k);
+        if (entry.value().raw_json().get(raw)) return bad("bad history: " + node);
+        out.emplace_back(std::move(node), std::string(raw));
+    }
+    return ok();
+}
+
+Result<void> build_histories(RawHistories &raw, std::string_view thread_id, std::map<std::string, FlowMemory, std::less<>> &out) {
+    for (auto &[node, text] : raw) {
+        auto messages = decode_history_json(text);
+        if (!messages.ok) return fail(messages.error.code, "graph checkpoint: history of '" + node + "': " + messages.error.message);
+        FlowMemory memory;
+        memory.id = std::string(thread_id) + ":" + node;
+        memory.history = std::move(messages.value);
+        out.insert_or_assign(std::move(node), std::move(memory));
+    }
+    return ok();
+}
+
+Result<void> decode_progress(simdjson::ondemand::value value, ParallelProgress &out, std::vector<RawHistories> &raw) {
+    simdjson::ondemand::object obj;
+    if (value.get_object().get(obj)) return bad("bad parallel progress.");
+    for (auto field : obj) {
+        std::string_view key, text;
+        if (field.unescaped_key().get(key)) return bad("bad parallel key.");
+        simdjson::ondemand::value v;
+        if (field.value().get(v)) return bad("bad parallel value.");
+        if (key == "node") {
+            if (!v.get_string().get(text)) out.node = std::string(text);
+            continue;
+        }
+        if (key != "branches") continue;
+        simdjson::ondemand::array branches;
+        if (v.get_array().get(branches)) return bad("bad parallel branches.");
+        for (auto item : branches) {
+            simdjson::ondemand::object bo;
+            if (item.get_object().get(bo)) return bad("bad parallel branch.");
+            BranchProgress b;
+            RawHistories histories;
+            for (auto bf : bo) {
+                std::string_view bk;
+                if (bf.unescaped_key().get(bk)) return bad("bad branch key.");
+                simdjson::ondemand::value bv;
+                if (bf.value().get(bv)) return bad("bad branch value.");
+                Result<void> r = ok();
+                if (bk == "entry") {
+                    if (!bv.get_string().get(text)) b.entry = std::string(text);
+                } else if (bk == "status") {
+                    if (!bv.get_string().get(text)) b.status = parse_branch_status(text);
+                } else if (bk == "next") {
+                    if (!bv.get_string().get(text)) b.next = std::string(text);
+                } else if (bk == "values") {
+                    r = decode_values(bv, b.values);
+                } else if (bk == "erased") {
+                    r = decode_strings(bv, b.erased);
+                } else if (bk == "writes") {
+                    r = decode_strings(bv, b.writes);
+                } else if (bk == "histories") {
+                    r = collect_histories(bv, histories);
+                } else if (bk == "interrupt_node") {
+                    if (!bv.get_string().get(text)) b.interrupt_node = std::string(text);
+                } else if (bk == "interrupt_reason") {
+                    if (!bv.get_string().get(text)) b.interrupt_reason = std::string(text);
+                } else if (bk == "pending_tool_calls") {
+                    r = decode_calls(bv, b.pending_tool_calls);
+                } else if (bk == "error") {
+                    if (!bv.get_string().get(text)) b.error = std::string(text);
+                }
+                if (!r.ok) return r;
+            }
+            out.branches.push_back(std::move(b));
+            raw.push_back(std::move(histories));
+        }
+    }
+    return ok();
+}
+
 } // namespace
 
-std::string encode_checkpoint(const GraphRun &run, std::string_view graph_name) {
+std::string encode_checkpoint(const GraphRun &run, std::string_view graph_name, const ParallelProgress *progress) {
     std::string json;
     json += "{\"version\":1,";
     append_string_field(json, "graph", graph_name);
@@ -68,69 +308,46 @@ std::string encode_checkpoint(const GraphRun &run, std::string_view graph_name) 
     append_string_field(json, "interrupt_node", run.interrupt_node);
     json += ',';
     append_string_field(json, "interrupt_reason", run.interrupt_reason);
-
-    json += ",\"pending_tool_calls\":[";
-    for (size_t i = 0; i < run.pending_tool_calls.size(); ++i) {
-        if (i > 0) json += ',';
-        const ToolCall &tc = run.pending_tool_calls[i];
-        json += '{';
-        append_string_field(json, "id", tc.id);
-        json += ',';
-        append_string_field(json, "name", tc.name);
-        json += ',';
-        append_string_field(json, "arguments", tc.arguments);
-        json += '}';
+    json += ",\"pending_tool_calls\":";
+    encode_calls(json, run.pending_tool_calls);
+    json += ",\"state\":";
+    encode_values(json, run.state.values);
+    json += ",\"histories\":";
+    encode_histories(json, run.state.histories);
+    if (progress) {
+        json += ",\"parallel\":";
+        encode_progress(json, *progress);
     }
-
-    json += "],\"state\":{";
-    bool first = true;
-    for (const auto &[key, value] : run.state.values) {
-        if (is_temp_key(key)) continue;
-        if (!first) json += ',';
-        first = false;
-        json += '"';
-        utils::escape_json_string(key, json);
-        json += "\":\"";
-        utils::escape_json_string(value, json);
-        json += '"';
-    }
-
-    json += "},\"histories\":{";
-    first = true;
-    for (const auto &[node, memory] : run.state.histories) {
-        if (!first) json += ',';
-        first = false;
-        json += '"';
-        utils::escape_json_string(node, json);
-        json += "\":";
-        encode_history_json(memory, json);
-    }
-    json += "}}";
+    json += '}';
     return json;
 }
 
-Result<void> decode_checkpoint(std::string_view json, GraphRun &out) {
+Result<void> decode_checkpoint(std::string_view json, GraphRun &out, ParallelProgress *progress, bool *has_progress) {
     // A local parser: decode_history_json below uses the thread's shared one.
     simdjson::ondemand::parser parser;
     simdjson::padded_string padded(json.data(), json.size());
     simdjson::ondemand::document doc;
-    if (parser.iterate(padded).get(doc)) return fail(ErrorCode::ParseError, "graph checkpoint: invalid JSON.");
+    if (parser.iterate(padded).get(doc)) return bad("invalid JSON.");
     simdjson::ondemand::object root;
-    if (doc.get_object().get(root)) return fail(ErrorCode::ParseError, "graph checkpoint: not a JSON object.");
+    if (doc.get_object().get(root)) return bad("not a JSON object.");
 
     GraphState state;
-    std::vector<std::pair<std::string, std::string>> raw_histories;
+    RawHistories raw_histories;
+    ParallelProgress parallel;
+    std::vector<RawHistories> raw_branch_histories;
+    bool found_progress = false;
     for (auto field : root) {
         std::string_view key;
-        if (field.unescaped_key().get(key)) return fail(ErrorCode::ParseError, "graph checkpoint: bad key.");
+        if (field.unescaped_key().get(key)) return bad("bad key.");
         const std::string name(key);
         simdjson::ondemand::value value;
-        if (field.value().get(value)) return fail(ErrorCode::ParseError, "graph checkpoint: bad value for " + name);
+        if (field.value().get(value)) return bad("bad value for " + name);
 
         std::string_view text;
+        Result<void> r = ok();
         if (name == "step") {
             uint64_t step = 0;
-            if (value.get_uint64().get(step)) return fail(ErrorCode::ParseError, "graph checkpoint: bad step.");
+            if (value.get_uint64().get(step)) return bad("bad step.");
             out.step = step;
         } else if (name == "next") {
             if (!value.get_string().get(text)) out.next_node = std::string(text);
@@ -141,51 +358,28 @@ Result<void> decode_checkpoint(std::string_view json, GraphRun &out) {
         } else if (name == "interrupt_reason") {
             if (!value.get_string().get(text)) out.interrupt_reason = std::string(text);
         } else if (name == "pending_tool_calls") {
-            simdjson::ondemand::array calls;
-            if (value.get_array().get(calls)) return fail(ErrorCode::ParseError, "graph checkpoint: bad pending_tool_calls.");
-            out.pending_tool_calls.clear();
-            for (auto item : calls) {
-                simdjson::ondemand::object obj;
-                if (item.get_object().get(obj)) continue;
-                ToolCall call;
-                std::string_view id, tool, arguments;
-                if (!obj["id"].get_string().get(id)) call.id = std::string(id);
-                if (!obj["name"].get_string().get(tool)) call.name = std::string(tool);
-                if (!obj["arguments"].get_string().get(arguments)) call.arguments = std::string(arguments);
-                out.pending_tool_calls.push_back(std::move(call));
-            }
+            r = decode_calls(value, out.pending_tool_calls);
         } else if (name == "state") {
-            simdjson::ondemand::object obj;
-            if (value.get_object().get(obj)) return fail(ErrorCode::ParseError, "graph checkpoint: bad state.");
-            for (auto entry : obj) {
-                std::string_view k, v;
-                if (entry.unescaped_key().get(k)) return fail(ErrorCode::ParseError, "graph checkpoint: bad state key.");
-                std::string state_key(k);
-                if (entry.value().get_string().get(v))
-                    return fail(ErrorCode::ParseError, "graph checkpoint: bad state value: " + state_key);
-                state.values.insert_or_assign(std::move(state_key), std::string(v));
-            }
+            r = decode_values(value, state.values);
         } else if (name == "histories") {
-            simdjson::ondemand::object obj;
-            if (value.get_object().get(obj)) return fail(ErrorCode::ParseError, "graph checkpoint: bad histories.");
-            for (auto entry : obj) {
-                std::string_view k, raw;
-                if (entry.unescaped_key().get(k)) return fail(ErrorCode::ParseError, "graph checkpoint: bad history key.");
-                std::string node(k);
-                if (entry.value().raw_json().get(raw)) return fail(ErrorCode::ParseError, "graph checkpoint: bad history: " + node);
-                raw_histories.emplace_back(std::move(node), std::string(raw));
-            }
+            r = collect_histories(value, raw_histories);
+        } else if (name == "parallel" && progress) {
+            found_progress = true;
+            r = decode_progress(value, parallel, raw_branch_histories);
         }
+        if (!r.ok) return r;
     }
 
-    for (auto &[node, raw] : raw_histories) {
-        auto messages = decode_history_json(raw);
-        if (!messages.ok) return fail(messages.error.code, "graph checkpoint: history of '" + node + "': " + messages.error.message);
-        FlowMemory memory;
-        memory.id = out.thread_id + ":" + node;
-        memory.history = std::move(messages.value);
-        state.histories.insert_or_assign(std::move(node), std::move(memory));
+    auto built = build_histories(raw_histories, out.thread_id, state.histories);
+    if (!built.ok) return built;
+    if (found_progress) {
+        for (size_t i = 0; i < parallel.branches.size(); ++i) {
+            built = build_histories(raw_branch_histories[i], out.thread_id, parallel.branches[i].histories);
+            if (!built.ok) return built;
+        }
+        *progress = std::move(parallel);
     }
+    if (has_progress) *has_progress = found_progress;
 
     out.state.values = std::move(state.values);
     out.state.histories = std::move(state.histories);

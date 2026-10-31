@@ -703,6 +703,8 @@ Graph make_graph(GraphNode node);
 Graph make_sequential(std::string name, std::vector<Graph> steps);
 // Fans out to every branch (concurrently when the provider supports parallel inference), joins,
 // then continues. Branches must write distinct state keys; a key written by two branches fails the run.
+// Each branch's progress is checkpointed; a resume re-runs only the branches that did not finish.
+// Branches of a top-level fan-out may interrupt (see GraphRun::interrupts).
 Graph make_parallel(std::string name, std::vector<Graph> branches);
 // Runs body until until() returns true (checked after each iteration) or max_iterations is reached.
 Graph make_loop(std::string name, Graph body, int max_iterations, GraphUntilFn until = nullptr, void *user_data = nullptr);
@@ -788,6 +790,24 @@ struct Checkpointer {
 // checkpoints are waiting, the run blocks until the writer catches up.
 Result<Checkpointer> open_checkpointer(const CheckpointerOps *ops, const CheckpointerConfig &config = {}, size_t async_queue_capacity = 64);
 
+// One paused node. A run interrupted inside a Parallel node's branches reports one per paused
+// branch (branch = the branch's entry node); an interrupt outside a fan-out has branch empty.
+struct GraphInterrupt {
+    std::string branch;
+    std::string node;
+    std::string reason;
+    std::vector<ToolCall> pending_tool_calls;
+};
+
+// Per-branch answer for resume_graph(..., std::span<const GraphBranchInput>).
+struct GraphBranchInput {
+    std::string branch;      // GraphInterrupt::branch ("" = the interrupt outside a fan-out)
+    std::string human_input; // written to that branch's "temp:human_input" when non-empty
+    // Pending tool calls of the branch: Allow approves, Deny denies, Ask (default) decides from
+    // human_input like the string overload ("approve", "yes", ... approve).
+    PermissionDecision decision = PermissionDecision::Ask;
+};
+
 struct GraphRun {
     // Checkpoints and per-thread state are keyed by this. Empty = "default".
     std::string thread_id;
@@ -807,6 +827,9 @@ struct GraphRun {
     std::string interrupt_node;
     std::string interrupt_reason;
     std::vector<ToolCall> pending_tool_calls; // interrupt_before_tools: the calls awaiting approval
+    // Every paused node. Inside a Parallel node: one per paused branch (interrupt_node is then the
+    // Parallel node, interrupt_reason and pending_tool_calls the concatenation of all of them).
+    std::vector<GraphInterrupt> interrupts;
 
     std::vector<GraphEvent> events; // appended to by every run_graph / resume_graph call
 
@@ -827,6 +850,12 @@ Result<void> resume_graph(Session &session, const Graph &graph, std::string_view
 // Same, with an explicit decision for pending tool calls (Allow approves; Deny and Ask deny).
 Result<void> resume_graph(Session &session, const Graph &graph, std::string_view thread_id, GraphRun &run, PermissionDecision decision,
                           std::string_view human_input = {});
+// Resumes only the listed interrupted branches of a paused fan-out, each with its own input and
+// decision; branches not listed stay paused (the run reports them again once the others are done).
+// Finished branches are not re-run; failed or unfinished ones re-run from the node they stopped at.
+// A branch name that is not paused is InvalidConfig.
+Result<void> resume_graph(Session &session, const Graph &graph, std::string_view thread_id, GraphRun &run,
+                          std::span<const GraphBranchInput> inputs);
 
 // Stored checkpoints of a thread, oldest first.
 Result<std::vector<GraphCheckpointInfo>> list_graph_checkpoints(Session &session, std::string_view thread_id,

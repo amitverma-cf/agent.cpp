@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -29,12 +30,38 @@ int64_t now_ms();
 std::string checkpoint_key(std::string_view thread_id, std::string_view suffix);
 std::string_view status_name(GraphRunStatus status);
 
+// Progress of the branches of an unfinished top-level fan-out (the Parallel node run.next_node),
+// carried in its checkpoints so a resume re-runs only unfinished branches.
+enum class BranchStatus { Pending, Running, Done, Interrupted, Failed };
+
+struct BranchProgress {
+    std::string entry;
+    BranchStatus status = BranchStatus::Pending;
+    std::string next; // node the branch continues at (the interrupted / failed one when paused)
+    // The branch's state relative to the fan-out's input state: changed or added values (temp:
+    // keys excluded) and removed keys.
+    std::map<std::string, std::string, std::less<>> values;
+    std::vector<std::string> erased;
+    std::vector<std::string> writes; // keys written with set_state (join conflict check)
+    std::map<std::string, FlowMemory, std::less<>> histories;
+    std::string interrupt_node;
+    std::string interrupt_reason;
+    std::vector<ToolCall> pending_tool_calls;
+    std::string error;
+};
+
+struct ParallelProgress {
+    std::string node;
+    std::vector<BranchProgress> branches;
+};
+
 // Serialises the resumable part of run (step, next node, status, interrupt + pending tool calls,
-// non-temp state values, Agent node histories) as JSON.
-std::string encode_checkpoint(const GraphRun &run, std::string_view graph_name);
+// non-temp state values, Agent node histories, and parallel progress when given) as JSON.
+std::string encode_checkpoint(const GraphRun &run, std::string_view graph_name, const ParallelProgress *progress = nullptr);
 // Restores what encode_checkpoint wrote into out (state, step, next_node, status, interrupt fields,
-// pending_tool_calls). Agent histories get FlowMemory ids "<thread_id>:<node>".
-Result<void> decode_checkpoint(std::string_view json, GraphRun &out);
+// pending_tool_calls). Agent histories get FlowMemory ids "<thread_id>:<node>". The parallel
+// progress (if any) goes to *progress when progress is non-null.
+Result<void> decode_checkpoint(std::string_view json, GraphRun &out, ParallelProgress *progress = nullptr, bool *has_progress = nullptr);
 
 // GraphEvents as a JSON array ({"type": <enum value>, "node", "key", "ts", "payload"}), used by the
 // StoreOps checkpointer's event log. decode_events appends to out.
