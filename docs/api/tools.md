@@ -53,6 +53,10 @@ agent::rebuild_tool_index(session);   // required after mutating tools
 
 Tools are dispatched via `session.tool_by_name`, an `unordered_map<string, size_t>` that maps tool name to index in `session.config.tools`. `rebuild_tool_index` (re)builds this index. It is called automatically by `init()` and by `step_flow` when filtering to `allowed_tools`.
 
+### MCP servers
+
+`connect_mcp_server(session, McpServerConfig{...})` starts a Model Context Protocol server over stdio and registers each of its tools as `<server>.<tool>`. They go through the same permission gate as every other tool. See [mcp.md](mcp.md).
+
 ---
 
 ## Custom tool example

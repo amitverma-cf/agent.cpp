@@ -1,0 +1,675 @@
+// MCP (Model Context Protocol) stdio client: newline-delimited JSON-RPC 2.0 with a server running
+// as a child process. Each remote tool is registered as a Tool named "<server>.<tool>".
+//
+// Ownership: one McpServer per connection, held by a shared_ptr in a DataSource named
+// "mcp:<server>" in Session::retained_data_sources, so the Session owns the process and moving the
+// Session moves only the shared_ptr. Tool::user_data points at a RemoteTool owned by the McpServer.
+
+#include "../utils/utils.hpp"
+#include "hal/child_process.hpp"
+#include "hal/log_file.hpp"
+
+#include <agent-cpp/agent.hpp>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <set>
+#include <thread>
+#include <utility>
+
+namespace agent {
+
+namespace {
+
+constexpr std::string_view kProtocolVersion = "2025-06-18";
+constexpr std::string_view kDataSourcePrefix = "mcp:";
+constexpr size_t kMaxLineBytes = 64u * 1024 * 1024;
+constexpr size_t kStderrTailBytes = 2048;
+constexpr int kMaxListPages = 1000;
+
+using Clock = std::chrono::steady_clock;
+
+// Optional field: out is left untouched when the field is missing or has another type.
+template <typename T> bool try_get(simdjson::simdjson_result<simdjson::dom::element> field, T &out) {
+    return field.get(out) == simdjson::SUCCESS;
+}
+
+std::string clip(std::string_view s, size_t max = 200) {
+    if (s.size() <= max) return std::string(s);
+    return std::string(s.substr(0, max)) + "...";
+}
+
+std::string_view trim(std::string_view s) {
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.remove_prefix(1);
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
+    return s;
+}
+
+// Logger state copied out of the Session: the stderr thread outlives any particular Session address.
+struct LogSink {
+    LogFn fn = nullptr;
+    void *user_data = nullptr;
+    std::shared_ptr<FILE> file;
+    std::shared_ptr<std::mutex> mutex;
+
+    void write(LogLevel level, std::string_view message) const {
+        if (fn) fn(level, message, user_data);
+        if (!file || !mutex) return;
+        const char *tag = level == LogLevel::Debug     ? "DEBUG"
+                          : level == LogLevel::Warning ? "WARN"
+                          : level == LogLevel::Error   ? "ERROR"
+                                                       : "INFO";
+        std::lock_guard<std::mutex> lock(*mutex);
+        hal::write_log_line(file.get(), tag, message);
+    }
+};
+
+// ---- base64 (image/audio content) ----
+
+int b64_value(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+' || c == '-') return 62;
+    if (c == '/' || c == '_') return 63;
+    return -1;
+}
+
+bool base64_decode(std::string_view in, std::string &out) {
+    out.clear();
+    out.reserve(in.size() / 4 * 3);
+    uint32_t acc = 0;
+    int bits = 0;
+    for (char c : in) {
+        if (c == '=' || c == '\n' || c == '\r' || c == ' ' || c == '\t') continue;
+        int v = b64_value(c);
+        if (v < 0) return false;
+        acc = (acc << 6) | static_cast<uint32_t>(v);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<char>((acc >> bits) & 0xFFu));
+        }
+    }
+    return true;
+}
+
+std::string_view extension_for(std::string_view mime) {
+    static constexpr std::pair<std::string_view, std::string_view> kTable[] = {
+        {"image/png", "png"},     {"image/jpeg", "jpg"}, {"image/jpg", "jpg"}, {"image/gif", "gif"},   {"image/webp", "webp"},
+        {"image/svg+xml", "svg"}, {"image/bmp", "bmp"},  {"audio/wav", "wav"}, {"audio/x-wav", "wav"}, {"audio/wave", "wav"},
+        {"audio/mpeg", "mp3"},    {"audio/mp3", "mp3"},  {"audio/ogg", "ogg"}, {"audio/flac", "flac"}, {"audio/webm", "webm"},
+    };
+    for (const auto &[m, ext] : kTable)
+        if (m == mime) return ext;
+    return "bin";
+}
+
+std::string sanitize_for_filename(std::string_view s) {
+    std::string out;
+    for (char c : s) {
+        bool keep = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+        out.push_back(keep ? c : '_');
+    }
+    return out;
+}
+
+bool valid_server_name(std::string_view name) {
+    if (name.empty() || name.size() > 64) return false;
+    for (char c : name) {
+        bool okc = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+        if (!okc) return false;
+    }
+    return true;
+}
+
+class McpServer;
+
+struct RemoteTool {
+    std::string full_name; // "<server>.<tool>"
+    std::string remote_name;
+    std::string description;
+    std::string schema;
+    McpServer *server = nullptr;
+};
+
+// JSON-RPC error responses are reported with this code so callers can tell them apart from
+// transport failures (NetworkError) and malformed output (ParseError).
+constexpr ErrorCode kRemoteError = ErrorCode::HttpError;
+
+class McpServer {
+  public:
+    McpServerConfig config;
+    LogSink log;
+    std::shared_ptr<std::string> workspace;
+    std::vector<std::unique_ptr<RemoteTool>> tools;
+    std::string protocol_version;
+    std::string server_info;
+
+    McpServer(McpServerConfig cfg, LogSink sink, std::shared_ptr<std::string> ws)
+        : config(std::move(cfg)),
+          log(std::move(sink)),
+          workspace(std::move(ws)) {}
+    ~McpServer() { shutdown(); }
+    McpServer(const McpServer &) = delete;
+    McpServer &operator=(const McpServer &) = delete;
+
+    Result<void> start();
+    Result<std::string> call_tool(std::string_view remote_name, std::string_view arguments);
+    void shutdown();
+
+  private:
+    std::mutex mutex_; // serialises requests (and shutdown) on this server
+    std::unique_ptr<hal::ChildProcess> process_;
+    std::thread stderr_thread_;
+    std::atomic<bool> stop_{false};
+    std::atomic<bool> stderr_closed_{false}; // set by the stderr thread once it has drained everything
+    std::mutex stderr_mutex_;
+    std::string stderr_tail_;
+    std::string stdout_buf_;
+    int64_t next_id_ = 1;
+    bool dead_ = false;
+    std::string dead_reason_;
+    simdjson::dom::parser parser_;
+    uint64_t artifact_counter_ = 0;
+
+    std::string prefix() const { return "mcp server '" + config.name + "'"; }
+    std::string stderr_tail();
+    std::string exit_details();
+    void drain_stderr();
+    Result<void> send_line(const std::string &line);
+    Result<void> notify(std::string_view method, std::string_view params_json);
+    void answer_server_request(std::string_view method, simdjson::dom::element id);
+    Result<simdjson::dom::element> request(std::string_view method, std::string_view params_json);
+    Result<void> mark_dead(std::string reason);
+    Result<void> list_tools(bool advertised);
+    Result<std::string> map_call_result(simdjson::dom::element result, std::string_view remote_name);
+    std::string save_artifact(std::string_view remote_name, std::string_view base64, std::string_view mime, std::string_view kind);
+};
+
+std::string McpServer::stderr_tail() {
+    std::lock_guard<std::mutex> lock(stderr_mutex_);
+    return stderr_tail_;
+}
+
+void McpServer::drain_stderr() {
+    std::string buf;
+    auto flush_lines = [this, &buf](bool all) {
+        size_t start = 0;
+        for (;;) {
+            size_t nl = buf.find('\n', start);
+            if (nl == std::string::npos) break;
+            std::string_view line = trim(std::string_view(buf).substr(start, nl - start));
+            if (!line.empty()) log.write(LogLevel::Info, "[mcp:" + config.name + "] " + std::string(line));
+            start = nl + 1;
+        }
+        buf.erase(0, start);
+        if (all && !trim(buf).empty()) log.write(LogLevel::Info, "[mcp:" + config.name + "] " + std::string(trim(buf)));
+        if (all) buf.clear();
+    };
+    while (!stop_.load()) {
+        const size_t before = buf.size();
+        hal::PipeRead r = process_->read(hal::ChildStream::Stderr, buf, 100);
+        if (r == hal::PipeRead::Data) {
+            {
+                std::lock_guard<std::mutex> lock(stderr_mutex_);
+                stderr_tail_.append(buf, before, std::string::npos);
+                if (stderr_tail_.size() > kStderrTailBytes) stderr_tail_.erase(0, stderr_tail_.size() - kStderrTailBytes);
+            }
+            flush_lines(false);
+            if (buf.size() > 64 * 1024) flush_lines(true); // a very long line without '\n'
+        } else if (r != hal::PipeRead::Timeout) {
+            break;
+        }
+    }
+    flush_lines(true);
+    stderr_closed_.store(true);
+}
+
+Result<void> McpServer::mark_dead(std::string reason) {
+    dead_ = true;
+    dead_reason_ = reason;
+    return fail(ErrorCode::NetworkError, std::move(reason));
+}
+
+// " (exit code N); stderr: ..." for a server whose pipes broke. Waits briefly for the exit status and
+// the last stderr lines (usually the explanation) to arrive.
+std::string McpServer::exit_details() {
+    for (int i = 0; i < 100 && !(process_->exited() && stderr_closed_.load()); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    std::string out;
+    if (process_->exited()) out += " (exit code " + std::to_string(process_->exit_code()) + ")";
+    std::string tail = std::string(trim(stderr_tail()));
+    if (!tail.empty()) out += "; stderr: " + clip(tail, 500);
+    return out;
+}
+
+Result<void> McpServer::send_line(const std::string &line) {
+    auto w = process_->write_stdin(line);
+    if (!w.ok) return mark_dead(prefix() + " is not accepting input (" + w.error.message + ")" + exit_details());
+    return ok();
+}
+
+Result<void> McpServer::notify(std::string_view method, std::string_view params_json) {
+    std::string line = "{\"jsonrpc\":\"2.0\",\"method\":\"";
+    utils::escape_json_string(method, line);
+    line += "\"";
+    if (!params_json.empty()) {
+        line += ",\"params\":";
+        line += params_json;
+    }
+    line += "}\n";
+    return send_line(line);
+}
+
+// Requests the server sends to us. We advertise no client capabilities, so only ping is answered.
+void McpServer::answer_server_request(std::string_view method, simdjson::dom::element id) {
+    std::string line = "{\"jsonrpc\":\"2.0\",\"id\":" + simdjson::to_string(id);
+    if (method == "ping") line += ",\"result\":{}}\n";
+    else {
+        line += ",\"error\":{\"code\":-32601,\"message\":\"Method not supported by client: ";
+        utils::escape_json_string(method, line);
+        line += "\"}}\n";
+    }
+    (void)send_line(line);
+}
+
+Result<simdjson::dom::element> McpServer::request(std::string_view method, std::string_view params_json) {
+    using R = Result<simdjson::dom::element>;
+    auto failure = [](ErrorCode code, std::string msg) { return R{.ok = false, .value = {}, .error = make_error(code, std::move(msg))}; };
+    if (dead_) return failure(ErrorCode::NetworkError, prefix() + " is not running: " + dead_reason_);
+
+    const int64_t id = next_id_++;
+    std::string line = "{\"jsonrpc\":\"2.0\",\"id\":" + std::to_string(id) + ",\"method\":\"";
+    utils::escape_json_string(method, line);
+    line += "\",\"params\":";
+    line += params_json.empty() ? std::string_view("{}") : params_json;
+    line += "}\n";
+    auto sent = send_line(line);
+    if (!sent.ok) return failure(sent.error.code, sent.error.message);
+
+    const auto deadline = Clock::now() + std::chrono::milliseconds(config.timeout_ms);
+    for (;;) {
+        size_t nl = stdout_buf_.find('\n');
+        if (nl == std::string::npos) {
+            if (stdout_buf_.size() > kMaxLineBytes) {
+                auto d = mark_dead(prefix() + " sent a line longer than " + std::to_string(kMaxLineBytes) + " bytes");
+                return failure(ErrorCode::ParseError, d.error.message);
+            }
+            auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+            if (left <= 0) {
+                (void)notify("notifications/cancelled", "{\"requestId\":" + std::to_string(id) + ",\"reason\":\"timeout\"}");
+                return failure(ErrorCode::NetworkError,
+                               prefix() + ": " + std::string(method) + " timed out after " + std::to_string(config.timeout_ms) + " ms");
+            }
+            hal::PipeRead r = process_->read(hal::ChildStream::Stdout, stdout_buf_, static_cast<int>(left));
+            if (r == hal::PipeRead::Closed || r == hal::PipeRead::Error) {
+                std::string reason = prefix() + (r == hal::PipeRead::Error ? " stdout read failed" : " exited") + " while waiting for " +
+                                     std::string(method) + exit_details();
+                auto d = mark_dead(std::move(reason));
+                return failure(ErrorCode::NetworkError, d.error.message);
+            }
+            continue;
+        }
+
+        std::string raw = stdout_buf_.substr(0, nl);
+        stdout_buf_.erase(0, nl + 1);
+        std::string_view text = trim(raw);
+        if (text.empty()) continue;
+        if (text.front() != '{') {
+            // Not JSON-RPC. The spec forbids it, but some launchers print banners on stdout.
+            log.write(LogLevel::Warning, prefix() + ": ignoring non-JSON-RPC output: " + clip(text));
+            continue;
+        }
+
+        simdjson::dom::element msg;
+        if (parser_.parse(text.data(), text.size()).get(msg) != simdjson::SUCCESS || !msg.is_object())
+            return failure(ErrorCode::ParseError, prefix() + " sent invalid JSON: " + clip(text));
+
+        simdjson::dom::element id_el;
+        const bool has_id = msg["id"].get(id_el) == simdjson::SUCCESS && !id_el.is_null();
+        std::string_view inbound_method;
+        if (msg["method"].get(inbound_method) == simdjson::SUCCESS) {
+            if (has_id) {
+                answer_server_request(inbound_method, id_el);
+            } else if (inbound_method == "notifications/message") {
+                simdjson::dom::element params;
+                if (msg["params"].get(params) == simdjson::SUCCESS)
+                    log.write(LogLevel::Info, "[mcp:" + config.name + "] " + clip(simdjson::to_string(params), 1000));
+            }
+            continue; // other notifications (progress, list_changed, ...) are ignored
+        }
+
+        int64_t got = -1;
+        if (!has_id || id_el.get(got) != simdjson::SUCCESS || got != id) continue; // stale reply to a timed-out request
+
+        simdjson::dom::element err;
+        if (msg["error"].get(err) == simdjson::SUCCESS) {
+            std::string_view message = "unknown error";
+            int64_t code = 0;
+            try_get(err["message"], message);
+            try_get(err["code"], code);
+            return failure(kRemoteError, prefix() + ": " + std::string(method) + " failed: " + std::string(message) + " (code " +
+                                             std::to_string(code) + ")");
+        }
+        simdjson::dom::element result;
+        if (msg["result"].get(result) != simdjson::SUCCESS)
+            return failure(ErrorCode::ParseError, prefix() + ": response to " + std::string(method) + " has neither result nor error");
+        return R{.ok = true, .value = result, .error = {}};
+    }
+}
+
+Result<void> McpServer::start() {
+    hal::SpawnOptions opts;
+    opts.program = config.command;
+    opts.args = config.args;
+    opts.env = config.env;
+    opts.working_directory = config.working_directory;
+    auto spawned = hal::spawn_child(opts);
+    if (!spawned.ok) return fail(ErrorCode::ProviderInitFailed, prefix() + ": " + spawned.error.message);
+    process_ = std::move(spawned.value);
+    stderr_thread_ = std::thread([this]() { drain_stderr(); });
+
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    std::string init_params = "{\"protocolVersion\":\"" + std::string(kProtocolVersion) +
+                              "\",\"capabilities\":{},\"clientInfo\":{\"name\":\"agent.cpp\",\"version\":\"0.1.0\"}}";
+    auto init = request("initialize", init_params);
+    bool advertised_tools = true;
+    if (init.ok) {
+        std::string_view version, name, ver;
+        if (init.value["protocolVersion"].get(version) == simdjson::SUCCESS) protocol_version = std::string(version);
+        simdjson::dom::element info;
+        if (init.value["serverInfo"].get(info) == simdjson::SUCCESS) {
+            try_get(info["name"], name);
+            try_get(info["version"], ver);
+            server_info = std::string(name) + (ver.empty() ? "" : " " + std::string(ver));
+        }
+        simdjson::dom::element caps, tools_cap;
+        advertised_tools = init.value["capabilities"].get(caps) == simdjson::SUCCESS && caps["tools"].get(tools_cap) == simdjson::SUCCESS;
+        auto n = notify("notifications/initialized", "");
+        if (!n.ok) return n;
+    } else if (init.error.code == kRemoteError) {
+        // Servers that predate (or drop) the handshake answer with an error; carry on without it.
+        log.write(LogLevel::Warning, prefix() + ": initialize was rejected, continuing without the handshake (" + init.error.message + ")");
+    } else {
+        return fail(init.error.code == ErrorCode::NetworkError ? ErrorCode::ProviderInitFailed : init.error.code, init.error.message);
+    }
+
+    return list_tools(advertised_tools);
+}
+
+Result<void> McpServer::list_tools(bool advertised) {
+    std::string cursor;
+    std::set<std::string, std::less<>> seen_cursors;
+    std::set<std::string, std::less<>> names;
+    for (int page = 0;; ++page) {
+        if (page >= kMaxListPages)
+            return fail(ErrorCode::ParseError, prefix() + ": tools/list did not finish after " + std::to_string(page) + " pages");
+        std::string params = "{}";
+        if (!cursor.empty()) params = "{\"cursor\":\"" + utils::escape_json_string(cursor) + "\"}";
+        auto res = request("tools/list", params);
+        if (!res.ok) {
+            if (res.error.code == kRemoteError && !advertised && page == 0) {
+                log.write(LogLevel::Info, prefix() + " offers no tools");
+                return ok();
+            }
+            return fail(res.error.code, res.error.message);
+        }
+
+        simdjson::dom::array list;
+        if (res.value["tools"].get(list) != simdjson::SUCCESS)
+            return fail(ErrorCode::ParseError, prefix() + ": tools/list result has no \"tools\" array");
+        for (simdjson::dom::element t : list) {
+            std::string_view name;
+            if (t["name"].get(name) != simdjson::SUCCESS || name.empty()) {
+                log.write(LogLevel::Warning, prefix() + ": skipping a tool without a name");
+                continue;
+            }
+            if (!names.emplace(name).second) {
+                log.write(LogLevel::Warning, prefix() + ": skipping duplicate tool '" + std::string(name) + "'");
+                continue;
+            }
+            auto rt = std::make_unique<RemoteTool>();
+            rt->remote_name = std::string(name);
+            rt->full_name = config.name + "." + rt->remote_name;
+            std::string_view desc, title;
+            if (t["description"].get(desc) == simdjson::SUCCESS) rt->description = std::string(desc);
+            else if (t["title"].get(title) == simdjson::SUCCESS) rt->description = std::string(title);
+            else rt->description = "Tool '" + rt->remote_name + "' of MCP server '" + config.name + "'.";
+            simdjson::dom::element schema;
+            if (t["inputSchema"].get(schema) == simdjson::SUCCESS && schema.is_object()) rt->schema = simdjson::to_string(schema);
+            else rt->schema = "{\"type\":\"object\"}";
+            rt->server = this;
+            tools.push_back(std::move(rt));
+        }
+
+        std::string_view next;
+        if (res.value["nextCursor"].get(next) != simdjson::SUCCESS || next.empty()) break;
+        if (!seen_cursors.emplace(next).second)
+            return fail(ErrorCode::ParseError, prefix() + ": tools/list returned the cursor '" + clip(next) + "' twice");
+        cursor = std::string(next);
+    }
+    return ok();
+}
+
+std::string McpServer::save_artifact(std::string_view remote_name, std::string_view base64, std::string_view mime, std::string_view kind) {
+    std::string bytes;
+    if (!base64_decode(base64, bytes)) return "[" + std::string(kind) + " content with invalid base64 data was dropped]";
+    if (!workspace || workspace->empty()) return "[" + std::string(kind) + " content dropped: no workspace]";
+
+    std::error_code ec;
+    std::filesystem::path dir = std::filesystem::path(*workspace) / "artifacts";
+    std::filesystem::create_directories(dir, ec);
+    const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    std::string file = "mcp-" + sanitize_for_filename(config.name) + "-" + sanitize_for_filename(remote_name) + "-" +
+                       std::to_string(stamp) + "-" + std::to_string(++artifact_counter_) + "." + std::string(extension_for(mime));
+    std::filesystem::path path = dir / file;
+    std::ofstream out(path, std::ios::binary);
+    if (!out) return "[" + std::string(kind) + " content dropped: cannot write " + path.string() + "]";
+    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    out.close();
+    if (!out) return "[" + std::string(kind) + " content dropped: cannot write " + path.string() + "]";
+    return "[" + std::string(kind) + " saved to " + path.string() + " (" + std::string(mime) + ", " + std::to_string(bytes.size()) +
+           " bytes)]";
+}
+
+Result<std::string> McpServer::map_call_result(simdjson::dom::element result, std::string_view remote_name) {
+    std::string text;
+    auto append = [&text](std::string_view part) {
+        if (!text.empty()) text += "\n";
+        text += part;
+    };
+
+    simdjson::dom::array content;
+    if (result["content"].get(content) == simdjson::SUCCESS) {
+        for (simdjson::dom::element item : content) {
+            std::string_view type;
+            try_get(item["type"], type);
+            std::string_view value, mime;
+            if (type == "text") {
+                if (item["text"].get(value) == simdjson::SUCCESS) append(value);
+            } else if (type == "image" || type == "audio") {
+                try_get(item["mimeType"], mime);
+                if (item["data"].get(value) == simdjson::SUCCESS) append(save_artifact(remote_name, value, mime, type));
+            } else if (type == "resource") {
+                simdjson::dom::element res;
+                if (item["resource"].get(res) == simdjson::SUCCESS) {
+                    std::string_view uri;
+                    try_get(res["uri"], uri);
+                    try_get(res["mimeType"], mime);
+                    if (res["text"].get(value) == simdjson::SUCCESS) append(value);
+                    else if (res["blob"].get(value) == simdjson::SUCCESS) append(save_artifact(remote_name, value, mime, "resource"));
+                    else append("[resource " + std::string(uri) + "]");
+                }
+            } else if (type == "resource_link") {
+                std::string_view uri, name;
+                try_get(item["uri"], uri);
+                try_get(item["name"], name);
+                append("[resource link " + std::string(name.empty() ? uri : name) + (name.empty() ? "" : ": " + std::string(uri)) + "]");
+            } else {
+                append("[unsupported content type '" + std::string(type) + "']");
+            }
+        }
+    }
+    simdjson::dom::element structured;
+    if (text.empty() && result["structuredContent"].get(structured) == simdjson::SUCCESS) text = simdjson::to_string(structured);
+
+    bool is_error = false;
+    try_get(result["isError"], is_error);
+    if (is_error) return fail<std::string>(kRemoteError, text.empty() ? "tool reported an error" : text);
+    return ok(std::move(text));
+}
+
+Result<std::string> McpServer::call_tool(std::string_view remote_name, std::string_view arguments) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!process_) return fail<std::string>(ErrorCode::NetworkError, prefix() + " is disconnected");
+
+    std::string args = "{}";
+    std::string_view trimmed = trim(arguments);
+    if (!trimmed.empty()) {
+        simdjson::dom::element parsed;
+        if (parser_.parse(trimmed.data(), trimmed.size()).get(parsed) != simdjson::SUCCESS)
+            return fail<std::string>(ErrorCode::ParseError, "arguments are not valid JSON");
+        if (!parsed.is_object()) return fail<std::string>(ErrorCode::ParseError, "arguments must be a JSON object");
+        args = simdjson::to_string(parsed); // minified: the request must stay on one line
+    }
+
+    std::string params = "{\"name\":\"";
+    utils::escape_json_string(remote_name, params);
+    params += "\",\"arguments\":";
+    params += args;
+    params += "}";
+    auto res = request("tools/call", params);
+    if (!res.ok) return fail<std::string>(res.error.code, res.error.message);
+    return map_call_result(res.value, remote_name);
+}
+
+void McpServer::shutdown() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!process_) return;
+    const int grace = config.timeout_ms < 2000 ? config.timeout_ms : 2000;
+    int code = process_->terminate(grace); // closes stdin first: the spec's stdio shutdown
+    stop_.store(true);
+    if (stderr_thread_.joinable()) stderr_thread_.join();
+    process_.reset();
+    dead_ = true;
+    dead_reason_ = "disconnected";
+    log.write(LogLevel::Debug, prefix() + " stopped (exit code " + std::to_string(code) + ")");
+}
+
+// ---- Session glue ----
+
+Result<std::string> remote_tool_callback(std::string_view arguments, void *user_data) {
+    auto *rt = static_cast<RemoteTool *>(user_data);
+    if (!rt || !rt->server) return fail<std::string>(ErrorCode::InvalidConfig, "MCP tool has no server");
+    return rt->server->call_tool(rt->remote_name, arguments);
+}
+
+// DataSource::query: {"name": "<remote tool>", "arguments": {...}} -> tools/call.
+Result<std::string> server_query(void *state, std::string_view query, void *) {
+    auto *server = static_cast<McpServer *>(state);
+    simdjson::dom::parser parser;
+    simdjson::dom::element doc;
+    std::string_view name;
+    if (parser.parse(query.data(), query.size()).get(doc) != simdjson::SUCCESS || doc["name"].get(name) != simdjson::SUCCESS)
+        return fail<std::string>(ErrorCode::ParseError, "MCP query must be {\"name\": \"<tool>\", \"arguments\": {...}}");
+    simdjson::dom::element args;
+    std::string args_json = doc["arguments"].get(args) == simdjson::SUCCESS ? simdjson::to_string(args) : std::string("{}");
+    return server->call_tool(std::string(name), args_json);
+}
+
+bool is_mcp_entry(const std::shared_ptr<DataSource> &ds) {
+    return ds && ds->query == server_query && ds->state && std::string_view(ds->name).starts_with(kDataSourcePrefix);
+}
+
+void unregister_tools(Session &session, const McpServer *server) {
+    auto &tools = session.config.tools;
+    std::erase_if(tools, [server](const Tool &t) {
+        return t.callback == remote_tool_callback && t.user_data && static_cast<const RemoteTool *>(t.user_data)->server == server;
+    });
+    rebuild_tool_index(session);
+}
+
+} // namespace
+
+Result<std::vector<Tool>> connect_mcp_server(Session &session, const McpServerConfig &config) {
+    using R = Result<std::vector<Tool>>;
+    if (!valid_server_name(config.name))
+        return fail<std::vector<Tool>>(ErrorCode::InvalidConfig,
+                                       "MCP server name '" + config.name + "' is invalid (use 1-64 letters, digits, '_' or '-')");
+    if (config.command.empty()) return fail<std::vector<Tool>>(ErrorCode::InvalidConfig, "MCP server '" + config.name + "' has no command");
+    if (config.timeout_ms <= 0)
+        return fail<std::vector<Tool>>(ErrorCode::InvalidConfig, "MCP server '" + config.name + "' needs timeout_ms > 0");
+    const std::string entry_name = std::string(kDataSourcePrefix) + config.name;
+    for (const auto &ds : session.retained_data_sources)
+        if (is_mcp_entry(ds) && ds->name == entry_name)
+            return fail<std::vector<Tool>>(ErrorCode::InvalidConfig, "MCP server '" + config.name + "' is already connected");
+
+    LogSink sink{
+        .fn = session.config.logger, .user_data = session.config.logger_user_data, .file = session.log_file, .mutex = session.log_mutex};
+    auto server = std::make_shared<McpServer>(config, std::move(sink), session.workspace_path);
+    auto started = server->start();
+    if (!started.ok) return fail<std::vector<Tool>>(started.error.code, started.error.message);
+
+    for (const auto &rt : server->tools) {
+        if (session.tool_by_name.count(rt->full_name))
+            return fail<std::vector<Tool>>(ErrorCode::InvalidConfig,
+                                           "MCP server '" + config.name + "': a tool named '" + rt->full_name + "' is already registered");
+    }
+
+    std::vector<Tool> registered;
+    registered.reserve(server->tools.size());
+    for (const auto &rt : server->tools) {
+        Tool t{.name = rt->full_name,
+               .description = rt->description,
+               .parameter_schema = rt->schema,
+               .callback = remote_tool_callback,
+               .user_data = rt.get()};
+        session.config.tools.push_back(t);
+        registered.push_back(t);
+    }
+
+    auto ds = std::make_shared<DataSource>();
+    ds->name = entry_name;
+    ds->state = server;
+    ds->query = server_query;
+    session.retained_data_sources.push_back(std::move(ds));
+    rebuild_tool_index(session);
+
+    utils::log(session, LogLevel::Info,
+               "MCP server '" + config.name + "' connected" + (server->server_info.empty() ? "" : " (" + server->server_info + ")") +
+                   (server->protocol_version.empty() ? "" : ", protocol " + server->protocol_version) + ", " +
+                   std::to_string(registered.size()) + " tool(s)");
+    return R{.ok = true, .value = std::move(registered), .error = {}};
+}
+
+Result<void> disconnect_mcp_server(Session &session, std::string_view name) {
+    const std::string entry_name = std::string(kDataSourcePrefix) + std::string(name);
+    auto &list = session.retained_data_sources;
+    for (auto it = list.begin(); it != list.end(); ++it) {
+        if (!is_mcp_entry(*it) || (*it)->name != entry_name) continue;
+        auto *server = static_cast<McpServer *>((*it)->state.get());
+        unregister_tools(session, server);
+        server->shutdown();
+        list.erase(it);
+        return ok();
+    }
+    return fail(ErrorCode::KeyNotFound, "MCP server '" + std::string(name) + "' is not connected");
+}
+
+void disconnect_mcp_servers(Session &session) {
+    for (const auto &name : list_mcp_servers(session)) (void)disconnect_mcp_server(session, name);
+}
+
+std::vector<std::string> list_mcp_servers(const Session &session) {
+    std::vector<std::string> names;
+    for (const auto &ds : session.retained_data_sources)
+        if (is_mcp_entry(ds)) names.push_back(ds->name.substr(kDataSourcePrefix.size()));
+    return names;
+}
+
+} // namespace agent

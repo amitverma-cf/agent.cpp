@@ -183,7 +183,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [x] **Interrupts** for human approval (reuse the permission `Ask`)
 - [ ] Load graphs from `agent.json`
 - [ ] Port skills, permissions, context compression, fs/terminal tools
-- [ ] MCP stdio client
+- [x] MCP stdio client (`connect_mcp_server`, see [docs/api/mcp.md](api/mcp.md))
 - [x] RAG pipeline: chunk → embed → `VectorStoreOps` → rerank → inject (`rag_index` / `rag_query` / `search_knowledge` tool via `make_rag_tool`; see [docs/api/rag.md](api/rag.md)). A dedicated graph node kind is not added: an Agent node with the tool, or a Function node calling `rag_query`, covers it
 
 ### Phase 4: Engine add-ons (ongoing; each is an independent task)
