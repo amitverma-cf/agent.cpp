@@ -16,6 +16,11 @@ const StoreOps *sqlite_store();
 // 1 - cosine distance. An existing table keeps the dimensions it was created with.
 const VectorStoreOps *sqlite_vector_store();
 
+// SQLite graph checkpointer (open with agent::open_checkpointer). CheckpointerConfig::path: file
+// path, or empty / ":memory:". WAL journal; table graph_checkpoints keyed by (thread_id, step).
+// Safe to share between threads; several processes may open the same file.
+const CheckpointerOps *sqlite_checkpointer();
+
 } // namespace agent::store
 
 namespace agent {

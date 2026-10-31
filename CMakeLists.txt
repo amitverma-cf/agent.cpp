@@ -78,6 +78,7 @@ add_library(agent
     src/core/executor/ambient_turn.cpp
     src/core/graph/graph_builders.cpp
     src/core/graph/graph_checkpoint.cpp
+    src/core/graph/graph_checkpointer.cpp
     src/core/graph/graph_executor.cpp
     src/core/graph/graph_json.cpp
     src/core/mcp/mcp_client.cpp
@@ -132,6 +133,7 @@ target_link_libraries(agent PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
 # Optional SQLite storage (KV store + sqlite-vec data source). Used by the CLI; library users opt in
 # by linking agent_store_sqlite. libagent itself has no SQLite dependency.
 add_library(agent_store_sqlite
+    tools/store-sqlite/src/sqlite_checkpointer.cpp
     tools/store-sqlite/src/sqlite_store.cpp
     tools/store-sqlite/src/sqlite_vec_data_source.cpp
     vendor/sqlite/sqlite3.c
@@ -272,6 +274,7 @@ add_executable(test_agent
     tests/unit/test_graph.cpp
     tests/unit/test_rag.cpp
     tests/unit/test_graph_json.cpp
+    tests/unit/test_graph_durability.cpp
     tests/unit/test_mcp.cpp
     tests/unit/test_sandbox.cpp
     tests/unit/test_model_registry.cpp

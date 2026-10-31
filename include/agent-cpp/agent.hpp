@@ -707,9 +707,10 @@ Graph make_parallel(std::string name, std::vector<Graph> branches);
 // Runs body until until() returns true (checked after each iteration) or max_iterations is reached.
 Graph make_loop(std::string name, Graph body, int max_iterations, GraphUntilFn until = nullptr, void *user_data = nullptr);
 
-// Exit: checkpoint only when run_graph / resume_graph returns. Async: after every node (v1 writes
-// synchronously, identical to Sync; reserved for a background writer). Sync: after every node,
-// before the next one starts.
+// Exit: checkpoint only when run_graph / resume_graph returns. Async: after every node, written by a
+// background thread (bounded queue) that is flushed before the call returns; a crash can lose the
+// checkpoints still queued, so a resume may re-run up to that many completed nodes. Sync: after
+// every node, before the next one starts.
 enum class GraphDurability { Exit, Async, Sync };
 
 enum class GraphRunStatus { Pending, Running, Completed, Interrupted, Failed };
@@ -726,10 +727,66 @@ struct GraphEvent {
     std::string payload;      // short (truncated) value, arguments, result, reason or error
 };
 
+// One stored checkpoint of a thread, as listed by CheckpointerOps::list / list_graph_checkpoints.
+struct GraphCheckpointInfo {
+    uint64_t step = 0;
+    int64_t timestamp_ms = 0; // when it was written (ms since the Unix epoch)
+    std::string metadata;     // JSON object written by the runtime: {"graph", "step", "next", "status", ...}
+};
+
+struct CheckpointerConfig {
+    // Backend-specific location. In-memory: unused. SQLite: file path, or empty / ":memory:".
+    std::string path;
+};
+
+// Pluggable graph checkpointer, same pattern as StoreOps / VectorStoreOps. open() returns the state
+// passed to every other call. Implementations must be safe to call from several threads on one
+// state (the Async writer calls put from a background thread). Steps of one thread only grow;
+// putting an existing (thread_id, step) replaces it.
+struct CheckpointerOps {
+    using OpenFn = Result<std::shared_ptr<void>> (*)(const CheckpointerConfig &config);
+    using PutFn = Result<void> (*)(void *state, std::string_view thread_id, uint64_t step, std::string_view blob,
+                                   std::string_view metadata);
+    // The checkpoint with the highest step. ErrorCode::KeyNotFound when the thread has none.
+    using GetLatestFn = Result<std::string> (*)(void *state, std::string_view thread_id);
+    // ErrorCode::KeyNotFound when that step was not stored.
+    using GetFn = Result<std::string> (*)(void *state, std::string_view thread_id, uint64_t step);
+    // Every stored checkpoint of the thread, oldest step first (empty when there are none).
+    using ListFn = Result<std::vector<GraphCheckpointInfo>> (*)(void *state, std::string_view thread_id);
+    using DeleteThreadFn = Result<void> (*)(void *state, std::string_view thread_id);
+
+    OpenFn open = nullptr;
+    PutFn put = nullptr;
+    GetLatestFn get_latest = nullptr;
+    GetFn get = nullptr;
+    ListFn list = nullptr;
+    DeleteThreadFn delete_thread = nullptr;
+};
+
+// Checkpoints kept in process memory (nothing persists past the Checkpointer). The optional
+// agent-store-sqlite library provides agent::store::sqlite_checkpointer().
+const CheckpointerOps *in_memory_checkpointer();
+
+// An opened checkpointer. Copies share the same state and Async writer. ops == nullptr (the
+// default) stores checkpoints through the Session's StoreOps under checkpoint:<thread_id>:<step>,
+// as before CheckpointerOps existed.
+struct Checkpointer {
+    const CheckpointerOps *ops = nullptr;
+    std::shared_ptr<void> state;  // from ops->open
+    std::shared_ptr<void> writer; // runtime-owned Async background writer (one thread per checkpointer)
+};
+
+// Opens ops with config. async_queue_capacity bounds the Async writer's queue: when that many
+// checkpoints are waiting, the run blocks until the writer catches up.
+Result<Checkpointer> open_checkpointer(const CheckpointerOps *ops, const CheckpointerConfig &config = {}, size_t async_queue_capacity = 64);
+
 struct GraphRun {
     // Checkpoints and per-thread state are keyed by this. Empty = "default".
     std::string thread_id;
     GraphDurability durability = GraphDurability::Async;
+    // Where checkpoints go. Default: the Session's StoreOps. Set it on the GraphRun passed to
+    // resume_graph too.
+    Checkpointer checkpointer;
 
     // Seed values before run_graph (prefer set_state); the final state afterwards.
     GraphState state;
@@ -762,6 +819,12 @@ Result<void> resume_graph(Session &session, const Graph &graph, std::string_view
 // Same, with an explicit decision for pending tool calls (Allow approves; Deny and Ask deny).
 Result<void> resume_graph(Session &session, const Graph &graph, std::string_view thread_id, GraphRun &run, PermissionDecision decision,
                           std::string_view human_input = {});
+
+// Stored checkpoints of a thread, oldest first.
+Result<std::vector<GraphCheckpointInfo>> list_graph_checkpoints(Session &session, std::string_view thread_id,
+                                                                const Checkpointer &checkpointer = {});
+// Deletes a thread's checkpoints (and its persisted events); a later run_graph starts it fresh.
+Result<void> delete_graph_thread(Session &session, std::string_view thread_id, const Checkpointer &checkpointer = {});
 
 } // namespace agent
 
