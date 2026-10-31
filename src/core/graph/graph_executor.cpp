@@ -588,24 +588,50 @@ void clear_temp(GraphState &state) {
     state.interrupt_reason.clear();
 }
 
-Result<void> write_checkpoint(Session &session, const Graph &graph, GraphRun &run) {
-    const std::string json = graph::encode_checkpoint(run, graph.name);
-    const std::string step_key = graph::checkpoint_key(run.thread_id, std::to_string(run.step));
-    auto put = store_memory(session, step_key, json);
-    if (!put.ok) return put;
-    put = store_memory(session, graph::checkpoint_key(run.thread_id, "latest"), json);
-    if (!put.ok) return put;
-    log_event(run.events, GraphEventType::Checkpoint, run.next_node, step_key, {});
-    return ok();
+// One run_graph / resume_graph call: where its checkpoints go.
+struct RunCtx {
+    Session &session;
+    const Graph &graph;
+    GraphRun &run;
+    graph::Sink sink;
+};
+
+std::string checkpoint_metadata(const RunCtx &c) {
+    std::string meta = "{\"graph\":\"";
+    utils::escape_json_string(c.graph.name, meta);
+    meta += "\",\"step\":" + std::to_string(c.run.step) + ",\"next\":\"";
+    utils::escape_json_string(c.run.next_node, meta);
+    meta += "\",\"status\":\"";
+    meta += graph::status_name(c.run.status);
+    meta += "\"}";
+    return meta;
 }
 
-// Ends the call: final checkpoint, temp: keys dropped.
-Result<void> finish(Session &session, const Graph &graph, GraphRun &run, std::optional<Error> error) {
+// Writes the run's current checkpoint. through_writer: queue it on the Async writer (when there is
+// one); otherwise it is written before this returns.
+Result<void> write_checkpoint(RunCtx &c, bool through_writer) {
+    GraphRun &run = c.run;
+    log_event(run.events, GraphEventType::Checkpoint, run.next_node, graph::checkpoint_key(run.thread_id, std::to_string(run.step)), {});
+    std::string json = graph::encode_checkpoint(run, c.graph.name);
+    std::string meta = checkpoint_metadata(c);
+    if (through_writer && c.sink.writer) {
+        c.sink.writer->put(run.thread_id, run.step, std::move(json), std::move(meta));
+        return ok();
+    }
+    return c.sink.ops->put(c.sink.state, run.thread_id, run.step, json, meta);
+}
+
+// Ends the call: queued Async checkpoints flushed, final checkpoint, temp: keys dropped.
+Result<void> finish(RunCtx &c, std::optional<Error> error) {
+    GraphRun &run = c.run;
     if (error) {
         run.status = GraphRunStatus::Failed;
         run.error = *error;
     }
-    auto cp = write_checkpoint(session, graph, run);
+    Result<void> cp = ok();
+    if (c.sink.writer) cp = c.sink.writer->flush();
+    auto last = write_checkpoint(c, false);
+    if (cp.ok) cp = std::move(last);
     clear_temp(run.state);
     if (error) return Result<void>{.ok = false, .error = std::move(*error)};
     if (!cp.ok) {
@@ -615,7 +641,10 @@ Result<void> finish(Session &session, const Graph &graph, GraphRun &run, std::op
     return cp;
 }
 
-Result<void> drive(Session &session, const Graph &graph, GraphRun &run, ScopedIndex &index, const PendingResume *resume) {
+Result<void> drive(RunCtx &c, ScopedIndex &index, const PendingResume *resume) {
+    Session &session = c.session;
+    const Graph &graph = c.graph;
+    GraphRun &run = c.run;
     Exec x{.session = session,
            .graph = graph,
            .thread_id = run.thread_id,
@@ -627,48 +656,47 @@ Result<void> drive(Session &session, const Graph &graph, GraphRun &run, ScopedIn
            .models = run.models};
 
     auto seeded = drain_writes(x, {}); // caller seeds and human input
-    if (!seeded.ok) return finish(session, graph, run, seeded.error);
+    if (!seeded.ok) return finish(c, seeded.error);
 
     int steps = 0;
     while (run.next_node != kGraphEnd) {
         if (++steps > graph.max_steps)
-            return finish(session, graph, run,
-                          make_error(ErrorCode::InvalidConfig,
-                                     "graph '" + graph.name + "' exceeded max_steps (" + std::to_string(graph.max_steps) + ")"));
+            return finish(c, make_error(ErrorCode::InvalidConfig,
+                                        "graph '" + graph.name + "' exceeded max_steps (" + std::to_string(graph.max_steps) + ")"));
         const GraphNode *node = find_node(graph, run.next_node);
-        if (!node) return finish(session, graph, run, make_error(ErrorCode::InvalidConfig, "unknown node '" + run.next_node + "'"));
+        if (!node) return finish(c, make_error(ErrorCode::InvalidConfig, "unknown node '" + run.next_node + "'"));
 
         auto res = run_node(x, *node, node->kind == GraphNodeKind::Agent ? resume : nullptr);
         resume = nullptr;
         if (!res.ok) {
             x.state.written.clear(); // a failed node's writes are not logged or persisted
-            return finish(session, graph, run, res.error);
+            return finish(c, res.error);
         }
         auto drained = drain_writes(x, node->name);
-        if (!drained.ok) return finish(session, graph, run, drained.error);
+        if (!drained.ok) return finish(c, drained.error);
 
         if (res.value.interrupted) {
             run.status = GraphRunStatus::Interrupted;
             run.interrupt_node = node->name;
             run.interrupt_reason = std::move(res.value.reason);
             run.pending_tool_calls = std::move(res.value.pending);
-            return finish(session, graph, run, std::nullopt); // next_node stays on the interrupted node
+            return finish(c, std::nullopt); // next_node stays on the interrupted node
         }
 
         auto next = resolve_next(x, *node, res.value);
-        if (!next.ok) return finish(session, graph, run, next.error);
+        if (!next.ok) return finish(c, next.error);
         run.next_node = std::move(next.value);
         run.step++;
         if (run.next_node == kGraphEnd) break; // the final checkpoint is written by finish()
         if (run.durability != GraphDurability::Exit) {
-            auto cp = write_checkpoint(session, graph, run);
-            if (!cp.ok) return finish(session, graph, run, cp.error);
+            auto cp = write_checkpoint(c, run.durability == GraphDurability::Async);
+            if (!cp.ok) return finish(c, cp.error);
         }
     }
 
     run.status = GraphRunStatus::Completed;
     run.next_node.clear();
-    return finish(session, graph, run, std::nullopt);
+    return finish(c, std::nullopt);
 }
 
 void reset_run_status(GraphRun &run) {
@@ -694,7 +722,10 @@ Result<void> resume_impl(Session &session, const Graph &graph, std::string_view 
     // Copies first: both views may point into run.
     const std::string human_input(human_input_view);
     run.thread_id = thread_id.empty() ? std::string("default") : std::string(thread_id);
-    auto stored = retrieve_memory(session, graph::checkpoint_key(run.thread_id, "latest"));
+    auto sink = graph::resolve_sink(session, run.checkpointer, run.durability == GraphDurability::Async);
+    if (!sink.ok) return fail(sink.error.code, sink.error.message);
+    RunCtx c{.session = session, .graph = graph, .run = run, .sink = std::move(sink.value)};
+    auto stored = c.sink.ops->get_latest(c.sink.state, run.thread_id);
     if (!stored.ok) {
         if (stored.error.code == ErrorCode::KeyNotFound)
             return fail(ErrorCode::KeyNotFound, "resume_graph: no checkpoint for thread '" + run.thread_id + "'");
@@ -718,7 +749,7 @@ Result<void> resume_impl(Session &session, const Graph &graph, std::string_view 
 
     log_event(run.events, GraphEventType::Resume, run.next_node, {}, human_input);
     if (!human_input.empty()) set_state(run.state, "temp:human_input", human_input);
-    return drive(session, graph, run, index, pending.calls.empty() ? nullptr : &pending);
+    return drive(c, index, pending.calls.empty() ? nullptr : &pending);
 }
 
 } // namespace
@@ -732,8 +763,12 @@ Result<void> run_graph(Session &session, const Graph &graph, GraphRun &run) {
     run.state = GraphState{};
     run.step = 0;
 
+    auto sink = graph::resolve_sink(session, run.checkpointer, run.durability == GraphDurability::Async);
+    if (!sink.ok) return fail(sink.error.code, sink.error.message);
+    RunCtx c{.session = session, .graph = graph, .run = run, .sink = std::move(sink.value)};
+
     // Continue the thread: per-thread values and Agent histories from its latest checkpoint.
-    auto stored = retrieve_memory(session, graph::checkpoint_key(run.thread_id, "latest"));
+    auto stored = c.sink.ops->get_latest(c.sink.state, run.thread_id);
     if (stored.ok) {
         GraphRun previous;
         previous.thread_id = run.thread_id;
@@ -757,7 +792,7 @@ Result<void> run_graph(Session &session, const Graph &graph, GraphRun &run) {
 
     reset_run_status(run);
     run.next_node = graph.entry;
-    return drive(session, graph, run, index, nullptr);
+    return drive(c, index, nullptr);
 }
 
 Result<void> resume_graph(Session &session, const Graph &graph, std::string_view thread_id, GraphRun &run, std::string_view human_input) {

@@ -2,7 +2,7 @@
 
 `#include <agent-cpp/agent.hpp>`
 
-The graph runtime runs workflows built from named nodes and edges, in the style of LangGraph 1.0 and Google ADK workflow agents. It adds scoped key/value state, a per-run event log, checkpoints keyed by `thread_id`, and interrupts for human approval.
+The graph runtime runs workflows built from named nodes and edges, in the style of LangGraph 1.0 and Google ADK workflow agents. It adds scoped key/value state, a per-run event log, checkpoints keyed by `thread_id` through a pluggable checkpointer, and interrupts for human approval.
 
 It is the library's only workflow API: it replaced the earlier `Flow` state machine and `AgentScheduler` (see [Migrating from Flow / AgentScheduler](#migrating-from-flow--agentscheduler)). Everything is plain structs and function pointers: no `std::function`, no virtual calls, no exceptions. A graph is built once at setup, so its nodes use owning strings. Inference inside Agent nodes goes through the usual arena-backed `run_turn`.
 
@@ -213,6 +213,7 @@ enum class GraphRunStatus { Pending, Running, Completed, Interrupted, Failed };
 struct GraphRun {
     std::string thread_id;                    // "" = "default"
     GraphDurability durability = GraphDurability::Async;
+    Checkpointer checkpointer;                // default: the Session's StoreOps
     GraphState state;                         // seed before; result after
     GraphRunStatus status;
     std::string next_node;                    // interrupted / failed node while paused
@@ -240,22 +241,76 @@ Result<void> resume_graph(Session &, const Graph &, std::string_view thread_id, 
 
 ## Checkpoints and durability
 
-A checkpoint is a JSON object that holds the step counter, the next node, the status, interrupt details and pending tool calls, all non-`temp:` state values, and every Agent node history (in the same JSON format as `save_flow_memory`). It is written through `store_memory` under:
+A checkpoint is a JSON object that holds the step counter, the next node, the status, interrupt details and pending tool calls, all non-`temp:` state values, and every Agent node history (in the same JSON format as `save_flow_memory`). One is written after every completed node (see the durability modes below), keyed by `(thread_id, step)`, together with a small metadata object (`{"graph", "step", "next", "status"}`).
 
-- `checkpoint:<thread_id>:<step>`, one per completed node;
-- `checkpoint:<thread_id>:latest`.
+### Checkpointers
+
+```cpp
+struct GraphCheckpointInfo { uint64_t step; int64_t timestamp_ms; std::string metadata; };
+struct CheckpointerConfig { std::string path; };
+
+struct CheckpointerOps {
+    OpenFn open;                 // Result<std::shared_ptr<void>>(const CheckpointerConfig &)
+    PutFn put;                   // (state, thread_id, step, blob, metadata)
+    GetLatestFn get_latest;      // highest step; KeyNotFound when none
+    GetFn get;                   // (state, thread_id, step); KeyNotFound when missing
+    ListFn list;                 // every step of a thread, oldest first
+    DeleteThreadFn delete_thread;
+};
+const CheckpointerOps *in_memory_checkpointer();
+const CheckpointerOps *store::sqlite_checkpointer();   // <agent-cpp/store_sqlite.hpp>, agent_store_sqlite
+
+struct Checkpointer { const CheckpointerOps *ops; std::shared_ptr<void> state; std::shared_ptr<void> writer; };
+Result<Checkpointer> open_checkpointer(const CheckpointerOps *ops, const CheckpointerConfig &config = {},
+                                       size_t async_queue_capacity = 64);
+
+Result<std::vector<GraphCheckpointInfo>> list_graph_checkpoints(Session &, std::string_view thread_id,
+                                                                const Checkpointer & = {});
+Result<void> delete_graph_thread(Session &, std::string_view thread_id, const Checkpointer & = {});
+```
+
+`CheckpointerOps` is a function-pointer table like `StoreOps` and `VectorStoreOps`. Implementations must be safe to call from several threads on one state. Select one per run with `GraphRun::checkpointer` (set it on the `GraphRun` you pass to `resume_graph` as well). Copies of a `Checkpointer` share its state and its Async writer.
+
+| Checkpointer | Where checkpoints go |
+|---|---|
+| `{}` (default, `ops == nullptr`) | The Session's `StoreOps`, as in v1: `checkpoint:<thread_id>:<step>` and `checkpoint:<thread_id>:latest`, plus `checkpoint_meta:<thread_id>:<step|latest>` for listing. `StoreOps` cannot delete keys, so `delete_graph_thread` overwrites them with empty values. |
+| `in_memory_checkpointer()` | Process memory; gone with the last copy of the `Checkpointer`. |
+| `store::sqlite_checkpointer()` | A SQLite file (`CheckpointerConfig::path`; empty or `":memory:"` = in memory). WAL journal, `synchronous=NORMAL` (a committed checkpoint survives a process crash; an OS crash or power loss can lose the last transactions), table `graph_checkpoints` keyed by `(thread_id, step)`. Several processes may open the same file. |
+
+```cpp
+#include <agent-cpp/store_sqlite.hpp>
+
+auto cp = agent::open_checkpointer(agent::store::sqlite_checkpointer(), {.path = "runs.sqlite3"});
+agent::GraphRun run;
+run.thread_id = "ticket-42";
+run.checkpointer = cp.value;
+agent::run_graph(session, graph, run);
+
+// Later, in another process:
+agent::GraphRun resumed;
+resumed.checkpointer = agent::open_checkpointer(agent::store::sqlite_checkpointer(), {.path = "runs.sqlite3"}).value;
+agent::resume_graph(session, graph, "ticket-42", resumed);
+```
+
+### Durability modes
 
 | Mode | When checkpoints are written |
 |---|---|
 | `Exit` | Only when `run_graph` / `resume_graph` returns: completed, interrupted or failed. |
-| `Async` | After every node, and on return. In v1 the write is synchronous, so this behaves exactly like `Sync`; the name is kept for a later background writer. |
+| `Async` (default) | After every node, by a background writer thread, and on return. |
 | `Sync` | After every node, before the next one starts, and on return. |
 
-`resume_graph` loads `checkpoint:<thread_id>:latest` and continues at its next node. Nodes that already completed do not run again. If the thread has no checkpoint it returns `KeyNotFound`; if the thread already completed it returns `ok()` and does nothing.
+**Async writer.** Each checkpointer opened with `open_checkpointer` owns one writer thread (started on first use, joined when the last copy of the `Checkpointer` goes away); the default StoreOps checkpointer gets one per call. The run hands each checkpoint to a bounded FIFO (`async_queue_capacity`, default 64) and keeps going; when the queue is full the run blocks until the writer catches up. Before `run_graph` / `resume_graph` returns, whether the run completed, was interrupted or failed, the queue is flushed and the final checkpoint is written synchronously, so after the call returns every checkpoint is stored. A write error from the queue is reported by that call (`run.status == Failed`, `run.error`).
+
+**Crash window.** If the process dies mid-run, `Async` can lose the checkpoints still in the queue (at most `async_queue_capacity`): `resume_graph` then continues from the newest checkpoint that reached storage and re-runs the nodes after it. `Sync` loses at most the node that was running. `Exit` loses everything since the call started. None of this affects a run that returns normally.
+
+### Resume
+
+`resume_graph` loads the thread's latest checkpoint and continues at its next node. Nodes that already completed do not run again. If the thread has no checkpoint it returns `KeyNotFound`; if the thread already completed it returns `ok()` and does nothing.
 
 Like LangGraph, the runtime re-executes on resume. A node that failed or was interrupted runs again from its start, so tools should be idempotent. State a failing node wrote before returning its error stays in memory and in the failure checkpoint, but it is not logged or persisted to `user:`/`app:` storage.
 
-Agent `FlowMemory` ids are `<thread_id>:<history>` (the node name or its `history_key`), so `run_turn` also saves them under `history:<thread_id>:<history>`. Per-node `TurnStats` are not checkpointed.
+Agent `FlowMemory` ids are `<thread_id>:<history>` (the node name or its `history_key`), so `run_turn` also saves them under `history:<thread_id>:<history>` in the Session's store, whichever checkpointer is used. Per-node `TurnStats` are not checkpointed.
 
 ---
 
@@ -327,8 +382,7 @@ With the llama engine the parallelism comes from **continuous batching** inside 
 
 - Interrupts are not supported inside parallel branches: `request_interrupt` and `interrupt_before_tools` there fail the node with `InvalidConfig`.
 - A fan-out is checkpointed as one step. If a branch fails, the whole fan-out runs again on resume.
-- Checkpoints go through `StoreOps`; there is no separate `CheckpointerOps` yet. There is no replay or time travel to an older step, although every `checkpoint:<thread_id>:<step>` is kept.
-- `Async` durability writes synchronously.
+- There is no replay or time travel to an older step, although every checkpoint is kept.
 - `hooks` and `context_provider` are C++ only; `agent.json` can set `history_key` but not these.
 
 ---

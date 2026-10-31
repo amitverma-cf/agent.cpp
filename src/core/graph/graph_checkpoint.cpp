@@ -23,8 +23,6 @@ std::string checkpoint_key(std::string_view thread_id, std::string_view suffix) 
     return key;
 }
 
-namespace {
-
 std::string_view status_name(GraphRunStatus s) {
     switch (s) {
     case GraphRunStatus::Pending: return "pending";
@@ -35,6 +33,8 @@ std::string_view status_name(GraphRunStatus s) {
     }
     return "pending";
 }
+
+namespace {
 
 GraphRunStatus parse_status(std::string_view s) {
     if (s == "running") return GraphRunStatus::Running;
