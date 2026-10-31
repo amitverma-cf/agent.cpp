@@ -141,9 +141,9 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 
 **In flight** (parallel worktrees, integrated to `main` one commit at a time after build + tests):
 - [ ] Out-of-process engine host (`agent-engine-host`, per-engine `isolation`, crash → `EngineCrashed` + auto-restart, hang watchdog, cross-process cancel). Fixes [LIMITATIONS](LIMITATIONS.md) §1
-- [ ] Remove `Flow`/`AgentScheduler`; the graph runtime becomes the only workflow API (tool hooks, shared/isolated history, context providers merged in)
+- [x] Remove `Flow`/`AgentScheduler`; the graph runtime becomes the only workflow API (tool hooks, shared/isolated history, context providers merged in)
 - [ ] `engines/trellis`: TRELLIS.2 image → GLB
-- [ ] `cmake --install` / `find_package(agent-cpp)` + Linux release tarball script
+- [x] `cmake --install` / `find_package(agent-cpp)` + Linux release tarball script ([docs/packaging.md](packaging.md))
 
 **Next up** (in order):
 - [ ] Explicit task on the public API (`InferRequest::task` / `run_task`) instead of the lowest-capability-bit heuristic
@@ -175,6 +175,8 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [x] Move httplib/OpenSSL into `tools/hub/` (CLI only); `libagent` depends only on simdjson
 - [x] New tree: `include/agent-cpp/{agent.hpp,engine_abi.h}`, `src/core/`, `engines/<name>/`, `tools/cli/`, `tools/hub/`, `tools/store-sqlite/`
 - [ ] CMake `install()`/`export()` for `find_package(agent-cpp)`; each engine builds standalone against the installed ABI header
+  - [x] `cmake --install` + `find_package(agent-cpp)` (`agent-cpp::agent`, `::store_sqlite`, `::hub`; static or `BUILD_SHARED_LIBS`), CLI in `bin/`, plugins + bundled runtime libraries in `lib/agent/engines/`; simdjson dropped from the public header; out-of-tree check in `tests/consumer/` (see [docs/packaging.md](packaging.md))
+  - [ ] engines build standalone against the installed `engine_abi.h` (they are still built in-tree)
 - [x] Tests stay green on the Mock engine
 
 ### Phase 2: Core v1 (3 to 4 weeks)
@@ -245,6 +247,8 @@ Watch list: audio.cpp as a meta-engine; llama.cpp native TTS / image gen when th
 - [ ] Mic input / speaker output for voice agents (small C audio I/O library such as miniaudio, decided in Phase 0)
 - [x] User config at `%APPDATA%\agent\` (Windows) and `~/.config/agent/` (Linux) (`$AGENT_CONFIG_DIR` / `--config-dir` override; the Windows path is untested)
 - [ ] Release artifacts: Windows x64 (CPU/CUDA/Vulkan), Linux x64 (CPU/CUDA/Vulkan), macOS (CI only)
+  - [x] Linux tarball script `scripts/package.sh` (`agent-<version>-linux-x64[-<backend>].tar.gz`, version from `project(VERSION)`); CPU tested, CUDA/Vulkan untested; no CI, no uploads
+  - [ ] Windows and macOS packaging (TODO in [docs/packaging.md](packaging.md))
 
 ### Phase 6: SDK and docs (finalize at release)
 - [ ] Guides: embed the library, write an engine plugin, write a tool, write a graph (JSON + C++)

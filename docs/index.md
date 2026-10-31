@@ -17,6 +17,7 @@ The library is designed around three principles:
 | Document | What it covers |
 |---|---|
 | [Getting Started](getting-started.md) | Build instructions, first program |
+| [Installing and packaging](packaging.md) | `cmake --install`, `find_package(agent-cpp)`, static/shared, Linux release tarball (`scripts/package.sh`) |
 | [The `agent` CLI](cli.md) | `agent setup`, `engine`, `model`, `chat`: config files, permissions, slash commands |
 | [Architecture](architecture.md) | System diagrams, memory model, data flow |
 | [Limitations](LIMITATIONS.md) | Known limitations and planned fixes |

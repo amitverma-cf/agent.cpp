@@ -4,7 +4,6 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
-#include <simdjson.h>
 #include <span>
 #include <string>
 #include <string_view>

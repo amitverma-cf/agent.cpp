@@ -50,3 +50,6 @@ add_custom_command(TARGET agent-engine-sherpa POST_BUILD
     COMMENT "Copying sherpa-onnx runtime libraries next to agent-engine-sherpa"
     VERBATIM
 )
+
+# Installed layout: the plugin and the sherpa-onnx / ONNX Runtime libraries in lib/agent/engines/.
+agent_install_engine(agent-engine-sherpa ${SHERPA_ONNX_RUNTIME_LIBS})

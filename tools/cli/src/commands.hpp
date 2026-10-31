@@ -9,7 +9,11 @@
 
 namespace agent::cli {
 
-inline constexpr std::string_view kCliVersion = "0.1.0-dev";
+// From project(VERSION) in the top-level CMakeLists.txt.
+#ifndef AGENT_CLI_VERSION
+#define AGENT_CLI_VERSION "0.0.0-unknown"
+#endif
+inline constexpr std::string_view kCliVersion = AGENT_CLI_VERSION;
 
 struct Context {
     std::string config_dir;

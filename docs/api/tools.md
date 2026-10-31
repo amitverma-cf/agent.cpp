@@ -82,7 +82,7 @@ agent::Tool query_db{
     .callback = [](std::string_view args, void *ud) -> agent::Result<std::string> {
         auto *ctx = static_cast<DbCtx*>(ud);
 
-        // parse args with simdjson or manually
+        // parse args with any JSON parser (agent.hpp does not expose one) or manually
         std::string sql = extract_string(args, "sql");
         if (sql.empty())
             return agent::fail<std::string>(agent::ErrorCode::ParseError, "Missing 'sql'");

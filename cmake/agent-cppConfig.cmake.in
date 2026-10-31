@@ -1,0 +1,25 @@
+# agent-cpp CMake package. Imported targets:
+#   agent-cpp::agent         libagent (public header <agent-cpp/agent.hpp>, plugin ABI <agent-cpp/engine_abi.h>)
+#   agent-cpp::store_sqlite  optional SQLite KV store + sqlite-vec vector store (<agent-cpp/store_sqlite.hpp>)
+#   agent-cpp::hub           optional Hugging Face model downloader (<agent-cpp/hub.hpp>), if it was built
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+set(agent-cpp_SHARED_LIBS @AGENT_PACKAGE_SHARED@)
+set(agent-cpp_HAS_HUB @AGENT_PACKAGE_HAS_HUB@)
+
+# Private link dependencies of the static libraries (shared builds resolve them at link time).
+if(NOT agent-cpp_SHARED_LIBS)
+    find_dependency(Threads)
+    if(agent-cpp_HAS_HUB)
+        find_dependency(OpenSSL)
+    endif()
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/agent-cppTargets.cmake")
+
+# Where engine plugins are installed (<prefix>/lib/agent/engines). It may not exist when no
+# engine was built, so it is not checked.
+set(agent-cpp_ENGINE_DIR "@PACKAGE_AGENT_INSTALL_ENGINEDIR@")
+
+check_required_components(agent-cpp)

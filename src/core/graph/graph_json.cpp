@@ -17,6 +17,7 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <simdjson.h>
 #include <sstream>
 #include <utility>
 
