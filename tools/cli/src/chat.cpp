@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <ctime>
 #include <cstdio>
@@ -65,8 +66,12 @@ void ensure_newline() {
 
 struct ChatState {
     Context *ctx = nullptr;
-    Session session;
-    bool has_session = false;
+    // Models live in the registry (memory_budget_mb, LRU unload); lease is the current one. Every model
+    // Session shares the SQLite store opened by `store`, so switching never leaves two write-back caches
+    // on one database.
+    ModelRegistry registry;
+    ModelLease lease;
+    Session store;
     FlowMemory memory;
 
     ModelRef model;
@@ -146,12 +151,31 @@ void on_tool_result(const Event &event, void *) {
     out("[result] " + one_line(result, 300) + "\n");
 }
 
+Result<void> acquire_current(ChatState &st) {
+    auto lease = acquire_model(st.registry, st.model.name);
+    if (!lease.ok) return fail(lease.error.code, lease.error.message);
+    st.lease = std::move(lease.value);
+    g_cancel_flag.store(st.lease->cancel_flag.get());
+    return ok();
+}
+
+// ModelSpec::on_load: share the chat's store and show tool results.
+Result<void> on_model_loaded(Session &session, const ModelSpec &, void *user_data) {
+    auto *st = static_cast<ChatState *>(user_data);
+    session.config.memory = st->store.config.memory;
+    session.memory_state = st->store.memory_state;
+    register_event_hook(session, EventType::OnToolResult, on_tool_result, st);
+    return ok();
+}
+
 Result<void> open_session(ChatState &st) {
-    if (st.has_session) {
-        st.session = Session{}; // free the old model before loading the next one
-        st.has_session = false;
-        g_cancel_flag.store(nullptr);
-    }
+    const std::string previous = st.lease ? st.lease.name : std::string();
+    release_model(st.lease);
+    g_cancel_flag.store(nullptr);
+    // Without a budget only one model stays loaded: free the old one before loading the next.
+    if (st.ctx->config.memory_budget_mb <= 0 && !previous.empty() && previous != st.model.name) unload_model(st.registry, previous);
+    if (has_model(st.registry, st.model.name)) return acquire_current(st);
+
     Config cfg;
     cfg.provider = AiProvider::Engine;
     cfg.engine = st.engine.name;
@@ -159,7 +183,6 @@ Result<void> open_session(ChatState &st) {
     cfg.engine_options = st.engine_options;
     cfg.model = st.model.path;
     cfg.workspace_dir = st.workspace;
-    cfg.memory = {.store = store::sqlite_store()};
     cfg.context_window = st.context_window;
     cfg.max_tokens = st.max_tokens;
     cfg.temperature = st.ctx->config.temperature;
@@ -170,13 +193,9 @@ Result<void> open_session(ChatState &st) {
     cfg.permission_prompt = prompt_tool;
     cfg.permission_user_data = &st;
 
-    auto s = init(cfg);
-    if (!s.ok) return fail(s.error.code, s.error.message);
-    st.session = std::move(s.value);
-    st.has_session = true;
-    register_event_hook(st.session, EventType::OnToolResult, on_tool_result, &st);
-    g_cancel_flag.store(st.session.cancel_flag.get());
-    return ok();
+    ModelSpec spec{.name = st.model.name, .config = std::move(cfg), .on_load = on_model_loaded, .on_load_user_data = &st};
+    if (auto r = register_model(st.registry, std::move(spec)); !r.ok) return r;
+    return acquire_current(st);
 }
 
 void collect_artifacts(ChatState &st, size_t from) {
@@ -193,10 +212,10 @@ void collect_artifacts(ChatState &st, size_t from) {
 }
 
 void remember_conversation(ChatState &st) {
-    auto index = retrieve_memory(st.session, kIndexKey);
+    auto index = retrieve_memory(*st.lease, kIndexKey);
     const std::string current = index.ok ? index.value : std::string();
     const std::string updated = add_conversation_id(current, st.memory.id);
-    if (updated != current) store_memory(st.session, kIndexKey, updated);
+    if (updated != current) store_memory(*st.lease, kIndexKey, updated);
     st.saved = true;
 }
 
@@ -214,7 +233,7 @@ std::string new_conversation_id() {
 }
 
 void print_stats(const ChatState &st) {
-    const SessionStats s = get_stats(st.session);
+    const SessionStats s = get_stats(*st.lease);
     const TurnStats &c = st.memory.stats;
     std::printf("conversation %s: %zu messages, %d inference rounds, %d tool calls, %d prompt + %d completion tokens\n",
                 st.memory.id.c_str(), st.memory.history.size(), c.turns, c.tool_calls, c.prompt_tokens, c.completion_tokens);
@@ -223,6 +242,15 @@ void print_stats(const ChatState &st) {
                 s.total_prune_cycles);
     std::printf("model %s (%s), engine %s %s\n", st.model.name.c_str(), st.model.path.c_str(), st.engine.name.c_str(),
                 st.engine.version.c_str());
+    const ModelBudget budget = get_budget(st.registry);
+    const auto mb = [](uint64_t b) { return static_cast<double>(b) / (1024.0 * 1024.0); };
+    std::printf("loaded models (budget %s, CLI process RSS %.0f MiB; out-of-process engines are not included):\n",
+                budget.ram_bytes ? (std::to_string(budget.ram_bytes >> 20) + " MiB").c_str() : "unlimited", mb(process_rss_bytes()));
+    const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    for (const LoadedModelInfo &m : loaded_models(st.registry))
+        std::printf("  %-24s ~%.0f MiB%s  %s, last used %llds ago, loaded in %.1fs\n", m.name.c_str(), mb(m.ram_bytes + m.vram_bytes),
+                    m.vram_bytes ? " (VRAM)" : "", m.leases ? "in use" : "idle", static_cast<long long>((now - m.last_used_ms) / 1000),
+                    static_cast<double>(m.load_time_ms) / 1000.0);
 }
 
 void print_chat_help() {
@@ -237,22 +265,22 @@ void print_chat_help() {
 }
 
 void run_one_turn(ChatState &st, const std::string &text, std::span<const Media> media) {
-    if (!st.has_session) {
+    if (!st.lease) {
         out("[error] no model is loaded; switch with /model NAME\n");
         return;
     }
     const size_t before = st.memory.history.size();
     st.streamed_bytes = 0;
-    clear_cancel(st.session);
+    clear_cancel(*st.lease);
     g_generating.store(true);
-    auto r = media.empty() ? run_turn(st.session, st.memory, text, true, on_token, &st)
-                           : run_turn_with_media(st.session, st.memory, text, media, true, on_token, &st);
+    auto r = media.empty() ? run_turn(*st.lease, st.memory, text, true, on_token, &st)
+                           : run_turn_with_media(*st.lease, st.memory, text, media, true, on_token, &st);
     g_generating.store(false);
     if (!r.ok) {
         ensure_newline();
         if (r.error.code == ErrorCode::Cancelled) out("[cancelled]\n");
         else out("[error] " + r.error.message + "\n");
-        clear_cancel(st.session);
+        clear_cancel(*st.lease);
     } else if (st.streamed_bytes == 0) {
         out(r.value); // engine did not stream
     }
@@ -311,7 +339,9 @@ void switch_model(ChatState &st, const std::string &spec) {
         out("note: --engine-options belong to the first model and are not used for " + st.model.name + "\n");
         st.engine_options.clear();
     }
-    out("loading " + st.model.path + " ...\n");
+    bool cached = false;
+    for (const LoadedModelInfo &info : loaded_models(st.registry)) cached = cached || info.name == st.model.name;
+    out((cached ? "switching to " : "loading ") + st.model.path + (cached ? " (already loaded)\n" : " ...\n"));
     if (auto r = open_session(st); !r.ok) {
         out("[error] " + r.error.message + "; going back to " + old_model.name + "\n");
         st.model = old_model;
@@ -330,7 +360,7 @@ void switch_model(ChatState &st, const std::string &spec) {
     }
     if (converted) {
         out("note: " + std::to_string(converted) + " earlier attachment(s) are now referenced by path only\n");
-        if (auto r = save_flow_memory(st.session, st.memory); !r.ok) out("[error] " + r.error.message + "\n");
+        if (auto r = save_flow_memory(*st.lease, st.memory); !r.ok) out("[error] " + r.error.message + "\n");
     }
     out("now using " + st.model.name + " on " + st.engine.name + "\n");
 }
@@ -387,7 +417,10 @@ int cmd_chat(const CommandLine &cl, Context &ctx) {
         else engine_log.clear();
     }
     const int rc = run_chat(st, cl, engine_log);
-    st.session = Session{}; // unload the model while its teardown logs still go to the log file
+    // Unload the models while their teardown logs still go to the log file.
+    release_model(st.lease);
+    st.registry = ModelRegistry();
+    st.store = Session{};
     if (g_err != stderr) restore_stderr(g_err);
     g_err = stderr;
     return rc;
@@ -396,13 +429,23 @@ int cmd_chat(const CommandLine &cl, Context &ctx) {
 namespace {
 
 int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log) {
+    Config store_cfg;
+    store_cfg.provider = AiProvider::Mock;
+    store_cfg.workspace_dir = st.workspace;
+    store_cfg.memory = {.store = store::sqlite_store()};
+    store_cfg.auto_default_tools = false;
+    auto store_session = init(store_cfg);
+    if (!store_session.ok) return chat_fail(store_session.error);
+    st.store = std::move(store_session.value);
+    set_budget(st.registry, ModelBudget{.ram_bytes = static_cast<uint64_t>(std::max<int64_t>(0, st.ctx->config.memory_budget_mb)) << 20});
+
     std::fprintf(g_err, "loading %s ...\n", st.model.path.c_str());
     if (auto r = open_session(st); !r.ok) return chat_fail(r.error);
 
     if (cl.has("resume")) {
         st.memory.id = std::string(cl.get("resume"));
         st.saved = true;
-        if (auto r = load_flow_memory(st.session, st.memory); !r.ok) {
+        if (auto r = load_flow_memory(*st.lease, st.memory); !r.ok) {
             if (r.error.code == ErrorCode::KeyNotFound)
                 return chat_fail(make_error(ErrorCode::KeyNotFound, "no saved conversation '" + st.memory.id + "' in " + st.workspace +
                                                                         " (see `agent chat --list`)"));
@@ -420,7 +463,7 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
     std::printf("  workspace: %s\n", st.workspace.c_str());
     if (!engine_log.empty()) std::printf("  engine log: %s (--verbose prints it here)\n", engine_log.c_str());
     std::string tool_names;
-    for (const auto &t : st.session.config.tools) tool_names += (tool_names.empty() ? "" : " ") + std::string(t.name);
+    for (const auto &t : st.lease->config.tools) tool_names += (tool_names.empty() ? "" : " ") + std::string(t.name);
     std::printf("  tools:     %s\n", tool_names.c_str());
     if (cl.has("resume")) {
         std::printf("  resumed:   %zu messages\n", st.memory.history.size());
@@ -449,7 +492,7 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
             continue;
         }
         if (cmd.kind == SlashKind::Exit) break;
-        if (!st.has_session && (cmd.kind == SlashKind::Clear || cmd.kind == SlashKind::Stats)) {
+        if (!st.lease && (cmd.kind == SlashKind::Clear || cmd.kind == SlashKind::Stats)) {
             out("[error] no model is loaded; switch with /model NAME\n");
             continue;
         }
@@ -461,8 +504,8 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
             if (has_system) st.memory.history.push_back(std::move(system));
             st.memory.stats = {};
             st.artifacts.clear();
-            if (auto r = save_flow_memory(st.session, st.memory); !r.ok) out("[error] " + r.error.message + "\n");
-            clear_provider_kv_cache(st.session);
+            if (auto r = save_flow_memory(*st.lease, st.memory); !r.ok) out("[error] " + r.error.message + "\n");
+            clear_provider_kv_cache(*st.lease);
             out("conversation cleared\n");
             break;
         }

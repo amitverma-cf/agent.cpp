@@ -35,6 +35,7 @@ The library is designed around three principles:
 | [API — RAG](api/rag.md) | `embed`, `rerank`, `VectorStoreOps` (in-memory, sqlite-vec), chunking, `rag_index` / `rag_query`, `search_knowledge` tool |
 | [API — Events](api/events.md) | `EventType`, `EventHook`, `register_event_hook` |
 | [API — Stats](api/stats.md) | `TurnStats`, `SessionStats`, `get_stats` |
+| [API — Model registry](api/models.md) | `ModelRegistry`: lazy model loading under a RAM/VRAM budget, LRU unload, leases, `GraphNode::model`, memory estimates |
 | [API — Model hub](api/hub.md) | CLI-side `agent_hub`: Hugging Face downloads, `models.json`, licence policy |
 
 ## Quick Example

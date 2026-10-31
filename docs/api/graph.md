@@ -28,6 +28,7 @@ struct GraphNode {
     std::string history_key;                 // Agent: conversation key; empty = the node name
     GraphContextFn context_provider = nullptr; // Agent: per-run system-prompt prefix
     std::vector<ToolHook> hooks;             // Agent: Pre/Post tool hooks
+    std::string model;                       // Agent: run on this GraphRun::models model (docs/api/models.md)
 
     GraphFunctionFn function = nullptr;      // Function
     std::string tool_name;                   // Tool
@@ -220,6 +221,7 @@ struct GraphRun {
     std::string interrupt_node, interrupt_reason;
     std::vector<ToolCall> pending_tool_calls;
     std::vector<GraphEvent> events;
+    ModelRegistry *models = nullptr;          // resolves GraphNode::model; see models.md
 };
 
 Result<void> run_graph(Session &, const Graph &, GraphRun &);

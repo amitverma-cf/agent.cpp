@@ -41,7 +41,8 @@ next to itself, in `engines/` and its subdirectories (so the build tree works as
   "hardware": {"cpu_cores": 4, "nvidia_smi": false, "nvidia_device": false, "dri_nodes": []},
   "context_window": 4096,
   "max_tokens": 512,
-  "temperature": 0.7
+  "temperature": 0.7,
+  "memory_budget_mb": 0
 }
 ```
 
@@ -159,10 +160,10 @@ prompt quits.
 |---|---|
 | `/exit` | quit (`/quit` also works) |
 | `/clear` | forget the conversation so far; the system prompt is kept |
-| `/model [NAME\|PATH]` | show the current model and the catalogue, or switch models. The conversation is kept. Earlier attachments stay in the history as `[attached mime: path]` text, and `--engine-options` are not applied to the new model. If the new model fails to load, the old one is reloaded. |
+| `/model [NAME\|PATH]` | show the current model and the catalogue, or switch models. The conversation is kept. Earlier attachments stay in the history as `[attached mime: path]` text, and `--engine-options` are not applied to the new model. If the new model fails to load, the old one is reloaded. With `memory_budget_mb` set, the previous model stays loaded (idle) while it fits, so switching back is instant; see [api/models.md](api/models.md#cli). |
 | `/image <path> [prompt]` | send an image or audio file with the message (`run_turn_with_media`). Put paths that contain spaces in quotes. The engine has to accept media, for example llama with `--engine-options '{"mmproj": "..."}'`. |
 | `/open [n]` | list the generated artifacts, or open the n-th one with the OS default app (`xdg-open` / `open` / `ShellExecute`). Media is never rendered in the terminal. |
-| `/stats` | token and tool-call counters for the conversation and the session |
+| `/stats` | token and tool-call counters for the conversation and the session, plus the loaded models (estimated size, in use / idle, last use) and the CLI's RSS |
 | `/help` | list the commands |
 | `//text` | send a message that starts with `/` |
 
@@ -190,6 +191,11 @@ agent run examples/graphs/research_pipeline.json --model qwen2.5-0.5b --set "top
 | `--resume ID [--input TEXT]` | continue an interrupted or failed run; `TEXT` is the human reply, or `approve` for pending tool calls |
 | `--yes` | approve tool calls the permission policy would ask about |
 | `--model`, `--engine`, `--engine-options`, `--workspace`, `--inprocess` | as for `agent chat` |
+
+Agent nodes can name their own model (`"model": "<catalogue name or path>"`). Those models are
+loaded through the [model registry](api/models.md) under `memory_budget_mb`, so a graph can use
+more models than fit in memory at once. The default model is then only loaded if some agent node
+has no `"model"`.
 
 When the graph finishes, the CLI prints the status and the final state. When it is interrupted,
 it prints the reason, any pending tool calls and the command to resume. Checkpoints live in the

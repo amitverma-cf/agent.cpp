@@ -81,6 +81,7 @@ add_library(agent
     src/core/graph/graph_executor.cpp
     src/core/graph/graph_json.cpp
     src/core/mcp/mcp_client.cpp
+    src/core/models/model_registry.cpp
     src/core/data/data_source_registry.cpp
     src/core/skills/skills_registry.cpp
     src/core/providers/provider_ops.cpp
@@ -273,6 +274,7 @@ add_executable(test_agent
     tests/unit/test_graph_json.cpp
     tests/unit/test_mcp.cpp
     tests/unit/test_sandbox.cpp
+    tests/unit/test_model_registry.cpp
     tests/integration/test_session.cpp
     tests/integration/test_turn.cpp
 )

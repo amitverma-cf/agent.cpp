@@ -72,6 +72,9 @@ struct CliConfig {
     int context_window = 4096;
     int max_tokens = 512;
     float temperature = 0.7f;
+    // RAM budget of the model registry behind `chat` /model switches and multi-model `run` graphs.
+    // 0 = unlimited. Exceeding it evicts the least recently used idle model.
+    int64_t memory_budget_mb = 0;
 };
 
 std::string config_to_json(const CliConfig &config);
