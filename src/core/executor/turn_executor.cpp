@@ -1,6 +1,7 @@
 #include "../providers/provider_ops.hpp"
 #include "../utils/utils.hpp"
 #include "ambient_turn.hpp"
+#include "history_json.hpp"
 
 #include <agent-cpp/agent.hpp>
 #include <atomic>
@@ -16,7 +17,9 @@ struct ActiveMemoryGuard {
     ~ActiveMemoryGuard() { ambient::active_memory = nullptr; }
 };
 
-static void encode_history_json(const FlowMemory &state, std::string &json) {
+} // namespace
+
+void encode_history_json(const FlowMemory &state, std::string &json) {
     size_t estimated = 2;
     for (const auto &msg : state.history) {
         estimated += msg.role.size() + msg.content.size() + msg.tool_call_id.size() + 128;
@@ -63,6 +66,8 @@ static void encode_history_json(const FlowMemory &state, std::string &json) {
     }
     json += ']';
 }
+
+namespace {
 
 static int count_message_tokens(Session &session, const Message &msg) {
     if (msg.token_count >= 0) return msg.token_count;
@@ -172,32 +177,14 @@ static void fire_tool_hooks(Session &session, FlowMemory &state, FlowHook::When 
 
 } // namespace
 
-Result<void> save_flow_memory(Session &session, const FlowMemory &memory) {
-    if (memory.id.empty()) return fail(ErrorCode::InvalidConfig, "FlowMemory.id is required to save history.");
-    std::string json;
-    encode_history_json(memory, json);
-    auto store = store_memory(session, "history:" + memory.id, json);
-    if (!store.ok) return store;
-    std::string stats =
-        "{\"prompt_tokens\":" + std::to_string(memory.stats.prompt_tokens) +
-        ",\"completion_tokens\":" + std::to_string(memory.stats.completion_tokens) +
-        ",\"tool_calls\":" + std::to_string(memory.stats.tool_calls) + ",\"compressions\":" + std::to_string(memory.stats.compressions) +
-        ",\"prune_cycles\":" + std::to_string(memory.stats.prune_cycles) + ",\"turns\":" + std::to_string(memory.stats.turns) + "}";
-    return store_memory(session, "history_stats:" + memory.id, stats);
-}
-
-Result<void> load_flow_memory(Session &session, FlowMemory &memory) {
-    if (memory.id.empty()) return fail(ErrorCode::InvalidConfig, "FlowMemory.id is required to load history.");
-
-    auto hist = retrieve_memory(session, "history:" + memory.id);
-    if (!hist.ok) return fail(hist.error.code, hist.error.message);
-
-    simdjson::padded_string padded(hist.value.data(), hist.value.size());
+Result<std::vector<Message>> decode_history_json(std::string_view json) {
+    simdjson::padded_string padded(json.data(), json.size());
     simdjson::ondemand::document doc;
-    if (ambient::json_parser.iterate(padded).get(doc)) return fail(ErrorCode::ParseError, "Failed to parse stored history JSON.");
+    if (ambient::json_parser.iterate(padded).get(doc))
+        return fail<std::vector<Message>>(ErrorCode::ParseError, "Failed to parse stored history JSON.");
 
     simdjson::ondemand::array arr;
-    if (doc.get_array().get(arr)) return fail(ErrorCode::ParseError, "Stored history is not a JSON array.");
+    if (doc.get_array().get(arr)) return fail<std::vector<Message>>(ErrorCode::ParseError, "Stored history is not a JSON array.");
 
     std::vector<Message> loaded;
     for (auto item : arr) {
@@ -239,7 +226,32 @@ Result<void> load_flow_memory(Session &session, FlowMemory &memory) {
         }
         loaded.push_back(std::move(msg));
     }
-    memory.history = std::move(loaded);
+    return ok(std::move(loaded));
+}
+
+Result<void> save_flow_memory(Session &session, const FlowMemory &memory) {
+    if (memory.id.empty()) return fail(ErrorCode::InvalidConfig, "FlowMemory.id is required to save history.");
+    std::string json;
+    encode_history_json(memory, json);
+    auto store = store_memory(session, "history:" + memory.id, json);
+    if (!store.ok) return store;
+    std::string stats =
+        "{\"prompt_tokens\":" + std::to_string(memory.stats.prompt_tokens) +
+        ",\"completion_tokens\":" + std::to_string(memory.stats.completion_tokens) +
+        ",\"tool_calls\":" + std::to_string(memory.stats.tool_calls) + ",\"compressions\":" + std::to_string(memory.stats.compressions) +
+        ",\"prune_cycles\":" + std::to_string(memory.stats.prune_cycles) + ",\"turns\":" + std::to_string(memory.stats.turns) + "}";
+    return store_memory(session, "history_stats:" + memory.id, stats);
+}
+
+Result<void> load_flow_memory(Session &session, FlowMemory &memory) {
+    if (memory.id.empty()) return fail(ErrorCode::InvalidConfig, "FlowMemory.id is required to load history.");
+
+    auto hist = retrieve_memory(session, "history:" + memory.id);
+    if (!hist.ok) return fail(hist.error.code, hist.error.message);
+
+    auto loaded = decode_history_json(hist.value);
+    if (!loaded.ok) return fail(loaded.error.code, loaded.error.message);
+    memory.history = std::move(loaded.value);
 
     auto stats_res = retrieve_memory(session, "history_stats:" + memory.id);
     if (stats_res.ok) {
@@ -419,6 +431,13 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
         state.history.push_back(std::move(assistant_msg));
 
         if (!resp.message.tool_calls.empty()) {
+            // Graph runtime human-in-the-loop: stop before running the calls; the caller executes
+            // (or denies) the pending calls recorded on the last assistant message later.
+            if (ambient::tool_pause_fn && ambient::tool_pause_fn(session, resp.message.tool_calls)) {
+                ambient::tools_paused = true;
+                loop = false;
+                break;
+            }
             if (tool_rounds >= session.config.max_tool_call_rounds) {
                 utils::log(session, LogLevel::Warning,
                            "Tool call round limit (" + std::to_string(session.config.max_tool_call_rounds) +

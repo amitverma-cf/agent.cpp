@@ -553,3 +553,178 @@ void reset_stats(Session &session);
 Result<void> clear_provider_kv_cache(Session &session);
 
 } // namespace agent
+
+// ============================================================================================
+// -------------------------- Graph runtime (Phase 3, v1) --------------------------
+// LangGraph / Google ADK style workflows: named nodes (Agent, Function, Tool) joined by static or
+// conditional edges, ADK workflow builders (make_sequential / make_parallel / make_loop), scoped
+// key/value state, a per-run event log, checkpoints keyed by thread_id, and interrupts for human
+// approval. See docs/api/graph.md. Graphs are built once at setup (owning strings are fine there);
+// the per-turn inference path inside Agent nodes is the ordinary arena-backed run_turn.
+// ============================================================================================
+
+#include <map>
+
+namespace agent {
+
+// Router return value (and edge target) meaning "this graph is done". Inside a graph composed by
+// make_sequential / make_loop / make_parallel, END finishes the current step, not the whole run.
+inline constexpr std::string_view kGraphEnd = "__end__";
+
+// Scoped key/value state shared by every node of a run.
+//   "temp:<k>"            discarded when run_graph / resume_graph returns; never checkpointed
+//   "user:<k>", "app:<k>" persisted through the Session's StoreOps; visible to every thread
+//   anything else         per-thread state (GraphRun::thread_id), carried in checkpoints
+// Write through set_state() so the runtime logs, persists and conflict-checks the write.
+struct GraphState {
+    std::map<std::string, std::string, std::less<>> values;
+    // Conversation history of each Agent node, keyed by node name.
+    std::map<std::string, FlowMemory, std::less<>> histories;
+
+    // Keys written via set_state() that the runtime has not processed yet.
+    std::vector<std::string> written;
+    // Set by request_interrupt().
+    bool interrupt_requested = false;
+    std::string interrupt_reason;
+};
+
+void set_state(GraphState &state, std::string_view key, std::string value);
+// The value of key, or fallback when unset. The view stays valid until key is written again.
+std::string_view get_state(const GraphState &state, std::string_view key, std::string_view fallback = {});
+bool has_state(const GraphState &state, std::string_view key);
+// Called from a Function node: pause the run after this node returns. On resume_graph the same node
+// runs again with the human's reply in "temp:human_input" (check it to avoid interrupting forever).
+void request_interrupt(GraphState &state, std::string_view reason);
+
+using GraphFunctionFn = Result<void> (*)(Session &session, GraphState &state, void *user_data);
+// Returns the next node name, or kGraphEnd. The view must outlive the call (string literal, node
+// name, or a value in state).
+using GraphRouterFn = Result<std::string_view> (*)(Session &session, const GraphState &state, void *user_data);
+// Builds a Tool node's JSON arguments from state.
+using GraphToolArgsFn = Result<std::string> (*)(Session &session, const GraphState &state, void *user_data);
+// make_loop termination test, checked after every iteration.
+using GraphUntilFn = Result<bool> (*)(Session &session, const GraphState &state, void *user_data);
+
+enum class GraphNodeKind {
+    Agent,    // run_turn on the node's own FlowMemory with system_prompt + allowed_tools
+    Function, // GraphFunctionFn
+    Tool,     // execute_tool(tool_name, args)
+    Parallel, // fan out to branches, join, then follow this node's own edge (make_parallel)
+    Loop,     // loop controller (make_loop)
+};
+
+struct GraphNode {
+    std::string name;
+    GraphNodeKind kind = GraphNodeKind::Function;
+
+    // Agent: the user message is state[input_key] when set, otherwise prompt. The final reply is
+    // written to state[output_key] when output_key is non-empty. Tool: input_key may hold the
+    // JSON arguments; the tool result goes to output_key.
+    std::string system_prompt;
+    std::vector<std::string> allowed_tools; // empty = every registered tool
+    std::string prompt;
+    std::string input_key;
+    std::string output_key;
+    // Agent: pause the run before executing model-requested tool calls (with a permission_check
+    // configured, only before calls it rates Ask). The calls are exposed in
+    // GraphRun::pending_tool_calls; resume_graph approves or denies them.
+    bool interrupt_before_tools = false;
+
+    GraphFunctionFn function = nullptr; // Function
+
+    std::string tool_name;               // Tool
+    GraphToolArgsFn tool_args = nullptr; // Tool: overrides input_key; neither = "{}"
+
+    std::vector<std::string> branches; // Parallel: entry node of each branch
+
+    std::string loop_body;        // Loop: entry node of the body
+    int max_iterations = 1;       // Loop
+    GraphUntilFn until = nullptr; // Loop: optional early exit
+
+    void *user_data = nullptr; // passed to function / tool_args / until
+
+    // Where the run goes when this node's transition resolves to kGraphEnd. Empty = the graph ends.
+    // Set by the builders to chain composed steps; a branch of a Parallel node ends when it reaches
+    // the Parallel node itself.
+    std::string exit_to;
+};
+
+// Static edge (router == nullptr): from -> to. Conditional edge: router picks the target. A node
+// has at most one outgoing edge; a node without one transitions to kGraphEnd.
+struct GraphEdge {
+    std::string from;
+    std::string to;
+    GraphRouterFn router = nullptr;
+    void *user_data = nullptr;
+};
+
+struct Graph {
+    std::string name;
+    std::string entry;
+    std::vector<GraphNode> nodes;
+    std::vector<GraphEdge> edges;
+    int max_steps = 1000; // guard against routing cycles, per run_graph / resume_graph call
+};
+
+// ADK-style builders. Node names must stay unique across the composed graph.
+Graph make_graph(GraphNode node);
+// Runs steps in order: each step's end continues at the next step's entry.
+Graph make_sequential(std::string name, std::vector<Graph> steps);
+// Fans out to every branch (concurrently when the provider supports parallel inference), joins,
+// then continues. Branches must write distinct state keys; a key written by two branches fails the run.
+Graph make_parallel(std::string name, std::vector<Graph> branches);
+// Runs body until until() returns true (checked after each iteration) or max_iterations is reached.
+Graph make_loop(std::string name, Graph body, int max_iterations, GraphUntilFn until = nullptr, void *user_data = nullptr);
+
+// Exit: checkpoint only when run_graph / resume_graph returns. Async: after every node (v1 writes
+// synchronously, identical to Sync; reserved for a background writer). Sync: after every node,
+// before the next one starts.
+enum class GraphDurability { Exit, Async, Sync };
+
+enum class GraphRunStatus { Pending, Running, Completed, Interrupted, Failed };
+
+enum class GraphEventType { NodeStart, NodeEnd, StateWrite, ToolCall, ToolResult, Interrupt, Resume, Checkpoint, NodeFailed };
+
+struct GraphEvent {
+    GraphEventType type = GraphEventType::NodeStart;
+    std::string node;
+    std::string key;          // StateWrite: state key. ToolCall/ToolResult: tool name. Checkpoint: store key.
+    int64_t timestamp_ms = 0; // wall clock, ms since the Unix epoch
+    std::string payload;      // short (truncated) value, arguments, result, reason or error
+};
+
+struct GraphRun {
+    // Checkpoints and per-thread state are keyed by this. Empty = "default".
+    std::string thread_id;
+    GraphDurability durability = GraphDurability::Async;
+
+    // Seed values before run_graph (prefer set_state); the final state afterwards.
+    GraphState state;
+
+    GraphRunStatus status = GraphRunStatus::Pending;
+    std::string next_node; // node that runs next; the interrupted / failed node when paused
+    uint64_t step = 0;     // nodes completed in this thread (checkpoint:<thread_id>:<step>)
+    Error error;           // set when status == Failed
+
+    std::string interrupt_node;
+    std::string interrupt_reason;
+    std::vector<ToolCall> pending_tool_calls; // interrupt_before_tools: the calls awaiting approval
+
+    std::vector<GraphEvent> events; // appended to by every run_graph / resume_graph call
+};
+
+// Runs graph from graph.entry. Per-thread state and Agent histories from this thread's latest
+// checkpoint (if any) are loaded first, then user:/app: keys from the store, then run.state's seed.
+// Returns ok when the run completed or was interrupted (check run.status); a node failure returns
+// the error with run.status == Failed, after checkpointing so resume_graph can retry the node.
+Result<void> run_graph(Session &session, const Graph &graph, GraphRun &run);
+// Reloads checkpoint:<thread_id>:latest and continues from its next node. human_input (if any) is
+// written to "temp:human_input". Pending tool calls are approved when human_input is "approve",
+// "approved", "yes", "y", "allow" or "ok" (case-insensitive) and denied otherwise.
+Result<void> resume_graph(Session &session, const Graph &graph, std::string_view thread_id, GraphRun &run,
+                          std::string_view human_input = {});
+// Same, with an explicit decision for pending tool calls (Allow approves; Deny and Ask deny).
+Result<void> resume_graph(Session &session, const Graph &graph, std::string_view thread_id, GraphRun &run, PermissionDecision decision,
+                          std::string_view human_input = {});
+
+} // namespace agent
