@@ -29,6 +29,7 @@ The library is designed around three principles:
 | [API — Data Sources](api/data-sources.md) | `DataSource`, RAG/SQLite/GraphRAG integration |
 | [API — Events](api/events.md) | `EventType`, `EventHook`, `register_event_hook` |
 | [API — Stats](api/stats.md) | `TurnStats`, `SessionStats`, `get_stats` |
+| [API — Model hub](api/hub.md) | CLI-side `agent_hub`: Hugging Face downloads, `models.json`, licence policy |
 
 ## Quick Example
 
