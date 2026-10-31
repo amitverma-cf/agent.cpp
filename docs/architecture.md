@@ -29,7 +29,7 @@ agent.cpp is structured around three core principles that inform every design de
 |     Provider Layer       |         |       Tools Layer            |
 |  ProviderOps[]           |         |  ToolsOps  tool_by_name      |
 |  Mock  Engine (plugins)  |         |  filesystem  terminal        |
-|  OnnxRuntime             |         |  compressor  skills          |
+|  llama / onnx / ...      |         |  compressor  skills          |
 +--------------------------+         |  permission gate (Allow/     |
                                      |  Ask/Deny, checked pre-call) |
                                      +------------------------------+
@@ -89,7 +89,6 @@ Provider, memory, and tools subsystems are resolved through `constexpr` arrays o
 ```cpp
 ProviderOps kProviderOps[] = {
     { /* Mock     */ init_mock,    infer_mock,    ... },
-    { /* Onnx     */ init_onnx,    infer_onnx,    ... },
     { /* Engine   */ init_engine,  infer_engine,  ... },   // adapts engine_abi.h plugins
 };
 
@@ -97,7 +96,7 @@ ProviderOps kProviderOps[] = {
 constexpr StoreOps kInMemoryStore{ open_in_memory, put_in_memory, get_in_memory, clear_in_memory };
 ```
 
-`find_provider_ops(AiProvider::Engine)` does a 3-element linear scan. Branch predictor handles it in a single cycle. No heap, no map, no virtual dispatch.
+`find_provider_ops(AiProvider::Engine)` does a 2-element linear scan. Branch predictor handles it in a single cycle. No heap, no map, no virtual dispatch.
 
 ---
 
@@ -212,7 +211,7 @@ All subagents share the same `Session`. Three different concurrency mechanisms a
 
 | Provider | Mechanism | Why |
 |---|---|---|
-| `Mock`, `OnnxRuntime` | Sequential round-robin (unchanged) | No batching support / not worth the complexity for these. |
+| `Mock`, non-concurrent engines | Sequential round-robin (unchanged) | No batching support / not worth the complexity for these. |
 | Concurrent engines (llama) | Threads + continuous batching inside the plugin (see below) | A single `llama_context` can only run one `llama_decode` at a time regardless of thread count — threads alone buy nothing; the actual parallelism has to come from batching multiple sequences into one decode call. |
 
 Making any of this safe required removing all of `Session`'s ambient mutable "current turn" state and replacing it with `thread_local` variables in the `agent::ambient` namespace (`src/core/executor/ambient_turn.cpp`): which `FlowMemory`/hooks/tool-allowlist the current thread's `execute_tool` call is running under (`ambient::active_memory`, `ambient::active_hooks`, `ambient::allowed_tools`), which `Arena` slot to use (`ambient::worker_arena_index`, resolved via `ambient::current_arena(session)`), and the cached `simdjson::ondemand::parser` (`ambient::json_parser`). A single thread behaves identically to the old shared-field design (nothing changes for callers who never touch `AgentScheduler`); concurrent threads get automatic isolation for free, no locking needed on any of it. What *is* still shared and mutex-guarded: `Session::stats` (`Session::stats_mutex`), the log file (`Session::log_mutex`), and event hook dispatch (`Session::event_mutex`), since these genuinely accumulate/fire across every concurrently-running turn.
@@ -263,8 +262,7 @@ When history token total exceeds 70% of `context_window` and history has more th
 | File | AiProvider | Key dependency |
 |---|---|---|
 | `provider_ops.cpp` | Mock | — |
-| `onnx_provider.cpp` | OnnxRuntime | `onnxruntime_c_api.h` |
-| `engine_provider.cpp` | Engine | `engine_abi.h` (plugins such as `engines/llama/` link their own backends) |
+| `engine_provider.cpp` | Engine | `engine_abi.h` (plugins such as `engines/llama/` and `engines/onnx/` link their own backends; the core never links llama.cpp or ONNX Runtime) |
 
 All provider state is heap-allocated and type-erased as `shared_ptr<void>` in `Session::provider_state`. The provider's destructor handles cleanup.
 

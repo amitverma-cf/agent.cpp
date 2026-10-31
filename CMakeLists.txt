@@ -39,7 +39,6 @@ add_library(agent
     src/core/providers/provider_ops.cpp
     src/core/providers/engine_provider.cpp
     src/core/engines/engine_registry.cpp
-    src/core/providers/onnx_provider.cpp
     src/core/utils/utils.cpp
     src/core/memory/in_memory_store.cpp
     src/core/tools/tools_ops.cpp
@@ -115,30 +114,8 @@ target_compile_options(agent_hub PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${
 target_link_options(agent_hub PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 endif()
 
-option(AGENT_ENABLE_ONNX "use ONNX Runtime for multimodal inference" OFF)
 option(AGENT_ENGINE_LLAMA "Build the llama.cpp engine plugin (engines/llama)" ON)
-
-if(AGENT_ENABLE_ONNX)
-    find_package(onnxruntime QUIET)
-    if(onnxruntime_FOUND)
-        target_link_libraries(agent PRIVATE onnxruntime::onnxruntime)
-    else()
-
-        find_library(ONNXRUNTIME_LIB NAMES onnxruntime)
-        if(NOT ONNXRUNTIME_LIB)
-            message(FATAL_ERROR
-                "ONNX Runtime library not found. "
-                "Install libonnxruntime-dev or point ONNXRUNTIME_LIB to the .so/.a path.")
-        endif()
-        target_link_libraries(agent PRIVATE ${ONNXRUNTIME_LIB})
-    endif()
-
-    set(ONNX_VENDOR_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/vendor/onnxruntime/include")
-    if(EXISTS "${ONNX_VENDOR_INCLUDE}/onnxruntime/core/session/onnxruntime_c_api.h")
-        target_include_directories(agent SYSTEM PRIVATE "${ONNX_VENDOR_INCLUDE}")
-    endif()
-    target_compile_definitions(agent PUBLIC AGENT_HAS_ONNX)
-endif()
+option(AGENT_ENGINE_ONNX "Build the ONNX Runtime engine plugin (engines/onnx; needs a prebuilt ONNX Runtime, see ONNXRUNTIME_ROOT)" OFF)
 
 add_executable(basic examples/basic/basic.cpp)
 target_link_libraries(basic PRIVATE agent)
@@ -161,6 +138,9 @@ add_subdirectory(engines/mock)
 if(AGENT_ENGINE_LLAMA)
     add_subdirectory(engines/llama)
     target_compile_definitions(agent_cli PRIVATE AGENT_CLI_DEFAULT_ENGINE="$<TARGET_FILE:agent-engine-llama>")
+endif()
+if(AGENT_ENGINE_ONNX)
+    add_subdirectory(engines/onnx)
 endif()
 
 enable_testing()
@@ -206,6 +186,10 @@ add_dependencies(test_agent agent-engine-mock)
 if(AGENT_ENGINE_LLAMA)
     target_compile_definitions(test_agent PRIVATE AGENT_TEST_LLAMA_ENGINE_PATH="$<TARGET_FILE:agent-engine-llama>")
     add_dependencies(test_agent agent-engine-llama)
+endif()
+if(AGENT_ENGINE_ONNX)
+    target_compile_definitions(test_agent PRIVATE AGENT_TEST_ONNX_ENGINE_PATH="$<TARGET_FILE:agent-engine-onnx>")
+    add_dependencies(test_agent agent-engine-onnx)
 endif()
 target_compile_options(test_agent PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 target_link_options(test_agent PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})

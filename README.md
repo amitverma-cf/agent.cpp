@@ -6,7 +6,7 @@ A modular, lightweight C++20 AI agent orchestration library for edge devices, of
 
 ## What it does
 
-agent.cpp provides a complete runtime for building AI agents on local inference backends (llama.cpp, ONNX Runtime), fully offline. It handles context management, tool calling, multi-agent scheduling, FSM-based agent flows, memory persistence, and observability — all with no heap allocations in the hot path.
+agent.cpp provides a complete runtime for building AI agents on local inference backends (llama.cpp, ONNX Runtime, ... loaded as engine plugins), fully offline. It handles context management, tool calling, multi-agent scheduling, FSM-based agent flows, memory persistence, and observability — all with no heap allocations in the hot path.
 
 ---
 
@@ -85,7 +85,7 @@ ctest --test-dir build --output-on-failure
 | Option | Default | Description |
 |---|---|---|
 | `AGENT_ENGINE_LLAMA` | `ON` | Build the llama.cpp engine plugin (`engines/llama`, GGUF models) |
-| `AGENT_ENABLE_ONNX` | `OFF` | ONNX Runtime multimodal inference |
+| `AGENT_ENGINE_ONNX` | `OFF` | Build the ONNX Runtime engine plugin (`engines/onnx`); needs `-DONNXRUNTIME_ROOT=<prebuilt ORT>` |
 | `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UBSan |
 | `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |
 
@@ -96,8 +96,7 @@ ctest --test-dir build --output-on-failure
 | Provider | Enum | Notes |
 |---|---|---|
 | Mock | `AiProvider::Mock` | Fixed response; always available; for testing |
-| ONNX Runtime | `AiProvider::OnnxRuntime` | Multimodal; `.onnx` models |
-| Engine plugin | `AiProvider::Engine` | Any engine shared library built against `engine_abi.h` (see [docs/api/engines.md](docs/api/engines.md)) |
+| Engine plugin | `AiProvider::Engine` | Any engine shared library built against `engine_abi.h`: `agent-engine-llama` (GGUF), `agent-engine-onnx` (`.onnx`, raw tensors), ... (see [docs/api/engines.md](docs/api/engines.md)) |
 
 ---
 
@@ -140,7 +139,8 @@ src/core/
   scheduler/
     scheduler.cpp              -- AgentScheduler
   providers/
-    mock / llama / onnx
+    provider_ops.cpp           -- Mock + Engine dispatch
+    engine_provider.cpp        -- adapter to engine plugins (engine_abi.h)
   memory/
     in_memory_store.cpp        -- default StoreOps (no persistence)
   tools/
@@ -156,11 +156,13 @@ src/hal/                       -- hardware/OS abstraction layer
   path.cpp                     -- sandboxed path resolution (symlink/.. escape hardened)
   process.cpp                  -- shell command execution (CreateProcess / posix_spawn)
   log_file.cpp                 -- session log file open/write
+engines/
+  mock/ llama/ onnx/           -- engine plugins (agent-engine-<name>)
 tests/
   unit/                        -- Catch2 tests: providers, memory, tools, hal, skills, permissions, ...
   integration/                 -- session lifecycle, conversation, FSM tests
 vendor/
-  llama.cpp / simdjson / cpp-httplib / sqlite / sqlite-vec / onnxruntime / catch2
+  llama.cpp / simdjson / cpp-httplib / sqlite / sqlite-vec / catch2
 ```
 
 ---

@@ -5,7 +5,7 @@
 `AgentScheduler` runs multiple `Flow`s. All agents share the same `Session`. How subagents advance depends on the provider:
 
 - **Concurrent engines** (`AiProvider::Engine` whose plugin sets `AGENT_ENGINE_FLAG_CONCURRENT`, e.g. the llama engine) — dispatched across up to `max_parallel_subagents` threads. For the llama engine the actual parallelism comes from **continuous batching** inside the plugin, not from the threads themselves: one shared `llama_context` (created with `n_seq_max = max_parallel_subagents`) multiplexes every currently-active generation's next token into a single `llama_decode` call per round, tagged by `llama_seq_id`. A single `llama_context` can't run two `llama_decode` calls at once regardless of thread count, so the threads mostly block waiting on that shared batch rather than doing independent decode work — see [architecture.md](../architecture.md#continuous-batching) for the full design.
-- **Everything else** (`Mock`, `OnnxRuntime`, non-concurrent engines) — strictly single-flight, cooperative round-robin, unchanged.
+- **Everything else** (`Mock`, non-concurrent engines) — strictly single-flight, cooperative round-robin, unchanged.
 
 ---
 

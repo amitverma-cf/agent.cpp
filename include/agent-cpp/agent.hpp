@@ -241,7 +241,7 @@ struct MemoryConfig {
 };
 
 // Engine = an engine plugin (see <agent-cpp/engine_abi.h>), selected by Config::engine.
-enum class AiProvider { Mock, OnnxRuntime, Engine };
+enum class AiProvider { Mock, Engine };
 
 enum class EventType {
     OnTurnStart,

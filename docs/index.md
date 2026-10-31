@@ -4,7 +4,7 @@ A modular, lightweight C++20 AI agent orchestration library built for edge devic
 
 ## What is agent.cpp?
 
-agent.cpp gives you a complete runtime for building AI agents on top of local inference backends (llama.cpp, ONNX Runtime), fully offline. It handles the hard parts: context management, tool calling, multi-agent scheduling, FSM-based agent flows, memory persistence, and observability — all without heap allocations in the hot path.
+agent.cpp gives you a complete runtime for building AI agents on top of local inference backends (llama.cpp, ONNX Runtime, ... loaded as engine plugins), fully offline. It handles the hard parts: context management, tool calling, multi-agent scheduling, FSM-based agent flows, memory persistence, and observability — all without heap allocations in the hot path.
 
 The library is designed around three principles:
 
@@ -67,6 +67,6 @@ int main() {
 | Option | Default | Description |
 |---|---|---|
 | `AGENT_ENGINE_LLAMA` | `ON` | Build the llama.cpp engine plugin |
-| `AGENT_ENABLE_ONNX` | `OFF` | ONNX Runtime multimodal inference backend |
+| `AGENT_ENGINE_ONNX` | `OFF` | Build the ONNX Runtime engine plugin (`engines/onnx`); needs `-DONNXRUNTIME_ROOT` |
 | `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UBSan |
 | `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |

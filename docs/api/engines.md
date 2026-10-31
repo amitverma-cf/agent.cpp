@@ -26,6 +26,11 @@ auto session = agent::init(cfg);
  "parallel": 4, "options": { ...Config::engine_options... }}
 ```
 
+Each request carries one task (`agent_request::task`): `AGENT_CAP_TEXT_GEN` if the engine supports
+it, otherwise the lowest capability bit the engine declares (e.g. `AGENT_CAP_GENERIC` for the onnx
+engine). Tensors on a `MessageView` are sent as `AGENT_PART_TENSOR` parts, and tensor parts in the
+reply come back in `InferResponse::output_tensors`.
+
 Files that engines generate (audio, images, video, meshes) are written to `<workspace>/artifacts/` and
 come back as `Message::media` entries (`path` + `mime`) on the assistant message; they persist with the
 history. To send media to an engine:
@@ -118,3 +123,55 @@ media and decodes text and embedding chunks in turn); generation then joins the 
 `common_chat` reports errors by throwing, and exceptions must not cross the plugin ABI. So the
 plugin catches at exactly those calls (template load/render, output parsing) and converts them to
 status codes. This is the only exception boundary in agent.cpp.
+
+## The onnx engine
+
+`engines/onnx` (`agent-engine-onnx`) runs any ONNX graph through the ONNX Runtime C API. It declares
+`AGENT_CAP_GENERIC` (raw named tensors in and out) and `AGENT_ENGINE_FLAG_CONCURRENT`: `OrtSession::Run`
+is thread-safe and every call keeps its own buffers.
+
+Build it against a prebuilt ONNX Runtime release (option `AGENT_ENGINE_ONNX`, default `OFF`):
+
+```bash
+cmake -B build -G Ninja -DAGENT_ENGINE_ONNX=ON -DONNXRUNTIME_ROOT=/path/to/onnxruntime-linux-x64-1.31.1
+```
+
+`ONNXRUNTIME_ROOT` is an extracted release from https://github.com/microsoft/onnxruntime/releases
+(`include/` + `lib/`). Without it CMake falls back to `find_package(onnxruntime)`. The core never links
+ONNX Runtime. **Ship `libonnxruntime.so.1` (`.dylib` / `.dll`) next to the plugin**: the plugin's RPATH
+is `$ORIGIN`, and the build copies the library into the plugin's output directory.
+
+`Config::model` is the `.onnx` path. `Config::engine_options`:
+
+| Option | Default | |
+|---|---|---|
+| `threads` | ORT default | intra-op threads |
+| `execution_provider` | `"cpu"` | `"cpu"` or `"cuda"`. `"cuda"` needs an ORT build with the CUDA EP; otherwise `create()` fails with a clear error |
+| `device_id` | `0` | CUDA device |
+| `graph_optimization` | `"all"` | `"disable"`, `"basic"`, `"extended"` or `"all"` |
+
+Input and output names and input types are read once at load time. Each model input is fed from the
+last tensor part with the same name across the request's messages; dtype and byte size must match.
+A missing input fails with `AGENT_ERR_INVALID_CONFIG` ("missing required input tensor 'x' ...").
+Every model output comes back as a tensor part. Supported dtypes are those of `agent_dtype`
+(f32, f16, i8, i32, i64, u8).
+
+```cpp
+cfg.provider = agent::AiProvider::Engine;
+cfg.engine   = "./engines/onnx/agent-engine-onnx.so";
+cfg.model    = "add.onnx";                       // sum = a + b
+auto session = agent::init(cfg);
+
+const int64_t shape[] = {2, 2};
+const float a[4] = {1, 2, 3, 4}, b[4] = {10, 20, 30, 40};
+const agent::TensorView in[] = {
+    {"a", agent::DType::Float32, shape, {reinterpret_cast<const uint8_t *>(a), sizeof(a)}},
+    {"b", agent::DType::Float32, shape, {reinterpret_cast<const uint8_t *>(b), sizeof(b)}},
+};
+agent::MessageView msg{.role = "user", .tensors = in};
+auto out = agent::infer(session.value, {.messages = {&msg, 1}});
+// out.value.output_tensors[0]: "sum", f32 [2,2] = {11, 22, 33, 44}
+```
+
+Not yet supported: cancelling inside a running `Run()` (the flag is checked before it starts),
+IoBinding / device-resident outputs, and non-tensor (sequence/map) outputs.

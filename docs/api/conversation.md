@@ -47,7 +47,7 @@ struct Message {
     std::string             content;
     std::vector<ToolCall>   tool_calls;     // non-empty when role="assistant" with tool use
     std::string             tool_call_id;   // non-empty when role="tool"
-    std::vector<TensorData> tensors;        // multimodal data (ONNX)
+    std::vector<TensorData> tensors;        // raw named tensors (e.g. the onnx engine)
     mutable int             token_count = -1; // -1 = not yet counted; cached lazily
 };
 ```
@@ -108,7 +108,7 @@ struct InferRequest {
 struct InferResponse {
     MessageView                 message;
     TokenUsage                  usage;
-    std::span<const TensorView> output_tensors;   // ONNX only
+    std::span<const TensorView> output_tensors;   // tensor outputs (e.g. the onnx engine)
 };
 ```
 

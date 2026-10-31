@@ -96,8 +96,7 @@ struct Config {
 | Provider | Required fields |
 |---|---|
 | `Mock` | none |
-| `Engine` | `engine` (plugin path or registered name), plus whatever the engine needs, usually `model` |
-| `OnnxRuntime` | `model` (path to `.onnx` file) |
+| `Engine` | `engine` (plugin path or registered name), plus whatever the engine needs, usually `model` (`.gguf` for `agent-engine-llama`, `.onnx` for `agent-engine-onnx`) |
 
 ---
 
