@@ -39,7 +39,6 @@ add_library(agent
     src/core/providers/provider_ops.cpp
     src/core/providers/engine_provider.cpp
     src/core/engines/engine_registry.cpp
-    src/core/providers/llama_provider.cpp
     src/core/providers/onnx_provider.cpp
     src/core/utils/utils.cpp
     src/core/memory/in_memory_store.cpp
@@ -96,18 +95,8 @@ target_link_libraries(agent_store_sqlite PUBLIC agent PRIVATE Threads::Threads $
 target_compile_options(agent_store_sqlite PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 target_link_options(agent_store_sqlite PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 
-option(AGENT_ENABLE_LLAMACPP "use llama.cpp (local LLM provider)" ON)
 option(AGENT_ENABLE_ONNX "use ONNX Runtime for multimodal inference" OFF)
-
-if(AGENT_ENABLE_LLAMACPP)
-    add_subdirectory(vendor/llama.cpp)
-    target_link_libraries(agent PRIVATE llama)
-    target_compile_definitions(agent PUBLIC AGENT_HAS_LLAMACPP)
-    set_target_properties(llama PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "$<TARGET_PROPERTY:llama,INTERFACE_INCLUDE_DIRECTORIES>")
-    if(TARGET ggml)
-        set_target_properties(ggml PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "$<TARGET_PROPERTY:ggml,INTERFACE_INCLUDE_DIRECTORIES>")
-    endif()
-endif()
+option(AGENT_ENGINE_LLAMA "Build the llama.cpp engine plugin (engines/llama)" ON)
 
 if(AGENT_ENABLE_ONNX)
     find_package(onnxruntime QUIET)
@@ -142,6 +131,10 @@ target_compile_options(agent_cli PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${
 target_link_options(agent_cli PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 
 add_subdirectory(engines/mock)
+if(AGENT_ENGINE_LLAMA)
+    add_subdirectory(engines/llama)
+    target_compile_definitions(agent_cli PRIVATE AGENT_CLI_DEFAULT_ENGINE="$<TARGET_FILE:agent-engine-llama>")
+endif()
 
 enable_testing()
 add_executable(test_agent
@@ -179,6 +172,10 @@ set_source_files_properties(
 target_link_libraries(test_agent PRIVATE agent agent_store_sqlite)
 target_compile_definitions(test_agent PRIVATE AGENT_TEST_MOCK_ENGINE_PATH="$<TARGET_FILE:agent-engine-mock>")
 add_dependencies(test_agent agent-engine-mock)
+if(AGENT_ENGINE_LLAMA)
+    target_compile_definitions(test_agent PRIVATE AGENT_TEST_LLAMA_ENGINE_PATH="$<TARGET_FILE:agent-engine-llama>")
+    add_dependencies(test_agent agent-engine-llama)
+endif()
 target_compile_options(test_agent PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 target_link_options(test_agent PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 

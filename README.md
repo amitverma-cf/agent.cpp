@@ -39,7 +39,8 @@ int main() {
     agent::AgentRuntime runtime;
 
     auto sess = agent::init({
-        .provider       = agent::AiProvider::LlamaCpp,
+        .provider       = agent::AiProvider::Engine,
+        .engine         = "build/engines/llama/agent-engine-llama.so",
         .model          = ".workspace/models/my.gguf",
         .workspace_dir  = ".workspace",
         .context_window = 4096,
@@ -83,7 +84,7 @@ ctest --test-dir build --output-on-failure
 
 | Option | Default | Description |
 |---|---|---|
-| `AGENT_ENABLE_LLAMACPP` | `ON` | Local llama.cpp inference (GGUF models) |
+| `AGENT_ENGINE_LLAMA` | `ON` | Build the llama.cpp engine plugin (`engines/llama`, GGUF models) |
 | `AGENT_ENABLE_ONNX` | `OFF` | ONNX Runtime multimodal inference |
 | `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UBSan |
 | `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |
@@ -95,7 +96,6 @@ ctest --test-dir build --output-on-failure
 | Provider | Enum | Notes |
 |---|---|---|
 | Mock | `AiProvider::Mock` | Fixed response; always available; for testing |
-| llama.cpp | `AiProvider::LlamaCpp` | Local GGUF models; offline |
 | ONNX Runtime | `AiProvider::OnnxRuntime` | Multimodal; `.onnx` models |
 | Engine plugin | `AiProvider::Engine` | Any engine shared library built against `engine_abi.h` (see [docs/api/engines.md](docs/api/engines.md)) |
 

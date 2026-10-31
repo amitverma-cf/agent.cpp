@@ -273,6 +273,18 @@ Result<InferResponse> infer_engine(Session &session, const InferRequest &request
                             .output_tensors = tensors});
 }
 
+bool supports_parallel(const Session &session) {
+    if (session.config.provider != AiProvider::Engine) return false;
+    auto *state = static_cast<EngineState *>(session.provider_state.get());
+    return state && (state->engine->flags & AGENT_ENGINE_FLAG_CONCURRENT);
+}
+
+bool needs_text_tools(const Session &session) {
+    if (session.config.provider != AiProvider::Engine) return false;
+    auto *state = static_cast<EngineState *>(session.provider_state.get());
+    return state && !(state->engine->flags & AGENT_ENGINE_FLAG_NATIVE_TOOLS);
+}
+
 Result<int> count_tokens_engine(Session &session, std::string_view text) {
     auto *state = static_cast<EngineState *>(session.provider_state.get());
     if (!state || !state->engine->count_tokens) return fail<int>(ErrorCode::UnsupportedProvider, "Engine does not count tokens.");

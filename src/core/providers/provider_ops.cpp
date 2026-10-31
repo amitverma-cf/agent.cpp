@@ -4,18 +4,7 @@
 
 #include <agent-cpp/agent.hpp>
 
-#ifdef AGENT_HAS_LLAMACPP
-#include <llama.h>
-#endif
-
 namespace agent::providers {
-
-#ifdef AGENT_HAS_LLAMACPP
-Result<void> init_llama_cpp(Session &session);
-Result<InferResponse> infer_llama_cpp(Session &session, const InferRequest &request);
-Result<int> count_tokens_llama_cpp(Session &session, std::string_view text);
-Result<void> clear_kv_cache_llama_cpp(Session &session);
-#endif
 
 Result<void> init_engine(Session &session);
 Result<InferResponse> infer_engine(Session &session, const InferRequest &request);
@@ -47,13 +36,6 @@ Result<InferResponse> infer_mock(Session &session, const InferRequest &request) 
 
 constexpr ProviderOps kProviderOps[] = {
     ProviderOps{.provider = AiProvider::Mock, .init = init_mock, .infer = infer_mock, .count_tokens = nullptr, .clear_kv_cache = nullptr},
-#ifdef AGENT_HAS_LLAMACPP
-    ProviderOps{.provider = AiProvider::LlamaCpp,
-                .init = init_llama_cpp,
-                .infer = infer_llama_cpp,
-                .count_tokens = count_tokens_llama_cpp,
-                .clear_kv_cache = clear_kv_cache_llama_cpp},
-#endif
     ProviderOps{.provider = AiProvider::Engine,
                 .init = init_engine,
                 .infer = infer_engine,
@@ -67,17 +49,10 @@ constexpr ProviderOps kProviderOps[] = {
 
 } // namespace
 
-void init_global_backends() {
-#ifdef AGENT_HAS_LLAMACPP
-    llama_backend_init();
-#endif
-}
+// Engine plugins initialise their own backends; nothing is compiled into the core today.
+void init_global_backends() {}
 
-void free_global_backends() {
-#ifdef AGENT_HAS_LLAMACPP
-    llama_backend_free();
-#endif
-}
+void free_global_backends() {}
 
 const ProviderOps *find_provider_ops(AiProvider provider) {
     for (const ProviderOps &ops : kProviderOps) {

@@ -28,7 +28,7 @@ agent.cpp is structured around three core principles that inform every design de
 +------v------------------+         +------------------v-----------+
 |     Provider Layer       |         |       Tools Layer            |
 |  ProviderOps[]           |         |  ToolsOps  tool_by_name      |
-|  Mock  LlamaCpp          |         |  filesystem  terminal        |
+|  Mock  Engine (plugins)  |         |  filesystem  terminal        |
 |  OnnxRuntime             |         |  compressor  skills          |
 +--------------------------+         |  permission gate (Allow/     |
                                      |  Ask/Deny, checked pre-call) |
@@ -89,15 +89,15 @@ Provider, memory, and tools subsystems are resolved through `constexpr` arrays o
 ```cpp
 ProviderOps kProviderOps[] = {
     { /* Mock     */ init_mock,    infer_mock,    ... },
-    { /* LlamaCpp */ init_llama,   infer_llama,   ... },
     { /* Onnx     */ init_onnx,    infer_onnx,    ... },
+    { /* Engine   */ init_engine,  infer_engine,  ... },   // adapts engine_abi.h plugins
 };
 
 // Memory: Config::memory.store points at a StoreOps table (nullptr = in-memory default).
 constexpr StoreOps kInMemoryStore{ open_in_memory, put_in_memory, get_in_memory, clear_in_memory };
 ```
 
-`find_provider_ops(AiProvider::LlamaCpp)` does a 4-element linear scan. Branch predictor handles it in a single cycle. No heap, no map, no virtual dispatch.
+`find_provider_ops(AiProvider::Engine)` does a 3-element linear scan. Branch predictor handles it in a single cycle. No heap, no map, no virtual dispatch.
 
 ---
 
@@ -194,7 +194,7 @@ The save/restore pattern guarantees that each state receives exactly the tools a
 
 ```
 pump()
-  if provider == LlamaCpp:
+  if providers::supports_parallel(session):   // engine flag AGENT_ENGINE_FLAG_CONCURRENT
     batch = up to max_parallel_subagents not-done SubEntry's
     spawn one std::thread per batch entry, each calling step_flow(session, ctx, flow)
     join all threads
@@ -213,20 +213,20 @@ All subagents share the same `Session`. Three different concurrency mechanisms a
 | Provider | Mechanism | Why |
 |---|---|---|
 | `Mock`, `OnnxRuntime` | Sequential round-robin (unchanged) | No batching support / not worth the complexity for these. |
-| `LlamaCpp` | Threads + continuous batching (see below) | A single `llama_context` can only run one `llama_decode` at a time regardless of thread count — threads alone buy nothing; the actual parallelism has to come from batching multiple sequences into one decode call. |
+| Concurrent engines (llama) | Threads + continuous batching inside the plugin (see below) | A single `llama_context` can only run one `llama_decode` at a time regardless of thread count — threads alone buy nothing; the actual parallelism has to come from batching multiple sequences into one decode call. |
 
 Making any of this safe required removing all of `Session`'s ambient mutable "current turn" state and replacing it with `thread_local` variables in the `agent::ambient` namespace (`src/core/executor/ambient_turn.cpp`): which `FlowMemory`/hooks/tool-allowlist the current thread's `execute_tool` call is running under (`ambient::active_memory`, `ambient::active_hooks`, `ambient::allowed_tools`), which `Arena` slot to use (`ambient::worker_arena_index`, resolved via `ambient::current_arena(session)`), and the cached `simdjson::ondemand::parser` (`ambient::json_parser`). A single thread behaves identically to the old shared-field design (nothing changes for callers who never touch `AgentScheduler`); concurrent threads get automatic isolation for free, no locking needed on any of it. What *is* still shared and mutex-guarded: `Session::stats` (`Session::stats_mutex`), the log file (`Session::log_mutex`), and event hook dispatch (`Session::event_mutex`), since these genuinely accumulate/fire across every concurrently-running turn.
 
 ### Continuous batching
 
-`llama_provider.cpp`'s `LlamaEngine` owns the single `llama_model`/`llama_context` for a Session and multiplexes every concurrently-active `LlamaCpp` generation onto it via llama.cpp's native multi-sequence batching (`llama_batch` entries tagged with distinct `llama_seq_id`s, context created with `n_seq_max = Config::max_parallel_subagents`):
+`engines/llama/llama_engine.cpp`'s `Batcher` owns the single `llama_model`/`llama_context` for an engine instance and multiplexes every concurrently-active generation onto it via llama.cpp's native multi-sequence batching (`llama_batch` entries tagged with distinct `llama_seq_id`s, context created with `n_seq_max = Config::max_parallel_subagents`):
 
-- Each generation's **prompt prefill** is decoded as its own `llama_decode` call when its sequence is acquired (not batched across sequences — prefill is comparatively rare and cheap relative to the token-by-token loop, and batching variable-length prompts together is a lot more complexity for little benefit).
-- Each generation's **next-token step**, from then on, goes through `LlamaEngine::next_token()`: the first caller in a round becomes its leader, briefly releases the lock so other concurrently-running generations can join (a ~2ms debounce window), then performs **one** `llama_decode` covering every joined sequence's next token and wakes every waiter with its own sampled result. A round with only one active sequence degenerates to exactly one decode call per token — today's behavior — so continuous batching only kicks in when there's actually something to batch.
-- Each generation owns its own `llama_sampler` chain (its own temperature, its own RNG) built fresh per call — nothing sampling-related is shared, so no locking is needed there; only the decode call itself is serialized through `LlamaEngine`'s mutex. (An earlier version also installed a GBNF grammar sampler here to force tool-call output into valid JSON; it was removed after a real-model crash traced the vendored `llama_sampler_init_grammar_lazy_patterns`/`llama_grammar_init_impl` path to an uncaught `std::regex_error` inside llama.cpp itself. Tool-call JSON is extracted unconstrained via bracket-matching instead, as it always was before that attempt.)
-- Sequence slots are a fixed-size free list of `[0, n_seq_max)`; `acquire_seq()`/`release_seq()` check them out/in per generation, failing cleanly with `ProviderInitFailed` if the pool is exhausted rather than corrupting state.
+- Each generation's **prompt prefill** is decoded on its own (split into `n_batch`-sized `llama_decode` calls) when its sequence is acquired (not batched across sequences — prefill is comparatively rare and cheap relative to the token-by-token loop, and batching variable-length prompts together is a lot more complexity for little benefit).
+- Each generation's **next-token step**, from then on, goes through `Batcher::next_token()`: the first caller in a round becomes its leader, briefly releases the lock so other concurrently-running generations can join (a ~2ms debounce window), then performs **one** `llama_decode` covering every joined sequence's next token and wakes every waiter with its own sampled result. A round with only one active sequence degenerates to exactly one decode call per token — today's behavior — so continuous batching only kicks in when there's actually something to batch.
+- Each generation owns its own `llama_sampler` chain (its own temperature, its own RNG) built fresh per call — nothing sampling-related is shared, so no locking is needed there; only the decode call itself is serialized through the `Batcher`'s mutex. (An earlier version also installed a GBNF grammar sampler here to force tool-call output into valid JSON; it was removed after a real-model crash traced the vendored `llama_sampler_init_grammar_lazy_patterns`/`llama_grammar_init_impl` path to an uncaught `std::regex_error` inside llama.cpp itself. Tool-call JSON is extracted unconstrained via bracket-matching instead, as it always was before that attempt.)
+- Sequence slots are a fixed-size free list of `[0, n_seq_max)`; `acquire_seq()`/`release_seq()` check them out/in per generation, failing cleanly with an error if the pool is exhausted rather than corrupting state.
 
-This is deliberately not built on C++20 coroutines: an earlier design considered making `run_turn`/`infer` themselves suspendable so the scheduler could interleave partial generations directly, but that would have meant changing the public `ProviderInferFn` contract for every provider (not just `LlamaCpp`) for a benefit only `LlamaCpp` needs. The thread-plus-shared-engine design gets the same real batching benefit — one shared `llama_decode` per round across every active sequence — without touching any public signature.
+This is deliberately not built on C++20 coroutines: an earlier design considered making `run_turn`/`infer` themselves suspendable so the scheduler could interleave partial generations directly, but that would have meant changing the public `ProviderInferFn` contract for every provider for a benefit only the llama engine needs. The thread-plus-shared-engine design gets the same real batching benefit — one shared `llama_decode` per round across every active sequence — without touching any public signature.
 
 ---
 
@@ -263,8 +263,8 @@ When history token total exceeds 70% of `context_window` and history has more th
 | File | AiProvider | Key dependency |
 |---|---|---|
 | `provider_ops.cpp` | Mock | — |
-| `llama_provider.cpp` | LlamaCpp | `llama.h` |
 | `onnx_provider.cpp` | OnnxRuntime | `onnxruntime_c_api.h` |
+| `engine_provider.cpp` | Engine | `engine_abi.h` (plugins such as `engines/llama/` link their own backends) |
 
 All provider state is heap-allocated and type-erased as `shared_ptr<void>` in `Session::provider_state`. The provider's destructor handles cleanup.
 

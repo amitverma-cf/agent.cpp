@@ -1,4 +1,5 @@
 #include "../executor/ambient_turn.hpp"
+#include "../providers/provider_ops.hpp"
 #include "../utils/utils.hpp"
 
 #include <agent-cpp/agent.hpp>
@@ -39,7 +40,7 @@ Result<void> AgentScheduler::pump(Session &session) {
         }
     };
 
-    const bool provider_can_run_parallel = session.config.provider == AiProvider::LlamaCpp;
+    const bool provider_can_run_parallel = providers::supports_parallel(session);
 
     if (provider_can_run_parallel) {
         const int batch_size = std::max(1, session.config.max_parallel_subagents);

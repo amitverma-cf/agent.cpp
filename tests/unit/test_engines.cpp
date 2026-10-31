@@ -1,6 +1,7 @@
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/engine_abi.h>
 #include <catch_amalgamated.hpp>
+#include <cstdlib>
 #include <string>
 
 namespace {
@@ -130,3 +131,132 @@ TEST_CASE("AiProvider::Engine requires a known engine", "[engines]") {
     REQUIRE_FALSE(res2.ok);
     REQUIRE(res2.error.code == agent::ErrorCode::InvalidConfig);
 }
+
+#ifdef AGENT_TEST_LLAMA_ENGINE_PATH
+
+namespace {
+
+agent::Config llama_config(std::string model) {
+    agent::Config cfg;
+    cfg.provider = agent::AiProvider::Engine;
+    cfg.engine = AGENT_TEST_LLAMA_ENGINE_PATH;
+    cfg.model = std::move(model);
+    cfg.workspace_dir = kWorkspace;
+    cfg.context_window = 512;
+    cfg.max_tokens = 16;
+    cfg.temperature = 0.0f;
+    cfg.auto_default_tools = false; // keep the prompt inside the tiny test context
+    return cfg;
+}
+
+// Set AGENT_TEST_LLAMA_MODEL to a GGUF file to run the real-model tests, e.g.
+// https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K.gguf
+const char *test_model() { return std::getenv("AGENT_TEST_LLAMA_MODEL"); }
+
+} // namespace
+
+TEST_CASE("llama engine plugin loads and declares its capabilities", "[engines][llama]") {
+    auto res = agent::load_engine_plugin(AGENT_TEST_LLAMA_ENGINE_PATH);
+    REQUIRE(res.ok);
+    REQUIRE(res.value == "llama");
+    const agent_engine_v1 *engine = agent::find_engine("llama");
+    REQUIRE(engine != nullptr);
+    REQUIRE((engine->caps & AGENT_CAP_TEXT_GEN) != 0);
+    REQUIRE((engine->flags & AGENT_ENGINE_FLAG_CONCURRENT) != 0);
+}
+
+TEST_CASE("llama engine reports a missing model file", "[engines][llama]") {
+    auto res = agent::init(llama_config("/nonexistent/model.gguf"));
+    REQUIRE_FALSE(res.ok);
+    REQUIRE(res.error.code == agent::ErrorCode::ModelLoadFailed);
+}
+
+TEST_CASE("llama engine generates text with a real model", "[engines][llama][model]") {
+    if (!test_model()) SKIP("AGENT_TEST_LLAMA_MODEL not set");
+    auto res = agent::init(llama_config(test_model()));
+    REQUIRE(res.ok);
+    agent::Session session = std::move(res.value);
+
+    std::string streamed;
+    agent::FlowMemory memory;
+    memory.id = "llama_real";
+    auto reply = agent::run_turn(
+        session, memory, "Once upon a time", true, [](std::string_view tok, void *ud) { *static_cast<std::string *>(ud) += tok; }, &streamed);
+    REQUIRE(reply.ok);
+    REQUIRE_FALSE(streamed.empty());
+    REQUIRE(memory.stats.completion_tokens > 0);
+    REQUIRE(agent::clear_provider_kv_cache(session).ok);
+}
+
+TEST_CASE("llama engine runs parallel subagents through continuous batching", "[engines][llama][model]") {
+    if (!test_model()) SKIP("AGENT_TEST_LLAMA_MODEL not set");
+    auto cfg = llama_config(test_model());
+    cfg.max_parallel_subagents = 3;
+    auto res = agent::init(cfg);
+    REQUIRE(res.ok);
+    agent::Session session = std::move(res.value);
+
+    static const agent::FlowState kStates[] = {
+        {.state_id = "go",
+         .on_transition = [](agent::Session &s, agent::FlowMemory &m, void *) -> agent::Result<std::string_view> {
+             auto r = agent::run_turn(s, m, "Once upon a time");
+             if (!r.ok) return agent::fail<std::string_view>(r.error.code, r.error.message);
+             return agent::ok(std::string_view("exit"));
+         }},
+    };
+    agent::AgentScheduler scheduler;
+    for (int i = 0; i < 3; ++i) {
+        agent::Flow flow;
+        flow.states = kStates;
+        flow.memory.id = "batch_" + std::to_string(i);
+        REQUIRE(scheduler.spawn("w" + std::to_string(i), std::move(flow)).ok);
+    }
+    REQUIRE(scheduler.run_until_done(session).ok);
+    for (const auto &r : scheduler.results()) {
+        INFO(r.id << ": " << r.error.message);
+        REQUIRE(r.ok);
+    }
+}
+
+#endif
+
+#ifdef AGENT_TEST_LLAMA_ENGINE_PATH
+TEST_CASE("llama engine rejects a prompt longer than the context instead of aborting", "[engines][llama][model]") {
+    if (!test_model()) SKIP("AGENT_TEST_LLAMA_MODEL not set");
+    auto cfg = llama_config(test_model());
+    cfg.context_window = 64;
+    cfg.max_tokens = 8;
+    auto res = agent::init(cfg);
+    REQUIRE(res.ok);
+    agent::Session session = std::move(res.value);
+
+    agent::FlowMemory memory;
+    memory.id = "llama_overflow";
+    std::string huge(4000, 'a');
+    for (size_t i = 0; i < huge.size(); i += 2) huge[i] = ' ';
+    auto reply = agent::run_turn(session, memory, huge);
+    REQUIRE_FALSE(reply.ok);
+}
+#endif
+
+#ifdef AGENT_TEST_LLAMA_ENGINE_PATH
+TEST_CASE("llama engine prefills prompts longer than n_batch in chunks", "[engines][llama][model]") {
+    if (!test_model()) SKIP("AGENT_TEST_LLAMA_MODEL not set");
+    auto cfg = llama_config(test_model());
+    cfg.context_window = 8192; // n_batch defaults to 2048, so a ~3000-token prompt needs two decodes
+    cfg.max_tokens = 4;
+    cfg.max_parallel_subagents = 1;
+    auto res = agent::init(cfg);
+    REQUIRE(res.ok);
+    agent::Session session = std::move(res.value);
+
+    agent::FlowMemory memory;
+    memory.id = "llama_chunked";
+    std::string prompt;
+    for (int i = 0; i < 3000; ++i) prompt += "a ";
+    auto reply = agent::run_turn(session, memory, prompt);
+    INFO(reply.error.message);
+    REQUIRE(reply.ok);
+    REQUIRE(memory.stats.prompt_tokens > 2048);
+}
+#endif

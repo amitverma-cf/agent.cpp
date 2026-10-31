@@ -49,12 +49,6 @@ Result<Session> init(const Config &config) {
         config.arena_capacity > 0 ? config.arena_capacity : static_cast<size_t>(config.context_window) * 8 + (2UL * 1024 * 1024);
     session.arena = Arena(arena_size);
 
-    const bool provider_can_run_parallel = config.provider == AiProvider::LlamaCpp;
-    if (provider_can_run_parallel && config.max_parallel_subagents > 0) {
-        session.worker_arenas.reserve(static_cast<size_t>(config.max_parallel_subagents));
-        for (int i = 0; i < config.max_parallel_subagents; ++i) session.worker_arenas.emplace_back(arena_size);
-    }
-
     session.workspace_path = std::make_shared<std::string>(config.workspace_dir);
 
     if (config.enable_file_logging) {
@@ -70,6 +64,11 @@ Result<Session> init(const Config &config) {
 
     auto init_res = ops->init(session);
     if (!init_res.ok) return fail<Session>(init_res.error.code, init_res.error.message);
+
+    if (providers::supports_parallel(session) && config.max_parallel_subagents > 0) {
+        session.worker_arenas.reserve(static_cast<size_t>(config.max_parallel_subagents));
+        for (int i = 0; i < config.max_parallel_subagents; ++i) session.worker_arenas.emplace_back(arena_size);
+    }
 
     auto mem_res = init_memory(session);
     if (!mem_res.ok) return fail<Session>(mem_res.error.code, mem_res.error.message);

@@ -376,7 +376,8 @@ int main() {
     agent::AgentRuntime runtime;
 
     auto sess = agent::init({
-        .provider       = agent::AiProvider::LlamaCpp,
+        .provider       = agent::AiProvider::Engine,
+        .engine         = "build/engines/llama/agent-engine-llama.so",
         .model          = ".workspace/models/my.gguf",
         .workspace_dir  = ".workspace",
         .context_window = 8192,

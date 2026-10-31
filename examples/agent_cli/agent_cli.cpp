@@ -87,8 +87,18 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    std::string engine = parse_flag(argc, argv, "--engine");
+#ifdef AGENT_CLI_DEFAULT_ENGINE
+    if (engine.empty()) engine = AGENT_CLI_DEFAULT_ENGINE;
+#endif
+    if (engine.empty()) {
+        std::fprintf(stderr, "Pass an engine plugin with --engine <path/to/agent-engine-llama.so>.\n");
+        return 1;
+    }
+
     agent::Config cfg;
-    cfg.provider = agent::AiProvider::LlamaCpp;
+    cfg.provider = agent::AiProvider::Engine;
+    cfg.engine = engine;
     cfg.model = model;
     cfg.workspace_dir = workspace_dir;
     cfg.memory = {.store = agent::store::sqlite_store()};

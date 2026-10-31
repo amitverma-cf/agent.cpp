@@ -90,11 +90,11 @@ static int count_text_tokens(Session &session, std::string_view text) {
 }
 
 static Result<void> prune_history_state(Session &session, FlowMemory &state) {
-    // The llama.cpp path injects session.tools_system_prompt as an extra prompt segment (see
+    // Engines without AGENT_ENGINE_FLAG_NATIVE_TOOLS get session.tools_system_prompt as an extra prompt segment (see
     // run_turn's need_tools_prefix/combined_system logic) that isn't part of state.history, so
     // reserve budget for it here or pruning can leave the real prompt over context_window.
     int tools_prefix_tokens = 0;
-    if (session.config.provider == AiProvider::LlamaCpp) tools_prefix_tokens = count_text_tokens(session, session.tools_system_prompt);
+    if (providers::needs_text_tools(session)) tools_prefix_tokens = count_text_tokens(session, session.tools_system_prompt);
 
     const int max_allowed = std::max(200, session.config.context_window - session.config.max_tokens - 100 - tools_prefix_tokens);
 
@@ -265,7 +265,7 @@ Result<std::string> run_turn(Session &session, FlowMemory &state, std::string_vi
         Arena &arena = ambient::current_arena(session);
         arena.reset();
 
-        const bool provider_needs_text_tools = session.config.provider == AiProvider::LlamaCpp;
+        const bool provider_needs_text_tools = providers::needs_text_tools(session);
         const bool has_system = !state.history.empty() && state.history[0].role == "system";
         const bool need_tools_prefix = provider_needs_text_tools && !session.tools_system_prompt.empty() && !has_system;
         const size_t view_count = state.history.size() + (need_tools_prefix ? 1 : 0);

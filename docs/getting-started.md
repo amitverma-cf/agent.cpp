@@ -24,7 +24,7 @@ cd build && ctest --output-on-failure
 ### Build without llama.cpp
 
 ```bash
-wsl cmake -B build -G Ninja -DAGENT_ENABLE_LLAMACPP=OFF
+wsl cmake -B build -G Ninja -DAGENT_ENGINE_LLAMA=OFF
 wsl cmake --build build
 ```
 
@@ -79,7 +79,8 @@ target_link_libraries(my_app PRIVATE agent)
 agent::AgentRuntime runtime;   // must outlive all sessions
 
 agent::Config cfg;
-cfg.provider      = agent::AiProvider::LlamaCpp;
+cfg.provider      = agent::AiProvider::Engine;
+cfg.engine        = "build/engines/llama/agent-engine-llama.so";
 cfg.model         = ".workspace/models/my.gguf";
 cfg.workspace_dir = ".workspace";
 cfg.context_window = 4096;

@@ -72,6 +72,9 @@ enum agent_capability {
 enum agent_engine_flag {
     /* run() may be called concurrently on the same instance from several threads. */
     AGENT_ENGINE_FLAG_CONCURRENT = 1u << 0,
+    /* The engine formats agent_request::tools_json into the prompt itself. Without this flag the
+     * host prepends its plain-text tool/skill instructions to the system message. */
+    AGENT_ENGINE_FLAG_NATIVE_TOOLS = 1u << 1,
 };
 
 /* Non-owning UTF-8 string view. data need not be NUL-terminated. */

@@ -4,8 +4,8 @@
 
 `AgentScheduler` runs multiple `Flow`s. All agents share the same `Session`. How subagents advance depends on the provider:
 
-- **`AiProvider::LlamaCpp`** — also dispatched across up to `max_parallel_subagents` threads, but the actual parallelism comes from **continuous batching** inside the provider, not from the threads themselves: one shared `llama_context` (created with `n_seq_max = max_parallel_subagents`) multiplexes every currently-active generation's next token into a single `llama_decode` call per round, tagged by `llama_seq_id`. A single `llama_context` can't run two `llama_decode` calls at once regardless of thread count, so the threads mostly block waiting on that shared batch rather than doing independent decode work — see [architecture.md](../architecture.md#continuous-batching) for the full design.
-- **`Mock` / `OnnxRuntime`** — strictly single-flight, cooperative round-robin, unchanged.
+- **Concurrent engines** (`AiProvider::Engine` whose plugin sets `AGENT_ENGINE_FLAG_CONCURRENT`, e.g. the llama engine) — dispatched across up to `max_parallel_subagents` threads. For the llama engine the actual parallelism comes from **continuous batching** inside the plugin, not from the threads themselves: one shared `llama_context` (created with `n_seq_max = max_parallel_subagents`) multiplexes every currently-active generation's next token into a single `llama_decode` call per round, tagged by `llama_seq_id`. A single `llama_context` can't run two `llama_decode` calls at once regardless of thread count, so the threads mostly block waiting on that shared batch rather than doing independent decode work — see [architecture.md](../architecture.md#continuous-batching) for the full design.
+- **Everything else** (`Mock`, `OnnxRuntime`, non-concurrent engines) — strictly single-flight, cooperative round-robin, unchanged.
 
 ---
 
@@ -17,7 +17,7 @@ AgentScheduler
 
 pump(session):
   Advance pending subagents one Flow step each:
-       - LlamaCpp: up to max_parallel_subagents at once, on real threads, joined
+       - concurrent engine: up to max_parallel_subagents at once, on real threads, joined
          before pump() returns
        - otherwise: one at a time, sequentially (today's round-robin, unchanged)
 
@@ -25,7 +25,7 @@ run_until_done(session):
   while !all_done(): pump()
 ```
 
-For providers other than `LlamaCpp`, each `pump()` call still gives every pending subagent exactly one `Flow` state transition — a subagent that blocks inside `on_transition` (e.g. doing a long local-model call) blocks the rest of that pump. For `LlamaCpp`, up to `max_parallel_subagents` subagents advance concurrently per pump, sharing one batched decode.
+For non-concurrent providers, each `pump()` call still gives every pending subagent exactly one `Flow` state transition — a subagent that blocks inside `on_transition` (e.g. doing a long local-model call) blocks the rest of that pump. For concurrent engines, up to `max_parallel_subagents` subagents advance concurrently per pump (the llama engine shares one batched decode between them).
 
 ---
 
@@ -169,7 +169,8 @@ int main() {
     agent::AgentRuntime runtime;
 
     auto sess = agent::init({
-        .provider      = agent::AiProvider::LlamaCpp,
+        .provider      = agent::AiProvider::Engine,
+        .engine        = "build/engines/llama/agent-engine-llama.so",
         .model         = ".workspace/models/my.gguf",
         .workspace_dir = ".workspace",
         .context_window = 4096,
