@@ -25,7 +25,7 @@ Status as of 2026-10-31. Each entry says what breaks, why, and the planned fix. 
 | Limitation | Fix |
 |---|---|
 | Windows and macOS code paths (plugin loader, CLI platform layer, MCP process spawning, packaging) have never been compiled. | Build and test on Windows (owner), then add CI once wanted. |
-| `engines/sdcpp` (and the TRELLIS nested build) only support single-config generators (Ninja/Make), not Visual Studio/Xcode. | Pass `--config` through the ExternalProject step. |
+| The TRELLIS nested build may still assume a single-config generator (`engines/sdcpp` handles Visual Studio/Xcode/Ninja Multi-Config; verified with Ninja Multi-Config on Linux, not with Visual Studio). | Same pattern as sdcpp: `--config $<CONFIG>` plus per-config archive dirs. |
 | No GPU backend has been tested (CUDA/Vulkan/Metal). | Test the llama/sd.cpp/ORT GPU builds; add a backend field to `engines.json`. |
 
 ## 4. Engine ABI and core API

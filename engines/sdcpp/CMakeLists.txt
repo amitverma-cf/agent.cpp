@@ -35,7 +35,18 @@ set(SDCPP_LIBS
     ${SDCPP_LIB_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}ggml-base${CMAKE_STATIC_LIBRARY_SUFFIX}
 )
 
+# Multi-config generators (Visual Studio, Xcode, Ninja Multi-Config) build the configuration the
+# outer build is building; the per-config archive directories below keep the libraries in one place.
+get_property(SDCPP_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 set(SDCPP_BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target stable-diffusion)
+set(SDCPP_CONFIG_ARGS -DCMAKE_BUILD_TYPE:STRING=${SDCPP_BUILD_TYPE})
+if(SDCPP_MULTI_CONFIG)
+    list(APPEND SDCPP_BUILD_COMMAND --config $<CONFIG>)
+    set(SDCPP_CONFIG_ARGS)
+    foreach(cfg DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+        list(APPEND SDCPP_CONFIG_ARGS -DCMAKE_ARCHIVE_OUTPUT_DIRECTORY_${cfg}:PATH=${SDCPP_LIB_DIR})
+    endforeach()
+endif()
 if(AGENT_SDCPP_BUILD_JOBS)
     list(APPEND SDCPP_BUILD_COMMAND --parallel ${AGENT_SDCPP_BUILD_JOBS})
 endif()
@@ -44,7 +55,7 @@ ExternalProject_Add(sdcpp-build
     SOURCE_DIR ${SDCPP_SOURCE_DIR}
     BINARY_DIR ${SDCPP_BINARY_DIR}
     CMAKE_CACHE_ARGS
-        -DCMAKE_BUILD_TYPE:STRING=${SDCPP_BUILD_TYPE}
+        ${SDCPP_CONFIG_ARGS}
         -DCMAKE_C_COMPILER:FILEPATH=${CMAKE_C_COMPILER}
         -DCMAKE_CXX_COMPILER:FILEPATH=${CMAKE_CXX_COMPILER}
         -DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=ON
