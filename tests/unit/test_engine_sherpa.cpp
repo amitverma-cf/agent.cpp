@@ -562,8 +562,11 @@ TEST_CASE("sherpa Silero VAD finds speech offline and streaming", "[engines][she
     REQUIRE(static_cast<const float *>(tensor.data)[2] == Catch::Approx(segs[1].start).margin(0.001));
     e->free_response(inst, &resp);
 
-    // A VAD-only instance answers the ASR task (what hosts without an explicit task send) with segments.
+    // A VAD-only instance answers an automatic task (the host sends ASR with AGENT_REQUEST_FLAG_AUTO_TASK
+    // when the caller didn't pick one) with segments; an explicit ASR request needs a recognizer.
     TensorMessage routed(AGENT_CAP_ASR, audio);
+    REQUIRE(e->run(inst, &routed.req, &resp) == AGENT_ERR_UNSUPPORTED);
+    routed.req.flags |= AGENT_REQUEST_FLAG_AUTO_TASK;
     REQUIRE(e->run(inst, &routed.req, &resp) == AGENT_OK);
     REQUIRE(parse_segments(sv(resp.message.parts[0].text)).size() == 2);
     e->free_response(inst, &resp);
