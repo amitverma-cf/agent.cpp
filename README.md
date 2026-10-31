@@ -93,6 +93,16 @@ manager (Hugging Face downloads) and a chat TUI with streaming and tool calls.
 
 See [docs/cli.md](docs/cli.md).
 
+## Install and package
+
+```bash
+cmake --install build --prefix /opt/agent   # bin/agent, lib/agent/engines/, libagent + headers + CMake package
+scripts/package.sh --engines llama          # dist/agent-<version>-linux-x64.tar.gz
+```
+
+Library users: `find_package(agent-cpp)` and link `agent-cpp::agent` (plus `agent-cpp::store_sqlite`,
+`agent-cpp::hub`). See [docs/packaging.md](docs/packaging.md); Windows and macOS packaging are still TODO.
+
 ### CMake options
 
 | Option | Default | Description |
@@ -100,6 +110,8 @@ See [docs/cli.md](docs/cli.md).
 | `AGENT_ENGINE_LLAMA` | `ON` | Build the llama.cpp engine plugin (`engines/llama`, GGUF models) |
 | `AGENT_BUILD_CLI` | `ON` | Build the `agent` CLI binary (`tools/cli`); needs `AGENT_BUILD_HUB` |
 | `AGENT_BUILD_HUB` | `ON` | Build `agent_hub`, the Hugging Face model downloader (needs OpenSSL) |
+| `BUILD_SHARED_LIBS` | `OFF` | Build `libagent`, `agent_store_sqlite`, `agent_hub` as shared libraries |
+| `AGENT_INSTALL` | `ON` (top level) | Generate install rules and the `agent-cpp` CMake package |
 | `AGENT_ENGINE_ONNX` | `OFF` | Build the ONNX Runtime engine plugin (`engines/onnx`); needs `-DONNXRUNTIME_ROOT=<prebuilt ORT>` |
 | `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UBSan |
 | `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |

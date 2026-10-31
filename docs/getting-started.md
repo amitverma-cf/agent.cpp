@@ -41,6 +41,16 @@ wsl cmake --build build
 This builds `build/engines/onnx/agent-engine-onnx.so` and copies `libonnxruntime.so.1` next to it.
 Ship the two together: the plugin finds ONNX Runtime through its `$ORIGIN` RPATH.
 
+### Install
+
+```bash
+wsl cmake --install build --prefix /opt/agent
+```
+
+This installs `bin/agent`, the engine plugins in `lib/agent/engines/`, `libagent` with its headers and
+the `agent-cpp` CMake package (`find_package(agent-cpp)`, target `agent-cpp::agent`). See
+[packaging.md](packaging.md).
+
 ### Enable sanitizers
 
 ```bash

@@ -43,6 +43,8 @@
 build/
 Build/
 build-*/
+# scripts/package.sh output
+dist/
 
 # CMake generated files
 CMakeFiles/

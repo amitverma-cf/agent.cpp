@@ -68,3 +68,7 @@ if(_ort_lib_dir)
             VERBATIM)
     endforeach()
 endif()
+
+# Installed layout: the plugin and the bundled ORT libraries in lib/agent/engines/. With
+# find_package(onnxruntime) the system ORT is used and nothing is bundled.
+agent_install_engine(agent-engine-onnx ${_ort_runtime})

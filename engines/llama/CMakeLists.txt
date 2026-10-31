@@ -40,3 +40,5 @@ foreach(dep llama-common llama-common-base mtmd)
         set_target_properties(${dep} PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "$<TARGET_PROPERTY:${dep},INTERFACE_INCLUDE_DIRECTORIES>")
     endif()
 endforeach()
+
+agent_install_engine(agent-engine-llama)

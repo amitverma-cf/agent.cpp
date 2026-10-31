@@ -17,6 +17,7 @@
 #include <fstream>
 #include <mutex>
 #include <set>
+#include <simdjson.h>
 #include <thread>
 #include <utility>
 

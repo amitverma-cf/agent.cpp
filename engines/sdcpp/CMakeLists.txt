@@ -106,3 +106,5 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 elseif(APPLE)
     target_link_options(agent-engine-sdcpp PRIVATE -Wl,-exported_symbol,_agent_engine_get_v1)
 endif()
+
+agent_install_engine(agent-engine-sdcpp)
