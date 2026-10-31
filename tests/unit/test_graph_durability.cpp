@@ -381,3 +381,177 @@ TEST_CASE("graph durability: a fresh run after an interrupt answers the abandone
     REQUIRE(agent::resume_graph(session, g, "abandoned", again).ok);
     REQUIRE(again.state.histories.at("worker").history.size() == 5);
 }
+
+TEST_CASE("graph durability: the event log is persisted and listed", "[graph][durability]") {
+    const std::string path = temp_db("events.sqlite3");
+    agent::Session session = make_session();
+    agent::Graph g = agent::make_sequential("logged", {agent::make_graph(kv_node("e1", "x=1")), agent::make_graph(kv_node("e2", "y=2"))});
+
+    SECTION("sqlite, read back through a new checkpointer") {
+        std::vector<agent::GraphEvent> live;
+        {
+            auto cp = agent::open_checkpointer(agent::store::sqlite_checkpointer(), {.path = path});
+            REQUIRE(cp.ok);
+            agent::GraphRun run;
+            run.thread_id = "logged";
+            run.checkpointer = cp.value;
+            REQUIRE(agent::run_graph(session, g, run).ok);
+            live = run.events;
+        }
+        auto cp = agent::open_checkpointer(agent::store::sqlite_checkpointer(), {.path = path});
+        REQUIRE(cp.ok);
+        auto stored = agent::list_graph_events(session, "logged", cp.value);
+        REQUIRE(stored.ok);
+        REQUIRE(stored.value.size() == live.size());
+        for (size_t i = 0; i < live.size(); ++i) {
+            REQUIRE(stored.value[i].type == live[i].type);
+            REQUIRE(stored.value[i].node == live[i].node);
+            REQUIRE(stored.value[i].key == live[i].key);
+            REQUIRE(stored.value[i].payload == live[i].payload);
+            REQUIRE(stored.value[i].timestamp_ms == live[i].timestamp_ms);
+        }
+        REQUIRE(count_events(stored.value, agent::GraphEventType::NodeEnd) == 2);
+        REQUIRE(count_events(stored.value, agent::GraphEventType::Checkpoint) == 2);
+
+        // A second call on the thread appends to the same log; deleting the thread clears it.
+        agent::GraphRun more;
+        more.thread_id = "logged";
+        more.checkpointer = cp.value;
+        REQUIRE(agent::run_graph(session, agent::make_graph(kv_node("e3", "z=3")), more).ok);
+        REQUIRE(agent::list_graph_events(session, "logged", cp.value).value.size() == live.size() + more.events.size());
+        REQUIRE(agent::delete_graph_thread(session, "logged", cp.value).ok);
+        REQUIRE(agent::list_graph_events(session, "logged", cp.value).value.empty());
+    }
+
+    SECTION("default StoreOps checkpointer, Async") {
+        agent::GraphRun run;
+        run.thread_id = "logged-store";
+        REQUIRE(agent::run_graph(session, g, run).ok);
+        auto stored = agent::list_graph_events(session, "logged-store");
+        REQUIRE(stored.ok);
+        REQUIRE(stored.value.size() == run.events.size());
+        REQUIRE(stored.value.front().type == agent::GraphEventType::NodeStart);
+        REQUIRE(stored.value.back().type == agent::GraphEventType::Checkpoint);
+    }
+
+    SECTION("in memory, a failed run's events are persisted too") {
+        auto cp = agent::open_checkpointer(agent::in_memory_checkpointer());
+        REQUIRE(cp.ok);
+        auto boom = function_node("boom", [](agent::Session &, agent::GraphState &, void *) -> agent::Result<void> {
+            return agent::fail(agent::ErrorCode::NetworkError, "boom");
+        });
+        agent::GraphRun run;
+        run.thread_id = "logged-fail";
+        run.checkpointer = cp.value;
+        agent::Graph failing = agent::make_sequential("f", {agent::make_graph(kv_node("ok1", "a=1")), agent::make_graph(boom)});
+        REQUIRE_FALSE(agent::run_graph(session, failing, run).ok);
+        auto stored = agent::list_graph_events(session, "logged-fail", cp.value);
+        REQUIRE(stored.ok);
+        REQUIRE(count_events(stored.value, agent::GraphEventType::NodeFailed, "boom") == 1);
+        REQUIRE(stored.value.size() == run.events.size());
+    }
+}
+
+namespace {
+int g_fork_a = 0, g_fork_b = 0, g_fork_c = 0;
+} // namespace
+
+TEST_CASE("graph durability: fork a thread from an earlier checkpoint", "[graph][durability]") {
+    agent::Session session = make_session();
+    auto cp = agent::open_checkpointer(agent::store::sqlite_checkpointer());
+    REQUIRE(cp.ok);
+    g_fork_a = g_fork_b = g_fork_c = 0;
+
+    auto a = function_node("a", [](agent::Session &, agent::GraphState &state, void *) -> agent::Result<void> {
+        ++g_fork_a;
+        agent::set_state(state, "topic", std::string(agent::get_state(state, "topic", "cats")));
+        return agent::ok();
+    });
+    auto b = function_node("b", [](agent::Session &, agent::GraphState &state, void *) -> agent::Result<void> {
+        ++g_fork_b;
+        agent::set_state(state, "draft", "about " + std::string(agent::get_state(state, "topic")));
+        return agent::ok();
+    });
+    auto c = function_node("c", [](agent::Session &, agent::GraphState &state, void *) -> agent::Result<void> {
+        ++g_fork_c;
+        agent::set_state(state, "final", std::string(agent::get_state(state, "draft")) + "!");
+        return agent::ok();
+    });
+    agent::Graph g = agent::make_sequential("forky", {agent::make_graph(a), agent::make_graph(b), agent::make_graph(c)});
+
+    agent::GraphRun run;
+    run.thread_id = "original";
+    run.checkpointer = cp.value;
+    REQUIRE(agent::run_graph(session, g, run).ok);
+    REQUIRE(agent::get_state(run.state, "final") == "about cats!");
+    auto steps = agent::list_graph_checkpoints(session, "original", cp.value);
+    REQUIRE(steps.value.size() == 3);
+
+    // Back to step 1 (after a), with an edited value: b and c run again, a does not.
+    agent::GraphRun forked;
+    forked.checkpointer = cp.value;
+    agent::set_state(forked.state, "topic", "dogs");
+    auto res = agent::fork_graph_run(session, g, "original", 1, "alternate", forked);
+    REQUIRE(res.ok);
+    REQUIRE(forked.status == agent::GraphRunStatus::Completed);
+    REQUIRE(forked.thread_id == "alternate");
+    REQUIRE(agent::get_state(forked.state, "final") == "about dogs!");
+    REQUIRE(g_fork_a == 1);
+    REQUIRE(g_fork_b == 2);
+    REQUIRE(g_fork_c == 2);
+    REQUIRE(forked.step == 3);
+
+    auto fork_steps = agent::list_graph_checkpoints(session, "alternate", cp.value);
+    REQUIRE(fork_steps.ok);
+    REQUIRE(fork_steps.value.size() == 3); // the copy at step 1, then 2 and 3
+    REQUIRE(fork_steps.value[0].step == 1);
+    REQUIRE(fork_steps.value[0].metadata.find("\"forked_from\":\"original:1\"") != std::string::npos);
+    auto fork_events = agent::list_graph_events(session, "alternate", cp.value);
+    REQUIRE(fork_events.ok);
+    REQUIRE(fork_events.value.front().type == agent::GraphEventType::Fork);
+    REQUIRE(fork_events.value.front().key == "original:1");
+
+    // The source thread is untouched.
+    agent::GraphRun source;
+    source.checkpointer = cp.value;
+    REQUIRE(agent::resume_graph(session, g, "original", source).ok);
+    REQUIRE(agent::get_state(source.state, "final") == "about cats!");
+
+    // Errors: unknown step, existing target, same thread.
+    agent::GraphRun bad;
+    bad.checkpointer = cp.value;
+    REQUIRE(agent::fork_graph_run(session, g, "original", 42, "other", bad).error.code == agent::ErrorCode::KeyNotFound);
+    REQUIRE(agent::fork_graph_run(session, g, "original", 1, "alternate", bad).error.code == agent::ErrorCode::InvalidConfig);
+    REQUIRE(agent::fork_graph_run(session, g, "original", 1, "original", bad).error.code == agent::ErrorCode::InvalidConfig);
+}
+
+TEST_CASE("graph durability: forking an interrupted checkpoint leaves the new thread paused", "[graph][durability]") {
+    agent::Session session = make_session();
+    g_ping_calls = 0;
+    auto worker = agent_node("worker", "", "out");
+    worker.prompt = "call:ping";
+    worker.allowed_tools = {"ping"};
+    worker.interrupt_before_tools = true;
+    agent::Graph g = agent::make_graph(worker);
+
+    agent::GraphRun run;
+    run.thread_id = "paused";
+    REQUIRE(agent::run_graph(session, g, run).ok);
+    REQUIRE(run.status == agent::GraphRunStatus::Interrupted);
+
+    agent::GraphRun forked;
+    REQUIRE(agent::fork_graph_run(session, g, "paused", run.step, "paused-fork", forked).ok);
+    REQUIRE(forked.status == agent::GraphRunStatus::Interrupted);
+    REQUIRE(forked.pending_tool_calls.size() == 1);
+    REQUIRE(g_ping_calls == 0);
+
+    agent::GraphRun approved;
+    REQUIRE(agent::resume_graph(session, g, "paused-fork", approved, "approve").ok);
+    REQUIRE(approved.status == agent::GraphRunStatus::Completed);
+    REQUIRE(g_ping_calls == 1);
+    REQUIRE(agent::get_state(approved.state, "out") == "tool done");
+    // The original is still waiting.
+    agent::GraphRun original;
+    REQUIRE(agent::resume_graph(session, g, "paused", original, agent::PermissionDecision::Deny).ok);
+    REQUIRE(g_ping_calls == 1);
+}

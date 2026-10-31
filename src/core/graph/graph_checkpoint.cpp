@@ -192,6 +192,54 @@ Result<void> decode_checkpoint(std::string_view json, GraphRun &out) {
     return ok();
 }
 
+void encode_events(std::span<const GraphEvent> events, std::string &json) {
+    json += '[';
+    for (size_t i = 0; i < events.size(); ++i) {
+        const GraphEvent &e = events[i];
+        if (i > 0) json += ',';
+        json += "{\"type\":" + std::to_string(static_cast<int>(e.type)) + ',';
+        append_string_field(json, "node", e.node);
+        json += ',';
+        append_string_field(json, "key", e.key);
+        json += ",\"ts\":" + std::to_string(e.timestamp_ms) + ',';
+        append_string_field(json, "payload", e.payload);
+        json += '}';
+    }
+    json += ']';
+}
+
+Result<void> decode_events(std::string_view json, std::vector<GraphEvent> &out) {
+    simdjson::ondemand::parser parser;
+    simdjson::padded_string padded(json.data(), json.size());
+    simdjson::ondemand::document doc;
+    simdjson::ondemand::array items;
+    if (parser.iterate(padded).get(doc) || doc.get_array().get(items))
+        return fail(ErrorCode::ParseError, "graph event log: not a JSON array.");
+    for (auto item : items) {
+        simdjson::ondemand::object obj;
+        if (item.get_object().get(obj)) return fail(ErrorCode::ParseError, "graph event log: bad event.");
+        GraphEvent e;
+        for (auto field : obj) {
+            std::string_view key, text;
+            if (field.unescaped_key().get(key)) return fail(ErrorCode::ParseError, "graph event log: bad key.");
+            int64_t number = 0;
+            if (key == "type") {
+                if (!field.value().get_int64().get(number)) e.type = static_cast<GraphEventType>(number);
+            } else if (key == "ts") {
+                if (!field.value().get_int64().get(number)) e.timestamp_ms = number;
+            } else if (key == "node") {
+                if (!field.value().get_string().get(text)) e.node = std::string(text);
+            } else if (key == "key") {
+                if (!field.value().get_string().get(text)) e.key = std::string(text);
+            } else if (key == "payload") {
+                if (!field.value().get_string().get(text)) e.payload = std::string(text);
+            }
+        }
+        out.push_back(std::move(e));
+    }
+    return ok();
+}
+
 Result<void> load_scoped_state(Session &session, GraphState &state, std::set<std::string, std::less<>> &index) {
     auto listed = retrieve_memory(session, kScopedIndexKey);
     if (!listed.ok) {

@@ -46,7 +46,7 @@ Status as of 2026-10-31. Each entry says what breaks, why, and the planned fix. 
 | Interrupts inside parallel branches are not supported. | Per-branch checkpoints. |
 | A parallel fan-out is checkpointed as one step, so a resume re-runs the whole fan-out. | Same. |
 | ~~`Async` durability writes synchronously (it behaves like `Sync`).~~ **Resolved**: a background writer thread per checkpointer with a bounded queue, flushed before `run_graph` / `resume_graph` return. A crash can lose the checkpoints still queued (see [api/graph.md](api/graph.md#durability-modes)). | Use `Sync` when re-running a few nodes after a crash is not acceptable. |
-| ~~Checkpoints go through `StoreOps`; there is no `CheckpointerOps`~~ **Resolved**: `CheckpointerOps` with in-memory and SQLite (`store::sqlite_checkpointer()`) implementations; the StoreOps layout stays the default. There is no time-travel replay, and the event log is in memory only. | A persisted event log + fork from an older step (ROADMAP Phase 3). |
+| ~~Checkpoints go through `StoreOps`; there is no `CheckpointerOps`~~ **Resolved**: `CheckpointerOps` with in-memory and SQLite (`store::sqlite_checkpointer()`) implementations; the StoreOps layout stays the default. ~~There is no time-travel replay, and the event log is in memory only.~~ **Resolved**: the event log is persisted through the checkpointer (`list_graph_events`) and `fork_graph_run` continues any stored step as a new thread. | Replay re-executes tool side effects (see [api/graph.md](api/graph.md#time-travel-fork_graph_run)); tools must be idempotent. |
 
 ## 6. Models and modalities
 

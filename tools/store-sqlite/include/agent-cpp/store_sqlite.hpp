@@ -17,7 +17,8 @@ const StoreOps *sqlite_store();
 const VectorStoreOps *sqlite_vector_store();
 
 // SQLite graph checkpointer (open with agent::open_checkpointer). CheckpointerConfig::path: file
-// path, or empty / ":memory:". WAL journal; table graph_checkpoints keyed by (thread_id, step).
+// path, or empty / ":memory:". WAL journal; tables graph_checkpoints keyed by (thread_id, step) and
+// graph_events (the persisted event log) keyed by (thread_id, seq).
 // Safe to share between threads; several processes may open the same file.
 const CheckpointerOps *sqlite_checkpointer();
 

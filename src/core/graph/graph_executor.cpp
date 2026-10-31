@@ -594,6 +594,8 @@ struct RunCtx {
     const Graph &graph;
     GraphRun &run;
     graph::Sink sink;
+    size_t persisted_events = run.events.size(); // run.events before this index were stored by earlier calls
+    std::string forked_from;                     // fork_graph_run: "<thread>:<step>", recorded in metadata
 };
 
 std::string checkpoint_metadata(const RunCtx &c) {
@@ -603,22 +605,34 @@ std::string checkpoint_metadata(const RunCtx &c) {
     utils::escape_json_string(c.run.next_node, meta);
     meta += "\",\"status\":\"";
     meta += graph::status_name(c.run.status);
+    if (!c.forked_from.empty()) {
+        meta += "\",\"forked_from\":\"";
+        utils::escape_json_string(c.forked_from, meta);
+    }
     meta += "\"}";
     return meta;
 }
 
-// Writes the run's current checkpoint. through_writer: queue it on the Async writer (when there is
-// one); otherwise it is written before this returns.
+// Writes the run's current checkpoint, then appends the events logged since the last write to the
+// thread's event log. through_writer: queue both on the Async writer (when there is one); otherwise
+// they are written before this returns.
 Result<void> write_checkpoint(RunCtx &c, bool through_writer) {
     GraphRun &run = c.run;
     log_event(run.events, GraphEventType::Checkpoint, run.next_node, graph::checkpoint_key(run.thread_id, std::to_string(run.step)), {});
     std::string json = graph::encode_checkpoint(run, c.graph.name);
     std::string meta = checkpoint_metadata(c);
+    std::vector<GraphEvent> fresh;
+    if (c.sink.ops->append_events && c.persisted_events < run.events.size())
+        fresh.assign(run.events.begin() + static_cast<std::ptrdiff_t>(c.persisted_events), run.events.end());
+    c.persisted_events = run.events.size();
     if (through_writer && c.sink.writer) {
         c.sink.writer->put(run.thread_id, run.step, std::move(json), std::move(meta));
+        c.sink.writer->append_events(run.thread_id, std::move(fresh));
         return ok();
     }
-    return c.sink.ops->put(c.sink.state, run.thread_id, run.step, json, meta);
+    auto put = c.sink.ops->put(c.sink.state, run.thread_id, run.step, json, meta);
+    if (!put.ok || fresh.empty()) return put;
+    return c.sink.ops->append_events(c.sink.state, run.thread_id, fresh);
 }
 
 // Ends the call: queued Async checkpoints flushed, final checkpoint, temp: keys dropped.
@@ -831,6 +845,57 @@ Result<void> resume_graph(Session &session, const Graph &graph, std::string_view
 Result<void> resume_graph(Session &session, const Graph &graph, std::string_view thread_id, GraphRun &run, PermissionDecision decision,
                           std::string_view human_input) {
     return resume_impl(session, graph, thread_id, run, decision, human_input);
+}
+
+Result<void> fork_graph_run(Session &session, const Graph &graph, std::string_view thread_id_view, uint64_t step,
+                            std::string_view new_thread_id_view, GraphRun &run) {
+    auto valid = validate(graph);
+    if (!valid.ok) return valid;
+    // Copies first: both views may point into run.
+    const std::string source = thread_id_view.empty() ? std::string("default") : std::string(thread_id_view);
+    const std::string target(new_thread_id_view);
+    if (target.empty() || target == source)
+        return fail(ErrorCode::InvalidConfig, "fork_graph_run: the new thread id must be non-empty and differ from '" + source + "'");
+
+    auto sink = graph::resolve_sink(session, run.checkpointer, run.durability == GraphDurability::Async);
+    if (!sink.ok) return fail(sink.error.code, sink.error.message);
+    auto existing = sink.value.ops->get_latest(sink.value.state, target);
+    if (existing.ok)
+        return fail(ErrorCode::InvalidConfig,
+                    "fork_graph_run: thread '" + target + "' already has checkpoints (delete_graph_thread it first)");
+    if (existing.error.code != ErrorCode::KeyNotFound) return fail(existing.error.code, existing.error.message);
+    auto stored = sink.value.ops->get(sink.value.state, source, step);
+    if (!stored.ok) return fail(stored.error.code, "fork_graph_run: " + stored.error.message);
+
+    GraphState seed = std::move(run.state);
+    run.state = GraphState{};
+    run.pending_tool_calls.clear();
+    run.thread_id = target;
+    RunCtx c{.session = session, .graph = graph, .run = run, .sink = std::move(sink.value)};
+    auto decoded = graph::decode_checkpoint(stored.value, run);
+    if (!decoded.ok) return decoded;
+    run.step = step;
+
+    ScopedIndex index;
+    auto scoped = graph::load_scoped_state(session, run.state, index);
+    if (!scoped.ok) return scoped;
+    for (auto &[key, value] : seed.values) run.state.values.insert_or_assign(key, std::move(value));
+    for (auto &[name, memory] : seed.histories) run.state.histories.insert_or_assign(name, std::move(memory));
+    run.state.written = std::move(seed.written);
+
+    // The new thread's first checkpoint is the copy, at the same step.
+    c.forked_from = source + ":" + std::to_string(step);
+    log_event(run.events, GraphEventType::Fork, run.next_node, c.forked_from, {});
+    auto copied = write_checkpoint(c, false);
+    c.forked_from.clear();
+    if (!copied.ok) return copied;
+    if (run.status == GraphRunStatus::Completed || run.status == GraphRunStatus::Interrupted) {
+        clear_temp(run.state);
+        return ok();
+    }
+
+    reset_run_status(run);
+    return drive(c, index, nullptr);
 }
 
 } // namespace agent

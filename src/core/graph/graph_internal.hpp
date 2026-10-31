@@ -36,6 +36,11 @@ std::string encode_checkpoint(const GraphRun &run, std::string_view graph_name);
 // pending_tool_calls). Agent histories get FlowMemory ids "<thread_id>:<node>".
 Result<void> decode_checkpoint(std::string_view json, GraphRun &out);
 
+// GraphEvents as a JSON array ({"type": <enum value>, "node", "key", "ts", "payload"}), used by the
+// StoreOps checkpointer's event log. decode_events appends to out.
+void encode_events(std::span<const GraphEvent> events, std::string &json);
+Result<void> decode_events(std::string_view json, std::vector<GraphEvent> &out);
+
 // Loads every persisted user:/app: key into state and fills index with the known scoped keys.
 Result<void> load_scoped_state(Session &session, GraphState &state, std::set<std::string, std::less<>> &index);
 Result<void> persist_scoped_value(Session &session, std::string_view key, std::string_view value,
@@ -53,6 +58,8 @@ class AsyncWriter {
 
     // Blocks while the queue is full.
     void put(std::string thread_id, uint64_t step, std::string blob, std::string metadata);
+    // Queues an append_events call (ignored when the checkpointer has no event log).
+    void append_events(std::string thread_id, std::vector<GraphEvent> events);
     // Waits until everything queued so far is written; returns the first error since the last flush.
     Result<void> flush();
 
@@ -62,7 +69,10 @@ class AsyncWriter {
         uint64_t step = 0;
         std::string blob;
         std::string metadata;
+        std::vector<GraphEvent> events;
+        bool is_events = false;
     };
+    void enqueue(Job job);
     void loop();
 
     const CheckpointerOps *ops_;

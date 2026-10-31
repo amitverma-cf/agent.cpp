@@ -23,6 +23,7 @@ struct MemCheckpoint {
 struct MemCheckpointer {
     std::mutex mutex;
     std::map<std::string, std::map<uint64_t, MemCheckpoint>, std::less<>> threads;
+    std::map<std::string, std::vector<GraphEvent>, std::less<>> events;
 };
 
 Result<std::shared_ptr<void>> mem_open(const CheckpointerConfig &) {
@@ -79,11 +80,36 @@ Result<void> mem_delete_thread(void *state, std::string_view thread_id) {
     std::lock_guard<std::mutex> lock(s->mutex);
     auto it = s->threads.find(thread_id);
     if (it != s->threads.end()) s->threads.erase(it);
+    auto ev = s->events.find(thread_id);
+    if (ev != s->events.end()) s->events.erase(ev);
     return ok();
 }
 
-constexpr CheckpointerOps kInMemoryCheckpointer{
-    .open = mem_open, .put = mem_put, .get_latest = mem_get_latest, .get = mem_get, .list = mem_list, .delete_thread = mem_delete_thread};
+Result<void> mem_append_events(void *state, std::string_view thread_id, std::span<const GraphEvent> events) {
+    auto *s = static_cast<MemCheckpointer *>(state);
+    std::lock_guard<std::mutex> lock(s->mutex);
+    auto it = s->events.find(thread_id);
+    if (it == s->events.end()) it = s->events.emplace(std::string(thread_id), std::vector<GraphEvent>{}).first;
+    it->second.insert(it->second.end(), events.begin(), events.end());
+    return ok();
+}
+
+Result<std::vector<GraphEvent>> mem_list_events(void *state, std::string_view thread_id) {
+    auto *s = static_cast<MemCheckpointer *>(state);
+    std::lock_guard<std::mutex> lock(s->mutex);
+    auto it = s->events.find(thread_id);
+    if (it == s->events.end()) return ok(std::vector<GraphEvent>{});
+    return ok(it->second);
+}
+
+constexpr CheckpointerOps kInMemoryCheckpointer{.open = mem_open,
+                                                .put = mem_put,
+                                                .get_latest = mem_get_latest,
+                                                .get = mem_get,
+                                                .list = mem_list,
+                                                .delete_thread = mem_delete_thread,
+                                                .append_events = mem_append_events,
+                                                .list_events = mem_list_events};
 
 // ---- StoreOps adapter (state = the Session) ----
 // checkpoint:<t>:<step> and checkpoint:<t>:latest hold the blob (the v1 layout).
@@ -161,8 +187,59 @@ Result<std::vector<GraphCheckpointInfo>> store_list(void *state, std::string_vie
     return ok(std::move(out));
 }
 
+// Event log: graph_events:<t>:<n> holds the n-th appended batch (a JSON array), graph_events:<t>:count
+// the number of batches.
+std::string events_key(std::string_view thread_id, std::string_view suffix) {
+    std::string key = "graph_events:";
+    key += thread_id;
+    key += ':';
+    key += suffix;
+    return key;
+}
+
+Result<uint64_t> store_event_batches(Session &session, std::string_view thread_id) {
+    auto count = store_get_nonempty(session, events_key(thread_id, "count"));
+    if (!count.ok) {
+        if (count.error.code == ErrorCode::KeyNotFound) return ok<uint64_t>(0);
+        return fail<uint64_t>(count.error.code, count.error.message);
+    }
+    uint64_t n = 0;
+    std::from_chars(count.value.data(), count.value.data() + count.value.size(), n);
+    return ok(n);
+}
+
+Result<void> store_append_events(void *state, std::string_view thread_id, std::span<const GraphEvent> events) {
+    Session &session = *static_cast<Session *>(state);
+    auto n = store_event_batches(session, thread_id);
+    if (!n.ok) return fail(n.error.code, n.error.message);
+    std::string json;
+    graph::encode_events(events, json);
+    auto put = store_memory(session, events_key(thread_id, std::to_string(n.value)), json);
+    if (!put.ok) return put;
+    return store_memory(session, events_key(thread_id, "count"), std::to_string(n.value + 1));
+}
+
+Result<std::vector<GraphEvent>> store_list_events(void *state, std::string_view thread_id) {
+    using R = Result<std::vector<GraphEvent>>;
+    Session &session = *static_cast<Session *>(state);
+    auto n = store_event_batches(session, thread_id);
+    if (!n.ok) return fail<std::vector<GraphEvent>>(n.error.code, n.error.message);
+    std::vector<GraphEvent> out;
+    for (uint64_t i = 0; i < n.value; ++i) {
+        auto batch = retrieve_memory(session, events_key(thread_id, std::to_string(i)));
+        if (!batch.ok) return R{.ok = false, .value = {}, .error = batch.error};
+        auto decoded = graph::decode_events(batch.value, out);
+        if (!decoded.ok) return R{.ok = false, .value = {}, .error = decoded.error};
+    }
+    return ok(std::move(out));
+}
+
 Result<void> store_delete_thread(void *state, std::string_view thread_id) {
     Session &session = *static_cast<Session *>(state);
+    if (store_get_nonempty(session, events_key(thread_id, "count")).ok) {
+        auto put = store_memory(session, events_key(thread_id, "count"), "");
+        if (!put.ok) return put;
+    }
     auto latest = store_latest_step(session, thread_id);
     if (latest.ok) {
         for (uint64_t step = 0; step <= latest.value; ++step) {
@@ -189,9 +266,13 @@ constexpr CheckpointerOps kStoreCheckpointer{.open = nullptr,
                                              .get_latest = store_get_latest,
                                              .get = store_get,
                                              .list = store_list,
-                                             .delete_thread = store_delete_thread};
+                                             .delete_thread = store_delete_thread,
+                                             .append_events = store_append_events,
+                                             .list_events = store_list_events};
 
-bool complete(const CheckpointerOps *ops) { return ops->put && ops->get_latest && ops->get && ops->list && ops->delete_thread; }
+bool complete(const CheckpointerOps *ops) {
+    return ops->put && ops->get_latest && ops->get && ops->list && ops->delete_thread && !ops->append_events == !ops->list_events;
+}
 
 } // namespace
 
@@ -201,7 +282,8 @@ Result<Checkpointer> open_checkpointer(const CheckpointerOps *ops, const Checkpo
     if (!ops) return fail<Checkpointer>(ErrorCode::InvalidConfig, "open_checkpointer: ops is null");
     if (!ops->open || !complete(ops))
         return fail<Checkpointer>(ErrorCode::InvalidConfig,
-                                  "open_checkpointer: CheckpointerOps is missing one of open/put/get_latest/get/list/delete_thread");
+                                  "open_checkpointer: CheckpointerOps is missing one of open/put/get_latest/get/list/delete_thread, or "
+                                  "sets only one of append_events/list_events");
     auto opened = ops->open(config);
     if (!opened.ok) return fail<Checkpointer>(opened.error.code, opened.error.message);
     Checkpointer cp;
@@ -232,13 +314,27 @@ AsyncWriter::~AsyncWriter() {
 }
 
 void AsyncWriter::put(std::string thread_id, uint64_t step, std::string blob, std::string metadata) {
+    enqueue(Job{.thread_id = std::move(thread_id),
+                .step = step,
+                .blob = std::move(blob),
+                .metadata = std::move(metadata),
+                .events = {},
+                .is_events = false});
+}
+
+void AsyncWriter::append_events(std::string thread_id, std::vector<GraphEvent> events) {
+    if (!ops_->append_events || events.empty()) return;
+    enqueue(Job{.thread_id = std::move(thread_id), .step = 0, .blob = {}, .metadata = {}, .events = std::move(events), .is_events = true});
+}
+
+void AsyncWriter::enqueue(Job job) {
     std::unique_lock<std::mutex> lock(mutex_);
     if (!started_) {
         started_ = true;
         thread_ = std::thread([this]() { loop(); });
     }
     cv_space_.wait(lock, [this]() { return queue_.size() < capacity_; });
-    queue_.push_back(Job{.thread_id = std::move(thread_id), .step = step, .blob = std::move(blob), .metadata = std::move(metadata)});
+    queue_.push_back(std::move(job));
     ++queued_;
     lock.unlock();
     cv_work_.notify_one();
@@ -263,7 +359,8 @@ void AsyncWriter::loop() {
         queue_.pop_front();
         cv_space_.notify_one();
         lock.unlock();
-        auto put = ops_->put(state_, job.thread_id, job.step, job.blob, job.metadata);
+        auto put = job.is_events ? ops_->append_events(state_, job.thread_id, job.events)
+                                 : ops_->put(state_, job.thread_id, job.step, job.blob, job.metadata);
         lock.lock();
         if (!put.ok && error_.code == ErrorCode::Ok) error_ = put.error;
         ++written_;
@@ -276,7 +373,8 @@ Result<Sink> resolve_sink(Session &session, const Checkpointer &checkpointer, bo
     if (checkpointer.ops) {
         if (!checkpointer.state) return fail<Sink>(ErrorCode::InvalidConfig, "graph checkpointer is not open (use open_checkpointer)");
         if (!complete(checkpointer.ops))
-            return fail<Sink>(ErrorCode::InvalidConfig, "graph checkpointer is missing one of put/get_latest/get/list/delete_thread");
+            return fail<Sink>(ErrorCode::InvalidConfig, "graph checkpointer is missing one of put/get_latest/get/list/delete_thread, or "
+                                                        "sets only one of append_events/list_events");
         sink.ops = checkpointer.ops;
         sink.state = checkpointer.state.get();
         sink.writer = std::static_pointer_cast<AsyncWriter>(checkpointer.writer);
@@ -296,6 +394,15 @@ Result<std::vector<GraphCheckpointInfo>> list_graph_checkpoints(Session &session
     auto sink = graph::resolve_sink(session, checkpointer, false);
     if (!sink.ok) return fail<std::vector<GraphCheckpointInfo>>(sink.error.code, sink.error.message);
     return sink.value.ops->list(sink.value.state, thread_id.empty() ? std::string_view("default") : thread_id);
+}
+
+Result<std::vector<GraphEvent>> list_graph_events(Session &session, std::string_view thread_id, const Checkpointer &checkpointer) {
+    using R = Result<std::vector<GraphEvent>>;
+    auto sink = graph::resolve_sink(session, checkpointer, false);
+    if (!sink.ok) return R{.ok = false, .value = {}, .error = sink.error};
+    if (!sink.value.ops->list_events)
+        return fail<std::vector<GraphEvent>>(ErrorCode::UnsupportedProvider, "graph checkpointer has no event log");
+    return sink.value.ops->list_events(sink.value.state, thread_id.empty() ? std::string_view("default") : thread_id);
 }
 
 Result<void> delete_graph_thread(Session &session, std::string_view thread_id, const Checkpointer &checkpointer) {

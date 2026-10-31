@@ -62,7 +62,17 @@ constexpr const char *kSchema = "CREATE TABLE IF NOT EXISTS graph_checkpoints ("
                                 " metadata TEXT NOT NULL,"
                                 " blob TEXT NOT NULL,"
                                 " PRIMARY KEY (thread_id, step)) WITHOUT ROWID;"
-                                "CREATE INDEX IF NOT EXISTS graph_checkpoints_created ON graph_checkpoints (thread_id, created_ms);";
+                                "CREATE INDEX IF NOT EXISTS graph_checkpoints_created ON graph_checkpoints (thread_id, created_ms);"
+                                "CREATE TABLE IF NOT EXISTS graph_events ("
+                                " thread_id TEXT NOT NULL,"
+                                " seq INTEGER NOT NULL,"
+                                " type INTEGER NOT NULL,"
+                                " node TEXT NOT NULL,"
+                                " key TEXT NOT NULL,"
+                                " ts INTEGER NOT NULL,"
+                                " payload TEXT NOT NULL,"
+                                " PRIMARY KEY (thread_id, seq)) WITHOUT ROWID;"
+                                "CREATE INDEX IF NOT EXISTS graph_events_type ON graph_events (thread_id, type);";
 
 Result<std::shared_ptr<void>> cp_open(const CheckpointerConfig &config) {
     using R = Result<std::shared_ptr<void>>;
@@ -154,16 +164,81 @@ Result<std::vector<GraphCheckpointInfo>> cp_list(void *state, std::string_view t
 Result<void> cp_delete_thread(void *state, std::string_view thread_id) {
     auto *s = static_cast<SqliteCheckpointer *>(state);
     std::lock_guard<std::mutex> lock(s->mutex);
-    Stmt st;
-    if (!st.prepare(s->db, "DELETE FROM graph_checkpoints WHERE thread_id = ?;"))
-        return Result<void>{.ok = false, .error = sqlite_error(s->db, "prepare delete")};
-    st.text(1, thread_id);
-    if (sqlite3_step(st.s) != SQLITE_DONE) return Result<void>{.ok = false, .error = sqlite_error(s->db, "delete")};
+    for (const char *sql : {"DELETE FROM graph_checkpoints WHERE thread_id = ?;", "DELETE FROM graph_events WHERE thread_id = ?;"}) {
+        Stmt st;
+        if (!st.prepare(s->db, sql)) return Result<void>{.ok = false, .error = sqlite_error(s->db, "prepare delete")};
+        st.text(1, thread_id);
+        if (sqlite3_step(st.s) != SQLITE_DONE) return Result<void>{.ok = false, .error = sqlite_error(s->db, "delete")};
+    }
     return ok();
 }
 
-constexpr CheckpointerOps kSqliteCheckpointer{
-    .open = cp_open, .put = cp_put, .get_latest = cp_get_latest, .get = cp_get, .list = cp_list, .delete_thread = cp_delete_thread};
+// One transaction per batch; seq continues after the thread's last event.
+Result<void> cp_append_events(void *state, std::string_view thread_id, std::span<const GraphEvent> events) {
+    auto *s = static_cast<SqliteCheckpointer *>(state);
+    std::lock_guard<std::mutex> lock(s->mutex);
+    auto begin = exec(s->db, "BEGIN IMMEDIATE;");
+    if (!begin.ok) return begin;
+    auto rollback = [s](Error e) {
+        exec(s->db, "ROLLBACK;");
+        return Result<void>{.ok = false, .error = std::move(e)};
+    };
+    int64_t seq = 0;
+    {
+        Stmt st;
+        if (!st.prepare(s->db, "SELECT COALESCE(MAX(seq) + 1, 0) FROM graph_events WHERE thread_id = ?;"))
+            return rollback(sqlite_error(s->db, "prepare append"));
+        st.text(1, thread_id);
+        if (sqlite3_step(st.s) != SQLITE_ROW) return rollback(sqlite_error(s->db, "append"));
+        seq = sqlite3_column_int64(st.s, 0);
+    }
+    Stmt st;
+    if (!st.prepare(s->db, "INSERT INTO graph_events (thread_id, seq, type, node, key, ts, payload) VALUES (?, ?, ?, ?, ?, ?, ?);"))
+        return rollback(sqlite_error(s->db, "prepare append"));
+    for (const GraphEvent &e : events) {
+        st.text(1, thread_id);
+        st.int64(2, seq++);
+        st.int64(3, static_cast<int64_t>(e.type));
+        st.text(4, e.node);
+        st.text(5, e.key);
+        st.int64(6, e.timestamp_ms);
+        st.text(7, e.payload);
+        if (sqlite3_step(st.s) != SQLITE_DONE) return rollback(sqlite_error(s->db, "append"));
+        sqlite3_reset(st.s);
+    }
+    auto commit = exec(s->db, "COMMIT;");
+    if (!commit.ok) return rollback(commit.error);
+    return ok();
+}
+
+Result<std::vector<GraphEvent>> cp_list_events(void *state, std::string_view thread_id) {
+    using R = Result<std::vector<GraphEvent>>;
+    auto *s = static_cast<SqliteCheckpointer *>(state);
+    std::lock_guard<std::mutex> lock(s->mutex);
+    Stmt st;
+    if (!st.prepare(s->db, "SELECT type, node, key, ts, payload FROM graph_events WHERE thread_id = ? ORDER BY seq;"))
+        return R{.ok = false, .value = {}, .error = sqlite_error(s->db, "prepare list events")};
+    st.text(1, thread_id);
+    std::vector<GraphEvent> out;
+    int rc = 0;
+    while ((rc = sqlite3_step(st.s)) == SQLITE_ROW)
+        out.push_back(GraphEvent{.type = static_cast<GraphEventType>(sqlite3_column_int64(st.s, 0)),
+                                 .node = st.column_text(1),
+                                 .key = st.column_text(2),
+                                 .timestamp_ms = sqlite3_column_int64(st.s, 3),
+                                 .payload = st.column_text(4)});
+    if (rc != SQLITE_DONE) return R{.ok = false, .value = {}, .error = sqlite_error(s->db, "list events")};
+    return ok(std::move(out));
+}
+
+constexpr CheckpointerOps kSqliteCheckpointer{.open = cp_open,
+                                              .put = cp_put,
+                                              .get_latest = cp_get_latest,
+                                              .get = cp_get,
+                                              .list = cp_list,
+                                              .delete_thread = cp_delete_thread,
+                                              .append_events = cp_append_events,
+                                              .list_events = cp_list_events};
 
 } // namespace
 

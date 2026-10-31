@@ -203,11 +203,12 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 ### Phase 3: Workflows, state, durability (3 weeks)
 - [x] Graph runtime: agent/tool/function nodes, conditional edges, **Sequential / Parallel / Loop** (see [docs/api/graph.md](api/graph.md))
 - [ ] Event log as the source of truth; hooks subscribe to events
-  - [x] v1: in-memory per-run `GraphRun::events` (node start/end, state writes, tool calls, interrupts, checkpoints) + existing `EventHook`s; not yet persisted or used for replay
+  - [x] v1: in-memory per-run `GraphRun::events` (node start/end, state writes, tool calls, interrupts, checkpoints) + existing `EventHook`s
+  - [x] v2: persisted through the checkpointer (`list_graph_events`); not used to replay tool results
 - [x] Scoped state (`temp:`/session/`user:`/`app:`)
 - [ ] Checkpointing by `thread_id` through `CheckpointerOps`; resume / replay; durability modes
   - [x] v1: checkpoints by `thread_id` through `StoreOps`, `resume_graph`, durability modes `Exit`/`Async`/`Sync`
-  - [x] v2: `CheckpointerOps` (`GraphRun::checkpointer`; the StoreOps layout stays the default), real `Async` durability (background writer, bounded queue, flushed on return); replay still open
+  - [x] v2: `CheckpointerOps` (`GraphRun::checkpointer`; the StoreOps layout stays the default), real `Async` durability (background writer, bounded queue, flushed on return); time travel via `fork_graph_run` (continue any stored step as a new thread)
 - [ ] `agent-store-sqlite`: SQLite checkpointer/state + sqlite-vec vector store (CLI and opt-in)
   - [x] sqlite-vec vector store (`store::sqlite_vector_store()`) and SQLite checkpointer (`store::sqlite_checkpointer()`, WAL); a SQLite `StateStoreOps` is still open (`user:`/`app:` state uses `StoreOps`)
 - [x] **Interrupts** for human approval (reuse the permission `Ask`)
