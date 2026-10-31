@@ -137,6 +137,26 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 
 ## 4. Phased plan with checklists
 
+### Status board (updated 2026-10-31)
+
+**In flight** (parallel worktrees, integrated to `main` one commit at a time after build + tests):
+- [ ] Out-of-process engine host (`agent-engine-host`, per-engine `isolation`, crash → `EngineCrashed` + auto-restart, hang watchdog, cross-process cancel). Fixes [LIMITATIONS](LIMITATIONS.md) §1
+- [ ] Remove `Flow`/`AgentScheduler`; the graph runtime becomes the only workflow API (tool hooks, shared/isolated history, context providers merged in)
+- [ ] `engines/trellis`: TRELLIS.2 image → GLB
+- [ ] `cmake --install` / `find_package(agent-cpp)` + Linux release tarball script
+
+**Next up** (in order):
+- [ ] Explicit task on the public API (`InferRequest::task` / `run_task`) instead of the lowest-capability-bit heuristic
+- [ ] Model registry with RAM/VRAM budget and LRU unload
+- [ ] ABI v2: `struct_size` fields for compatible growth (after the engine host lands)
+- [ ] `CheckpointerOps` + persisted event log; per-branch checkpoints and interrupts in parallel fan-outs
+- [ ] OS sandboxing for the engine host, tool runner and MCP children (Landlock/seccomp, AppContainer)
+- [ ] Hub: split GGUF downloads, proxy auth, gated repos
+- [ ] Windows build + test pass (owner)
+- [ ] Voice loop: mic/speaker I/O + VAD (sherpa) → ASR → LLM → TTS example
+
+**Recently done** (see the phase lists below): engine plugin ABI + loader + manifest; llama (b12020, Jinja templates, native tool calls, vision/audio input, embed/rerank), sdcpp, sherpa and onnx engines; media/progress/cancel in the turn loop; graph runtime + `agent.json` loader; MCP stdio client; RAG pipeline; Hugging Face hub; `agent` CLI (`setup`, `engine`, `model`, `chat`, `run`); SQLite moved out of the core.
+
 ### Phase 0: Decide and de-risk (1 to 2 weeks)
 - [ ] Agree on this roadmap; record decisions as ADRs in `docs/adr/`
 - [ ] Spike: C plugin ABI. Load two plugins with **different** ggml versions into one process on **Windows (MSVC)** and Linux; confirm no symbol clashes (use `-fvisibility=hidden` / `RTLD_LOCAL`)
@@ -152,10 +172,10 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [x] Move the ONNX provider into `engines/onnx/` (`agent-engine-onnx` plugin, built against a prebuilt ORT release; `AiProvider::OnnxRuntime` and the vendored ORT headers removed)
 - [x] Move SQLite, sqlite-vec and the memory write-back cache out of `libagent` into `tools/store-sqlite/` (used by the CLI)
 - [x] Move llama.cpp out of core into `engines/llama/` (`agent-engine-llama` plugin; `AiProvider::LlamaCpp` removed)
-- [ ] Move httplib/OpenSSL into `tools/hub/` (CLI only); `libagent` depends only on simdjson
-- [ ] New tree: `include/agent-cpp/{agent.hpp,engine_abi.h}`, `src/core/`, `engines/<name>/`, `tools/cli/`, `tools/hub/`, `tools/store-sqlite/`
+- [x] Move httplib/OpenSSL into `tools/hub/` (CLI only); `libagent` depends only on simdjson
+- [x] New tree: `include/agent-cpp/{agent.hpp,engine_abi.h}`, `src/core/`, `engines/<name>/`, `tools/cli/`, `tools/hub/`, `tools/store-sqlite/`
 - [ ] CMake `install()`/`export()` for `find_package(agent-cpp)`; each engine builds standalone against the installed ABI header
-- [ ] Tests stay green on the Mock engine
+- [x] Tests stay green on the Mock engine
 
 ### Phase 2: Core v1 (3 to 4 weeks)
 - [x] Engine registry: load plugins by path, ABI/version check, capability query (`AiProvider::Engine`, mock engine plugin)
