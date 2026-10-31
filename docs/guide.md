@@ -28,7 +28,8 @@ A `Session` is created once, used for the lifetime of a conversation (or many co
 agent::AgentRuntime runtime;    // init global backends; must outlive all sessions
 
 agent::Config cfg;
-cfg.provider      = agent::AiProvider::LlamaCpp;
+cfg.provider      = agent::AiProvider::Engine;
+cfg.engine        = "build/engines/llama/agent-engine-llama.so";
 cfg.model         = ".workspace/models/my.gguf";
 cfg.workspace_dir = ".workspace";
 cfg.context_window = 4096;
@@ -59,12 +60,13 @@ Always available. Returns fixed text. Useful for testing without a model.
 cfg.provider = agent::AiProvider::Mock;
 ```
 
-### LlamaCpp
+### llama.cpp engine
 
-Local on-device inference from GGUF files.
+Local on-device inference from GGUF files through the `agent-engine-llama` plugin (built by default; `-DAGENT_ENGINE_LLAMA=OFF` to skip). See [docs/api/engines.md](api/engines.md).
 
 ```cpp
-cfg.provider       = agent::AiProvider::LlamaCpp;
+cfg.provider       = agent::AiProvider::Engine;
+cfg.engine         = "build/engines/llama/agent-engine-llama.so";
 cfg.model          = ".workspace/models/mistral-7b-q4_k_m.gguf";
 cfg.context_window = 8192;
 cfg.max_tokens     = 1024;
@@ -383,7 +385,7 @@ agent::FlowState my_state{
 
 ## Parallel subagents with scheduling
 
-`AgentScheduler` runs multiple `Flow`s. For `AiProvider::LlamaCpp`, subagents run on worker threads whose next-token steps are continuously batched into one `llama_decode` (bounded by `Config::max_parallel_subagents`); for every other provider, subagents are interleaved in a cooperative round-robin instead. All subagents share the same `Session`. See [docs/api/scheduler.md](api/scheduler.md) for details.
+`AgentScheduler` runs multiple `Flow`s. For engines that set `AGENT_ENGINE_FLAG_CONCURRENT` (e.g. the llama engine), subagents run on worker threads whose next-token steps are continuously batched into one `llama_decode` (bounded by `Config::max_parallel_subagents`); for every other provider, subagents are interleaved in a cooperative round-robin instead. All subagents share the same `Session`. See [docs/api/scheduler.md](api/scheduler.md) for details.
 
 ```cpp
 agent::AgentScheduler scheduler;

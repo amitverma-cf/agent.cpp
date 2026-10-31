@@ -6,27 +6,6 @@ TEST_CASE("Session lifecycle: valid Mock init", "[session]") {
     REQUIRE(res.ok);
 }
 
-TEST_CASE("LlamaCpp init requires a model path", "[session][llama]") {
-    auto res = agent::init({.provider = agent::AiProvider::LlamaCpp, .workspace_dir = "/tmp/agent_test_ws"});
-    REQUIRE_FALSE(res.ok);
-#ifdef AGENT_HAS_LLAMACPP
-    REQUIRE(res.error.code == agent::ErrorCode::InvalidConfig);
-#else
-    REQUIRE(res.error.code == agent::ErrorCode::UnsupportedProvider);
-#endif
-}
-
-TEST_CASE("LlamaCpp init with a nonexistent model file fails to load", "[session][llama]") {
-#ifdef AGENT_HAS_LLAMACPP
-    auto res =
-        agent::init({.provider = agent::AiProvider::LlamaCpp, .model = "/nonexistent/model.gguf", .workspace_dir = "/tmp/agent_test_ws"});
-    REQUIRE_FALSE(res.ok);
-    REQUIRE(res.error.code == agent::ErrorCode::ModelLoadFailed);
-#else
-    SUCCEED("AGENT_ENABLE_LLAMACPP=OFF; nothing to test");
-#endif
-}
-
 TEST_CASE("get_stats and reset_stats accumulate across turns", "[session][stats]") {
     auto session_result = agent::init({.provider = agent::AiProvider::Mock, .workspace_dir = "/tmp/agent_test_ws"});
     REQUIRE(session_result.ok);

@@ -151,7 +151,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [ ] Remove `AgentScheduler` provider-specific threading (replaced by the graph runtime in Phase 3)
 - [ ] Move the ONNX provider and its vendored ORT headers into `engines/onnx/` (kept, not deleted)
 - [x] Move SQLite, sqlite-vec and the memory write-back cache out of `libagent` into `tools/store-sqlite/` (used by the CLI)
-- [ ] Move llama.cpp out of core into `engines/llama/` (its own CMake project)
+- [x] Move llama.cpp out of core into `engines/llama/` (`agent-engine-llama` plugin; `AiProvider::LlamaCpp` removed)
 - [ ] Move httplib/OpenSSL into `tools/hub/` (CLI only); `libagent` depends only on simdjson
 - [ ] New tree: `include/agent-cpp/{agent.hpp,engine_abi.h}`, `src/core/`, `engines/<name>/`, `tools/cli/`, `tools/hub/`, `tools/store-sqlite/`
 - [ ] CMake `install()`/`export()` for `find_package(agent-cpp)`; each engine builds standalone against the installed ABI header

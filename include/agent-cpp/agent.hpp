@@ -221,7 +221,7 @@ struct MemoryConfig {
 };
 
 // Engine = an engine plugin (see <agent-cpp/engine_abi.h>), selected by Config::engine.
-enum class AiProvider { Mock, LlamaCpp, OnnxRuntime, Engine };
+enum class AiProvider { Mock, OnnxRuntime, Engine };
 
 enum class EventType {
     OnTurnStart,
@@ -323,13 +323,14 @@ struct Flow {
 
 struct Config {
     AiProvider provider = AiProvider::Mock;
-    std::string model;
-    std::string workspace_dir;
-
     // AiProvider::Engine only: a registered engine name, or a path to an engine shared library.
     std::string engine;
     // AiProvider::Engine only: JSON object forwarded to the engine as "options" in its create() config.
     std::string engine_options;
+
+    std::string model;
+    std::string workspace_dir;
+
     MemoryConfig memory;
     std::vector<Tool> tools;
 

@@ -309,7 +309,7 @@ struct MemoryConfig {
 ## Providers
 
 ```cpp
-enum class AiProvider { Mock, LlamaCpp, OnnxRuntime };
+enum class AiProvider { Mock, OnnxRuntime, Engine };
 ```
 
 ---
@@ -544,7 +544,9 @@ Result<std::string> read_skill_body(Session &session, std::string_view name);
 ```cpp
 struct Config {
     AiProvider        provider      = AiProvider::Mock;
-    std::string       model;            // model path (llama.cpp/ONNX)
+    std::string       engine;           // AiProvider::Engine: plugin path or registered name
+    std::string       engine_options;   // AiProvider::Engine: JSON "options" for the engine
+    std::string       model;            // model path (GGUF, ONNX, ...)
     std::string       workspace_dir;    // REQUIRED -- no shell metacharacters
 
     MemoryConfig      memory;
@@ -573,7 +575,7 @@ struct Config {
     // File logging
     bool enable_file_logging  = false;  // write timestamped log to workspace_dir/logs/
 
-    // Parallel subagent bound for the LlamaCpp scheduler path
+    // Parallel subagent bound for concurrent engines (llama engine: continuous batching)
     // (continuous-batching sequence slots).
     int max_parallel_subagents = 4;
 
@@ -763,7 +765,7 @@ Result<void> clear_provider_kv_cache(Session &session);
 
 ## AgentScheduler
 
-Multi-agent scheduler. `pump()`/`run_until_done()` internally dispatch across real OS threads for `LlamaCpp` (bounded by `Config::max_parallel_subagents`), and sequentially otherwise; see [scheduler.md](api/scheduler.md) for the concurrency model per provider. `AgentScheduler`'s own methods (`spawn`, `pump`, etc.) are not thread-safe themselves — call them from one thread.
+Multi-agent scheduler. `pump()`/`run_until_done()` internally dispatch across real OS threads for concurrent engines (bounded by `Config::max_parallel_subagents`), and sequentially otherwise; see [scheduler.md](api/scheduler.md) for the concurrency model per provider. `AgentScheduler`'s own methods (`spawn`, `pump`, etc.) are not thread-safe themselves — call them from one thread.
 
 ```cpp
 class AgentScheduler {

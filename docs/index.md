@@ -40,7 +40,8 @@ int main() {
     agent::AgentRuntime runtime;          // initialises global backends (llama.cpp etc.)
 
     agent::Config cfg;
-    cfg.provider     = agent::AiProvider::LlamaCpp;
+    cfg.provider     = agent::AiProvider::Engine;
+    cfg.engine       = "build/engines/llama/agent-engine-llama.so";
     cfg.model        = ".workspace/models/my-model.gguf";
     cfg.workspace_dir = ".workspace";
     cfg.context_window = 4096;
@@ -64,7 +65,7 @@ int main() {
 
 | Option | Default | Description |
 |---|---|---|
-| `AGENT_ENABLE_LLAMACPP` | `ON` | Local llama.cpp inference backend |
+| `AGENT_ENGINE_LLAMA` | `ON` | Build the llama.cpp engine plugin |
 | `AGENT_ENABLE_ONNX` | `OFF` | ONNX Runtime multimodal inference backend |
 | `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UBSan |
 | `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |
