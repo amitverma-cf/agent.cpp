@@ -1,6 +1,9 @@
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/engine_abi.h>
 #include <catch_amalgamated.hpp>
+#include <cctype>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 
@@ -361,3 +364,165 @@ TEST_CASE("Progress reaches Config::on_progress and request_cancel stops the eng
     progress.cancel_at = 0;
     REQUIRE(agent::run_turn(session, memory, "hello").ok);
 }
+#ifdef AGENT_TEST_LLAMA_ENGINE_PATH
+namespace {
+
+// 64x64 solid-color 24-bit BMP (stb_image reads BMP, so no PNG encoder is needed here).
+// channel: 0 = blue, 1 = green, 2 = red (BMP pixels are BGR).
+std::string solid_bmp(uint32_t channel) {
+    const uint32_t w = 64, h = 64, row = w * 3, data = row * h;
+    std::string bmp(54 + data, '\0');
+    auto put32 = [&](size_t at, uint32_t v) {
+        for (size_t i = 0; i < 4; ++i) bmp[at + i] = static_cast<char>((v >> (8 * i)) & 0xff);
+    };
+    bmp[0] = 'B';
+    bmp[1] = 'M';
+    put32(2, 54 + data);
+    put32(10, 54);
+    put32(14, 40);
+    put32(18, w);
+    put32(22, h);
+    bmp[26] = 1;  // planes
+    bmp[28] = 24; // bits per pixel
+    put32(34, data);
+    for (uint32_t i = 0; i < w * h; ++i) bmp[54 + i * 3 + channel] = static_cast<char>(0xff);
+    return bmp;
+}
+
+agent_str abi_str(std::string_view s) { return agent_str{s.data(), s.size()}; }
+
+struct LlamaAbi {
+    const agent_engine_v1 *engine = nullptr;
+    void *inst = nullptr;
+    ~LlamaAbi() {
+        if (inst) engine->destroy(inst);
+    }
+};
+
+// Loads the plugin and creates an instance through the C ABI (no core message model involved).
+bool create_llama(LlamaAbi &abi, const std::string &config) {
+    if (!agent::load_engine_plugin(AGENT_TEST_LLAMA_ENGINE_PATH).ok) return false;
+    abi.engine = agent::find_engine("llama");
+    if (!abi.engine) return false;
+    char err[512] = {0};
+    int32_t rc = abi.engine->create(abi_str(config), &abi.inst, err, sizeof(err));
+    if (rc != AGENT_OK) WARN(err);
+    return rc == AGENT_OK;
+}
+
+int32_t run_with_media(LlamaAbi &abi, const agent_part &media, std::string_view prompt, std::string &text) {
+    agent_part parts[2] = {};
+    parts[0] = media;
+    parts[1].kind = AGENT_PART_TEXT;
+    parts[1].text = abi_str(prompt);
+    agent_message msg{};
+    msg.role = abi_str("user");
+    msg.parts = parts;
+    msg.n_parts = 2;
+    agent_request req{};
+    req.task = AGENT_CAP_TEXT_GEN;
+    req.messages = &msg;
+    req.n_messages = 1;
+    req.params_json = abi_str(R"({"max_tokens":24,"temperature":0})");
+    agent_response resp{};
+    int32_t rc = abi.engine->run(abi.inst, &req, &resp);
+    if (rc == AGENT_OK) {
+        for (size_t i = 0; i < resp.message.n_parts; ++i)
+            if (resp.message.parts[i].kind == AGENT_PART_TEXT) text.append(resp.message.parts[i].text.data, resp.message.parts[i].text.size);
+        abi.engine->free_response(abi.inst, &resp);
+    }
+    return rc;
+}
+
+std::string lower(std::string s) {
+    for (char &c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+} // namespace
+
+TEST_CASE("llama engine declares image and audio input", "[engines][llama]") {
+    REQUIRE(agent::load_engine_plugin(AGENT_TEST_LLAMA_ENGINE_PATH).ok);
+    const agent_engine_v1 *engine = agent::find_engine("llama");
+    REQUIRE(engine != nullptr);
+    REQUIRE((engine->caps & AGENT_CAP_VISION_IN) != 0);
+    REQUIRE((engine->caps & AGENT_CAP_AUDIO_IN) != 0);
+}
+
+TEST_CASE("llama engine rejects media parts without an mmproj", "[engines][llama][model]") {
+    if (!test_model()) SKIP("AGENT_TEST_LLAMA_MODEL not set");
+    LlamaAbi abi;
+    REQUIRE(create_llama(abi, std::string(R"({"model":")") + test_model() + R"(","context_window":256})"));
+
+    const std::string bmp = solid_bmp(2);
+    agent_part media{};
+    media.kind = AGENT_PART_BYTES;
+    media.mime = abi_str("image/bmp");
+    media.data = bmp.data();
+    media.size = bmp.size();
+    std::string text;
+    REQUIRE(run_with_media(abi, media, "What color is this?", text) == AGENT_ERR_UNSUPPORTED);
+    REQUIRE(std::string(abi.engine->last_error(abi.inst)).find("mmproj") != std::string::npos);
+}
+
+// Set AGENT_TEST_LLAMA_VISION_MODEL and AGENT_TEST_LLAMA_VISION_MMPROJ to a vision GGUF and its
+// projector, e.g. https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF
+// (SmolVLM-256M-Instruct-Q8_0.gguf + mmproj-SmolVLM-256M-Instruct-Q8_0.gguf).
+TEST_CASE("llama engine reads an image through libmtmd", "[engines][llama][model]") {
+    const char *model = std::getenv("AGENT_TEST_LLAMA_VISION_MODEL");
+    const char *mmproj = std::getenv("AGENT_TEST_LLAMA_VISION_MMPROJ");
+    if (!model || !mmproj) SKIP("AGENT_TEST_LLAMA_VISION_MODEL / AGENT_TEST_LLAMA_VISION_MMPROJ not set");
+    LlamaAbi abi;
+    std::string config = "{\"model\":\"";
+    config += model;
+    config += "\",\"context_window\":2048,\"options\":{\"mmproj\":\"";
+    config += mmproj;
+    config += "\"}}";
+    REQUIRE(create_llama(abi, config));
+
+    const std::string bmp = solid_bmp(2);
+    const std::string path = "/tmp/agent_test_red.bmp";
+    FILE *f = std::fopen(path.c_str(), "wb");
+    REQUIRE(f != nullptr);
+    REQUIRE(std::fwrite(bmp.data(), 1, bmp.size(), f) == bmp.size());
+    std::fclose(f);
+    const char *question = "What color is this image? Answer in one word.";
+
+    SECTION("file part") {
+        agent_part media{};
+        media.kind = AGENT_PART_FILE;
+        media.path = abi_str(path);
+        media.mime = abi_str("image/bmp");
+        std::string text;
+        int32_t rc = run_with_media(abi, media, question, text);
+        INFO(abi.engine->last_error(abi.inst));
+        REQUIRE(rc == AGENT_OK);
+        INFO("reply: " << text);
+        REQUIRE_FALSE(text.empty());
+        CHECK(lower(text).find("red") != std::string::npos);
+    }
+    SECTION("bytes part") {
+        const std::string blue = solid_bmp(0); // a second color, so the answer can't be a fixed guess
+        agent_part media{};
+        media.kind = AGENT_PART_BYTES;
+        media.mime = abi_str("image/bmp");
+        media.data = blue.data();
+        media.size = blue.size();
+        std::string text;
+        int32_t rc = run_with_media(abi, media, question, text);
+        INFO(abi.engine->last_error(abi.inst));
+        REQUIRE(rc == AGENT_OK);
+        INFO("reply: " << text);
+        REQUIRE_FALSE(text.empty());
+        CHECK(lower(text).find("blue") != std::string::npos);
+    }
+    SECTION("unreadable file") {
+        agent_part media{};
+        media.kind = AGENT_PART_FILE;
+        media.path = abi_str("/nonexistent/image.png");
+        media.mime = abi_str("image/png");
+        std::string text;
+        REQUIRE(run_with_media(abi, media, "What is this?", text) == AGENT_ERR_FILESYSTEM);
+    }
+}
+#endif
