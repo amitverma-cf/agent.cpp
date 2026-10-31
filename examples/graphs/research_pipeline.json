@@ -1,0 +1,58 @@
+{
+  "//": "Research a topic, refine the notes until the critic approves (at most 3 rounds), then write two outputs in parallel.",
+  "name": "research_pipeline",
+  "description": "Sequential research -> review loop -> parallel publish.",
+  "engine": "llama",
+  "model": "qwen3-4b-instruct",
+  "entry": "pipeline",
+  "nodes": [
+    {
+      "name": "pipeline",
+      "kind": "sequential",
+      "steps": ["research", "refine", "publish"]
+    },
+    {
+      "name": "research",
+      "kind": "agent",
+      "system_prompt": "You are a careful researcher. Reply with concise bullet-point notes.",
+      "input_key": "topic",
+      "output_key": "notes"
+    },
+    {
+      "name": "refine",
+      "kind": "loop",
+      "body": "critic",
+      "max_iterations": 3,
+      "until": { "key": "verdict", "equals": "APPROVED" }
+    },
+    {
+      "name": "critic",
+      "kind": "agent",
+      "system_prompt": "Review the notes. Reply with exactly APPROVED if they are complete and correct, otherwise list what is missing.",
+      "input_key": "notes",
+      "output_key": "verdict"
+    },
+    {
+      "name": "publish",
+      "kind": "parallel",
+      "branches": ["to_markdown", "to_summary"]
+    },
+    {
+      "name": "to_markdown",
+      "kind": "agent",
+      "system_prompt": "Turn the notes into a well-structured Markdown article.",
+      "input_key": "notes",
+      "output_key": "article"
+    },
+    {
+      "name": "to_summary",
+      "kind": "agent",
+      "system_prompt": "Summarise the notes in two sentences.",
+      "input_key": "notes",
+      "output_key": "summary"
+    }
+  ],
+  "edges": [
+    { "from": "pipeline", "to": "__end__" }
+  ]
+}

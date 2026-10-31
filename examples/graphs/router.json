@@ -1,0 +1,47 @@
+{
+  "//": "Classify the request, then route on the classifier's answer (a state value) to a specialist agent.",
+  "name": "router",
+  "engine": "llama",
+  "model": "qwen3-4b-instruct",
+  "nodes": [
+    {
+      "name": "classify",
+      "kind": "agent",
+      "system_prompt": "Classify the user's request. Reply with exactly one word: code, math or chat.",
+      "input_key": "request",
+      "output_key": "temp:category"
+    },
+    {
+      "name": "coder",
+      "kind": "agent",
+      "system_prompt": "You are a senior C++ engineer. Answer with code first, then a short explanation.",
+      "input_key": "request",
+      "output_key": "answer",
+      "allowed_tools": ["read_file", "list_dir"]
+    },
+    {
+      "name": "mathematician",
+      "kind": "agent",
+      "system_prompt": "Solve the problem step by step and give the final result on its own line.",
+      "input_key": "request",
+      "output_key": "answer"
+    },
+    {
+      "name": "chatter",
+      "kind": "agent",
+      "system_prompt": "You are a friendly assistant.",
+      "input_key": "request",
+      "output_key": "answer"
+    }
+  ],
+  "edges": [
+    {
+      "from": "classify",
+      "route": {
+        "key": "temp:category",
+        "cases": { "code": "coder", "math": "mathematician" },
+        "default": "chatter"
+      }
+    }
+  ]
+}

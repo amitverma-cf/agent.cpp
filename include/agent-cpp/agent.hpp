@@ -871,3 +871,41 @@ void disconnect_mcp_servers(Session &session);
 std::vector<std::string> list_mcp_servers(const Session &session);
 
 } // namespace agent
+
+// ============================================================================================
+// -------------------------- agent.json graph loader (Phase 3) --------------------------
+// Declarative graphs for CLI users: nodes, edges (static or routed on a state value), workflow
+// nodes (sequential / parallel / loop), MCP servers to connect, and engine/model hints. Function
+// nodes reference C++ functions registered by name. See docs/api/agent-json.md.
+// ============================================================================================
+
+namespace agent {
+
+// Process-wide registry used by "kind": "function" nodes ("function": "<name>"). Registering an
+// existing name replaces it. user_data must outlive every graph loaded with it.
+void register_graph_function(std::string_view name, GraphFunctionFn fn, void *user_data = nullptr);
+void unregister_graph_function(std::string_view name);
+
+struct LoadedGraph {
+    Graph graph;
+    std::string description;
+    // Hints for the host (the CLI picks the engine/model from them); the loader does not act on them.
+    std::string engine;
+    std::string model;
+    std::vector<McpServerConfig> mcp_servers; // as declared
+    // Non-fatal findings: unknown fields, unreachable nodes, cycles without a conditional edge, ...
+    std::vector<std::string> warnings;
+    // Owns the route tables, loop conditions and static tool arguments that graph's user_data
+    // pointers refer to. Keep the LoadedGraph alive while graph is in use (moving it is fine).
+    std::shared_ptr<void> storage;
+};
+
+// Parses and validates a graph without a Session: no MCP servers are started and tool names are
+// not checked. path_or_json is JSON text when it starts with '{' or '[' (after whitespace), else a file path.
+Result<LoadedGraph> parse_graph_json(std::string_view path_or_json);
+// parse_graph_json, then connects the declared mcp_servers (a server already connected under the
+// same name is reused) and checks that every Tool node names a registered tool. On failure, servers
+// connected by this call are disconnected again.
+Result<LoadedGraph> load_graph_json(Session &session, std::string_view path_or_json);
+
+} // namespace agent
