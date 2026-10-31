@@ -4,3 +4,6 @@
 [submodule "vendor/simdjson"]
 	path = vendor/simdjson
 	url = https://github.com/simdjson/simdjson.git
+[submodule "vendor/stable-diffusion.cpp"]
+	path = vendor/stable-diffusion.cpp
+	url = https://github.com/leejet/stable-diffusion.cpp

@@ -175,3 +175,57 @@ auto out = agent::infer(session.value, {.messages = {&msg, 1}});
 
 Not yet supported: cancelling inside a running `Run()` (the flag is checked before it starts),
 IoBinding / device-resident outputs, and non-tensor (sequence/map) outputs.
+
+## The sdcpp engine
+
+`engines/sdcpp` (`agent-engine-sdcpp`) wraps [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)
+(`vendor/stable-diffusion.cpp`, pinned to a release tag) for image generation: SD 1.x/2.x/XL, SD3,
+FLUX, Qwen-Image, Z-Image and whatever else that sd.cpp release loads.
+
+It is opt-in because it builds a second copy of ggml:
+
+```sh
+git submodule update --init vendor/stable-diffusion.cpp
+git -C vendor/stable-diffusion.cpp submodule update --init --depth 1 ggml
+cmake -B build -G Ninja -DAGENT_ENGINE_SDCPP=ON [-DAGENT_SDCPP_BUILD_JOBS=4]
+```
+
+sd.cpp's ggml uses the same CMake target names as llama.cpp's, so it is built as a nested CMake project
+(`ExternalProject`) and its static archives are linked into the plugin with hidden visibility (on Linux
+also `-Wl,--exclude-libs,ALL`). The llama and sdcpp plugins can be loaded into one process.
+`AGENT_SDCPP_BUILD_JOBS` caps the nested build's parallelism.
+
+- Name `sdcpp`, caps `AGENT_CAP_IMAGE_GEN | AGENT_CAP_IMAGE_EDIT`, flags `0`.
+- `IMAGE_GEN` (txt2img): the prompt is the text of the last user message.
+- `IMAGE_EDIT` (img2img): the same, plus the last image `FILE` (or `BYTES`) part of that message as the
+  init image.
+- The image is written as `<output_dir>/sdcpp-<unix ms>-<n>.png` and returned as a `FILE` part
+  (`image/png`) followed by a text part `generated image: <path>`.
+- Other tasks fail with `AGENT_ERR_UNSUPPORTED`.
+
+`create()` config: `model` is a single-file checkpoint (`.gguf`, `.safetensors`, `.ckpt`). Split models
+(FLUX, SD3, Qwen-Image, ...) leave it empty and set components in `options`:
+
+| Option | Meaning |
+|--------|---------|
+| `diffusion_model`, `vae`, `taesd`, `clip_l`, `clip_g`, `t5xxl`, `llm` | component file paths (`llm` is the LLM text encoder of Qwen-Image / Z-Image / FLUX.2) |
+| `threads` | CPU threads (default: physical cores) |
+| `flash_attn`, `eager_load`, `verbose` | booleans; `verbose` forwards sd.cpp info logs to stderr (warnings and errors always are) |
+| `prediction` | override the prediction type (`eps`, `v`, `edm_v`, `sd3_flow`, `flux_flow`, ...) |
+| `width`, `height`, `steps`, `cfg_scale`, `guidance`, `sampler`, `scheduler`, `seed`, `negative_prompt`, `strength`, `clip_skip`, `vae_tiling` | generation defaults |
+
+`params_json` per request accepts the same generation keys (`width`, `height`, `steps`, `seed`,
+`negative_prompt`, `cfg_scale`, `guidance`, `sampler`, `scheduler`, `strength`, `clip_skip`,
+`vae_tiling`). Defaults: 512x512 (img2img: the input image size, rounded down to a multiple of 8), 20 steps, `cfg_scale` 7, random seed (`-1`), and the model's own
+default sampler and scheduler. Sampler and scheduler names are sd.cpp's (`euler`, `euler_a`, `lcm`, ...;
+`discrete`, `karras`, ...).
+
+Progress goes to `on_progress(step, total)`; the counter restarts per phase (sampling, VAE decode, and
+lazy weight loading on the first run unless `eager_load` is set). `cancel` is checked before starting
+and at every sampler step, then `run()` returns `AGENT_ERR_CANCELLED`.
+
+sd.cpp's log and progress callbacks are process-global, so generations from different sdcpp instances
+are serialized by a mutex inside the plugin.
+
+The core currently sends every request as `AGENT_CAP_TEXT_GEN`, so the sdcpp engine is driven
+through the C ABI directly until the core routes image tasks.
