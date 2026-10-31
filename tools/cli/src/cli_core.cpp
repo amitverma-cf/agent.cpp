@@ -1,0 +1,721 @@
+#include "cli_core.hpp"
+
+#include <agent-cpp/engine_abi.h>
+
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <simdjson.h>
+
+namespace agent::cli {
+
+namespace {
+
+std::string_view trim(std::string_view s) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
+    return s;
+}
+
+std::string lower(std::string_view s) {
+    std::string out(s);
+    for (char &c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return out;
+}
+
+bool contains(std::span<const std::string_view> list, std::string_view v) { return std::find(list.begin(), list.end(), v) != list.end(); }
+
+// -------------------------- Command table --------------------------
+
+struct SubSpec {
+    std::string_view name;
+    int min_positionals;
+    int max_positionals;
+};
+
+struct CommandSpec {
+    std::string_view name;
+    std::span<const SubSpec> subs; // empty = no subcommand
+    int min_positionals;           // used when subs is empty
+    int max_positionals;
+    std::span<const std::string_view> value_flags;
+    std::span<const std::string_view> bool_flags;
+};
+
+constexpr std::string_view kGlobalValue[] = {"config-dir"};
+constexpr std::string_view kGlobalBool[] = {"help"};
+
+constexpr std::string_view kSetupValue[] = {"caps", "workspace", "models-dir", "engines-dir", "backend"};
+constexpr std::string_view kSetupBool[] = {"yes"};
+
+constexpr SubSpec kEngineSubs[] = {{"ls", 0, 0}, {"add", 1, 1}, {"rm", 1, 1}};
+
+constexpr SubSpec kModelSubs[] = {{"ls", 0, 0}, {"pull", 1, 1}, {"rm", 1, 1}};
+constexpr std::string_view kModelValue[] = {"name"};
+constexpr std::string_view kModelBool[] = {"allow-restricted", "keep-file"};
+
+constexpr std::string_view kChatValue[] = {"model", "engine", "resume", "workspace", "ctx", "max-tokens", "engine-options"};
+constexpr std::string_view kChatBool[] = {"yes", "list", "verbose"};
+
+constexpr CommandSpec kCommands[] = {
+    {"setup", {}, 0, 0, kSetupValue, kSetupBool},
+    {"engine", kEngineSubs, 0, 0, {}, {}},
+    {"model", kModelSubs, 0, 0, kModelValue, kModelBool},
+    {"chat", {}, 0, 0, kChatValue, kChatBool},
+    {"run", {}, 1, 1, {}, {}},
+    {"help", {}, 0, 1, {}, {}},
+    {"version", {}, 0, 0, {}, {}},
+};
+
+const CommandSpec *find_command(std::string_view name) {
+    for (const auto &c : kCommands)
+        if (c.name == name) return &c;
+    return nullptr;
+}
+
+std::string_view expand_short(std::string_view s) {
+    if (s == "-h") return "help";
+    if (s == "-y") return "yes";
+    if (s == "-m") return "model";
+    if (s == "-e") return "engine";
+    return {};
+}
+
+} // namespace
+
+bool CommandLine::has(std::string_view flag) const {
+    return std::any_of(flags.begin(), flags.end(), [&](const Flag &f) { return f.name == flag; });
+}
+
+std::string_view CommandLine::get(std::string_view flag, std::string_view fallback) const {
+    for (auto it = flags.rbegin(); it != flags.rend(); ++it)
+        if (it->name == flag) return it->value;
+    return fallback;
+}
+
+Result<CommandLine> parse_command_line(std::span<const std::string_view> args) {
+    CommandLine cl;
+    const CommandSpec *spec = nullptr;
+    std::vector<std::string> positionals;
+    bool only_positionals = false;
+
+    for (size_t i = 0; i < args.size(); ++i) {
+        const std::string_view a = args[i];
+        if (!only_positionals && a == "--") {
+            only_positionals = true;
+            continue;
+        }
+        const bool is_long = !only_positionals && a.size() > 2 && a.substr(0, 2) == "--";
+        const std::string_view short_name = only_positionals ? std::string_view() : expand_short(a);
+        if (!is_long && short_name.empty() && !only_positionals && a.size() > 1 && a.front() == '-')
+            return fail<CommandLine>(ErrorCode::InvalidConfig, "unknown option '" + std::string(a) + "'");
+        if (!is_long && short_name.empty()) {
+            if (!spec) {
+                spec = find_command(a);
+                if (!spec) return fail<CommandLine>(ErrorCode::InvalidConfig, "unknown command '" + std::string(a) + "'");
+                cl.command = std::string(a);
+            } else {
+                positionals.emplace_back(a);
+            }
+            continue;
+        }
+
+        std::string_view name = is_long ? a.substr(2) : short_name;
+        std::string value;
+        bool has_inline_value = false;
+        if (const size_t eq = name.find('='); is_long && eq != std::string_view::npos) {
+            value = std::string(name.substr(eq + 1));
+            name = name.substr(0, eq);
+            has_inline_value = true;
+        }
+        const bool takes_value = contains(kGlobalValue, name) || (spec && contains(spec->value_flags, name));
+        const bool is_bool = contains(kGlobalBool, name) || (spec && contains(spec->bool_flags, name));
+        if (!takes_value && !is_bool) {
+            std::string msg = "unknown option '--" + std::string(name) + "'";
+            if (spec) msg += " for '" + cl.command + "'";
+            return fail<CommandLine>(ErrorCode::InvalidConfig, msg);
+        }
+        if (takes_value && !has_inline_value) {
+            if (i + 1 >= args.size()) return fail<CommandLine>(ErrorCode::InvalidConfig, "option '--" + std::string(name) + "' needs a value");
+            value = std::string(args[++i]);
+        }
+        if (is_bool && has_inline_value) return fail<CommandLine>(ErrorCode::InvalidConfig, "option '--" + std::string(name) + "' takes no value");
+        if (name == "help") cl.help = true;
+        else cl.flags.push_back(Flag{std::string(name), std::move(value)});
+    }
+
+    if (!spec) {
+        if (cl.help) cl.command = "help";
+        return ok(std::move(cl));
+    }
+    if (cl.help) return ok(std::move(cl)); // "agent chat --help": no positional validation
+
+    int min_pos = spec->min_positionals, max_pos = spec->max_positionals;
+    size_t first = 0;
+    if (!spec->subs.empty()) {
+        if (positionals.empty()) return fail<CommandLine>(ErrorCode::InvalidConfig, "'" + cl.command + "' needs a subcommand");
+        const SubSpec *sub = nullptr;
+        for (const auto &s : spec->subs)
+            if (s.name == positionals[0]) sub = &s;
+        if (!sub) return fail<CommandLine>(ErrorCode::InvalidConfig, "unknown subcommand '" + cl.command + " " + positionals[0] + "'");
+        cl.subcommand = positionals[0];
+        min_pos = sub->min_positionals;
+        max_pos = sub->max_positionals;
+        first = 1;
+    }
+    const int n = static_cast<int>(positionals.size() - first);
+    std::string what = cl.command + (cl.subcommand.empty() ? "" : " " + cl.subcommand);
+    if (n < min_pos) return fail<CommandLine>(ErrorCode::InvalidConfig, "'" + what + "' is missing an argument");
+    if (n > max_pos) return fail<CommandLine>(ErrorCode::InvalidConfig, "too many arguments for '" + what + "'");
+    cl.positionals.assign(positionals.begin() + static_cast<std::ptrdiff_t>(first), positionals.end());
+    return ok(std::move(cl));
+}
+
+std::string usage_text() {
+    return "usage: agent <command> [options]\n"
+           "\n"
+           "commands:\n"
+           "  setup                      detect hardware, pick capabilities, write config.json + engines.json\n"
+           "        [--yes] [--caps llama,sherpa,sdcpp,onnx] [--workspace DIR] [--models-dir DIR]\n"
+           "        [--engines-dir DIR] [--backend cpu|cuda|vulkan]\n"
+           "  engine ls                  list engines in engines.json\n"
+           "  engine add <plugin>        validate an engine plugin and record it\n"
+           "  engine rm <name>           forget an engine\n"
+           "  model pull <spec>          download from Hugging Face (owner/repo[:file-or-QUANT])\n"
+           "        [--name NAME] [--allow-restricted]\n"
+           "  model ls                   list downloaded models (models.json)\n"
+           "  model rm <name> [--keep-file]\n"
+           "  chat                       interactive chat with streaming and tools\n"
+           "        [-m|--model NAME|PATH] [-e|--engine NAME|PATH] [--resume ID] [--list]\n"
+           "        [--workspace DIR] [--ctx N] [--max-tokens N] [--engine-options JSON] [-y|--yes] [--verbose]\n"
+           "  run <graph.json>           run a declarative graph (not implemented yet)\n"
+           "  version                    print the version\n"
+           "\n"
+           "global options: -h|--help, --config-dir DIR (default: $AGENT_CONFIG_DIR or the platform config dir)\n"
+           "chat commands: /exit /clear /model [NAME] /image <path> [prompt] /open [n] /stats /help\n";
+}
+
+// -------------------------- JSON helpers --------------------------
+
+std::string json_escape(std::string_view s) {
+    std::string out;
+    out.reserve(s.size() + 2);
+    for (char c : s) {
+        switch (c) {
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:
+            if (static_cast<unsigned char>(c) < 0x20) {
+                char buf[8];
+                std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(static_cast<unsigned char>(c)));
+                out += buf;
+            } else {
+                out += c;
+            }
+        }
+    }
+    return out;
+}
+
+namespace {
+
+std::string json_str(std::string_view s) { return "\"" + json_escape(s) + "\""; }
+
+std::string string_array(std::span<const std::string> items) {
+    std::string out = "[";
+    for (size_t i = 0; i < items.size(); ++i) out += (i ? ", " : "") + json_str(items[i]);
+    return out + "]";
+}
+
+std::string get_str(simdjson::dom::element obj, std::string_view key, std::string fallback = {}) {
+    std::string_view v;
+    if (obj[key].get_string().get(v)) return fallback;
+    return std::string(v);
+}
+
+int64_t get_int(simdjson::dom::element obj, std::string_view key, int64_t fallback) {
+    int64_t v = 0;
+    if (obj[key].get_int64().get(v)) return fallback;
+    return v;
+}
+
+double get_num(simdjson::dom::element obj, std::string_view key, double fallback) {
+    double v = 0;
+    if (obj[key].get_double().get(v)) {
+        int64_t i = 0;
+        if (obj[key].get_int64().get(i)) return fallback;
+        return static_cast<double>(i);
+    }
+    return v;
+}
+
+bool get_bool(simdjson::dom::element obj, std::string_view key, bool fallback) {
+    bool v = false;
+    if (obj[key].get_bool().get(v)) return fallback;
+    return v;
+}
+
+std::vector<std::string> get_str_array(simdjson::dom::element obj, std::string_view key) {
+    std::vector<std::string> out;
+    simdjson::dom::array arr;
+    if (obj[key].get_array().get(arr)) return out;
+    for (simdjson::dom::element e : arr) {
+        std::string_view v;
+        if (!e.get_string().get(v)) out.emplace_back(v);
+    }
+    return out;
+}
+
+Result<std::string> read_text_file(const std::string &path, bool &exists) {
+    std::error_code ec;
+    exists = std::filesystem::exists(path, ec);
+    if (!exists) return ok(std::string());
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return fail<std::string>(ErrorCode::FilesystemError, "cannot read " + path);
+    return ok(std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()));
+}
+
+Result<void> write_text_file_atomic(const std::string &path, std::string_view text) {
+    std::error_code ec;
+    const std::filesystem::path p(path);
+    if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path(), ec);
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out) return fail(ErrorCode::FilesystemError, "cannot write " + tmp);
+        out.write(text.data(), static_cast<std::streamsize>(text.size()));
+        if (!out.flush()) return fail(ErrorCode::FilesystemError, "failed writing " + tmp);
+    }
+    std::filesystem::rename(tmp, p, ec);
+    if (ec) return fail(ErrorCode::FilesystemError, "cannot replace " + path + ": " + ec.message());
+    return ok();
+}
+
+} // namespace
+
+// -------------------------- Hardware --------------------------
+
+std::string suggest_backend(const HardwareInfo &hw) {
+    if (hw.nvidia_smi || hw.nvidia_device) return "cuda";
+    if (!hw.dri_nodes.empty()) return "vulkan";
+    return "cpu";
+}
+
+// -------------------------- config.json --------------------------
+
+std::span<const std::string_view> starter_pack() {
+    static constexpr std::string_view kPack[] = {"llama", "sherpa", "sdcpp", "onnx"};
+    return kPack;
+}
+
+std::string config_to_json(const CliConfig &c) {
+    char temp[32];
+    std::snprintf(temp, sizeof(temp), "%g", static_cast<double>(c.temperature));
+    std::string out = "{\n";
+    out += "  \"version\": " + std::to_string(c.version) + ",\n";
+    out += "  \"workspace\": " + json_str(c.workspace) + ",\n";
+    out += "  \"models_dir\": " + json_str(c.models_dir) + ",\n";
+    out += "  \"default_model\": " + json_str(c.default_model) + ",\n";
+    out += "  \"capabilities\": " + string_array(c.capabilities) + ",\n";
+    out += "  \"backend\": " + json_str(c.backend) + ",\n";
+    out += "  \"hardware\": {\"cpu_cores\": " + std::to_string(c.hardware.cpu_cores) +
+           ", \"nvidia_smi\": " + (c.hardware.nvidia_smi ? "true" : "false") +
+           ", \"nvidia_device\": " + (c.hardware.nvidia_device ? "true" : "false") + ", \"dri_nodes\": " + string_array(c.hardware.dri_nodes) +
+           "},\n";
+    out += "  \"context_window\": " + std::to_string(c.context_window) + ",\n";
+    out += "  \"max_tokens\": " + std::to_string(c.max_tokens) + ",\n";
+    out += "  \"temperature\": " + std::string(temp) + "\n";
+    out += "}\n";
+    return out;
+}
+
+Result<CliConfig> config_from_json(std::string_view json) {
+    simdjson::dom::parser parser;
+    simdjson::dom::element doc;
+    if (parser.parse(json.data(), json.size()).get(doc) || !doc.is_object())
+        return fail<CliConfig>(ErrorCode::ParseError, "config.json is not a JSON object");
+    CliConfig c;
+    c.version = static_cast<int>(get_int(doc, "version", 1));
+    c.workspace = get_str(doc, "workspace");
+    c.models_dir = get_str(doc, "models_dir");
+    c.default_model = get_str(doc, "default_model");
+    c.capabilities = get_str_array(doc, "capabilities");
+    c.backend = get_str(doc, "backend", "cpu");
+    simdjson::dom::element hw;
+    if (!doc["hardware"].get(hw) && hw.is_object()) {
+        c.hardware.cpu_cores = static_cast<int>(get_int(hw, "cpu_cores", 0));
+        c.hardware.nvidia_smi = get_bool(hw, "nvidia_smi", false);
+        c.hardware.nvidia_device = get_bool(hw, "nvidia_device", false);
+        c.hardware.dri_nodes = get_str_array(hw, "dri_nodes");
+    }
+    c.context_window = static_cast<int>(get_int(doc, "context_window", c.context_window));
+    c.max_tokens = static_cast<int>(get_int(doc, "max_tokens", c.max_tokens));
+    c.temperature = static_cast<float>(get_num(doc, "temperature", c.temperature));
+    if (c.context_window <= 0 || c.max_tokens <= 0)
+        return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: context_window and max_tokens must be positive");
+    return ok(std::move(c));
+}
+
+Result<CliConfig> load_config(const std::string &path) {
+    bool exists = false;
+    auto text = read_text_file(path, exists);
+    if (!text.ok) return fail<CliConfig>(text.error.code, text.error.message);
+    if (!exists || trim(text.value).empty()) return ok(CliConfig{});
+    auto c = config_from_json(text.value);
+    if (!c.ok) c.error.message = path + ": " + c.error.message;
+    return c;
+}
+
+Result<void> save_config(const std::string &path, const CliConfig &config) { return write_text_file_atomic(path, config_to_json(config)); }
+
+// -------------------------- engines.json --------------------------
+
+std::string engines_to_json(std::span<const EngineEntry> engines) {
+    std::string out = "{\n  \"engines\": [";
+    for (size_t i = 0; i < engines.size(); ++i) {
+        const auto &e = engines[i];
+        out += i ? ",\n    " : "\n    ";
+        out += "{\"name\": " + json_str(e.name) + ", \"path\": " + json_str(e.path) + ", \"version\": " + json_str(e.version) +
+               ", \"backend\": " + json_str(e.backend) + ", \"caps\": " + string_array(e.caps) + "}";
+    }
+    out += engines.empty() ? "]\n}\n" : "\n  ]\n}\n";
+    return out;
+}
+
+Result<std::vector<EngineEntry>> engines_from_json(std::string_view json) {
+    using R = std::vector<EngineEntry>;
+    simdjson::dom::parser parser;
+    simdjson::dom::element doc;
+    if (parser.parse(json.data(), json.size()).get(doc)) return fail<R>(ErrorCode::ParseError, "engines.json is not valid JSON");
+    simdjson::dom::array arr;
+    if (doc["engines"].get_array().get(arr)) return fail<R>(ErrorCode::ParseError, "engines.json has no \"engines\" array");
+    R out;
+    for (simdjson::dom::element e : arr) {
+        if (!e.is_object()) return fail<R>(ErrorCode::ParseError, "engines.json entry is not an object");
+        EngineEntry entry;
+        entry.path = get_str(e, "path");
+        if (entry.path.empty()) return fail<R>(ErrorCode::ParseError, "engines.json entry without a \"path\"");
+        entry.name = get_str(e, "name");
+        if (entry.name.empty()) {
+            // Hand-written manifest: derive the name from agent-engine-<name>.<ext>.
+            std::string stem = std::filesystem::path(entry.path).stem().string();
+            constexpr std::string_view prefix = "agent-engine-";
+            entry.name = stem.rfind(prefix, 0) == 0 ? stem.substr(prefix.size()) : stem;
+        }
+        entry.version = get_str(e, "version");
+        entry.backend = get_str(e, "backend", "cpu");
+        entry.caps = get_str_array(e, "caps");
+        out.push_back(std::move(entry));
+    }
+    return ok(std::move(out));
+}
+
+Result<std::vector<EngineEntry>> load_engines(const std::string &path) {
+    using R = std::vector<EngineEntry>;
+    bool exists = false;
+    auto text = read_text_file(path, exists);
+    if (!text.ok) return fail<R>(text.error.code, text.error.message);
+    if (!exists || trim(text.value).empty()) return ok(R{});
+    auto r = engines_from_json(text.value);
+    if (!r.ok) r.error.message = path + ": " + r.error.message;
+    return r;
+}
+
+Result<void> save_engines(const std::string &path, std::span<const EngineEntry> engines) {
+    return write_text_file_atomic(path, engines_to_json(engines));
+}
+
+void upsert_engine(std::vector<EngineEntry> &engines, EngineEntry entry) {
+    for (auto &e : engines)
+        if (e.name == entry.name) {
+            e = std::move(entry);
+            return;
+        }
+    engines.push_back(std::move(entry));
+}
+
+bool remove_engine(std::vector<EngineEntry> &engines, std::string_view name) {
+    const auto before = engines.size();
+    std::erase_if(engines, [&](const EngineEntry &e) { return e.name == name; });
+    return engines.size() != before;
+}
+
+const EngineEntry *find_engine_entry(std::span<const EngineEntry> engines, std::string_view name) {
+    for (const auto &e : engines)
+        if (e.name == name) return &e;
+    return nullptr;
+}
+
+std::vector<std::string> caps_to_names(uint64_t caps) {
+    static constexpr struct {
+        uint64_t bit;
+        std::string_view name;
+    } kNames[] = {
+        {AGENT_CAP_TEXT_GEN, "text_gen"},   {AGENT_CAP_TOOL_CALL, "tool_call"},   {AGENT_CAP_VISION_IN, "vision_in"},
+        {AGENT_CAP_AUDIO_IN, "audio_in"},   {AGENT_CAP_VIDEO_IN, "video_in"},     {AGENT_CAP_OCR, "ocr"},
+        {AGENT_CAP_ASR, "asr"},             {AGENT_CAP_TTS, "tts"},               {AGENT_CAP_VAD, "vad"},
+        {AGENT_CAP_DIARIZE, "diarize"},     {AGENT_CAP_IMAGE_GEN, "image_gen"},   {AGENT_CAP_IMAGE_EDIT, "image_edit"},
+        {AGENT_CAP_VIDEO_GEN, "video_gen"}, {AGENT_CAP_MESH_GEN, "mesh_gen"},     {AGENT_CAP_EMBED, "embed"},
+        {AGENT_CAP_RERANK, "rerank"},       {AGENT_CAP_DECIDE, "decide"},         {AGENT_CAP_CLASSIFY, "classify"},
+        {AGENT_CAP_GENERIC, "generic"},
+    };
+    std::vector<std::string> out;
+    for (const auto &n : kNames)
+        if (caps & n.bit) out.emplace_back(n.name);
+    return out;
+}
+
+std::string plugin_file_name(std::string_view engine_name) {
+#if defined(_WIN32)
+    constexpr std::string_view suffix = ".dll";
+#elif defined(__APPLE__)
+    constexpr std::string_view suffix = ".dylib";
+#else
+    constexpr std::string_view suffix = ".so";
+#endif
+    return "agent-engine-" + std::string(engine_name) + std::string(suffix);
+}
+
+std::vector<std::string> split_list(std::string_view list) {
+    std::vector<std::string> out;
+    size_t i = 0;
+    while (i <= list.size()) {
+        size_t j = list.find_first_of(", \t", i);
+        if (j == std::string_view::npos) j = list.size();
+        std::string item = lower(trim(list.substr(i, j - i)));
+        if (!item.empty() && std::find(out.begin(), out.end(), item) == out.end()) out.push_back(std::move(item));
+        i = j + 1;
+    }
+    return out;
+}
+
+// -------------------------- Model / engine resolution --------------------------
+
+std::string_view engine_for_model(std::string_view model_path) {
+    const std::string ext = lower(std::filesystem::path(model_path).extension().string());
+    if (ext == ".gguf") return "llama";
+    if (ext == ".onnx") return "onnx";
+    if (ext == ".safetensors" || ext == ".ckpt" || ext == ".sft") return "sdcpp";
+    return {};
+}
+
+Result<ModelRef> resolve_model(std::string_view spec, std::string_view default_model, std::span<const ModelRef> catalog, ExistsFn exists) {
+    std::string_view want = trim(spec);
+    if (want.empty()) want = trim(default_model);
+    if (want.empty()) {
+        for (const auto &m : catalog)
+            if (engine_for_model(m.path) == "llama") return ok(m);
+        return fail<ModelRef>(ErrorCode::InvalidConfig,
+                              "no model given and none downloaded; pass --model PATH or run `agent model pull <owner/repo:QUANT>`");
+    }
+    for (const auto &m : catalog)
+        if (m.name == want) {
+            if (!exists(m.path))
+                return fail<ModelRef>(ErrorCode::FilesystemError,
+                                      "model '" + m.name + "' is in models.json but its file is missing: " + m.path);
+            return ok(m);
+        }
+    if (exists(want)) {
+        std::string name = std::filesystem::path(want).stem().string();
+        return ok(ModelRef{std::move(name), std::string(want)});
+    }
+    std::string msg = "no model file or catalogue entry named '" + std::string(want) + "'";
+    if (want.find('/') != std::string_view::npos && want.find(':') != std::string_view::npos)
+        msg += "; download it first with `agent model pull " + std::string(want) + "`";
+    else msg += "; see `agent model ls`";
+    return fail<ModelRef>(ErrorCode::KeyNotFound, msg);
+}
+
+Result<EngineRef> resolve_engine(std::string_view engine_flag, std::string_view model_path, std::span<const EngineEntry> engines,
+                                 ExistsFn exists) {
+    engine_flag = trim(engine_flag);
+    if (!engine_flag.empty()) {
+        if (const EngineEntry *e = find_engine_entry(engines, engine_flag)) return ok(EngineRef{e->name, e->path});
+        if (exists(engine_flag)) return ok(EngineRef{"", std::string(engine_flag)});
+        if (engine_flag.find('/') != std::string_view::npos || engine_flag.find('\\') != std::string_view::npos)
+            return fail<EngineRef>(ErrorCode::FilesystemError, "engine plugin not found: " + std::string(engine_flag));
+        return ok(EngineRef{std::string(engine_flag), ""});
+    }
+    const std::string_view name = engine_for_model(model_path);
+    if (name.empty())
+        return fail<EngineRef>(ErrorCode::UnsupportedProvider,
+                               "cannot tell which engine runs '" + std::string(model_path) + "' from its file type; pass --engine NAME");
+    if (const EngineEntry *e = find_engine_entry(engines, name)) return ok(EngineRef{e->name, e->path});
+    return ok(EngineRef{std::string(name), ""});
+}
+
+std::string mime_for_path(std::string_view path) {
+    const std::string ext = lower(std::filesystem::path(path).extension().string());
+    static constexpr struct {
+        std::string_view ext, mime;
+    } kMimes[] = {
+        {".png", "image/png"},   {".jpg", "image/jpeg"},  {".jpeg", "image/jpeg"}, {".gif", "image/gif"},
+        {".bmp", "image/bmp"},   {".webp", "image/webp"}, {".wav", "audio/wav"},   {".mp3", "audio/mpeg"},
+        {".flac", "audio/flac"}, {".ogg", "audio/ogg"},   {".mp4", "video/mp4"},   {".webm", "video/webm"},
+        {".glb", "model/gltf-binary"},
+    };
+    for (const auto &m : kMimes)
+        if (m.ext == ext) return std::string(m.mime);
+    return "application/octet-stream";
+}
+
+// -------------------------- Chat --------------------------
+
+SlashCommand parse_slash_command(std::string_view line) {
+    SlashCommand cmd;
+    std::string_view t = trim(line);
+    if (t.size() >= 2 && t[0] == '/' && t[1] == '/') {
+        cmd.text = std::string(t.substr(1));
+        return cmd;
+    }
+    if (t.empty() || t.front() != '/') {
+        cmd.text = std::string(t);
+        return cmd;
+    }
+    t.remove_prefix(1);
+    const size_t sp = t.find_first_of(" \t");
+    const std::string name = lower(t.substr(0, sp));
+    std::string_view args = sp == std::string_view::npos ? std::string_view() : trim(t.substr(sp));
+
+    // First argument, optionally "quoted" (paths with spaces).
+    if (!args.empty() && (args.front() == '"' || args.front() == '\'')) {
+        const char q = args.front();
+        const size_t end = args.find(q, 1);
+        if (end == std::string_view::npos) {
+            cmd.arg = std::string(args.substr(1));
+            args = {};
+        } else {
+            cmd.arg = std::string(args.substr(1, end - 1));
+            args = trim(args.substr(end + 1));
+        }
+    } else if (!args.empty()) {
+        const size_t end = args.find_first_of(" \t");
+        cmd.arg = std::string(args.substr(0, end));
+        args = end == std::string_view::npos ? std::string_view() : trim(args.substr(end));
+    }
+    cmd.rest = std::string(args);
+
+    if (name == "exit" || name == "quit" || name == "q") cmd.kind = SlashKind::Exit;
+    else if (name == "clear") cmd.kind = SlashKind::Clear;
+    else if (name == "model") cmd.kind = SlashKind::Model;
+    else if (name == "image") cmd.kind = SlashKind::Image;
+    else if (name == "open") cmd.kind = SlashKind::Open;
+    else if (name == "stats") cmd.kind = SlashKind::Stats;
+    else if (name == "help" || name == "?") cmd.kind = SlashKind::Help;
+    else {
+        cmd.kind = SlashKind::Unknown;
+        cmd.arg = name;
+    }
+    return cmd;
+}
+
+namespace {
+
+// Length of the longest suffix of text that is a proper prefix of tag.
+size_t partial_tag_suffix(std::string_view text, std::string_view tag) {
+    for (size_t n = std::min(text.size(), tag.size() - 1); n > 0; --n)
+        if (text.substr(text.size() - n) == tag.substr(0, n)) return n;
+    return 0;
+}
+
+} // namespace
+
+std::string filter_stream(StreamFilter &f, std::string_view token) {
+    constexpr std::string_view kOpen = "<tool_call>";
+    constexpr std::string_view kClose = "</tool_call>";
+    f.pending += token;
+    std::string out;
+    for (;;) {
+        if (!f.inside) {
+            const size_t pos = f.pending.find(kOpen);
+            if (pos != std::string::npos) {
+                out += f.pending.substr(0, pos);
+                f.pending.erase(0, pos + kOpen.size());
+                f.inside = true;
+                continue;
+            }
+            const size_t keep = partial_tag_suffix(f.pending, kOpen);
+            out += f.pending.substr(0, f.pending.size() - keep);
+            f.pending.erase(0, f.pending.size() - keep);
+            return out;
+        }
+        const size_t pos = f.pending.find(kClose);
+        if (pos != std::string::npos) {
+            f.pending.erase(0, pos + kClose.size());
+            if (!f.pending.empty() && f.pending.front() == '\n') f.pending.erase(0, 1);
+            f.inside = false;
+            continue;
+        }
+        const size_t keep = partial_tag_suffix(f.pending, kClose);
+        f.pending.erase(0, f.pending.size() - keep);
+        return out;
+    }
+}
+
+std::string flush_stream(StreamFilter &f) {
+    std::string out = f.inside ? std::string() : std::move(f.pending);
+    f.pending.clear();
+    f.inside = false;
+    return out;
+}
+
+std::string add_conversation_id(std::string_view index, std::string_view id) {
+    std::vector<std::string> ids = conversation_ids(index);
+    std::erase(ids, std::string(id));
+    ids.emplace_back(id);
+    std::string out;
+    for (const auto &i : ids) out += i + "\n";
+    return out;
+}
+
+std::vector<std::string> conversation_ids(std::string_view index) {
+    std::vector<std::string> out;
+    size_t i = 0;
+    while (i < index.size()) {
+        size_t j = index.find('\n', i);
+        if (j == std::string_view::npos) j = index.size();
+        std::string_view id = trim(index.substr(i, j - i));
+        if (!id.empty()) out.emplace_back(id);
+        i = j + 1;
+    }
+    return out;
+}
+
+std::string format_progress(uint64_t done, uint64_t total, int width) {
+    constexpr double kMiB = 1024.0 * 1024.0;
+    char buf[96];
+    if (total == 0) {
+        std::snprintf(buf, sizeof(buf), "%.1f MiB", static_cast<double>(done) / kMiB);
+        return buf;
+    }
+    if (done > total) done = total;
+    const double frac = static_cast<double>(done) / static_cast<double>(total);
+    const int filled = static_cast<int>(frac * width);
+    std::string bar = "[" + std::string(static_cast<size_t>(filled), '#') + std::string(static_cast<size_t>(width - filled), '-') + "]";
+    std::snprintf(buf, sizeof(buf), " %5.1f%%  %.1f/%.1f MiB", frac * 100.0, static_cast<double>(done) / kMiB,
+                  static_cast<double>(total) / kMiB);
+    return bar + buf;
+}
+
+std::string one_line(std::string_view text, size_t max_bytes) {
+    std::string out;
+    out.reserve(std::min(text.size(), max_bytes) + 3);
+    for (char c : text) {
+        if (out.size() >= max_bytes) {
+            // Do not cut a UTF-8 sequence in half.
+            while (!out.empty() && (static_cast<unsigned char>(out.back()) & 0xC0) == 0x80) out.pop_back();
+            if (!out.empty() && (static_cast<unsigned char>(out.back()) & 0x80)) out.pop_back();
+            return out + "...";
+        }
+        out += (c == '\n' || c == '\r' || c == '\t') ? ' ' : c;
+    }
+    return out;
+}
+
+} // namespace agent::cli

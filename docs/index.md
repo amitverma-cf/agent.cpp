@@ -17,6 +17,7 @@ The library is designed around three principles:
 | Document | What it covers |
 |---|---|
 | [Getting Started](getting-started.md) | Build instructions, first program |
+| [The `agent` CLI](cli.md) | `agent setup`, `engine`, `model`, `chat`: config files, permissions, slash commands |
 | [Architecture](architecture.md) | System diagrams, memory model, data flow |
 | [API — Core Types](api/core.md) | `Result<T>`, `Error`, `ErrorCode`, `Arena` |
 | [API — Session](api/session.md) | `Config`, `Session`, `init()`, `AgentRuntime` |
