@@ -15,10 +15,10 @@ enum class EventType {
     OnInferenceComplete,   // fired immediately after infer returns
     OnToolCall,            // fired when a tool is about to be dispatched
     OnToolResult,          // fired after a tool returns its result
-    OnStateTransition,     // fired when a new FSM state is entered
+    OnStateTransition,     // fired when a graph node starts (payload = node name)
     OnCompression,         // fired after context compression completes
     OnPrune,               // fired after a sliding-window prune operation
-    OnSubAgentComplete,    // fired when a subagent FSM finishes
+    OnSubAgentComplete,    // fired per finished branch of a graph Parallel node (payload = branch entry node name)
 };
 ```
 
@@ -131,15 +131,17 @@ agent::register_event_hook(session, agent::EventType::OnToolResult,
     });
 ```
 
-### Track FSM state transitions
+### Track graph node transitions
 
 ```cpp
 agent::register_event_hook(session, agent::EventType::OnStateTransition,
     [](const agent::Event &ev, void *) {
-        std::string state(reinterpret_cast<const char*>(ev.payload.data()), ev.payload.size());
-        printf("FSM entered state: %s\n", state.c_str());
+        std::string node(reinterpret_cast<const char*>(ev.payload.data()), ev.payload.size());
+        printf("graph entered node: %s\n", node.c_str());
     });
 ```
+
+For a full per-run record (node start/end, state writes, tool calls, checkpoints) use `GraphRun::events` instead; see [graph.md](graph.md#event-log).
 
 ### Measure token usage with a custom accumulator
 
@@ -158,10 +160,13 @@ agent::register_event_hook(session, agent::EventType::OnInferenceComplete,
 
 ### Detect when a subagent finishes
 
+Fired once per successful branch of a graph `Parallel` node, on the calling thread after the branches have joined:
+
 ```cpp
 agent::register_event_hook(session, agent::EventType::OnSubAgentComplete,
-    [](const agent::Event &, void *) {
-        printf("A subagent just completed.\n");
+    [](const agent::Event &ev, void *) {
+        std::string branch(reinterpret_cast<const char*>(ev.payload.data()), ev.payload.size());
+        printf("Subagent branch '%s' completed.\n", branch.c_str());
     });
 ```
 
@@ -181,16 +186,16 @@ agent::register_event_hook(session, agent::EventType::OnCompression,
 
 ---
 
-## Combining with FlowHooks
+## Combining with ToolHooks
 
-`EventHook` and `FlowHook` serve different purposes:
+`EventHook` and `ToolHook` (set per graph Agent node in `GraphNode::hooks`) serve different purposes:
 
-| | `EventHook` | `FlowHook` |
+| | `EventHook` | `ToolHook` |
 |---|---|---|
-| Scope | Session-wide; fires for all conversations | FSM state-specific; fires only while that state's `on_transition` runs |
+| Scope | Session-wide; fires for all conversations | Node-specific; fires only while that Agent node runs |
 | Tool visibility | `OnToolCall` fires for all tools | Can be narrowed to a specific `tool_name` |
-| Result access | `OnToolResult` provides result bytes | `FlowHook::Post` receives `std::string_view result` |
-| Use case | Telemetry, logging, dashboards | State-scoped auditing, result post-processing, abort logic |
+| Result access | `OnToolResult` provides result bytes | `ToolHook::Post` receives `std::string_view result` and the node's `FlowMemory` |
+| Use case | Telemetry, logging, dashboards | Node-scoped auditing and logging |
 
 Use both together for comprehensive observability:
 
@@ -199,11 +204,12 @@ Use both together for comprehensive observability:
 agent::register_event_hook(session, agent::EventType::OnInferenceSubmit, start_timer, &timer);
 agent::register_event_hook(session, agent::EventType::OnInferenceComplete, stop_timer, &timer);
 
-// Per-state tool restriction enforcement (via FlowHook, not EventHook)
-static const agent::FlowHook kStateHooks[] = {
-    { .when = agent::FlowHook::When::Pre,
+// Node-scoped warning (via ToolHook, not EventHook)
+worker_node.hooks = {
+    { .when = agent::ToolHook::When::Pre,
       .tool_name = "delete_path",
-      .callback = [](auto &, auto &, auto, auto args, auto, void *) {
+      .callback = [](agent::Session &, agent::FlowMemory &, std::string_view, std::string_view args,
+                     std::string_view, void *) {
           printf("[WARN] agent is about to delete: %s\n", std::string(args).c_str());
       }
     },

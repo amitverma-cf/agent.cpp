@@ -118,6 +118,9 @@ struct NodeResult {
     std::string forced_next; // Loop: jump into the body, bypassing edges
 };
 
+// The Agent node's conversation in GraphState::histories (history_key, else the node name).
+const std::string &history_name(const GraphNode &node) { return node.history_key.empty() ? node.name : node.history_key; }
+
 FlowMemory &history_for(Exec &x, const std::string &node) {
     auto it = x.state.histories.find(node);
     if (it != x.state.histories.end()) return it->second;
@@ -177,7 +180,8 @@ bool pause_before_tools(Session &session, std::span<const ToolCallView> calls) {
     return false;
 }
 
-// Installs a node's system prompt for the duration of its turn(s), like step_flow does.
+// Installs a node's system prompt for the duration of its turn(s); the history keeps whatever
+// system message it had before.
 struct SystemPromptScope {
     FlowMemory &memory;
     bool injected = false;
@@ -211,7 +215,7 @@ struct SystemPromptScope {
 
 struct AmbientScope {
     std::span<const std::string_view> allowed = ambient::allowed_tools;
-    std::span<const FlowHook> hooks = ambient::active_hooks;
+    std::span<const ToolHook> hooks = ambient::active_hooks;
     ambient::ToolPauseFn pause = ambient::tool_pause_fn;
     bool paused = ambient::tools_paused;
 
@@ -223,9 +227,18 @@ struct AmbientScope {
     }
 };
 
-std::string run_approved_call(Exec &x, FlowMemory &memory, std::string_view node, const ToolCall &tc, const PendingResume &resume) {
+void fire_node_hooks(Session &session, FlowMemory &memory, const GraphNode &node, ToolHook::When when, const ToolCall &tc,
+                     std::string_view result) {
+    for (const auto &hook : node.hooks) {
+        if (hook.when != when || !hook.callback) continue;
+        if (!hook.tool_name.empty() && hook.tool_name != tc.name) continue;
+        hook.callback(session, memory, tc.name, tc.arguments, result, hook.user_data);
+    }
+}
+
+std::string run_approved_call(Exec &x, FlowMemory &memory, const GraphNode &node, const ToolCall &tc, const PendingResume &resume) {
     Session &session = x.session;
-    log_event(x.events, GraphEventType::ToolCall, node, tc.name, tc.arguments);
+    log_event(x.events, GraphEventType::ToolCall, node.name, tc.name, tc.arguments);
     trigger_event(session, EventType::OnToolCall, bytes_of(tc.name));
 
     PermissionDecision policy = PermissionDecision::Ask;
@@ -237,13 +250,15 @@ std::string run_approved_call(Exec &x, FlowMemory &memory, std::string_view node
         result = "Error: tool call denied by human reviewer";
         if (!resume.human_input.empty()) result += ": " + resume.human_input;
     } else {
+        fire_node_hooks(session, memory, node, ToolHook::When::Pre, tc, {});
         ambient::tool_call_preapproved = (policy == PermissionDecision::Ask);
         auto exec = execute_tool(session, tc.name, tc.arguments);
         ambient::tool_call_preapproved = false;
         result = exec.ok ? std::move(exec.value) : "Error: " + exec.error.message;
+        fire_node_hooks(session, memory, node, ToolHook::When::Post, tc, result);
     }
 
-    log_event(x.events, GraphEventType::ToolResult, node, tc.name, result);
+    log_event(x.events, GraphEventType::ToolResult, node.name, tc.name, result);
     trigger_event(session, EventType::OnToolResult, bytes_of(result));
     memory.stats.tool_calls++;
     {
@@ -258,18 +273,27 @@ Result<NodeResult> run_agent_node(Exec &x, const GraphNode &node, const PendingR
         return fail<NodeResult>(ErrorCode::InvalidConfig,
                                 "agent node '" + node.name + "': interrupt_before_tools is not supported inside parallel branches");
 
-    FlowMemory &memory = history_for(x, node.name);
+    std::string system_prompt = node.system_prompt;
+    if (node.context_provider) {
+        auto extra = node.context_provider(x.session, x.state, node.user_data);
+        if (!extra.ok) return fail<NodeResult>(extra.error.code, extra.error.message);
+        if (!extra.value.empty()) system_prompt = system_prompt.empty() ? std::move(extra.value) : extra.value + "\n" + system_prompt;
+    }
+
+    FlowMemory &memory = history_for(x, history_name(node));
     std::string prompt = node.prompt;
     if (!node.input_key.empty() && has_state(x.state, node.input_key)) prompt = std::string(get_state(x.state, node.input_key));
 
     std::vector<std::string_view> allowed(node.allowed_tools.begin(), node.allowed_tools.end());
     ToolLogCtx log_ctx{&x.events, node.name};
-    const FlowHook hooks[] = {
-        FlowHook{.when = FlowHook::When::Pre, .tool_name = {}, .callback = log_tool_pre, .user_data = &log_ctx},
-        FlowHook{.when = FlowHook::When::Post, .tool_name = {}, .callback = log_tool_post, .user_data = &log_ctx},
-    };
+    // The event-log hooks wrap the node's own hooks.
+    std::vector<ToolHook> hooks;
+    hooks.reserve(node.hooks.size() + 2);
+    hooks.push_back(ToolHook{.when = ToolHook::When::Pre, .tool_name = {}, .callback = log_tool_pre, .user_data = &log_ctx});
+    hooks.insert(hooks.end(), node.hooks.begin(), node.hooks.end());
+    hooks.push_back(ToolHook{.when = ToolHook::When::Post, .tool_name = {}, .callback = log_tool_post, .user_data = &log_ctx});
 
-    SystemPromptScope system_scope(memory, node.system_prompt);
+    SystemPromptScope system_scope(memory, system_prompt);
     AmbientScope ambient_scope;
     ambient::allowed_tools = allowed;
     ambient::active_hooks = hooks;
@@ -282,7 +306,7 @@ Result<NodeResult> run_agent_node(Exec &x, const GraphNode &node, const PendingR
         for (const auto &tc : resume->calls) {
             Message tool_msg;
             tool_msg.role = "tool";
-            tool_msg.content = run_approved_call(x, memory, node.name, tc, *resume);
+            tool_msg.content = run_approved_call(x, memory, node, tc, *resume);
             tool_msg.tool_call_id = tc.id;
             memory.history.push_back(std::move(tool_msg));
         }
@@ -467,6 +491,8 @@ Result<NodeResult> run_parallel_node(Exec &x, const GraphNode &node) {
 
     for (auto &b : branches)
         for (auto &e : b.events) x.events.push_back(std::move(e));
+    for (size_t i = 0; i < count; ++i)
+        if (branches[i].result.ok) trigger_event(x.session, EventType::OnSubAgentComplete, bytes_of(node.branches[i]));
 
     for (size_t i = 0; i < count; ++i) {
         if (!branches[i].result.ok)
@@ -474,7 +500,7 @@ Result<NodeResult> run_parallel_node(Exec &x, const GraphNode &node) {
                                     "parallel '" + node.name + "' branch '" + node.branches[i] + "': " + branches[i].result.error.message);
     }
 
-    // Join: every key and every Agent history must come from a single branch.
+    // Join: every key and every Agent history (history_key) must come from a single branch.
     std::map<std::string_view, size_t, std::less<>> key_owner;
     for (size_t i = 0; i < count; ++i) {
         for (const auto &key : branches[i].writes) {
@@ -490,8 +516,8 @@ Result<NodeResult> run_parallel_node(Exec &x, const GraphNode &node) {
         for (const auto &[name, memory] : branches[i].state.histories) {
             auto [it, inserted] = history_owner.emplace(name, i);
             if (!inserted)
-                return fail<NodeResult>(ErrorCode::InvalidConfig, "parallel '" + node.name + "': agent node '" + name +
-                                                                      "' ran in branches '" + node.branches[it->second] + "' and '" +
+                return fail<NodeResult>(ErrorCode::InvalidConfig, "parallel '" + node.name + "': agent history '" + name +
+                                                                      "' used in branches '" + node.branches[it->second] + "' and '" +
                                                                       node.branches[i] + "'");
         }
     }

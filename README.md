@@ -6,7 +6,7 @@ A modular, lightweight C++20 AI agent orchestration library for edge devices, of
 
 ## What it does
 
-agent.cpp provides a complete runtime for building AI agents on local inference backends (llama.cpp, ONNX Runtime, ... loaded as engine plugins), fully offline. It handles context management, tool calling, multi-agent scheduling, FSM-based agent flows, memory persistence, and observability — all with no heap allocations in the hot path.
+agent.cpp provides a complete runtime for building AI agents on local inference backends (llama.cpp, ONNX Runtime, ... loaded as engine plugins), fully offline. It handles context management, tool calling, graph workflows with parallel subagents, memory persistence, and observability — all with no heap allocations in the hot path.
 
 ---
 
@@ -16,8 +16,8 @@ agent.cpp provides a complete runtime for building AI agents on local inference 
 - **Data-oriented dispatch.** Providers, memory backends, and tools resolve through `constexpr` function-pointer tables — no virtual dispatch, no RTTI.
 - **Monadic error handling.** Every fallible function returns `Result<T>`. No exceptions anywhere.
 - **Single public header.** `#include <agent-cpp/agent.hpp>`. Backend headers are behind CMake flags.
-- **FSM executor.** Decompose agent workflows into named states, each with its own system prompt, tool allowlist, and pre/post hooks.
-- **Cooperative multi-agent scheduler.** Run parallel FSM subagents; llama.cpp subagents share one continuously-batched decode.
+- **Graph workflows.** LangGraph / ADK-style graphs of agent, function and tool nodes: per-node system prompt, tool allowlist and pre/post tool hooks, private or shared conversations, conditional edges, sequential / parallel / loop builders, checkpoints and human-in-the-loop interrupts. Load them from C++ or `agent.json`.
+- **Parallel subagents.** Parallel graph branches run concurrently on concurrent engines; llama.cpp branches share one continuously-batched decode.
 - **Automatic context management.** Sliding-window pruning and LLM-based compression keep conversations within the context budget automatically.
 - **Built-in tools.** Filesystem (8 tools), terminal, and context compressor — registered by default.
 - **Skills.** Load [SKILL.md](https://agentskills.io)-format capability packages from a directory; only name/description sit in context until the model calls `use_skill` to load the rest.
@@ -145,14 +145,16 @@ src/core/
   events.cpp                   -- event hook dispatch
   executor/
     turn_executor.cpp          -- run_turn, pruning, save/load_flow_memory
-    flow_executor.cpp          -- step_flow, run_flow
     ambient_turn.cpp           -- thread_local turn/hook/tool-allowlist/arena/json_parser state
   data/
     data_source_registry.cpp   -- register_data_source, query_data_source, bind_data_source_tool
   skills/
     skills_registry.cpp        -- load_skills_dir, read_skill_body, use_skill tool
-  scheduler/
-    scheduler.cpp              -- AgentScheduler
+  graph/
+    graph_executor.cpp         -- run_graph, resume_graph, parallel branches
+    graph_builders.cpp         -- make_graph / make_sequential / make_parallel / make_loop
+    graph_checkpoint.cpp       -- checkpoints, scoped state persistence
+    graph_json.cpp             -- agent.json loader
   providers/
     provider_ops.cpp           -- Mock + Engine dispatch
     engine_provider.cpp        -- adapter to engine plugins (engine_abi.h)
@@ -179,7 +181,7 @@ tools/
   store-sqlite/                -- agent_store_sqlite: SQLite KV store, sqlite-vec
 tests/
   unit/                        -- Catch2 tests: providers, memory, tools, hal, skills, permissions, ...
-  integration/                 -- session lifecycle, conversation, FSM tests
+  integration/                 -- session lifecycle, conversation tests
 vendor/
   llama.cpp / simdjson / cpp-httplib / sqlite / sqlite-vec / catch2
 ```

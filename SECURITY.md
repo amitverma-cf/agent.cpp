@@ -9,7 +9,7 @@ Please report vulnerabilities via the private security advisory feature or by co
 ## Covered Topics
 
 Vulnerabilities within the following areas are considered high priority:
-- **Core Logic**: Memory safety issues in the Arena allocator or FSM executor.
+- **Core Logic**: Memory safety issues in the Arena allocator, turn executor or graph runtime.
 - **Hardware Abstraction**: Vulnerabilities in the abstraction layer that could lead to privilege escalation or unauthorized system access.
 - **Tool Execution**: Insecure handling of tool parameters that could lead to command injection.
 - **Input Sanitization**: Failures to properly sanitize or validate outputs before action execution.

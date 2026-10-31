@@ -103,5 +103,29 @@ int main() {
         std::cout << "turn 2: " << r2.value << "\n";
     }
 
+    {
+        // A two-step graph: both Agent nodes continue one conversation (same history_key),
+        // each under its own system prompt.
+        agent::GraphNode plan{
+            .name = "plan", .kind = agent::GraphNodeKind::Agent, .system_prompt = "You plan.", .input_key = "task", .history_key = "demo"};
+        agent::GraphNode act{.name = "act",
+                             .kind = agent::GraphNodeKind::Agent,
+                             .system_prompt = "You act.",
+                             .prompt = "Carry out the plan.",
+                             .output_key = "result",
+                             .history_key = "demo"};
+        agent::Graph graph = agent::make_sequential("plan_act", {agent::make_graph(plan), agent::make_graph(act)});
+
+        agent::GraphRun run;
+        run.thread_id = "basic_graph";
+        agent::set_state(run.state, "task", "Count to three.");
+        auto res = agent::run_graph(session, graph, run);
+        if (!res.ok) {
+            print_error(res.error);
+            return 1;
+        }
+        std::cout << "graph: " << agent::get_state(run.state, "result") << "\n";
+    }
+
     return 0;
 }

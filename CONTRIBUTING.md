@@ -33,7 +33,7 @@ Before submitting your PR:
 - **Test your changes**:
   - Run all unit and integration tests: tests are written with [Catch2](https://github.com/catchorg/Catch2) (`tests/`), built as the `test_agent` executable, and registered individually with CTest via `catch_discover_tests`. Run all of them with `ctest --test-dir build --output-on-failure`, or filter to a subsystem with Catch2 tags, e.g. `./build/test_agent "[memory]"`.
   - Build with `-DAGENT_ENABLE_SANITIZERS=ON` (AddressSanitizer + UBSan) and run `ctest`.
-  - For changes touching concurrency (scheduler, memory backend), also run under valgrind `--tool=helgrind`.
+  - For changes touching concurrency (parallel graph branches, memory backend), also run under valgrind `--tool=helgrind`.
   - Check coverage on changes touching `src/`: build with `-DAGENT_ENABLE_COVERAGE=ON`, run `ctest`, then `gcovr -r . --object-directory build --exclude 'vendor/.*' --exclude 'tests/.*' --exclude 'examples/.*' --gcov-ignore-parse-errors=negative_hits.warn`. The `--gcov-ignore-parse-errors` flag works around a long-standing `gcov` bug ([GCC #68080](https://gcc.gnu.org/bugzilla/show_bug.cgi?id=68080)) that emits a bogus negative branch-hit count on some files; it's not something in this codebase.
 - **Atomic Changes**: Create separate PRs for each feature or fix.
 

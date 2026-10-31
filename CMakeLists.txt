@@ -31,9 +31,7 @@ add_library(agent
     src/core/arena.cpp
     src/core/events.cpp
     src/core/executor/turn_executor.cpp
-    src/core/executor/flow_executor.cpp
     src/core/executor/ambient_turn.cpp
-    src/core/scheduler/scheduler.cpp
     src/core/graph/graph_builders.cpp
     src/core/graph/graph_checkpoint.cpp
     src/core/graph/graph_executor.cpp
@@ -182,7 +180,6 @@ add_executable(test_agent
     tests/unit/test_context_compressor.cpp
     tests/unit/test_tools_ops.cpp
     tests/unit/test_events.cpp
-    tests/unit/test_scheduler.cpp
     tests/unit/test_arena.cpp
     tests/unit/test_skills.cpp
     tests/unit/test_permissions.cpp
@@ -193,7 +190,7 @@ add_executable(test_agent
     tests/unit/test_graph_json.cpp
     tests/unit/test_mcp.cpp
     tests/integration/test_session.cpp
-    tests/integration/test_flow.cpp
+    tests/integration/test_turn.cpp
 )
 target_include_directories(test_agent PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/vendor/catch2

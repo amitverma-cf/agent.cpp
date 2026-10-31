@@ -87,7 +87,7 @@ TEST_CASE("agent.json: agent nodes, static edges and hints", "[graph_json]") {
         "nodes": [
             {"name": "first", "kind": "agent", "system_prompt": "be brief", "input_key": "topic", "output_key": "draft"},
             {"name": "second", "kind": "agent", "input_key": "draft", "output_key": "final",
-             "allowed_tools": ["echo_args"], "interrupt_before_tools": false}
+             "allowed_tools": ["echo_args"], "interrupt_before_tools": false, "history_key": "shared"}
         ],
         "edges": [{"from": "first", "to": "second"}, {"from": "second", "to": "__end__"}]
     })");
@@ -102,6 +102,8 @@ TEST_CASE("agent.json: agent nodes, static edges and hints", "[graph_json]") {
     REQUIRE(lg.graph.nodes.size() == 2);
     CHECK(lg.graph.nodes[0].system_prompt == "be brief");
     CHECK(lg.graph.nodes[1].allowed_tools == std::vector<std::string>{"echo_args"});
+    CHECK(lg.graph.nodes[0].history_key.empty());
+    CHECK(lg.graph.nodes[1].history_key == "shared");
 
     agent::GraphRun run;
     run.thread_id = "static";
@@ -111,6 +113,9 @@ TEST_CASE("agent.json: agent nodes, static edges and hints", "[graph_json]") {
     CHECK(run.status == agent::GraphRunStatus::Completed);
     CHECK(agent::get_state(run.state, "draft") == "echo: cats");
     CHECK(agent::get_state(run.state, "final") == "echo: echo: cats");
+    CHECK(run.state.histories.count("first") == 1);
+    CHECK(run.state.histories.count("shared") == 1);
+    CHECK(run.state.histories.count("second") == 0);
 }
 
 TEST_CASE("agent.json: routes on state equality with a default", "[graph_json]") {

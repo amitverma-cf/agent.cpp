@@ -58,7 +58,7 @@ Result<std::string> default_execute(Session &session, std::string_view name, std
                 break;
             }
         }
-        if (!allowed) return fail<std::string>(ErrorCode::KeyNotFound, "Tool not allowed in current Flow state: " + std::string(name));
+        if (!allowed) return fail<std::string>(ErrorCode::KeyNotFound, "Tool not allowed for the current agent node: " + std::string(name));
     }
 
     if (session.config.permission_check) {

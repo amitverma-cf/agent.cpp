@@ -6,7 +6,7 @@
 namespace agent::ambient {
 
 extern thread_local FlowMemory *active_memory;
-extern thread_local std::span<const FlowHook> active_hooks;
+extern thread_local std::span<const ToolHook> active_hooks;
 
 extern thread_local std::span<const std::string_view> allowed_tools;
 

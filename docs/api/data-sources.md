@@ -2,7 +2,7 @@
 
 `#include <agent-cpp/agent.hpp>`
 
-`DataSource` is a pluggable, open-ended registry for backends a `Flow` needs beyond the library's own conversation-history persistence — RAG/vector search, SQLite, GraphRAG, arbitrary files, or anything else. It is deliberately separate from `MemoryConfig`/`StoreOps` (see [memory.md](memory.md)), which stays a plain key-value store for the library's internal use.
+`DataSource` is a pluggable, open-ended registry for backends an agent needs beyond the library's own conversation-history persistence — RAG/vector search, SQLite, GraphRAG, arbitrary files, or anything else. It is deliberately separate from `MemoryConfig`/`StoreOps` (see [memory.md](memory.md)), which stays a plain key-value store for the library's internal use.
 
 ---
 
@@ -48,9 +48,9 @@ Result<void> register_data_source(Session &session, DataSource ds);
 Result<std::string> query_data_source(Session &session, std::string_view name, std::string_view query);
 ```
 
-`register_data_source` stores a `DataSource` in `session.data_sources`, keyed by `ds.name`. `query_data_source` looks it up by name and calls its `query` function. Use these directly when you want to query a data source from your own application code (e.g. from a `FlowState::context_provider`, see [fsm.md](fsm.md#context_provider)).
+`register_data_source` stores a `DataSource` in `session.data_sources`, keyed by `ds.name`. `query_data_source` looks it up by name and calls its `query` function. Use these directly when you want to query a data source from your own application code (e.g. from a graph Agent node's `context_provider`, see [graph.md](graph.md#per-run-context-context_provider)).
 
-Like `session.config.tools`, `session.data_sources` isn't mutex-guarded: call `register_data_source` during single-threaded setup, not concurrently with an active turn or scheduler `pump()` on another thread. `query_data_source` (read-only) is safe to call from any thread once registration is done.
+Like `session.config.tools`, `session.data_sources` isn't mutex-guarded: call `register_data_source` during single-threaded setup, not concurrently with an active turn on another thread. `query_data_source` (read-only) is safe to call from any thread once registration is done.
 
 ```cpp
 struct FakeVectorStore {
@@ -105,28 +105,25 @@ session.config.tools.push_back(docs_tool);
 agent::rebuild_tool_index(session);
 ```
 
-`FlowState::allowed_tools` (see [fsm.md](fsm.md#allowed_tools)) scopes which data-source tools are visible in which state, for free — the same allowlist mechanism used for every other tool.
+A graph Agent node's `allowed_tools` (see [graph.md](graph.md#system-prompt-and-tool-allowlist)) scopes which data-source tools are visible to which node, for free — the same allowlist mechanism used for every other tool.
 
 ---
 
 ## Automatic context injection (classic RAG)
 
-For the "retrieve relevant chunks, stuff them into context" pattern — without requiring the model to make an explicit tool call — use `FlowState::context_provider` instead. It's called before `on_transition`, and its return value is folded into that state's system prompt for that turn only. See [fsm.md](fsm.md#context_provider) for the full example.
+For the "retrieve relevant chunks, stuff them into context" pattern — without requiring the model to make an explicit tool call — use a graph Agent node's `context_provider` instead. It's called before the node's turn, and its return value is folded into that node's system prompt for that turn only. See [graph.md](graph.md#per-run-context-context_provider).
 
 ```cpp
-std::string_view inject_docs_context(agent::Session &session, agent::FlowMemory &, void *) {
-    static thread_local std::string buf;
-    auto res = agent::query_data_source(session, "product_docs", "installation steps");
-    if (!res.ok) return {};
-    buf = "Relevant docs:\n" + res.value;
-    return buf;
+agent::Result<std::string> inject_docs_context(agent::Session &session, const agent::GraphState &state, void *) {
+    auto res = agent::query_data_source(session, "product_docs", agent::get_state(state, "question"));
+    if (!res.ok) return agent::ok(std::string());   // answer without the extra context
+    return agent::ok("Relevant docs:\n" + res.value);
 }
 
-agent::FlowState answer_state{
-    .state_id         = "answer",
-    .context_provider = inject_docs_context,
-    .on_transition    = answer_fn,
-};
+agent::GraphNode answer{.name = "answer", .kind = agent::GraphNodeKind::Agent,
+                        .system_prompt = "Answer using the provided docs context.",
+                        .input_key = "question", .output_key = "answer",
+                        .context_provider = inject_docs_context};
 ```
 
 ---
@@ -137,7 +134,7 @@ agent::FlowState answer_state{
 |---|---|---|
 | Who decides to query | The model, via a tool call | You, unconditionally every time the state runs |
 | Best for | Backends the model should reason about ("should I look this up?") | Always-relevant context the model shouldn't have to ask for |
-| Scoping | `FlowState::allowed_tools` | Per-state, since `context_provider` is a `FlowState` field |
+| Scoping | `GraphNode::allowed_tools` | Per-node, since `context_provider` is a `GraphNode` field |
 
 Both can be used together — e.g. always inject a short summary via `context_provider`, and also expose a tool for deeper on-demand queries.
 
@@ -177,4 +174,4 @@ std::string payload = R"({"vector": [)" + join_floats(query_vec) + R"(], "top_k"
 auto res = agent::query_data_source(session, "product_docs", payload);
 ```
 
-Wire it up to a `Flow` exactly like any other `DataSource` — `bind_data_source_tool` for model-initiated lookups, or a `context_provider` that embeds the user's message and injects the top matches automatically (the classic RAG pattern). Both need you to call your embedding model first; agent.cpp's part starts at "here's a vector, find the nearest ones."
+Wire it up exactly like any other `DataSource` — `bind_data_source_tool` for model-initiated lookups, or a `context_provider` that embeds the user's message and injects the top matches automatically (the classic RAG pattern). Both need you to call your embedding model first; agent.cpp's part starts at "here's a vector, find the nearest ones."

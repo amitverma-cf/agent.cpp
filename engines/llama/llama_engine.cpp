@@ -1,7 +1,7 @@
 // agent-engine-llama: llama.cpp text generation, embeddings and reranking as an agent.cpp engine plugin.
 //
 // One instance = one model + one llama_context with n_seq_max = "parallel" sequence slots.
-// Concurrent run() calls (AgentScheduler subagents) are continuously batched: each generation's
+// Concurrent run() calls (parallel graph branches) are continuously batched: each generation's
 // next-token step joins a shared round, and one llama_decode serves every active sequence.
 //
 // Prompts are rendered with the model's own Jinja chat template and the reply is parsed into

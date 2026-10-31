@@ -249,10 +249,10 @@ enum class EventType {
     OnInferenceComplete,
     OnToolCall,
     OnToolResult,
-    OnStateTransition,
+    OnStateTransition, // a graph node starts; payload = node name
     OnCompression,
     OnPrune,
-    OnSubAgentComplete,
+    OnSubAgentComplete, // a Parallel node's branch finished (fired after the join); payload = the branch's entry node name
 };
 
 struct Event {
@@ -304,7 +304,11 @@ struct FlowMemory {
 
 struct Session;
 
-struct FlowHook {
+// Callback fired around each tool call made inside run_turn (and around tool calls approved on a
+// graph resume). Attach them to a graph Agent node via GraphNode::hooks; they are active only while
+// that node runs. tool_name empty = every tool, otherwise only that tool (the view must outlive the
+// node). memory is the conversation that issued the call; result is empty for Pre.
+struct ToolHook {
     enum class When { Pre, Post };
     When when = When::Pre;
     std::string_view tool_name;
@@ -313,33 +317,6 @@ struct FlowHook {
                             std::string_view result, void *user_data);
     HookFn callback = nullptr;
     void *user_data = nullptr;
-};
-
-struct FlowState {
-    std::string_view state_id;
-    std::string_view system_prompt;
-    std::span<const std::string_view> allowed_tools;
-    std::span<const FlowHook> hooks;
-
-    bool isolated_memory = false;
-
-    using ContextProviderFn = std::string_view (*)(Session &session, FlowMemory &memory, void *context);
-    ContextProviderFn context_provider = nullptr;
-
-    using TransitionFn = Result<std::string_view> (*)(Session &session, FlowMemory &memory, void *context);
-    TransitionFn on_transition = nullptr;
-};
-
-struct Flow {
-    std::string id;
-    std::span<const FlowState> states;
-
-    FlowMemory memory;
-    std::unordered_map<std::string, FlowMemory> isolated_memories;
-
-    size_t current_state_index = 0;
-    bool has_started = false;
-    bool has_finished = false;
 };
 
 struct Config {
@@ -365,6 +342,8 @@ struct Config {
     bool auto_default_tools = true;
     bool enable_file_logging = false;
 
+    // Concurrent engines only: worker arenas (one per thread) for the branches of a graph Parallel
+    // node; the llama engine also sizes its continuous-batching sequence slots from it.
     int max_parallel_subagents = 4;
 
     LogFn logger = nullptr;
@@ -454,34 +433,6 @@ struct AgentRuntime {
     AgentRuntime &operator=(AgentRuntime &&) = delete;
 };
 
-struct SubAgentResult {
-    std::string id;
-    bool ok = false;
-    Error error;
-    TurnStats stats;
-};
-
-class AgentScheduler {
-  public:
-    Result<void> spawn(std::string id, Flow flow, void *context = nullptr);
-
-    Result<void> pump(Session &session);
-    Result<void> run_until_done(Session &session);
-
-    bool all_done() const;
-    std::vector<SubAgentResult> results() const;
-
-  private:
-    struct SubAgent {
-        std::string id;
-        Flow flow;
-        void *context = nullptr;
-        bool done = false;
-        SubAgentResult result;
-    };
-    std::vector<SubAgent> subagents_;
-};
-
 // -------------------------- Lifecycle --------------------------
 
 void init_backend();
@@ -534,9 +485,6 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &memory, st
 void request_cancel(Session &session);
 void clear_cancel(Session &session);
 
-Result<void> run_flow(Session &session, void *context, Flow &flow);
-Result<bool> step_flow(Session &session, void *context, Flow &flow);
-
 Result<void> compress_context(Session &session, FlowMemory &memory, size_t keep_recent = 6);
 
 Result<void> save_flow_memory(Session &session, const FlowMemory &memory);
@@ -578,7 +526,7 @@ inline constexpr std::string_view kGraphEnd = "__end__";
 // Write through set_state() so the runtime logs, persists and conflict-checks the write.
 struct GraphState {
     std::map<std::string, std::string, std::less<>> values;
-    // Conversation history of each Agent node, keyed by node name.
+    // Agent node conversations, keyed by GraphNode::history_key (default: the node name).
     std::map<std::string, FlowMemory, std::less<>> histories;
 
     // Keys written via set_state() that the runtime has not processed yet.
@@ -604,9 +552,12 @@ using GraphRouterFn = Result<std::string_view> (*)(Session &session, const Graph
 using GraphToolArgsFn = Result<std::string> (*)(Session &session, const GraphState &state, void *user_data);
 // make_loop termination test, checked after every iteration.
 using GraphUntilFn = Result<bool> (*)(Session &session, const GraphState &state, void *user_data);
+// Agent node: extra system-prompt text computed per run of the node (e.g. retrieved context). An
+// empty result adds nothing; an error fails the node.
+using GraphContextFn = Result<std::string> (*)(Session &session, const GraphState &state, void *user_data);
 
 enum class GraphNodeKind {
-    Agent,    // run_turn on the node's own FlowMemory with system_prompt + allowed_tools
+    Agent,    // run_turn on the node's FlowMemory (see history_key) with system_prompt + allowed_tools
     Function, // GraphFunctionFn
     Tool,     // execute_tool(tool_name, args)
     Parallel, // fan out to branches, join, then follow this node's own edge (make_parallel)
@@ -629,6 +580,15 @@ struct GraphNode {
     // configured, only before calls it rates Ask). The calls are exposed in
     // GraphRun::pending_tool_calls; resume_graph approves or denies them.
     bool interrupt_before_tools = false;
+    // Agent: key into GraphState::histories. Empty = the node name (a private conversation). Agent
+    // nodes with the same history_key continue one shared conversation.
+    std::string history_key;
+    // Agent: called before each run of the node; its text is prepended to system_prompt for that
+    // run only (nothing is written to the history). Receives user_data.
+    GraphContextFn context_provider = nullptr;
+    // Agent: Pre/Post tool hooks active while this node runs. Inside a Parallel node's branches they
+    // may be called from worker threads.
+    std::vector<ToolHook> hooks;
 
     GraphFunctionFn function = nullptr; // Function
 
@@ -641,7 +601,7 @@ struct GraphNode {
     int max_iterations = 1;       // Loop
     GraphUntilFn until = nullptr; // Loop: optional early exit
 
-    void *user_data = nullptr; // passed to function / tool_args / until
+    void *user_data = nullptr; // passed to function / tool_args / until / context_provider
 
     // Where the run goes when this node's transition resolves to kGraphEnd. Empty = the graph ends.
     // Set by the builders to chain composed steps; a branch of a Parallel node ends when it reaches

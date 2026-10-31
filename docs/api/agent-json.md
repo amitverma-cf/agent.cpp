@@ -88,7 +88,7 @@ Every node has a `name` and a `kind`. Names must be unique, non-empty, not `"__e
 
 | `kind` | Fields | Runtime node |
 |---|---|---|
-| `agent` | `system_prompt`, `prompt`, `input_key`, `output_key`, `allowed_tools` (array), `interrupt_before_tools` (bool) | `GraphNodeKind::Agent`. Same semantics as in [graph.md](graph.md). A warning is given when there is neither `prompt` nor `input_key` |
+| `agent` | `system_prompt`, `prompt`, `input_key`, `output_key`, `allowed_tools` (array), `interrupt_before_tools` (bool), `history_key` (agent nodes with the same key share one conversation) | `GraphNodeKind::Agent`. Same semantics as in [graph.md](graph.md#agent-nodes). `hooks` and `context_provider` are C++ only. A warning is given when there is neither `prompt` nor `input_key` |
 | `tool` | `tool` (required), `args` (object), `input_key`, `output_key` | `GraphNodeKind::Tool`. `args` are sent as static JSON arguments, otherwise `state[input_key]` is used, otherwise `{}`. When both are set, `args` wins (with a warning) |
 | `function` | `function` (required) | `GraphNodeKind::Function`, with the function registered under that name |
 | `parallel` | `branches` (required, non-empty array of node names) | `GraphNodeKind::Parallel` |
@@ -157,7 +157,7 @@ The checks cover: types of every field, required fields, unknown kinds, duplicat
 ```text
 document     := { name?, description?, engine?, model?, entry?, max_steps?, mcp_servers?: [mcp_server], nodes: [node, ...], edges?: [edge] }
 mcp_server   := { name, command, args?: [string], env?: {string: string}, timeout_ms?: int>0, working_directory? }
-node         := { name, kind: "agent",      system_prompt?, prompt?, input_key?, output_key?, allowed_tools?: [string], interrupt_before_tools?: bool }
+node         := { name, kind: "agent",      system_prompt?, prompt?, input_key?, output_key?, allowed_tools?: [string], interrupt_before_tools?: bool, history_key? }
               | { name, kind: "tool",       tool, args?: object, input_key?, output_key? }
               | { name, kind: "function",   function }
               | { name, kind: "parallel",   branches: [node name, ...] }

@@ -3,7 +3,7 @@
 namespace agent::ambient {
 
 thread_local FlowMemory *active_memory = nullptr;
-thread_local std::span<const FlowHook> active_hooks;
+thread_local std::span<const ToolHook> active_hooks;
 thread_local std::span<const std::string_view> allowed_tools;
 thread_local size_t worker_arena_index = 0;
 thread_local simdjson::ondemand::parser json_parser;

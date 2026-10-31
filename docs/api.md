@@ -325,10 +325,10 @@ enum class EventType {
     OnInferenceComplete,   // infer returned
     OnToolCall,            // tool call dispatched (payload = tool name bytes)
     OnToolResult,          // tool result received (payload = result bytes)
-    OnStateTransition,     // FSM state entered (payload = state_id bytes)
+    OnStateTransition,     // graph node started (payload = node name bytes)
     OnCompression,         // context compression completed
     OnPrune,               // history sliding-window prune completed
-    OnSubAgentComplete,    // subagent FSM finished
+    OnSubAgentComplete,    // graph Parallel branch finished (payload = branch entry node name)
 };
 ```
 
@@ -401,18 +401,18 @@ struct FlowMemory {
 };
 ```
 
-You create this on the stack or heap and pass it by reference to `run_turn` and `step_flow`. Its lifetime must exceed every call that uses it. `save_flow_memory`/`load_flow_memory` persist/restore it via the memory backend (see [Memory](#memory-1) below).
+You create this on the stack or heap and pass it by reference to `run_turn` (graph Agent nodes keep theirs in `GraphState::histories`). Its lifetime must exceed every call that uses it. `save_flow_memory`/`load_flow_memory` persist/restore it via the memory backend (see [Memory](#memory-1) below).
 
 ---
 
-## FSM types
+## Tool hooks
 
-### `FlowHook`
+### `ToolHook`
 
-Pre/post callback around tool calls within an FSM state.
+Pre/post callback around tool calls, attached to a graph Agent node (`GraphNode::hooks`) and active only while that node runs. See [graph.md](api/graph.md#tool-hooks).
 
 ```cpp
-struct FlowHook {
+struct ToolHook {
     enum class When { Pre, Post };
     When when = When::Pre;
 
@@ -421,7 +421,7 @@ struct FlowHook {
     std::string_view tool_name;
 
     using HookFn = void (*)(Session &session,
-                            FlowMemory &state,
+                            FlowMemory &memory,
                             std::string_view tool_name,
                             std::string_view args,
                             std::string_view result,  // empty for Pre hooks
@@ -431,58 +431,7 @@ struct FlowHook {
 };
 ```
 
-### `FlowState`
-
-One node in the state machine.
-
-```cpp
-struct FlowState {
-    std::string_view state_id;
-
-    // Injected as memory.history[0] for the duration of on_transition.
-    // Empty = leave system message unchanged.
-    std::string_view system_prompt;
-
-    // Tool allowlist. Empty span = all session tools are available.
-    std::span<const std::string_view> allowed_tools;
-
-    // Pre/post tool-call hooks active while in this state.
-    std::span<const FlowHook> hooks;
-
-    // true => this state uses Flow::isolated_memories[state_id] instead of Flow::memory.
-    bool isolated_memory = false;
-
-    // Optional. Called before on_transition; its return value is folded into
-    // effective_system_prompt for this turn only (see docs/api/data-sources.md).
-    using ContextProviderFn = std::string_view (*)(Session &session, FlowMemory &memory,
-                                                   void *context);
-    ContextProviderFn context_provider = nullptr;
-
-    // Required. Returns the next state_id, or "exit" / "" to terminate the FSM.
-    using TransitionFn = Result<std::string_view>(*)
-                         (Session &session, FlowMemory &memory, void *context);
-    TransitionFn on_transition = nullptr;
-};
-```
-
-### `Flow`
-
-Container for the FSM runtime state plus the memory it drives. Not safe to step concurrently on the same instance (see [scheduler.md](api/scheduler.md)).
-
-```cpp
-struct Flow {
-    std::string id;
-    std::span<const FlowState> states;  // first entry = entry state; caller keeps storage alive
-
-    FlowMemory memory;                                          // shared by default
-    std::unordered_map<std::string, FlowMemory> isolated_memories;  // used by isolated_memory states
-
-    // Internal -- managed by step_flow / run_flow. Do not modify.
-    size_t current_state_index = 0;
-    bool   has_started         = false;
-    bool   has_finished        = false;
-};
-```
+Multi-step workflows (per-node system prompts and tool allowlists, shared or private conversations, parallel subagents, checkpoints, interrupts) are graphs: `Graph`, `GraphNode`, `run_graph`, `resume_graph`, `make_sequential` / `make_parallel` / `make_loop`. See [graph.md](api/graph.md) and, for JSON graphs, [agent-json.md](api/agent-json.md).
 
 ---
 
@@ -575,8 +524,8 @@ struct Config {
     // File logging
     bool enable_file_logging  = false;  // write timestamped log to workspace_dir/logs/
 
-    // Parallel subagent bound for concurrent engines (llama engine: continuous batching)
-    // (continuous-batching sequence slots).
+    // Parallel graph branches on concurrent engines: worker threads / arenas
+    // (llama engine: continuous-batching sequence slots).
     int max_parallel_subagents = 4;
 
     LogFn logger          = nullptr;
@@ -588,7 +537,7 @@ struct Config {
 
 ## Session
 
-Move-only handle to all session state. Do not copy. Do not share between threads (aside from the specific concurrency AgentScheduler already provides -- see [scheduler.md](api/scheduler.md)).
+Move-only handle to all session state. Do not copy. Do not share between threads (aside from the specific concurrency parallel graph branches already provide -- see [graph.md](api/graph.md#parallel-execution)).
 
 ```cpp
 struct Session {
@@ -597,7 +546,7 @@ struct Session {
     SessionStats stats;
 
     // internal fields omitted -- do not access directly. Notably: worker_arenas (one per
-    // parallel scheduler worker), retained_data_sources (keeps bind_data_source_tool's
+    // parallel graph branch thread), retained_data_sources (keeps bind_data_source_tool's
     // DataSources alive), tool_by_name, tools_system_prompt, data_sources, log_file,
     // stats_mutex/log_mutex/event_mutex.
 };
@@ -679,16 +628,17 @@ Result<void> save_flow_memory(Session &session, const FlowMemory &memory);
 Result<void> load_flow_memory(Session &session, FlowMemory &memory);
 ```
 
-### FSM
+### Graph runtime
 
 ```cpp
-// Run the FSM to completion (loops step_flow until finished or error).
-Result<void> run_flow(Session &session, void *context, Flow &flow);
-
-// Advance exactly one FSM state transition.
-// Returns Result<bool>: true = still running, false = finished.
-Result<bool> step_flow(Session &session, void *context, Flow &flow);
+Result<void> run_graph(Session &session, const Graph &graph, GraphRun &run);
+Result<void> resume_graph(Session &session, const Graph &graph, std::string_view thread_id, GraphRun &run,
+                          std::string_view human_input = {});
+Result<void> resume_graph(Session &session, const Graph &graph, std::string_view thread_id, GraphRun &run,
+                          PermissionDecision decision, std::string_view human_input = {});
 ```
+
+See [graph.md](api/graph.md) for the graph types and builders.
 
 ### Memory
 
@@ -756,36 +706,9 @@ void reset_stats(Session &session);
 ```cpp
 // Clear the provider's KV cache. No-op for providers that don't expose cache control.
 // For llama.cpp: calls llama_memory_clear on the model context -- clears every active
-// sequence's KV, so only call this when you know no other Flow has a generation in
-// flight on this Session.
+// sequence's KV, so only call this when you know no other turn (e.g. a parallel graph
+// branch) has a generation in flight on this Session.
 Result<void> clear_provider_kv_cache(Session &session);
-```
-
----
-
-## AgentScheduler
-
-Multi-agent scheduler. `pump()`/`run_until_done()` internally dispatch across real OS threads for concurrent engines (bounded by `Config::max_parallel_subagents`), and sequentially otherwise; see [scheduler.md](api/scheduler.md) for the concurrency model per provider. `AgentScheduler`'s own methods (`spawn`, `pump`, etc.) are not thread-safe themselves — call them from one thread.
-
-```cpp
-class AgentScheduler {
-public:
-    // Register a new subagent FSM. Returns InvalidConfig if id is already used.
-    // context is passed through to each step_flow call for that executor.
-    Result<void> spawn(std::string id, Flow flow, void *context = nullptr);
-
-    // Advance all pending subagents one FSM step each.
-    Result<void> pump(Session &session);
-
-    // Loop pump() until all subagents are done.
-    Result<void> run_until_done(Session &session);
-
-    // True when every spawned subagent has finished (success or error).
-    bool all_done() const;
-
-    // Return a copy of all subagent results (populated as agents complete).
-    std::vector<SubAgentResult> results() const;
-};
 ```
 
 ---

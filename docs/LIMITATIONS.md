@@ -35,7 +35,6 @@ Status as of 2026-10-31. Each entry says what breaks, why, and the planned fix. 
 | The task for non-chat engines is inferred as "TEXT_GEN, else the lowest capability bit". Multi-capability engines (sherpa: ASR+TTS) route by content as a workaround. | Explicit task on the public API (e.g. `InferRequest::task`, `run_task(...)`), which already exists internally as `providers::infer_task`. |
 | `agent_engine_v1` has no struct-size field, so it can't grow compatibly. | Add `struct_size` to the request/response/engine structs in ABI v2. |
 | Cancel granularity differs per engine: ONNX only before `Run()`, llama per token, sd.cpp per step, sherpa per sentence. | Document per engine; the engine host makes hard cancel (kill) possible. |
-| `Flow`/`AgentScheduler` duplicate the graph runtime. | Being removed; the graph runtime replaces them. |
 
 ## 5. Graph runtime
 
