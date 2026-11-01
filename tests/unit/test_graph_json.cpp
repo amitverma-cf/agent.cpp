@@ -501,9 +501,9 @@ TEST_CASE("agent.json: a sandboxed MCP server is started under its policy", "[gr
     auto session = make_session();
     const std::string server = AGENT_TEST_FAKE_MCP_SERVER_PATH;
     auto json = [&](std::string_view name, std::string_view sandbox) {
-        return std::string(R"({"mcp_servers": [{"name": ")") + std::string(name) + R"(", "command": ")" + server +
-               R"(", "sandbox": )" + std::string(sandbox) + R"(}], "nodes": [{"name": "t", "kind": "tool", "tool": ")" +
-               std::string(name) + R"(.echo", "args": {"text": "boxed"}, "output_key": "out"}]})";
+        return std::string(R"({"mcp_servers": [{"name": ")") + std::string(name) + R"(", "command": ")" + server + R"(", "sandbox": )" +
+               std::string(sandbox) + R"(}], "nodes": [{"name": "t", "kind": "tool", "tool": ")" + std::string(name) +
+               R"(.echo", "args": {"text": "boxed"}, "output_key": "out"}]})";
     };
 
     auto boxed = agent::load_graph_json(session, json("boxed", R"({"network": "deny"})"));

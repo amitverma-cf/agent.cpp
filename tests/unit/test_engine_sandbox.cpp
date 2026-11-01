@@ -9,6 +9,7 @@
 #include "hal/sandbox.hpp"
 
 #include <agent-cpp/agent.hpp>
+#include <agent-cpp/engine_abi.h>
 #include <catch_amalgamated.hpp>
 #include <cctype>
 #include <cstdlib>
@@ -26,12 +27,12 @@ namespace fs = std::filesystem;
 
 const std::string kRoot = "/tmp/agent_test_engine_sandbox";
 
-const char *env(const char *name) {
+[[maybe_unused]] const char *env(const char *name) {
     const char *v = std::getenv(name);
     return (v && *v) ? v : nullptr;
 }
 
-std::string fresh_dir(const std::string &name) {
+[[maybe_unused]] std::string fresh_dir(const std::string &name) {
     const std::string dir = kRoot + "/" + name;
     std::error_code ec;
     fs::remove_all(dir, ec);
@@ -39,17 +40,17 @@ std::string fresh_dir(const std::string &name) {
     return dir;
 }
 
-void write_file(const fs::path &p, const std::string &content) {
+[[maybe_unused]] void write_file(const fs::path &p, const std::string &content) {
     fs::create_directories(p.parent_path());
     std::ofstream(p, std::ios::binary) << content;
 }
 
-std::string lower(std::string s) {
+[[maybe_unused]] std::string lower(std::string s) {
     for (char &c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
 }
 
-bool landlock() { return agent::hal::sandbox_support().landlock_abi > 0; }
+[[maybe_unused]] bool landlock() { return agent::hal::sandbox_support().landlock_abi > 0; }
 
 // Every message the session logs at Warning or above, e.g. "sandbox: allow-list path ... skipped".
 struct Log {
@@ -65,7 +66,7 @@ struct Log {
 };
 
 // Process isolation under the untouched default engine_sandbox.
-agent::Config sandboxed(const char *plugin, std::string model, const std::string &workspace, Log &log) {
+[[maybe_unused]] agent::Config sandboxed(const char *plugin, std::string model, const std::string &workspace, Log &log) {
     agent::Config cfg;
     cfg.provider = agent::AiProvider::Engine;
     cfg.engine = plugin;
@@ -79,7 +80,7 @@ agent::Config sandboxed(const char *plugin, std::string model, const std::string
     return cfg;
 }
 
-agent::Session open(const agent::Config &cfg, const Log &log) {
+[[maybe_unused]] agent::Session open(const agent::Config &cfg, const Log &log) {
     REQUIRE(cfg.engine_sandbox.enabled); // the default: no network, no /tmp, workspace read-only
     REQUIRE_FALSE(cfg.engine_sandbox.allow_tmp);
     REQUIRE(cfg.engine_sandbox.network == agent::SandboxNetwork::Deny);
@@ -272,8 +273,8 @@ TEST_CASE("sandboxed engine host: sherpa speaks, transcribes, detects speech and
     const char *tts_dir = env("AGENT_TEST_SHERPA_TTS_DIR");
     if (!tts_dir) SKIP("AGENT_TEST_SHERPA_TTS_DIR not set");
     const std::string d(tts_dir);
-    std::string options = "{\"tts\":{\"kokoro\":{\"model\":\"" + d + "/model.onnx\",\"voices\":\"" + d + "/voices.bin\",\"tokens\":\"" + d +
-                          "/tokens.txt\"";
+    std::string options =
+        "{\"tts\":{\"kokoro\":{\"model\":\"" + d + "/model.onnx\",\"voices\":\"" + d + "/voices.bin\",\"tokens\":\"" + d + "/tokens.txt\"";
     for (const char *name : {"lexicon-en-us.txt", "lexicon-us-en.txt", "lexicon.txt"})
         if (fs::exists(d + "/" + name)) {
             options += ",\"lexicon\":\"" + d + "/" + name + "\"";

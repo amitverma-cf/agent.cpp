@@ -337,7 +337,8 @@ Result<PreparedSandbox> prepare_sandbox(const SandboxPolicy &policy) {
                 if (policy.system_paths) {
                     for (const auto &p : sandbox_system_read_only_paths(!deny_net))
                         add_rule(out.landlock_fd, p, kFsReadOnly, fs, false, out.warnings);
-                    for (const auto &p : sandbox_system_read_write_paths(policy.gpu)) add_rule(out.landlock_fd, p, fs, fs, false, out.warnings);
+                    for (const auto &p : sandbox_system_read_write_paths(policy.gpu))
+                        add_rule(out.landlock_fd, p, fs, fs, false, out.warnings);
                 }
                 if (policy.allow_tmp) {
                     add_rule(out.landlock_fd, temp_dir(), fs, fs, false, out.warnings);

@@ -280,11 +280,10 @@ Result<McpServerConfig> parse_mcp_server(Parser &p, simdjson::dom::element el, s
     if (el.get(obj) != simdjson::SUCCESS)
         return Result<McpServerConfig>{.ok = false, .value = {}, .error = p.error(where, "must be an object")};
     p.check_fields(obj, where, {"name", "command", "args", "env", "timeout_ms", "working_directory", "sandbox"});
-    bool good = read_required_string(p, obj, "name", cfg.name, where, err) &&
-                read_required_string(p, obj, "command", cfg.command, where, err) &&
-                read_string_array(p, obj, "args", cfg.args, where, err) && read_int(p, obj, "timeout_ms", cfg.timeout_ms, where, err) &&
-                read_string(p, obj, "working_directory", cfg.working_directory, where, err) &&
-                read_sandbox(p, obj, cfg.sandbox, where, err);
+    bool good =
+        read_required_string(p, obj, "name", cfg.name, where, err) && read_required_string(p, obj, "command", cfg.command, where, err) &&
+        read_string_array(p, obj, "args", cfg.args, where, err) && read_int(p, obj, "timeout_ms", cfg.timeout_ms, where, err) &&
+        read_string(p, obj, "working_directory", cfg.working_directory, where, err) && read_sandbox(p, obj, cfg.sandbox, where, err);
     if (good) {
         simdjson::dom::object env;
         bool present = false;
