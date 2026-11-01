@@ -34,12 +34,17 @@ Result<std::string> run_command(const std::string &ws, std::string_view args, co
         }
     }
     if (command_sv.empty()) return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'command'");
+    // Negative = default; at most a day (the int cast below must not overflow).
+    if (timeout_seconds < 0) timeout_seconds = 30;
+    if (timeout_seconds > 86400) timeout_seconds = 86400;
 
     auto proc = hal::run_shell_command(ws, command_sv, static_cast<int>(timeout_seconds), 32 * 1024, sandbox);
     if (!proc.ok) return fail<std::string>(proc.error.code, proc.error.message);
 
     std::string result = "{\"exit_code\":" + std::to_string(proc.value.exit_code) +
                          ",\"timed_out\":" + (proc.value.timed_out ? "true" : "false") + ",\"output\":\"";
+    // The output cap can cut a UTF-8 sequence, and programs print arbitrary bytes: keep the JSON valid text.
+    utils::sanitize_utf8(proc.value.output);
     utils::escape_json_string(proc.value.output, result);
     result += "\"";
     if (!proc.value.sandbox_warnings.empty()) {

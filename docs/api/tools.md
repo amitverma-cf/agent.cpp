@@ -177,16 +177,29 @@ All paths resolve relative to `workspace_dir`. Absolute paths are accepted but c
 
 #### `read_file`
 
-Read a file. Returns the file content as a string, truncated at `max_bytes` if the file is larger.
+Read a file (a `parts_callback` tool).
 
 ```json
 {
   "path": "src/main.cpp",
-  "max_bytes": 16384
+  "max_bytes": 16384,
+  "offset": 0
 }
 ```
 
-Returns: raw file content, with `\n[truncated at N bytes]` appended if the file is larger.
+- **Text files**: the content from `offset` (default 0), at most `max_bytes` (default 16384, clamped
+  to 4 MiB). The cut never splits a UTF-8 character; invalid UTF-8 bytes become U+FFFD. A longer file
+  gets `\n[truncated at N bytes]\n[T bytes in total; read more with "offset": K]`.
+- **Images, audio, video** (by extension: png, jpg/jpeg, gif, webp, bmp, tga, wav, mp3, flac, ogg,
+  opus, m4a, mp4, webm, mov, mkv, avi): returned as `ToolResult::media` with the text
+  `image file cat.png (N bytes), attached`, so a vision / audio model looks at or listens to the file
+  on its next inference (the `view_image` use case). A file outside the workspace (only possible with
+  `sandbox_filesystem = false`) is first copied to `<workspace>/artifacts/read-<ms>-<name>`, because a
+  sandboxed out-of-process engine can only read the workspace.
+- **Other binary files** (containing NUL bytes): `[binary file <name>, N bytes; not shown as text]`.
+- A directory fails (use `list_dir`).
+
+Call it through `execute_tool` / `execute_tool_parts`: `read_file` has no string `callback`.
 
 #### `write_file`
 
@@ -200,7 +213,8 @@ Write (overwrite) a file. Creates parent directories by default.
 }
 ```
 
-Returns: `"wrote N bytes to /path/to/file"`
+Returns: `"wrote N bytes to /path/to/file"`. A missing (or non-string) `content` fails instead of
+truncating the file.
 
 #### `append_file`
 
@@ -223,7 +237,8 @@ List directory contents. Returns a JSON array of `{name, type, size?}` objects. 
 { "path": "src" }
 ```
 
-Returns: `[{"name":"main.cpp","type":"file","size":1234},{"name":"utils","type":"dir"}]`
+Returns: `[{"name":"main.cpp","type":"file","size":1234},{"name":"utils","type":"dir"}]`, sorted by
+name. At most 1000 entries; a larger directory ends with `{"truncated":true,"shown":1000}`.
 
 #### `create_dir`
 
@@ -247,7 +262,7 @@ Returns: `"deleted N entries at /path/to/scratch"`
 
 #### `move_path`
 
-Move or rename a file or directory.
+Move or rename a file or directory. Cannot move the workspace root.
 
 ```json
 { "from": "draft.md", "to": "published/final.md" }
@@ -280,31 +295,60 @@ Run a shell command in `workspace_dir`. stdout and stderr are merged. Output is 
 
 Returns: `{"exit_code":0,"output":"abc1234 fix bug\ndef5678 add feature\n..."}`
 
-`timeout_seconds` defaults to 30. Set to 0 for no timeout. On POSIX, the system `timeout` utility enforces the limit. On Windows, no timeout is applied when `timeout_seconds = 0`.
+`timeout_seconds` defaults to 30 (negative = 30, capped at one day). Set to 0 for no timeout. On POSIX, the system `timeout` utility enforces the limit. On Windows, no timeout is applied when `timeout_seconds = 0`. Invalid UTF-8 in the output (including a character cut by the 32 KiB cap) becomes U+FFFD. A running command is not stopped by `request_cancel()`; only its timeout ends it.
 
 ### Context compressor
 
 #### `compress_context`
 
-Summarise and compress the active conversation's older history to free context window space. The LLM invokes this tool automatically when context pressure is high, or you can expose it for the model to call explicitly.
+Summarise the active conversation's older history into one system message
+(`[Compressed history]: <summary>`) to free context window space. The model can call it (it acts on
+the conversation that issued the call: in a graph, the node's history, shared ones included), and
+`run_turn` also compresses automatically at the start of a turn when the history exceeds 70% of
+`context_window` (keeping the 6 most recent messages). `agent::compress_context(session, memory,
+keep_recent)` does the same directly.
 
 ```json
 { "keep_recent": 6 }
 ```
 
-Returns: `"Context compressed."` on success.
+Returns: `"Context compressed."` on success (also when there was nothing to compress).
+
+- The summary is written by the Session's own engine as a plain chat request (`AGENT_CAP_TEXT_GEN`,
+  whatever `Config::default_task` is, without tool definitions), in a separate arena, so it works
+  from inside a tool call and with process-isolated engines. An engine that cannot chat, or a failed
+  request, skips compression (the pruner still trims the history).
+- An assistant tool call and its results are never separated, and the assistant message whose tool
+  call is running stays in place.
+- Media in the summarized part are named in the summary prompt (`[file: <path> (<mime>)]`); the
+  files themselves leave the context.
+- `run_turn` sends the leading system messages (system prompt, summary, injected tool list) to the
+  engine as **one** system message, and the pruner never drops them. A graph node's `system_prompt`
+  goes in front of a summary instead of replacing it. A later compression folds the previous summary
+  into the new one.
 
 ### Skill loader
 
 #### `use_skill`
 
-Registered automatically when `Config::skills_dir` is set (see [Skills](../guide.md#skills)). Loads the full `SKILL.md` content for a named skill, previously scanned by `load_skills_dir`.
+Registered automatically when `Config::skills_dir` is set (see [Skills](../guide.md#skills)). Loads the full `SKILL.md` content for a named skill, previously scanned by `load_skills_dir`, or a file bundled with it.
 
 ```json
 { "name": "pdf-tools" }
+{ "name": "pdf-tools", "file": "references/forms.md" }
 ```
 
-Returns: the skill's full `SKILL.md` file content. Returns `KeyNotFound` if the name doesn't match a loaded skill.
+Returns: `Skill directory: <absolute path> ...` followed by the skill's full `SKILL.md` content.
+With `file`: that file's text (up to 256 KiB), or for png/jpg/gif/webp/wav/mp3 the file as media.
+`file` must resolve inside the skill directory (`SandboxViolation` otherwise). Returns `KeyNotFound`
+if the name doesn't match a loaded skill. In a graph Agent node the skills list is only advertised
+when `use_skill` is in the node's `allowed_tools` (or the list is empty). `SKILL.md` frontmatter
+values may be quoted.
+
+### Graph Agent nodes
+
+`allowed_tools` also scopes the plain-text tool list injected for engines without native tool
+calling: the engine only sees the node's tools.
 
 ---
 

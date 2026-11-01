@@ -268,7 +268,10 @@ struct SystemPromptScope {
 
     SystemPromptScope(FlowMemory &m, std::string_view prompt) : memory(m) {
         if (prompt.empty()) return;
-        if (!memory.history.empty() && memory.history[0].role == "system") {
+        // A compressed-history summary at the front is conversation, not a system prompt: keep it (run_turn
+        // merges the leading system messages) and put the node's prompt before it.
+        if (!memory.history.empty() && memory.history[0].role == "system" &&
+            !std::string_view(memory.history[0].content).starts_with(tools::kCompressedHistoryPrefix)) {
             saved = memory.history[0];
             memory.history[0].content = std::string(prompt);
             memory.history[0].token_count = -1;

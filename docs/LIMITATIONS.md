@@ -39,6 +39,15 @@ Status as of 2026-10-31. Each entry says what breaks, why, and the planned fix. 
 | ~~`agent_engine_v1` has no struct-size field, so it can't grow compatibly.~~ **Resolved in ABI 2**: `agent_engine_v1`, `agent_request` and `agent_response` carry `struct_size`; readers check it (`AGENT_HAS_FIELD`) before touching fields past the v2 baseline. | `agent_part` / `agent_message` arrays still change only with a new ABI version. |
 | Cancel granularity differs per engine: ONNX only before `Run()`, llama per token, sd.cpp per step, sherpa per sentence. | Document per engine. Under process isolation a cancel the engine doesn't honour within `engine_cancel_grace_ms` kills the host (hard cancel). |
 
+## 4b. Tools
+
+| Limitation | Fix |
+|---|---|
+| Tool media is sent to an engine whenever it declares the input capability, but the llama plugin declares VISION_IN/AUDIO_IN even without an `mmproj`. The first request carrying tool media then fails and is retried without it (one wasted call; the Session stops sending tool media). | A per-instance capability query in the engine ABI. |
+| Tool tensors (`ToolResult::tensors`) reach the engine and the event log as a note, but are not persisted with the history (`save_flow_memory` / checkpoints store media, not tensors). | Persist tensors as artifacts if needed. |
+| `run_command` is not interrupted by `request_cancel()`; only `timeout_seconds` stops it. | Cancel hook in `hal::run_shell_command`. |
+| Context compression is only tested with the mock engine (summary quality with small local models is unknown); the automatic trigger runs at most once per turn, at its start. | Test with a real model; trigger inside long tool loops. |
+
 ## 5. Graph runtime
 
 | Limitation | Fix |

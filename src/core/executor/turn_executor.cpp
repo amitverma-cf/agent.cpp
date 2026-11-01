@@ -126,8 +126,10 @@ static Result<void> prune_history_state(Session &session, FlowMemory &state) {
 
     if (state.history.empty()) return ok();
 
-    const bool has_system = (state.history[0].role == "system");
-    const size_t fixed_start = has_system ? 1 : 0;
+    // The leading system messages (system prompt, compressed-history summary) are never pruned.
+    size_t fixed_start = 0;
+    while (fixed_start < state.history.size() && state.history[fixed_start].role == "system") ++fixed_start;
+    if (fixed_start == state.history.size()) fixed_start = state.history.empty() ? 0 : state.history.size() - 1;
     const size_t min_keep = fixed_start + 1;
 
     int total = 0;
