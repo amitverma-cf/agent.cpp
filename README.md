@@ -117,6 +117,7 @@ Library users: `find_package(agent-cpp)` and link `agent-cpp::agent` (plus `agen
 | `AGENT_ENGINE_WHISPER` | `OFF` | Build the whisper.cpp speech-to-text + Silero VAD engine plugin (`engines/whisper`); needs the `vendor/whisper.cpp` submodule; `AGENT_WHISPER_BUILD_JOBS` caps the nested build |
 | `AGENT_ENGINE_PARAKEET` | `OFF` | Build the parakeet.cpp (NVIDIA Parakeet / Nemotron) speech-to-text engine plugin (`engines/parakeet`); needs the `vendor/parakeet.cpp` submodule and its ggml; `AGENT_PARAKEET_BUILD_JOBS` caps the nested build |
 | `AGENT_ENGINE_QWEN3TTS` | `OFF` | Build the Qwen3-TTS text-to-speech + voice cloning engine plugin (`engines/qwen3tts`, qwentts.cpp); needs the `vendor/qwentts.cpp` submodule and its ggml; `AGENT_QWEN3TTS_BUILD_JOBS` caps the nested build |
+| `AGENT_BUILD_EXAMPLES` | `ON` | Build `examples/` (guide code, image critique, RAG over docs) and their mock-engine smoke tests (`ctest -L examples`) |
 | `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UBSan |
 | `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |
 
@@ -148,6 +149,12 @@ Library users: `find_package(agent-cpp)` and link `agent-cpp::agent` (plus `agen
 ## Documentation
 
 Full documentation here: [`docs`](docs/index.md)
+
+Guides: [embedding the library](docs/guides/getting-started-library.md) ·
+[writing an engine plugin](docs/guides/writing-an-engine.md) ([template](templates/engine-plugin)) ·
+[writing a tool](docs/guides/writing-a-tool.md) · [writing a graph](docs/guides/writing-a-graph.md) ·
+[a local voice assistant](docs/guides/voice-assistant.md). Their code builds and runs as tests from
+[`examples/guides/`](examples/guides).
 
 ---
 
