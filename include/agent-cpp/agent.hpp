@@ -1221,4 +1221,14 @@ Result<Decision> decide_score(Session &session, std::string_view question, int m
 // P(yes) for a yes/no question.
 Result<float> decide_yes_no(Session &session, std::string_view question, const DecideOptions &opts = {});
 
+// ============================================================================================
+// -------------------------- OCR --------------------------
+// ============================================================================================
+
+// The text in image (AGENT_CAP_OCR). With the llama engine: an OCR-tuned VLM (PaddleOCR-VL, GLM-OCR,
+// DeepSeek-OCR, dots.ocr, HunyuanOCR) or any vision model, loaded with engine option "mmproj"; the
+// engine picks the model family's trained prompt unless prompt (or engine option "ocr_prompt") sets
+// one, e.g. "Table Recognition:". Like embed(), safe to call from inside another session's tool call.
+Result<std::string> ocr(Session &session, const Media &image, std::string_view prompt = {});
+
 } // namespace agent
