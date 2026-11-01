@@ -199,7 +199,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
   - [x] shared memory for large tensors, concurrent requests per host (engine host v2)
   - [ ] Windows build
 - [ ] Agent loop (pi-agent-core style) with tool-call limits
-- [ ] Tools return `{parts}` (text and/or artifacts)
+- [x] Tools return `{parts}` (text and/or artifacts): `ToolResult` {text, media, tensors, is_error} via `Tool::parts_callback` (the string `callback` still works), `execute_tool_parts`; tool media go on the tool `Message`, persist with the history and reach engines that declare the input modality as FILE parts (see [docs/api/tools.md](api/tools.md#tools-that-return-parts)); MCP image/audio content becomes media
 - [x] `llama` engine v1: llama.cpp b12020, Jinja chat templates + native tool-call parsing (common_chat), continuous batching
 - [ ] Freeze public `agent.hpp` v1 and write `docs/api`
 

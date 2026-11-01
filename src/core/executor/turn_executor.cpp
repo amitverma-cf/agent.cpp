@@ -1,10 +1,12 @@
 #include "../providers/provider_ops.hpp"
+#include "../tools/tools_ops.hpp"
 #include "../utils/utils.hpp"
 #include "ambient_turn.hpp"
 #include "history_json.hpp"
 
 #include <agent-cpp/agent.hpp>
 #include <atomic>
+#include <cstring>
 #include <mutex>
 #include <simdjson.h>
 
@@ -12,9 +14,14 @@ namespace agent {
 
 namespace {
 
+// Restores the previous conversation on exit, so a run_turn nested inside a tool call (a sub-agent)
+// leaves the outer turn's compress_context pointing at the outer conversation.
 struct ActiveMemoryGuard {
+    FlowMemory *previous = ambient::active_memory;
     explicit ActiveMemoryGuard(FlowMemory *memory) { ambient::active_memory = memory; }
-    ~ActiveMemoryGuard() { ambient::active_memory = nullptr; }
+    ~ActiveMemoryGuard() { ambient::active_memory = previous; }
+    ActiveMemoryGuard(const ActiveMemoryGuard &) = delete;
+    ActiveMemoryGuard &operator=(const ActiveMemoryGuard &) = delete;
 };
 
 } // namespace
@@ -318,10 +325,17 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
         Arena &arena = ambient::current_arena(session);
         arena.reset();
 
+        // Leading system messages (the node / user system prompt, then e.g. a compressed-history
+        // summary) and the injected tool list are merged into one system message: many chat
+        // templates reject a system message anywhere but first.
         const std::string_view injected = providers::injected_system_text(session);
-        const bool has_system = !state.history.empty() && state.history[0].role == "system";
-        const bool need_tools_prefix = !injected.empty() && !has_system;
-        const size_t view_count = state.history.size() + (need_tools_prefix ? 1 : 0);
+        size_t n_lead = 0;
+        while (n_lead < state.history.size() && state.history[n_lead].role == "system" &&
+               (n_lead == 0 || (state.history[n_lead].media.empty() && state.history[n_lead].tensors.empty())))
+            ++n_lead;
+        const bool need_tools_prefix = !injected.empty() && n_lead == 0;
+        const size_t merged = n_lead > 1 ? n_lead - 1 : 0; // messages folded into the first one
+        const size_t view_count = state.history.size() - merged + (need_tools_prefix ? 1 : 0);
 
         auto message_views = arena.allocate_span<MessageView>(view_count);
         if (view_count != 0 && message_views.size() != view_count) {
@@ -341,17 +355,32 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
         }
 
         std::string_view combined_system;
-        if (has_system && !injected.empty()) {
-            std::string combined;
-            combined.reserve(state.history[0].content.size() + 1 + injected.size());
-            combined += state.history[0].content;
-            combined += '\n';
-            combined += injected;
-            combined_system = arena.allocate_string(combined);
+        if (n_lead > 1 || (n_lead == 1 && !injected.empty())) {
+            size_t bytes = injected.empty() ? 0 : injected.size() + 1;
+            for (size_t i = 0; i < n_lead; ++i) bytes += state.history[i].content.size() + 2;
+            char *buf = static_cast<char *>(arena.allocate(bytes + 1, 1));
+            if (!buf) return fail<std::string>(ErrorCode::DecodeFailed, "Arena capacity exhausted building message views.");
+            size_t off = 0;
+            auto put = [&](std::string_view s) {
+                if (!s.empty()) std::memcpy(buf + off, s.data(), s.size());
+                off += s.size();
+            };
+            for (size_t i = 0; i < n_lead; ++i) {
+                if (i > 0) put("\n\n");
+                put(state.history[i].content);
+            }
+            if (!injected.empty()) {
+                put("\n");
+                put(injected);
+            }
+            combined_system = std::string_view(buf, off);
         }
 
+        bool sent_tool_media = false;
+        size_t v = view_offset;
         for (size_t i = 0; i < state.history.size(); ++i) {
-            MessageView &mv = message_views[i + view_offset];
+            if (i > 0 && i < n_lead) continue; // merged into the first system message
+            MessageView &mv = message_views[v++];
             const Message &m = state.history[i];
             mv.role = m.role;
             if (i == 0 && !combined_system.empty()) mv.content = combined_system;
@@ -360,6 +389,8 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
 
             if (!m.tool_calls.empty()) {
                 auto tcvs = arena.allocate_span<ToolCallView>(m.tool_calls.size());
+                if (tcvs.size() != m.tool_calls.size())
+                    return fail<std::string>(ErrorCode::DecodeFailed, "Arena capacity exhausted building message views.");
                 for (size_t j = 0; j < m.tool_calls.size(); ++j)
                     tcvs[j] = {m.tool_calls[j].id, m.tool_calls[j].name, m.tool_calls[j].arguments};
                 mv.tool_calls = tcvs;
@@ -369,6 +400,8 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
 
             if (!m.tensors.empty()) {
                 auto tvs = arena.allocate_span<TensorView>(m.tensors.size());
+                if (tvs.size() != m.tensors.size())
+                    return fail<std::string>(ErrorCode::DecodeFailed, "Arena capacity exhausted building message views.");
                 for (size_t j = 0; j < m.tensors.size(); ++j) {
                     const TensorData &td = m.tensors[j];
                     tvs[j] = {td.name, td.dtype, std::span<const int64_t>(td.shape.data(), td.shape.size()),
@@ -379,12 +412,21 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
                 mv.tensors = {};
             }
 
-            if (!m.media.empty()) {
-                auto mvs = arena.allocate_span<MediaView>(m.media.size());
-                if (mvs.size() != m.media.size())
+            // Media a tool returned reaches the engine only when it can take that modality (the text
+            // note in the tool message covers the rest); user media is always sent.
+            const bool tool_msg = m.role == "tool";
+            size_t n_media = 0;
+            for (const Media &md : m.media)
+                if (!tool_msg || providers::accepts_tool_media(session, md.mime)) ++n_media;
+            if (n_media != 0) {
+                auto mvs = arena.allocate_span<MediaView>(n_media);
+                if (mvs.size() != n_media)
                     return fail<std::string>(ErrorCode::DecodeFailed, "Arena capacity exhausted building message views.");
-                for (size_t j = 0; j < m.media.size(); ++j) mvs[j] = {m.media[j].path, m.media[j].mime};
+                size_t k = 0;
+                for (const Media &md : m.media)
+                    if (!tool_msg || providers::accepts_tool_media(session, md.mime)) mvs[k++] = {md.path, md.mime};
                 mv.media = mvs;
+                sent_tool_media = sent_tool_media || tool_msg;
             } else {
                 mv.media = {};
             }
@@ -403,6 +445,16 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
                          .cancel = session.cancel_flag.get()};
 
         auto resp_res = infer(session, req);
+        if (!resp_res.ok && sent_tool_media && resp_res.error.code != ErrorCode::Cancelled &&
+            resp_res.error.code != ErrorCode::EngineCrashed) {
+            // E.g. a llama model without a projector: retry once with tool media left out (the tool
+            // messages still name the files) and stop sending it on this Session.
+            utils::log(session, LogLevel::Warning,
+                       "Engine failed a request carrying tool-produced media (" + resp_res.error.message +
+                           "); retrying without it. Tool media is no longer sent to this engine.");
+            providers::reject_tool_media(session);
+            continue;
+        }
         if (!resp_res.ok) return fail<std::string>(resp_res.error.code, resp_res.error.message);
 
         trigger_event(session, EventType::OnInferenceComplete, std::span<const uint8_t>());
@@ -453,15 +505,13 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
 
                 fire_tool_hooks(session, state, ToolHook::When::Pre, tcv.name, tcv.arguments, {});
 
-                std::string result_text;
-                auto exec_res = execute_tool(session, tcv.name, tcv.arguments);
-                if (exec_res.ok) result_text = std::move(exec_res.value);
-                else result_text = "Error: " + exec_res.error.message;
+                // text = the message content (attachment notes / "Error: ..." included).
+                ToolResult result = tools::execute_for_message(session, tcv.name, tcv.arguments);
 
-                fire_tool_hooks(session, state, ToolHook::When::Post, tcv.name, tcv.arguments, result_text);
+                fire_tool_hooks(session, state, ToolHook::When::Post, tcv.name, tcv.arguments, result.text);
 
                 trigger_event(session, EventType::OnToolResult,
-                              std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(result_text.data()), result_text.size()));
+                              std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(result.text.data()), result.text.size()));
 
                 state.stats.tool_calls++;
                 {
@@ -471,8 +521,10 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
 
                 Message tool_msg;
                 tool_msg.role = "tool";
-                tool_msg.content = std::move(result_text);
+                tool_msg.content = std::move(result.text);
                 tool_msg.tool_call_id = std::string(tcv.id);
+                tool_msg.media = std::move(result.media);
+                tool_msg.tensors = std::move(result.tensors);
                 state.history.push_back(std::move(tool_msg));
             }
             continue;

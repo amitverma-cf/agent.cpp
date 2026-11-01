@@ -663,8 +663,15 @@ Result<void> clear_memory(Session &session);
 Result<void> init_tools(Session &session);
 
 // Dispatch a tool by name. Uses the O(1) tool_by_name index.
-// Returns KeyNotFound if name is not registered.
+// Returns KeyNotFound if name is not registered. Media of a parts tool are listed as
+// "[attached: <path> (<mime>)]" lines; a ToolResult with is_error fails with ToolError.
 Result<std::string> execute_tool(
+    Session         &session,
+    std::string_view name,
+    std::string_view arguments);
+
+// Same, returning the whole ToolResult (text + media + tensors + is_error). See api/tools.md.
+Result<ToolResult> execute_tool_parts(
     Session         &session,
     std::string_view name,
     std::string_view arguments);
