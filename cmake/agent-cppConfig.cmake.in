@@ -2,6 +2,9 @@
 #   agent-cpp::agent         libagent (public header <agent-cpp/agent.hpp>, plugin ABI <agent-cpp/engine_abi.h>)
 #   agent-cpp::store_sqlite  optional SQLite KV store + sqlite-vec vector store (<agent-cpp/store_sqlite.hpp>)
 #   agent-cpp::hub           optional Hugging Face model downloader (<agent-cpp/hub.hpp>), if it was built
+#   agent-cpp::engine_abi    header-only plugin ABI (<agent-cpp/engine_abi.h>) for engine plugins
+# Functions (agent-cppEngine.cmake): agent_add_engine(), agent_install_engine().
+# Variables: agent-cpp_ENGINE_DIR (installed plugins), agent-cpp_ENGINE_HOST (agent-engine-host).
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
@@ -21,5 +24,11 @@ include("${CMAKE_CURRENT_LIST_DIR}/agent-cppTargets.cmake")
 # Where engine plugins are installed (<prefix>/lib/agent/engines). It may not exist when no
 # engine was built, so it is not checked.
 set(agent-cpp_ENGINE_DIR "@PACKAGE_AGENT_INSTALL_ENGINEDIR@")
+# The out-of-process engine host (EngineIsolation::Process). libagent looks for it next to the running
+# executable; programs installed elsewhere pass this path as Config::engine_host_path (or set
+# $AGENT_ENGINE_HOST).
+set(agent-cpp_ENGINE_HOST "@PACKAGE_CMAKE_INSTALL_BINDIR@/agent-engine-host${CMAKE_EXECUTABLE_SUFFIX}")
+
+include("${CMAKE_CURRENT_LIST_DIR}/agent-cppEngine.cmake")
 
 check_required_components(agent-cpp)

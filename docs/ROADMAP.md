@@ -178,9 +178,9 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [x] Move llama.cpp out of core into `engines/llama/` (`agent-engine-llama` plugin; `AiProvider::LlamaCpp` removed)
 - [x] Move httplib/OpenSSL into `tools/hub/` (CLI only); `libagent` depends only on simdjson
 - [x] New tree: `include/agent-cpp/{agent.hpp,engine_abi.h}`, `src/core/`, `engines/<name>/`, `tools/cli/`, `tools/hub/`, `tools/store-sqlite/`
-- [ ] CMake `install()`/`export()` for `find_package(agent-cpp)`; each engine builds standalone against the installed ABI header
+- [x] CMake `install()`/`export()` for `find_package(agent-cpp)`; each engine builds standalone against the installed ABI header
   - [x] `cmake --install` + `find_package(agent-cpp)` (`agent-cpp::agent`, `::store_sqlite`, `::hub`; static or `BUILD_SHARED_LIBS`), CLI in `bin/`, plugins + bundled runtime libraries in `lib/agent/engines/`; simdjson dropped from the public header; out-of-tree check in `tests/consumer/` (see [docs/packaging.md](packaging.md))
-  - [ ] engines build standalone against the installed `engine_abi.h` (they are still built in-tree)
+  - [x] engines build standalone against the installed `engine_abi.h`: the package exports `agent-cpp::engine_abi`, `agent_add_engine()` and `agent_install_engine()`; [`templates/engine-plugin/`](../templates/engine-plugin) builds out of tree against an installed prefix and loads with `agent engine add` (verified on Linux). The engines in `engines/` are still built in-tree
 - [x] Tests stay green on the Mock engine
 
 ### Phase 2: Core v1 (3 to 4 weeks)
@@ -271,7 +271,7 @@ Watch list: audio.cpp as a meta-engine; llama.cpp native TTS / image gen when th
 ### Phase 6: SDK and docs (finalize at release)
 - [ ] Guides: embed the library, write an engine plugin, write a tool, write a graph (JSON + C++)
 - [ ] Examples: voice assistant (STT → LLM → TTS) (done: `agent voice` + [guide](guides/voice-assistant.md); no graph JSON form, a graph runs on one engine session), image agent (LLM → SD → VLM critique loop), video storyboard, RAG over docs, OCR → extraction, decision-model router
-- [ ] Engine plugin template repo / cookiecutter
+- [x] Engine plugin template: [`templates/engine-plugin/`](../templates/engine-plugin) (standalone CMake project against the installed package, C echo engine + test harness); not a separate repository or cookiecutter
 - [ ] Benchmarks: tokens/s, time to first audio, peak memory per pipeline
 
 ---
