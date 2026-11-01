@@ -111,6 +111,14 @@ add_library(agent
     vendor/simdjson/singleheader/simdjson.cpp
 )
 add_library(agent-cpp::agent ALIAS agent)
+# Header-only plugin ABI for engine plugins built against the installed package
+# (find_package(agent-cpp) -> agent-cpp::engine_abi, agent_add_engine(); see templates/engine-plugin/).
+add_library(agent_engine_abi INTERFACE)
+add_library(agent-cpp::engine_abi ALIAS agent_engine_abi)
+target_include_directories(agent_engine_abi INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
 target_include_directories(agent PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -389,6 +397,7 @@ if(AGENT_INSTALL)
     set(AGENT_CMAKE_INSTALL_DIR ${CMAKE_INSTALL_LIBDIR}/cmake/agent-cpp)
     set_target_properties(agent PROPERTIES EXPORT_NAME agent VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR})
     set_target_properties(agent_store_sqlite PROPERTIES EXPORT_NAME store_sqlite VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR})
+    set_target_properties(agent_engine_abi PROPERTIES EXPORT_NAME engine_abi)
     set(_agent_export_targets agent agent_store_sqlite)
     if(AGENT_BUILD_HUB)
         set_target_properties(agent_hub PROPERTIES EXPORT_NAME hub VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR})
@@ -398,6 +407,7 @@ if(AGENT_INSTALL)
         # agent_store_sqlite / agent_hub find libagent next to themselves.
         set_target_properties(${_agent_export_targets} PROPERTIES INSTALL_RPATH "$ORIGIN")
     endif()
+    install(TARGETS agent_engine_abi EXPORT agent-cppTargets)
     install(TARGETS ${_agent_export_targets}
         EXPORT agent-cppTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -422,7 +432,7 @@ if(AGENT_INSTALL)
     configure_package_config_file(cmake/agent-cppConfig.cmake.in
         ${CMAKE_CURRENT_BINARY_DIR}/agent-cppConfig.cmake
         INSTALL_DESTINATION ${AGENT_CMAKE_INSTALL_DIR}
-        PATH_VARS AGENT_INSTALL_ENGINEDIR
+        PATH_VARS AGENT_INSTALL_ENGINEDIR CMAKE_INSTALL_BINDIR
     )
     # Pre-1.0: minor versions may break the API.
     write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/agent-cppConfigVersion.cmake
@@ -432,6 +442,7 @@ if(AGENT_INSTALL)
     install(FILES
         ${CMAKE_CURRENT_BINARY_DIR}/agent-cppConfig.cmake
         ${CMAKE_CURRENT_BINARY_DIR}/agent-cppConfigVersion.cmake
+        cmake/agent-cppEngine.cmake
         DESTINATION ${AGENT_CMAKE_INSTALL_DIR}
     )
 endif()

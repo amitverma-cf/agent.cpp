@@ -24,7 +24,7 @@ Installed layout:
 | `lib/libagent.a` (or `.so`) | the library |
 | `lib/libagent_store_sqlite.a`, `lib/libagent_hub.a` | the optional SQLite store and Hugging Face hub libraries |
 | `include/agent-cpp/` | `agent.hpp`, `engine_abi.h`, `store_sqlite.hpp`, `hub.hpp` |
-| `lib/cmake/agent-cpp/` | `agent-cppConfig.cmake`, `agent-cppConfigVersion.cmake`, exported targets |
+| `lib/cmake/agent-cpp/` | `agent-cppConfig.cmake`, `agent-cppConfigVersion.cmake`, exported targets, `agent-cppEngine.cmake` (engine plugin helpers) |
 | `share/doc/agent/` | `README.md`, `LICENSE`, `cli.md` |
 
 The library directory is `CMAKE_INSTALL_LIBDIR` (`lib`, or `lib64` on some distributions). The engine
@@ -74,6 +74,18 @@ cmake --install build --prefix /tmp/agent-prefix
 cmake -S tests/consumer -B /tmp/agent-consumer -DCMAKE_PREFIX_PATH=/tmp/agent-prefix
 cmake --build /tmp/agent-consumer && /tmp/agent-consumer/consumer
 ```
+
+## Engine plugins outside this tree
+
+The package also serves engine authors. `find_package(agent-cpp)` provides the header-only target
+`agent-cpp::engine_abi` (`<agent-cpp/engine_abi.h>`), `agent_add_engine(<target> <sources>...)` (a shared
+library without the `lib` prefix and with hidden visibility), `agent_install_engine(<target> [libs...])`
+(installs into `<prefix>/lib/agent/engines/`, like the in-tree function of the same name) and
+`agent-cpp_ENGINE_HOST` (the installed `agent-engine-host`, for process-isolation tests).
+[`templates/engine-plugin/`](../templates/engine-plugin) is a standalone project using them: a C echo
+engine plus a test harness that loads it in process and through the host. Checked by installing to a
+temporary prefix, building a copy of the template outside the source tree, running its test and
+registering the result with `agent engine add`. See [guides/writing-an-engine.md](guides/writing-an-engine.md).
 
 ## Linux release tarball: `scripts/package.sh`
 
