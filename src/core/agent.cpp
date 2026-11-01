@@ -127,10 +127,18 @@ Result<void> init_tools(Session &session) {
     return ops->init(session);
 }
 
-Result<std::string> execute_tool(Session &session, std::string_view name, std::string_view arguments) {
+Result<ToolResult> execute_tool_parts(Session &session, std::string_view name, std::string_view arguments) {
     const tools::ToolsOps *ops = tools::find_tools_ops();
-    if (!ops || !ops->execute) return fail<std::string>(ErrorCode::UnsupportedProvider, "Tools registry not compiled into this build.");
+    if (!ops || !ops->execute) return fail<ToolResult>(ErrorCode::UnsupportedProvider, "Tools registry not compiled into this build.");
     return ops->execute(session, name, arguments);
+}
+
+Result<std::string> execute_tool(Session &session, std::string_view name, std::string_view arguments) {
+    auto res = execute_tool_parts(session, name, arguments);
+    if (!res.ok) return fail<std::string>(res.error.code, res.error.message);
+    std::string text = tools::render_tool_text(res.value);
+    if (res.value.is_error) return fail<std::string>(ErrorCode::ToolError, text.empty() ? std::string("tool reported an error") : text);
+    return ok(std::move(text));
 }
 
 void rebuild_tool_index(Session &session) {
@@ -140,21 +148,7 @@ void rebuild_tool_index(Session &session) {
 
     session.tools_system_prompt.clear();
     session.skills_system_prompt.clear();
-    if (!session.config.tools.empty()) {
-        session.tools_system_prompt += "You have access to the following tools:\n";
-        for (const auto &tool : session.config.tools) {
-            session.tools_system_prompt += "- ";
-            session.tools_system_prompt += tool.name;
-            session.tools_system_prompt += ": ";
-            session.tools_system_prompt += tool.description;
-            session.tools_system_prompt += "\n  Schema: ";
-            session.tools_system_prompt += tool.parameter_schema;
-            session.tools_system_prompt += "\n";
-        }
-        session.tools_system_prompt += "When you need a tool, respond with ONLY a single JSON object of "
-                                       "the exact form {\"name\": \"tool_name\", \"arguments\": {...}} and "
-                                       "stop. Wait for the tool result before continuing.";
-    }
+    tools::append_tool_list(session, {}, session.tools_system_prompt);
 
     if (!session.skills.empty()) {
         session.skills_system_prompt += "You have access to the following skills. Call the "

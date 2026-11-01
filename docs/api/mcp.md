@@ -54,12 +54,12 @@ It returns copies of the registered `Tool`s. Their string views point into stora
 A tool callback sends `tools/call` with `{"name": <remote tool>, "arguments": <args>}` and waits for the matching response.
 
 - **Arguments** must be a JSON object; empty means `{}`. They are parsed and re-serialised in minified form, because a newline inside a message would break the line-based framing. Invalid JSON, or a value that is not an object, fails with `ParseError` before anything is sent.
-- **Result `content`** is turned into text, one line per item:
-  - `text`: the text itself.
-  - `image` / `audio`: the base64 `data` is decoded and saved as `<workspace>/artifacts/mcp-<server>-<tool>-<ms>-<n>.<ext>`, where the extension comes from `mimeType`. The item becomes a note: `[image saved to /path/file.png (image/png, 1234 bytes)]`.
+- **Result `content`** becomes a `ToolResult` (MCP tools are `Tool::parts_callback` tools, see [tools.md](tools.md#tools-that-return-parts)):
+  - `text`: one line of `ToolResult::text` per item.
+  - `image` / `audio`: the base64 `data` is decoded and saved as `<workspace>/artifacts/mcp-<server>-<tool>-<ms>-<n>.<ext>` (absolute path), where the extension comes from `mimeType`, and added to `ToolResult::media`. Inside `run_turn` the file goes on the tool message, so a vision/audio model sees it on the next inference; the text gets `[attached: /path/file.png (image/png)]`, which is also what the string `execute_tool` returns. Undecodable data becomes a text note instead.
   - `resource`: its `text` is used, or its `blob` is saved like an image; `resource_link` becomes `[resource link name: uri]`.
-  - If there is no content, the result is `structuredContent` as JSON.
-- **`isError: true`** fails the call with `ErrorCode::HttpError`, and the content text becomes the message. Inside `run_turn` the model sees it as `Error: <text>`.
+  - If there is no content, the text is `structuredContent` as JSON.
+- **`isError: true`** sets `ToolResult::is_error` (the media are kept). The string `execute_tool` then fails with `ErrorCode::ToolError` and the content text as the message; inside `run_turn` the model sees `Error: <text>`.
 
 While waiting for its response the client also handles other traffic. It answers server-to-client `ping` requests, and rejects other server requests (sampling, roots, elicitation) with `-32601`, because it advertises none of those capabilities. It writes `notifications/message` to the log and ignores other notifications. A response with an id that does not match is skipped (see timeouts below).
 

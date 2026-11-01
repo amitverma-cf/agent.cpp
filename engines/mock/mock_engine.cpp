@@ -1,6 +1,13 @@
 // Reference engine plugin used by the test suite. Shows the minimum an engine implements.
 //   - echoes the last user text back as "echo: <text>"
-//   - a user message starting with "call:<tool>" produces a tool call to <tool> with {}
+//   - a user message starting with "call:<tool>" produces a tool call to <tool> with {};
+//     "call:<tool> <json>" passes <json> as the arguments
+//   - after tool results it replies "tool done", plus "tool media: <mime> <path>" for every FILE part
+//     on the trailing tool messages
+//   - "show:system" replies "<n> system: <text>|<text>" with the system messages it received
+//   - declares VISION_IN / AUDIO_IN so tool media reaches it (it only lists the files)
+//   - "reject-media" in engine_options' JSON: any request with a FILE part fails (like a llama model
+//     without a projector)
 //   - streams the reply as one text chunk when on_chunk is set
 //   - a model path of "fail" makes create() fail
 //   - media parts on the last user message are acknowledged as "media: <mime> <path>" lines
@@ -86,6 +93,7 @@ struct MockInstance {
 struct MockOutput {
     std::string reply;
     std::string tool_name;
+    std::string tool_args;
     std::string out_path;
     agent_part part{};
     agent_part parts[2]{};
@@ -135,12 +143,20 @@ int32_t mock_create(agent_str config_json, void **out_instance, char *err, size_
 
 void mock_destroy(void *instance) { delete static_cast<MockInstance *>(instance); }
 
-int32_t mock_run(void *, const agent_request *req, agent_response *resp) {
+int32_t mock_run(void *instance, const agent_request *req, agent_response *resp) {
     MockOutput *inst = &thread_output();
     inst->error.clear();
     if (req->task != AGENT_CAP_TEXT_GEN) {
         inst->error = "mock: only TEXT_GEN is supported";
         return AGENT_ERR_UNSUPPORTED;
+    }
+    if (static_cast<MockInstance *>(instance)->model.find("reject-media") != std::string::npos) {
+        for (size_t i = 0; i < req->n_messages; ++i)
+            for (size_t p = 0; p < req->messages[i].n_parts; ++p)
+                if (req->messages[i].parts[p].kind == AGENT_PART_FILE) {
+                    inst->error = "mock: media input is disabled (reject-media)";
+                    return AGENT_ERR_UNSUPPORTED;
+                }
     }
 
     std::string_view last_user;
@@ -200,14 +216,42 @@ int32_t mock_run(void *, const agent_request *req, agent_response *resp) {
 
     const bool after_tool = req->n_messages > 0 && sv(req->messages[req->n_messages - 1].role) == "tool";
     if (!after_tool && last_user.starts_with("call:")) {
-        inst->tool_name = std::string(last_user.substr(5));
-        inst->call = agent_tool_call{agent_str{"call_0", 6}, agent_str{inst->tool_name.data(), inst->tool_name.size()}, agent_str{"{}", 2}};
+        // "call:<tool>" or "call:<tool> <json arguments>"
+        std::string_view spec = last_user.substr(5);
+        const size_t space = spec.find(' ');
+        inst->tool_name = std::string(spec.substr(0, space));
+        inst->tool_args = space == std::string_view::npos ? std::string("{}") : std::string(spec.substr(space + 1));
+        inst->call = agent_tool_call{agent_str{"call_0", 6}, agent_str{inst->tool_name.data(), inst->tool_name.size()},
+                                     agent_str{inst->tool_args.data(), inst->tool_args.size()}};
         resp->message.tool_calls = &inst->call;
         resp->message.n_tool_calls = 1;
         return AGENT_OK;
     }
 
-    inst->reply = after_tool ? "tool done" : "echo: " + std::string(last_user) + media_lines;
+    if (after_tool) {
+        // "tool done", plus one "tool media: <mime> <path>" line per FILE part of the trailing tool messages.
+        inst->reply = "tool done";
+        size_t first_tool = req->n_messages;
+        while (first_tool > 0 && sv(req->messages[first_tool - 1].role) == "tool") --first_tool;
+        for (size_t i = first_tool; i < req->n_messages; ++i)
+            for (size_t p = 0; p < req->messages[i].n_parts; ++p)
+                if (req->messages[i].parts[p].kind == AGENT_PART_FILE)
+                    inst->reply += "\ntool media: " + std::string(sv(req->messages[i].parts[p].mime)) + " " +
+                                   std::string(sv(req->messages[i].parts[p].path));
+    } else if (last_user == "show:system") {
+        // The system messages as the engine received them: "<count> system: <text>|<text>..."
+        size_t n = 0;
+        std::string text;
+        for (size_t i = 0; i < req->n_messages; ++i) {
+            if (sv(req->messages[i].role) != "system") continue;
+            if (n++) text += '|';
+            for (size_t p = 0; p < req->messages[i].n_parts; ++p)
+                if (req->messages[i].parts[p].kind == AGENT_PART_TEXT) text += sv(req->messages[i].parts[p].text);
+        }
+        inst->reply = std::to_string(n) + " system: " + text;
+    } else {
+        inst->reply = "echo: " + std::string(last_user) + media_lines;
+    }
     if (std::string probe = sandbox_probe(last_user); !after_tool && !probe.empty()) inst->reply = std::move(probe);
     if (req->on_chunk) req->on_chunk(req->user_data, AGENT_CHUNK_TEXT, inst->reply.data(), inst->reply.size());
     inst->part = agent_part{};
@@ -281,7 +325,7 @@ const agent_engine_v1 kMockEngine = {
     sizeof(agent_engine_v1),
     kName,
     "1.0",
-    AGENT_CAP_TEXT_GEN | AGENT_CAP_TOOL_CALL,
+    AGENT_CAP_TEXT_GEN | AGENT_CAP_TOOL_CALL | AGENT_CAP_VISION_IN | AGENT_CAP_AUDIO_IN,
     kFlags,
     mock_create,
     mock_destroy,
