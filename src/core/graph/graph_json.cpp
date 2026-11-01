@@ -226,17 +226,65 @@ Result<std::string> read_source(std::string_view path_or_json, std::string &labe
     return ok(buf.str());
 }
 
+// "sandbox": true | false | {enabled, read_only_paths, read_write_paths, network, memory_limit_mb}.
+// An object without "enabled" turns the sandbox on (writing the object is the opt-in).
+bool read_sandbox(Parser &p, simdjson::dom::object obj, SandboxPolicy &out, std::string_view where, Error &err) {
+    simdjson::dom::element el;
+    if (obj["sandbox"].get(el) != simdjson::SUCCESS) return true;
+    if (bool on = false; el.get(on) == simdjson::SUCCESS) {
+        out.enabled = on;
+        return true;
+    }
+    simdjson::dom::object sb;
+    if (el.get(sb) != simdjson::SUCCESS) {
+        err = p.error(where, "\"sandbox\" must be true, false or an object");
+        return false;
+    }
+    const std::string sw = std::string(where) + ": sandbox";
+    p.check_fields(sb, sw, {"enabled", "read_only_paths", "read_write_paths", "network", "memory_limit_mb"});
+    out.enabled = true;
+    std::string network;
+    if (!read_bool(p, sb, "enabled", out.enabled, sw, err) || !read_string_array(p, sb, "read_only_paths", out.read_only_paths, sw, err) ||
+        !read_string_array(p, sb, "read_write_paths", out.read_write_paths, sw, err) || !read_string(p, sb, "network", network, sw, err))
+        return false;
+    for (const auto *list : {&out.read_only_paths, &out.read_write_paths})
+        for (const auto &path : *list)
+            if (path.empty()) {
+                err = p.error(sw, "paths must not be empty");
+                return false;
+            }
+    if (network == "deny") out.network = SandboxNetwork::Deny;
+    else if (network.empty() || network == "allow") out.network = SandboxNetwork::Allow;
+    else {
+        err = p.error(sw, "\"network\" must be \"allow\" or \"deny\"");
+        return false;
+    }
+    simdjson::dom::element mem;
+    if (sb["memory_limit_mb"].get(mem) == simdjson::SUCCESS) {
+        // Up to 16 TiB; 0 = no limit.
+        constexpr uint64_t kMaxMb = 16ull << 20;
+        uint64_t mb = 0;
+        if (mem.get(mb) != simdjson::SUCCESS || mb > kMaxMb) {
+            err = p.error(sw, "\"memory_limit_mb\" must be an integer between 0 and " + std::to_string(kMaxMb));
+            return false;
+        }
+        out.memory_limit_bytes = mb << 20;
+    }
+    return true;
+}
+
 Result<McpServerConfig> parse_mcp_server(Parser &p, simdjson::dom::element el, std::string_view where) {
     McpServerConfig cfg;
     simdjson::dom::object obj;
     Error err;
     if (el.get(obj) != simdjson::SUCCESS)
         return Result<McpServerConfig>{.ok = false, .value = {}, .error = p.error(where, "must be an object")};
-    p.check_fields(obj, where, {"name", "command", "args", "env", "timeout_ms", "working_directory"});
+    p.check_fields(obj, where, {"name", "command", "args", "env", "timeout_ms", "working_directory", "sandbox"});
     bool good = read_required_string(p, obj, "name", cfg.name, where, err) &&
                 read_required_string(p, obj, "command", cfg.command, where, err) &&
                 read_string_array(p, obj, "args", cfg.args, where, err) && read_int(p, obj, "timeout_ms", cfg.timeout_ms, where, err) &&
-                read_string(p, obj, "working_directory", cfg.working_directory, where, err);
+                read_string(p, obj, "working_directory", cfg.working_directory, where, err) &&
+                read_sandbox(p, obj, cfg.sandbox, where, err);
     if (good) {
         simdjson::dom::object env;
         bool present = false;

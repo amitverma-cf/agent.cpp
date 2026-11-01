@@ -476,6 +476,8 @@ EngineIsolation cli_engine_isolation(bool inprocess_flag, std::string_view entry
     return inprocess_flag || entry_isolation == "inprocess" ? EngineIsolation::InProcess : EngineIsolation::Process;
 }
 
+bool cli_engine_gpu(std::string_view backend) { return !backend.empty() && backend != "cpu"; }
+
 const EngineEntry *find_engine_entry(std::span<const EngineEntry> engines, std::string_view name) {
     for (const auto &e : engines)
         if (e.name == name) return &e;

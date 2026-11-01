@@ -188,7 +188,7 @@ struct SandboxPolicy {
     std::vector<std::string> read_only_paths;
     std::vector<std::string> read_write_paths;
     // Read-only system dirs (/usr, /lib*, selected /etc files, /proc, /sys) and the basic device
-    // nodes plus GPUs read-write (/dev/null, /dev/urandom, /dev/dri, /dev/nvidia*, ...).
+    // nodes read-write (/dev/null, /dev/urandom, /dev/shm, ...).
     bool system_paths = true;
     bool allow_tmp = true; // $TMPDIR (or /tmp) and /var/tmp read-write
     SandboxNetwork network = SandboxNetwork::Allow;
@@ -196,6 +196,10 @@ struct SandboxPolicy {
     // RLIMIT_NPROC (Linux: counts every process and thread of the user, not just this tree; ignored
     // for root) / Job Object active process limit. 0 = none.
     int max_processes = 0;
+    // GPU device nodes read-write (Linux: /dev/dri, /dev/kfd, /dev/nvidia*). Opt-in: needed only by
+    // GPU builds of an engine (CUDA, ROCm, Vulkan) or GPU tools; the drivers are a large kernel
+    // attack surface. Needs system_paths.
+    bool gpu = false;
 };
 
 namespace tools {
@@ -431,7 +435,8 @@ struct Config {
     SandboxPolicy tool_sandbox{.enabled = true};
     // OS sandbox for the agent-engine-host (process isolation only): plugin dir, model path and
     // engine_options paths read-only, workspace read-only, workspace/artifacts read-write, no
-    // network, no /tmp. memory_limit_bytes becomes the host's RLIMIT_AS.
+    // network, no /tmp, no GPU (set engine_sandbox.gpu for CUDA/ROCm/Vulkan builds).
+    // memory_limit_bytes becomes the host's RLIMIT_AS.
     SandboxPolicy engine_sandbox{.enabled = true, .allow_tmp = false, .network = SandboxNetwork::Deny};
 
     // AiProvider::Engine: the task (an AGENT_CAP_* bit) for requests that don't set InferRequest::task,

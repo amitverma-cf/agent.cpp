@@ -9,7 +9,7 @@ sandbox does. It is applied to three kinds of children:
 |---|---|---|
 | `agent-engine-host` (`EngineIsolation::Process`) | `Config::engine_sandbox` | **on**: plugin + model read-only, workspace read-only, `workspace/artifacts` read-write, no network, no `/tmp` |
 | `run_command` (default tool set) | `Config::tool_sandbox` | **on**: workspace read-write, system dirs read-only, `/tmp` read-write, network allowed |
-| MCP servers | `McpServerConfig::sandbox` | **off** (opt-in per server) |
+| MCP servers | `McpServerConfig::sandbox` (`"sandbox"` per server in [agent.json](api/agent-json.md#mcp_servers)) | **off** (opt-in per server) |
 
 In-process engines are not sandboxed (they are the calling process). Neither is anything your own
 tools start.
@@ -24,11 +24,12 @@ struct SandboxPolicy {
     bool filesystem = true;                     // false: no filesystem rules at all
     std::vector<std::string> read_only_paths;   // extra, on top of what each use adds
     std::vector<std::string> read_write_paths;
-    bool system_paths = true;                   // /usr, /lib*, selected /etc files, /proc, /sys, /dev basics, GPUs
+    bool system_paths = true;                   // /usr, /lib*, selected /etc files, /proc, /sys, /dev basics
     bool allow_tmp = true;                      // $TMPDIR (or /tmp) and /var/tmp read-write
     SandboxNetwork network = SandboxNetwork::Allow;
     uint64_t memory_limit_bytes = 0;            // RLIMIT_AS / Job Object memory, 0 = none
     int max_processes = 0;                      // RLIMIT_NPROC / Job Object process count, 0 = none
+    bool gpu = false;                           // GPU device nodes read-write (opt-in, see below)
 };
 
 cfg.tool_sandbox   = {.enabled = true};                                                         // default
@@ -90,8 +91,18 @@ The system read-only list is `/usr /bin /sbin /lib /lib32 /lib64 /libx32 /opt /n
 `localtime`, `alternatives`, locale and GPU ICD directories, and, when the network is allowed, the
 resolver and TLS files (`hosts`, `resolv.conf`, `/etc/ssl`, `/run/systemd/resolve`, ...). Not
 `/etc/shadow`, not `/home`, not `/root`. Read-write devices: `/dev/null`, `/dev/zero`, `/dev/full`,
-`/dev/random`, `/dev/urandom`, `/dev/shm`, `/dev/dri`, `/dev/kfd`, `/dev/nvidia*`. See
-`hal::sandbox_system_read_only_paths()`.
+`/dev/random`, `/dev/urandom`, `/dev/shm`. See `hal::sandbox_system_read_only_paths()`.
+
+**GPUs are opt-in** (`SandboxPolicy::gpu`, default `false` for every child): with it, `/dev/dri`
+(DRM card and render nodes: Vulkan, Intel, ROCm), `/dev/kfd` (ROCm compute) and every `/dev/nvidia*`
+node (`nvidiactl`, `nvidia-uvm`, `nvidia0`, ...) become read-write. GPU drivers are a large kernel
+attack surface, so a CPU engine should not be able to reach them. The driver libraries (`/usr/lib`),
+ICD files (`/etc/vulkan`, `/etc/OpenCL`, `/usr/share/vulkan`) and `/sys` / `/proc` (device
+enumeration) are readable either way. A CUDA, ROCm or Vulkan build of llama.cpp / sd.cpp, or ORT
+with the CUDA provider, needs `cfg.engine_sandbox.gpu = true`; the `agent` CLI sets it whenever the
+engine's `backend` in `engines.json` (or `config.json`) is anything but `"cpu"`. CUDA also keeps a
+JIT cache in `~/.nv/ComputeCache` (`$CUDA_CACHE_PATH`): without a read-write entry for it the cache
+is simply not written (kernels are re-JITed per start). Untested: this machine has no GPU.
 
 **Graceful degradation.** A kernel without Landlock (older than 5.13, or Landlock not in the active
 LSM list) or without seccomp still spawns the child; what could not be enforced is returned as
@@ -115,11 +126,24 @@ uses the `landlock_create_ruleset(..., LANDLOCK_CREATE_RULESET_VERSION)` syscall
 ## macOS (written, untested)
 
 The same `setsid` / rlimit / close-on-exec steps, then `sandbox_init()` with an SBPL profile:
-`(allow default)`, `(deny file-read* file-write*)`, then the allow-lists re-allowed as `subpath`
-rules (system list: `/System`, `/usr`, `/bin`, `/sbin`, `/Library`, `/opt/homebrew`, `/private/etc`,
-`/dev`, ...), and `(deny network*)` except Unix sockets when the network is denied. `sandbox_init`
-is deprecated but still present; the profile has never been run. Every sandboxed spawn reports the
-warning "the macOS sandbox_init() profile is untested".
+`(allow default)`, `(deny file-read* file-write*)`, `(allow file-read-metadata)` (stat / realpath /
+dyld walk the parents of allowed paths; names and attributes stay visible, contents do not), then
+the allow-lists re-allowed as `subpath` rules on their canonical paths (`/tmp` becomes
+`/private/tmp`; system list: `/System`, `/usr`, `/bin`, `/sbin`, `/Library`, `/opt/homebrew`,
+`/private/etc`, `/private/var/db/dyld`, `/dev`, ...), and `(deny network*)` except Unix sockets when
+the network is denied. `sandbox_init` is deprecated but still present; the profile has never been
+run. Every sandboxed spawn reports the warning "the macOS sandbox_init() profile is untested".
+
+Known gaps, from review only:
+
+- `sandbox_init()` runs in the child between `fork()` and `exec()`. It compiles the profile, which
+  allocates; in a multithreaded parent that is not async-signal-safe and can deadlock on a malloc
+  lock held by another thread at fork time. The fix is to exec through `/usr/bin/sandbox-exec -p
+  <profile>` (deprecated too) or to compile the profile in the parent (private
+  `sandbox_compile_string` / `sandbox_apply`).
+- `SandboxPolicy::gpu` does nothing: Metal goes through IOKit / Mach services, which `(allow
+  default)` leaves open anyway. Mach lookups, IPC and `process-exec` are not restricted at all.
+- `RLIMIT_AS` is not enforced by the macOS kernel for most allocations.
 
 ## Windows (written, untested)
 
@@ -129,10 +153,29 @@ whole tree dies with the `ChildProcess` / when run_command returns), no breakawa
 `max_processes`, and UI restrictions (no clipboard, desktop switching, global atoms, system
 parameter changes).
 
-**Not enforced on Windows:** the filesystem allow-list and network denial. AppContainer would do
-both, but it needs an ACL entry for the AppContainer SID on every allowed directory (a persistent
-change to the user's files) and loopback exemptions; a restricted token alone does not restrict file
-access for files the user owns. Spawns report a warning saying so. This code has never been compiled.
+**Not enforced on Windows:** the filesystem allow-list and network denial. Spawns report a warning
+saying so. This code has never been compiled.
+
+AppContainer is the planned way to enforce both, and why it is not done yet:
+
+- An AppContainer process can open only objects whose DACL grants its SID (or `ALL APPLICATION
+  PACKAGES`). Every allowed directory (plugin, model, workspace, artifacts) needs an inheritable ACE
+  for the container SID: a persistent change to the user's files that must be added before the spawn
+  and removed afterwards (or kept, keyed by a stable container name from
+  `CreateAppContainerProfile`). Parallel sessions sharing a directory have to coordinate the ACEs.
+- `C:\Windows` and `Program Files` are already readable through `ALL APPLICATION PACKAGES`; the
+  user profile, other drives and temp directories are not, which is the point.
+- The network is denied unless the `internetClient` / `privateNetworkClientServer` capabilities are
+  added, so `network = Allow` maps to those; loopback needs a firewall exemption
+  (`NetworkIsolationSetAppContainerConfig`), so a local MCP server over TCP would not work without it.
+- The child is started with `STARTUPINFOEX` + `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`. The same
+  attribute list should carry `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`: today `CreateProcessW(...,
+  bInheritHandles = TRUE, ...)` lets the child inherit *every* inheritable handle of the parent, not
+  only its three pipe ends (the Linux path marks everything else close-on-exec).
+
+Other review notes: a failed `AssignProcessToJobObject` (e.g. a parent job that forbids nesting on
+Windows 7) degrades to a warning and the child runs without limits; `SandboxPolicy::gpu` has no
+meaning (no device files).
 
 ## Verifying
 
@@ -149,4 +192,9 @@ access for files the user owns. Spawns report a warning saying so. This code has
 - the engine host runs the mock engine under its default policy: the model file is readable,
   `/etc/shadow`, a temp secret and writes outside `artifacts/` are not, `socket(AF_INET)` fails
   (mock triggers `read:<path>`, `write:<path>`, `net`);
-- an MCP server with an opted-in sandbox still serves tool calls.
+- an MCP server with an opted-in sandbox still serves tool calls; `agent.json`'s per-server
+  `"sandbox"` object is parsed, validated and reaches the spawn (`test_graph_json.cpp`);
+- GPU device nodes are only in the read-write list with `gpu = true`.
+
+`tests/unit/test_engine_sandbox.cpp` runs every real engine through the sandboxed host under the
+untouched default policy (gated on the model environment variables; see the next section).
