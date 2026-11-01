@@ -99,6 +99,9 @@ struct InferRequest {
     bool          stream          = false;
     TokenStreamFn on_token        = nullptr;
     void         *token_user_data = nullptr;
+    // ... on_progress, cancel, task (see engines.md)
+    std::string_view params_json;            // extra engine parameters, a JSON object merged into
+                                             // agent_request::params_json (e.g. {"mode":"yesno"})
 };
 ```
 

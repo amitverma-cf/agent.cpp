@@ -34,6 +34,7 @@ The library is designed around three principles:
 | [API — Memory](api/memory.md) | `MemoryConfig`, `store_memory`, `retrieve_memory` |
 | [API — Data Sources](api/data-sources.md) | `DataSource`, RAG/SQLite/GraphRAG integration |
 | [API — RAG](api/rag.md) | `embed`, `rerank`, `VectorStoreOps` (in-memory, sqlite-vec), chunking, `rag_index` / `rag_query`, `search_knowledge` tool |
+| [API — Decisions](api/decide.md) | `decide`, `decide_score`, `decide_yes_no`: choice / score / yes-no probabilities from model log-probabilities (`AGENT_CAP_DECIDE`) |
 | [API — Events](api/events.md) | `EventType`, `EventHook`, `register_event_hook` |
 | [API — Stats](api/stats.md) | `TurnStats`, `SessionStats`, `get_stats` |
 | [API — Model registry](api/models.md) | `ModelRegistry`: lazy model loading under a RAM/VRAM budget, LRU unload, leases, `GraphNode::model`, memory estimates |

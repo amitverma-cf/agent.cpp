@@ -13,6 +13,9 @@
 //
 // With options.mode "embed" / "rerank" the context is created in embedding mode with pooling (rank
 // pooling for rerankers) and run() serves AGENT_CAP_EMBED / AGENT_CAP_RERANK instead of chat.
+//
+// In generate mode AGENT_CAP_DECIDE scores a fixed set of answers (choice / score / yes-no) from the
+// model's log-probabilities after one prompt prefill, without generating.
 
 #include <agent-cpp/engine_abi.h>
 #include <algorithm>
@@ -78,26 +81,7 @@ class Batcher {
     bool prefill(llama_seq_id seq, const std::vector<llama_token> &tokens, llama_sampler *sampler, llama_token &out) {
         if (tokens.empty()) return false;
         std::lock_guard<std::mutex> lock(mu_);
-        const size_t chunk = std::max<size_t>(1, llama_n_batch(ctx));
-        llama_batch batch = llama_batch_init(static_cast<int32_t>(std::min(chunk, tokens.size())), 0, 1);
-        llama_pos pos = next_pos_[seq];
-        bool ok = true;
-        for (size_t begin = 0; ok && begin < tokens.size(); begin += chunk) {
-            const size_t n = std::min(chunk, tokens.size() - begin);
-            for (size_t i = 0; i < n; ++i) {
-                batch.token[i] = tokens[begin + i];
-                batch.pos[i] = pos + static_cast<llama_pos>(i);
-                batch.n_seq_id[i] = 1;
-                batch.seq_id[i][0] = seq;
-                batch.logits[i] = (begin + i + 1 == tokens.size());
-            }
-            batch.n_tokens = static_cast<int32_t>(n);
-            ok = llama_decode(ctx, batch) == 0;
-            pos += static_cast<llama_pos>(n);
-        }
-        llama_batch_free(batch);
-        if (!ok) return false;
-        next_pos_[seq] = pos;
+        if (!decode_prompt_locked(seq, tokens)) return false;
         out = llama_sampler_sample(sampler, ctx, -1);
         return true;
     }
@@ -168,12 +152,96 @@ class Batcher {
         return res.ok;
     }
 
+    // AGENT_CAP_DECIDE: prefills the prompt (text tokens, or mtmd chunks when chunks is set) on seq, then
+    // adds up the log-probability of each option's tokens following it. Every option is decoded after the
+    // prompt and removed again, so one sequence serves all of them. Runs under the batching mutex.
+    bool score_options(llama_seq_id seq, const std::vector<llama_token> &tokens, mtmd_context *mctx, const mtmd_input_chunks *chunks,
+                       const std::vector<std::vector<llama_token>> &options, std::vector<double> &logprobs) {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (chunks) {
+            llama_pos n_past = next_pos_[seq];
+            if (mtmd_helper_eval_chunks(mctx, ctx, chunks, n_past, seq, static_cast<int32_t>(llama_n_batch(ctx)), true, &n_past) != 0)
+                return false;
+            next_pos_[seq] = n_past;
+        } else if (!decode_prompt_locked(seq, tokens)) {
+            return false;
+        }
+        const llama_pos base = next_pos_[seq];
+        const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+        // The prompt's logits are overwritten by the first option decode: take every option's first token now.
+        const float *last = llama_get_logits_ith(ctx, -1);
+        if (!last) return false;
+        logprobs.assign(options.size(), 0.0);
+        for (size_t o = 0; o < options.size(); ++o) logprobs[o] = token_logprob(last, n_vocab, options[o].front());
+
+        size_t longest = 1;
+        for (const auto &opt : options) longest = std::max(longest, opt.size());
+        llama_batch batch = llama_batch_init(static_cast<int32_t>(longest), 0, 1);
+        bool ok = true;
+        for (size_t o = 0; ok && o < options.size(); ++o) {
+            const std::vector<llama_token> &opt = options[o];
+            if (opt.size() < 2) continue;
+            for (size_t i = 0; i + 1 < opt.size(); ++i) {
+                batch.token[i] = opt[i];
+                batch.pos[i] = base + static_cast<llama_pos>(i);
+                batch.n_seq_id[i] = 1;
+                batch.seq_id[i][0] = seq;
+                batch.logits[i] = true;
+            }
+            batch.n_tokens = static_cast<int32_t>(opt.size() - 1);
+            ok = llama_decode(ctx, batch) == 0;
+            for (size_t i = 0; ok && i + 1 < opt.size(); ++i) {
+                const float *logits = llama_get_logits_ith(ctx, static_cast<int32_t>(i));
+                ok = logits != nullptr;
+                if (ok) logprobs[o] += token_logprob(logits, n_vocab, opt[i + 1]);
+            }
+            llama_memory_seq_rm(llama_get_memory(ctx), seq, base, -1);
+        }
+        llama_batch_free(batch);
+        return ok;
+    }
+
     void clear() {
         std::lock_guard<std::mutex> lock(mu_);
         llama_memory_clear(llama_get_memory(ctx), true);
     }
 
   private:
+    // Decodes tokens on seq after its current position in chunks of at most n_batch, with logits for
+    // the last token only. mu_ must be held.
+    bool decode_prompt_locked(llama_seq_id seq, const std::vector<llama_token> &tokens) {
+        if (tokens.empty()) return false;
+        const size_t chunk = std::max<size_t>(1, llama_n_batch(ctx));
+        llama_batch batch = llama_batch_init(static_cast<int32_t>(std::min(chunk, tokens.size())), 0, 1);
+        llama_pos pos = next_pos_[seq];
+        bool ok = true;
+        for (size_t begin = 0; ok && begin < tokens.size(); begin += chunk) {
+            const size_t n = std::min(chunk, tokens.size() - begin);
+            for (size_t i = 0; i < n; ++i) {
+                batch.token[i] = tokens[begin + i];
+                batch.pos[i] = pos + static_cast<llama_pos>(i);
+                batch.n_seq_id[i] = 1;
+                batch.seq_id[i][0] = seq;
+                batch.logits[i] = (begin + i + 1 == tokens.size());
+            }
+            batch.n_tokens = static_cast<int32_t>(n);
+            ok = llama_decode(ctx, batch) == 0;
+            pos += static_cast<llama_pos>(n);
+        }
+        llama_batch_free(batch);
+        if (ok) next_pos_[seq] = pos;
+        return ok;
+    }
+
+    // log softmax(logits)[token], computed in double.
+    static double token_logprob(const float *logits, int32_t n_vocab, llama_token token) {
+        float max = logits[0];
+        for (int32_t i = 1; i < n_vocab; ++i) max = std::max(max, logits[i]);
+        double sum = 0.0;
+        for (int32_t i = 0; i < n_vocab; ++i) sum += std::exp(static_cast<double>(logits[i]) - max);
+        return static_cast<double>(logits[token]) - max - std::log(sum);
+    }
+
     static constexpr std::chrono::milliseconds kDebounceWindow{2};
 
     struct RoundReq {
@@ -734,6 +802,296 @@ int32_t run_rerank(Instance &inst, const agent_request *req, agent_response *res
     return AGENT_OK;
 }
 
+// ------------------------------------------------------------------ decisions (choice / score / yes-no)
+
+void append_json_string(std::string &out, std::string_view s) {
+    out += '"';
+    for (const char c : s) {
+        switch (c) {
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:
+            if (static_cast<unsigned char>(c) < 0x20) {
+                char buf[8];
+                std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(c));
+                out += buf;
+            } else {
+                out += c;
+            }
+        }
+    }
+    out += '"';
+}
+
+void append_json_number(std::string &out, double v) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.6g", std::isfinite(v) ? v : -1e30);
+    out += buf;
+}
+
+// Native decision models (llama-server's /v1/systemone, "<arch>.decision.type" in the GGUF) read their
+// answers from model-specific heads and prompt layouts, which generic option scoring doesn't reproduce.
+std::string native_decision_type(const llama_model *model) {
+    char arch[64], type[64];
+    if (llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch)) <= 0) return {};
+    const std::string key = std::string(arch) + ".decision.type";
+    if (llama_model_meta_val_str(model, key.c_str(), type, sizeof(type)) <= 0) return {};
+    return type;
+}
+
+enum class DecideMode { Choice, Score, YesNo };
+
+struct DecideParams {
+    DecideMode mode = DecideMode::Choice;
+    std::vector<std::string> options;
+    int scale_min = 1, scale_max = 5;
+    bool instructions = true; // append the answer-format instruction to the last user message
+    bool end = true;          // score "<option><end of turn>", so "1" doesn't also count "10"
+};
+
+int32_t parse_decide_params(const agent_request *req, DecideParams &p, std::string &error) {
+    simdjson::ondemand::parser parser;
+    simdjson::padded_string json(sv(req->params_json));
+    simdjson::ondemand::document doc;
+    simdjson::ondemand::object obj;
+    if (!req->params_json.size || parser.iterate(json).get(doc) || doc.get_object().get(obj)) {
+        error = "llama: DECIDE needs params_json, a JSON object with \"mode\" and \"options\" or \"scale\"";
+        return AGENT_ERR_INVALID_CONFIG;
+    }
+    for (auto field : obj) {
+        std::string_view key, s;
+        if (field.unescaped_key().get(key)) continue;
+        auto value = field.value();
+        if (key == "mode") {
+            if (value.get_string().get(s)) s = {};
+            if (s == "choice") p.mode = DecideMode::Choice;
+            else if (s == "score") p.mode = DecideMode::Score;
+            else if (s == "yesno") p.mode = DecideMode::YesNo;
+            else {
+                error = "llama: params_json.mode must be \"choice\", \"score\" or \"yesno\"";
+                return AGENT_ERR_INVALID_CONFIG;
+            }
+        } else if (key == "options") {
+            simdjson::ondemand::array arr;
+            if (value.get_array().get(arr)) {
+                error = "llama: params_json.options must be an array of strings";
+                return AGENT_ERR_INVALID_CONFIG;
+            }
+            for (auto el : arr) {
+                if (el.get_string().get(s) || s.empty()) {
+                    error = "llama: params_json.options must be non-empty strings";
+                    return AGENT_ERR_INVALID_CONFIG;
+                }
+                p.options.emplace_back(s);
+            }
+        } else if (key == "scale") {
+            simdjson::ondemand::array arr;
+            int64_t v[2] = {0, 0};
+            size_t n = 0;
+            if (!value.get_array().get(arr))
+                for (auto el : arr) {
+                    int64_t x = 0;
+                    if (n < 2 && !el.get_int64().get(x)) v[n] = x;
+                    ++n;
+                }
+            if (n != 2 || v[0] >= v[1] || v[0] < -1000 || v[1] > 1000 || v[1] - v[0] > 100) {
+                error = "llama: params_json.scale must be [min, max] integers with min < max and at most 101 levels";
+                return AGENT_ERR_INVALID_CONFIG;
+            }
+            p.scale_min = static_cast<int>(v[0]);
+            p.scale_max = static_cast<int>(v[1]);
+        } else if (key == "instructions") {
+            bool b = true;
+            if (!value.get_bool().get(b)) p.instructions = b;
+        } else if (key == "end") {
+            bool b = true;
+            if (!value.get_bool().get(b)) p.end = b;
+        }
+    }
+    if (p.mode == DecideMode::YesNo) {
+        p.options = {"Yes", "No"};
+    } else if (p.mode == DecideMode::Score) {
+        p.options.clear();
+        for (int v = p.scale_min; v <= p.scale_max; ++v) p.options.push_back(std::to_string(v));
+    } else if (p.options.size() < 2) {
+        error = "llama: DECIDE choice needs at least two params_json.options";
+        return AGENT_ERR_INVALID_CONFIG;
+    }
+    if (p.options.size() > 256) {
+        error = "llama: DECIDE takes at most 256 options";
+        return AGENT_ERR_INVALID_CONFIG;
+    }
+    return AGENT_OK;
+}
+
+std::string decide_instruction(const DecideParams &p) {
+    switch (p.mode) {
+    case DecideMode::YesNo: return "\n\nAnswer with Yes or No.";
+    case DecideMode::Score:
+        return "\n\nAnswer with a single whole number from " + std::to_string(p.scale_min) + " to " + std::to_string(p.scale_max) + ".";
+    case DecideMode::Choice: break;
+    }
+    std::string s = "\n\nOptions:\n";
+    for (const std::string &o : p.options) s += "- " + o + "\n";
+    s += "\nAnswer with exactly one of the options, word for word.";
+    return s;
+}
+
+// The rendered prompt of a non-chat task (DECIDE, OCR): text tokens, or mtmd chunks when the request
+// has media. in must come from build_inputs(); its tools are dropped.
+struct TaskPrompt {
+    std::vector<mtmd::bitmap> bitmaps;
+    std::vector<llama_token> tokens;
+    mtmd::input_chunks chunks;
+    int n_tokens = 0;
+    bool has_media() const { return chunks.ptr != nullptr; }
+};
+
+int32_t render_task_prompt(Instance &inst, const agent_request *req, common_chat_templates_inputs in, TaskPrompt &out, std::string &error) {
+    bool has_media = false;
+    for (size_t i = 0; i < req->n_messages && !has_media; ++i)
+        for (size_t k = 0; k < req->messages[i].n_parts && !has_media; ++k) has_media = is_media(req->messages[i].parts[k]);
+    if (has_media && !inst.mtmd) {
+        error = "llama: image/audio input needs a multimodal projector (engine option \"mmproj\")";
+        return AGENT_ERR_UNSUPPORTED;
+    }
+    if (has_media)
+        if (int32_t rc = load_media(inst, req, out.bitmaps, error); rc != AGENT_OK) return rc;
+    in.tools.clear();
+    const llama_vocab *vocab = llama_model_get_vocab(inst.batcher.model);
+    common_chat_session session;
+    if (!start_session(inst, vocab, in, session, error)) return AGENT_ERR_INVALID_CONFIG;
+    if (has_media) {
+        out.chunks.ptr.reset(mtmd_input_chunks_init());
+        if (!tokenize_media_prompt(inst, session.prompt(), out.bitmaps, out.chunks.ptr.get(), error)) return AGENT_ERR_DECODE_FAILED;
+        out.n_tokens = static_cast<int>(mtmd_helper_get_n_tokens(out.chunks.ptr.get()));
+    } else {
+        if (!tokenize_prompt(vocab, session.prompt(), out.tokens)) {
+            error = "llama: tokenization failed";
+            return AGENT_ERR_DECODE_FAILED;
+        }
+        out.n_tokens = static_cast<int>(out.tokens.size());
+    }
+    return AGENT_OK;
+}
+
+common_chat_msg *last_user(common_chat_templates_inputs &in) {
+    for (auto it = in.messages.rbegin(); it != in.messages.rend(); ++it)
+        if (it->role == "user") return &*it;
+    return nullptr;
+}
+
+// AGENT_CAP_DECIDE: the request's messages hold the question (and optional images, with an mmproj);
+// params_json picks the answers: {"mode":"choice","options":[...]}, {"mode":"score","scale":[1,5]} or
+// {"mode":"yesno"}. Each answer is scored as the reply to the rendered chat by the sum of its tokens'
+// log-probabilities (plus the end-of-turn token), and the scores are normalized with a softmax.
+// Returns a TEXT part with a JSON summary and a "probs" tensor (f32 [n_options]) in option order.
+int32_t run_decide(Instance &inst, const agent_request *req, agent_response *resp) {
+    Batcher &b = inst.batcher;
+    if (const std::string native = native_decision_type(b.model); !native.empty())
+        return inst.fail(AGENT_ERR_UNSUPPORTED, "llama: this is a native decision model (" + native +
+                                                    ", System One format); serve it with llama-server's /v1/systemone. DECIDE here "
+                                                    "scores options with an instruct model's LM head");
+    DecideParams p;
+    std::string error;
+    if (int32_t rc = parse_decide_params(req, p, error); rc != AGENT_OK) return inst.fail(rc, error);
+
+    common_chat_templates_inputs in = build_inputs(req, inst.mtmd ? mtmd_default_marker() : nullptr);
+    if (p.instructions) {
+        common_chat_msg *user = last_user(in);
+        if (!user) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: DECIDE needs a user message with the question");
+        user->content += decide_instruction(p);
+    }
+    TaskPrompt prompt;
+    if (int32_t rc = render_task_prompt(inst, req, std::move(in), prompt, error); rc != AGENT_OK) return inst.fail(rc, error);
+
+    const llama_vocab *vocab = llama_model_get_vocab(b.model);
+    llama_token end = llama_vocab_eot(vocab);
+    if (end == LLAMA_TOKEN_NULL) end = llama_vocab_eos(vocab);
+    std::vector<std::vector<llama_token>> option_tokens;
+    size_t longest = 0;
+    for (const std::string &o : p.options) {
+        std::vector<llama_token> t = tokenize_text(vocab, o, false, false);
+        if (t.empty()) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: option \"" + o + "\" has no tokens");
+        if (p.end && end != LLAMA_TOKEN_NULL) t.push_back(end);
+        longest = std::max(longest, t.size());
+        option_tokens.push_back(std::move(t));
+    }
+    if (longest > llama_n_batch(b.ctx)) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: a DECIDE option is longer than n_batch tokens");
+    if (prompt.n_tokens + static_cast<int>(longest) >= b.seq_ctx)
+        return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: prompt is " + std::to_string(prompt.n_tokens) + " tokens (+" +
+                                                       std::to_string(longest) + " for the longest option) but context_window is " +
+                                                       std::to_string(b.seq_ctx));
+    if (req->cancel && *req->cancel) return inst.fail(AGENT_ERR_CANCELLED, "llama: cancelled");
+
+    llama_seq_id seq = 0;
+    if (!b.acquire_seq(seq)) return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: no free sequence slot (raise max_parallel_subagents)");
+    std::vector<double> logprobs;
+    const bool scored = b.score_options(seq, prompt.tokens, inst.mtmd.get(), prompt.chunks.ptr.get(), option_tokens, logprobs);
+    b.release_seq(seq);
+    if (!scored) return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: decode failed while scoring the options");
+
+    // Softmax over the options' sequence log-probabilities.
+    const double max = *std::max_element(logprobs.begin(), logprobs.end());
+    std::vector<double> probs(logprobs.size());
+    double sum = 0.0;
+    for (size_t i = 0; i < probs.size(); ++i) sum += probs[i] = std::exp(logprobs[i] - max);
+    for (double &v : probs) v /= sum;
+    const auto best = static_cast<size_t>(std::max_element(probs.begin(), probs.end()) - probs.begin());
+
+    CallOutput &out = inst.output();
+    out = CallOutput{};
+    static constexpr const char *kDecideModeName[] = {"choice", "score", "yesno"};
+    std::string &j = out.content;
+    j = "{\"mode\":\"";
+    j += kDecideModeName[static_cast<size_t>(p.mode)];
+    j += "\",\"choice\":";
+    append_json_string(j, p.options[best]);
+    j += ",\"index\":" + std::to_string(best) + ",\"confidence\":";
+    append_json_number(j, probs[best]);
+    if (p.mode == DecideMode::Score) {
+        double expected = 0.0;
+        for (size_t i = 0; i < probs.size(); ++i) expected += probs[i] * (p.scale_min + static_cast<double>(i));
+        j += ",\"score\":";
+        append_json_number(j, expected);
+        j += ",\"scale\":[" + std::to_string(p.scale_min) + "," + std::to_string(p.scale_max) + "]";
+    } else if (p.mode == DecideMode::YesNo) {
+        j += ",\"yes\":";
+        append_json_number(j, probs[0]);
+    }
+    auto append_array = [&j](const char *key, auto &&values, auto &&append) {
+        j += ",\"";
+        j += key;
+        j += "\":[";
+        for (size_t i = 0; i < values.size(); ++i) {
+            if (i) j += ',';
+            append(j, values[i]);
+        }
+        j += ']';
+    };
+    append_array("options", p.options, [](std::string &o, const std::string &v) { append_json_string(o, v); });
+    append_array("probs", probs, [](std::string &o, double v) { append_json_number(o, v); });
+    append_array("logprobs", logprobs, [](std::string &o, double v) { append_json_number(o, v); });
+    j += '}';
+
+    out.floats.assign(probs.begin(), probs.end());
+    out.shape = static_cast<int64_t>(probs.size());
+    tensor_parts(out, "probs", 1, resp);
+    agent_part text{};
+    text.kind = AGENT_PART_TEXT;
+    text.text = agent_str{out.content.data(), out.content.size()};
+    out.parts.insert(out.parts.begin(), text);
+    resp->message.parts = out.parts.data();
+    resp->message.n_parts = out.parts.size();
+    int completion = 0;
+    for (const auto &t : option_tokens) completion += static_cast<int>(t.size());
+    resp->usage = agent_usage{prompt.n_tokens, completion};
+    return AGENT_OK;
+}
+
 // llama.cpp has no public "has a classification head" query. Reranker GGUFs carry no
 // <arch>.pooling_type or declare rank pooling; embedding models declare mean / cls / last. So a
 // declared non-rank pooling type rules the model out.
@@ -899,8 +1257,9 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
     auto *inst = static_cast<Instance *>(instance);
     if (inst->mode == Mode::Embed && req->task == AGENT_CAP_EMBED) return run_embed(*inst, req, resp);
     if (inst->mode == Mode::Rerank && req->task == AGENT_CAP_RERANK) return run_rerank(*inst, req, resp);
+    if (inst->mode == Mode::Generate && req->task == AGENT_CAP_DECIDE) return run_decide(*inst, req, resp);
     if (inst->mode != Mode::Generate || req->task != AGENT_CAP_TEXT_GEN) {
-        static constexpr const char *kModeTask[] = {"TEXT_GEN", "EMBED", "RERANK"};
+        static constexpr const char *kModeTask[] = {"TEXT_GEN / DECIDE", "EMBED", "RERANK"};
         static constexpr const char *kModeName[] = {"generate", "embed", "rerank"};
         const auto m = static_cast<size_t>(inst->mode);
         return inst->fail(AGENT_ERR_UNSUPPORTED, std::string("llama: this instance was created with mode \"") + kModeName[m] +
@@ -1067,7 +1426,8 @@ const agent_engine_v1 kLlamaEngine = {
     // projector that supports it); otherwise run() returns AGENT_ERR_UNSUPPORTED for media parts.
     // EMBED / RERANK need an instance created with options.mode "embed" / "rerank"; an instance runs
     // only its own mode's task.
-    AGENT_CAP_TEXT_GEN | AGENT_CAP_TOOL_CALL | AGENT_CAP_VISION_IN | AGENT_CAP_AUDIO_IN | AGENT_CAP_EMBED | AGENT_CAP_RERANK,
+    AGENT_CAP_TEXT_GEN | AGENT_CAP_TOOL_CALL | AGENT_CAP_VISION_IN | AGENT_CAP_AUDIO_IN | AGENT_CAP_EMBED | AGENT_CAP_RERANK |
+        AGENT_CAP_DECIDE,
     AGENT_ENGINE_FLAG_CONCURRENT | AGENT_ENGINE_FLAG_NATIVE_TOOLS,
     llama_create,
     llama_destroy,

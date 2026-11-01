@@ -305,6 +305,17 @@ cfg.context_window = 512;
 cfg.engine_options = R"({"mode": "embed"})";
 ```
 
+### Decisions: choice / score / yes-no
+
+In generate mode the instance also serves `AGENT_CAP_DECIDE`: the request's messages hold a question
+(plus images with `mmproj`), `params_json` the answers (`{"mode":"choice","options":[...]}`,
+`{"mode":"score","scale":[1,5]}` or `{"mode":"yesno"}`). Each answer is scored as the assistant's reply
+by the sum of its tokens' log-probabilities plus the end-of-turn token, after one shared prompt
+prefill, and the sums are softmax-normalized. The response is a TEXT part with a JSON summary and an
+f32 `"probs"` tensor. Native System One decision models (`<arch>.decision.type` in the GGUF) are
+detected and rejected with `AGENT_ERR_UNSUPPORTED`. Use it through `agent::decide` /
+`decide_score` / `decide_yes_no`; see [decide.md](decide.md) for the protocol and the scoring details.
+
 `common_chat` reports errors by throwing, and exceptions must not cross the plugin ABI. So the
 plugin catches at exactly those calls (template load/render, output parsing) and converts them to
 status codes. This is the only exception boundary in agent.cpp.
