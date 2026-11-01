@@ -1,0 +1,53 @@
+{
+  "//": "Write a draft, then loop: a reviewer approves or sends feedback, and the writer revises in its own conversation. Stops at APPROVED or after 3 reviews.",
+  "name": "review_loop",
+  "description": "Writer / reviewer loop with a route inside the loop body and a shared writer history.",
+  "engine": "llama",
+  "model": "qwen2.5-0.5b-instruct",
+  "checkpointer": "sqlite",
+  "entry": "pipeline",
+  "nodes": [
+    {
+      "name": "pipeline",
+      "kind": "sequential",
+      "steps": ["write", "review"]
+    },
+    {
+      "name": "write",
+      "kind": "agent",
+      "system_prompt": "You are a concise technical writer. Write at most five sentences.",
+      "input_key": "task",
+      "output_key": "draft",
+      "history_key": "writer"
+    },
+    {
+      "name": "review",
+      "kind": "loop",
+      "body": "reviewer",
+      "max_iterations": 3,
+      "until": { "key": "verdict", "equals": "APPROVED" }
+    },
+    {
+      "name": "reviewer",
+      "kind": "agent",
+      "system_prompt": "You review drafts. Reply with exactly APPROVED if the draft is clear and correct; otherwise give at most three short bullet points of feedback.",
+      "input_key": "draft",
+      "output_key": "verdict"
+    },
+    {
+      "name": "revise",
+      "kind": "agent",
+      "system_prompt": "You are a concise technical writer. Rewrite your previous draft, applying the reviewer's feedback. Reply with the new draft only.",
+      "input_key": "verdict",
+      "output_key": "draft",
+      "history_key": "writer"
+    }
+  ],
+  "edges": [
+    {
+      "from": "reviewer",
+      "route": { "key": "verdict", "cases": { "APPROVED": "__end__" }, "default": "revise" }
+    },
+    { "from": "pipeline", "to": "__end__" }
+  ]
+}

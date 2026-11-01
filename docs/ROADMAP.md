@@ -270,7 +270,7 @@ Watch list: audio.cpp as a meta-engine; llama.cpp native TTS / image gen when th
   - [ ] Windows and macOS packaging (TODO in [docs/packaging.md](packaging.md))
 
 ### Phase 6: SDK and docs (finalize at release)
-- [ ] Guides: embed the library, write an engine plugin, write a tool, write a graph (JSON + C++)
+- [x] Guides: [embed the library](guides/getting-started-library.md), [write an engine plugin](guides/writing-an-engine.md), [write a tool](guides/writing-a-tool.md), [write a graph](guides/writing-a-graph.md) (JSON + C++); every C++ snippet is taken from `examples/guides/`, which builds with `AGENT_BUILD_EXAMPLES` and runs on the mock engine under ctest (`-L examples`)
 - [ ] Examples: voice assistant (STT → LLM → TTS) (done: `agent voice` + [guide](guides/voice-assistant.md); no graph JSON form, a graph runs on one engine session), image agent (LLM → SD → VLM critique loop), video storyboard, RAG over docs, OCR → extraction, decision-model router
 - [x] Engine plugin template: [`templates/engine-plugin/`](../templates/engine-plugin) (standalone CMake project against the installed package, C echo engine + test harness); not a separate repository or cookiecutter
 - [ ] Benchmarks: tokens/s, time to first audio, peak memory per pipeline
