@@ -206,6 +206,8 @@ option(AGENT_ENGINE_SDCPP "Build the stable-diffusion.cpp image generation engin
 # Heavy (builds trellis2.cpp + its own ggml), so off by default.
 option(AGENT_ENGINE_TRELLIS "Build the TRELLIS.2 image-to-3D engine plugin (engines/trellis)" OFF)
 option(AGENT_ENGINE_SHERPA "Build the sherpa-onnx speech engine plugin (engines/sherpa, needs SHERPA_ONNX_ROOT)" OFF)
+# Builds whisper.cpp + its own ggml, so off by default.
+option(AGENT_ENGINE_WHISPER "Build the whisper.cpp speech-to-text engine plugin (engines/whisper)" OFF)
 
 add_executable(basic examples/basic/basic.cpp)
 target_link_libraries(basic PRIVATE agent)
@@ -252,6 +254,9 @@ if(AGENT_ENGINE_TRELLIS)
 endif()
 if(AGENT_ENGINE_SHERPA)
     add_subdirectory(engines/sherpa)
+endif()
+if(AGENT_ENGINE_WHISPER)
+    add_subdirectory(engines/whisper)
 endif()
 
 enable_testing()
@@ -342,6 +347,12 @@ if(AGENT_ENGINE_SHERPA)
     target_sources(test_agent PRIVATE tests/unit/test_engine_sherpa.cpp)
     target_compile_definitions(test_agent PRIVATE AGENT_TEST_SHERPA_ENGINE_PATH="$<TARGET_FILE:agent-engine-sherpa>")
     add_dependencies(test_agent agent-engine-sherpa)
+endif()
+if(AGENT_ENGINE_WHISPER)
+    target_sources(test_agent PRIVATE tests/unit/test_engine_whisper.cpp)
+    target_compile_definitions(test_agent PRIVATE AGENT_TEST_WHISPER_ENGINE_PATH="$<TARGET_FILE:agent-engine-whisper>"
+                                                  AGENT_TEST_WHISPER_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/vendor/whisper.cpp/samples")
+    add_dependencies(test_agent agent-engine-whisper)
 endif()
 target_compile_options(test_agent PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 target_link_options(test_agent PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})

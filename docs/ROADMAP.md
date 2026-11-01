@@ -240,7 +240,7 @@ Priority wave A (v1 **starter pack**, installed by default by `agent setup`):
   - [x] v1: named tensors in/out (`AGENT_CAP_GENERIC`), concurrent `run()`, threads, graph optimization level, CPU/CUDA EP selection
   - [ ] IoBinding / device-resident outputs, more EPs (DirectML, CoreML, TensorRT), cancel during `Run()`, task-specific pre/post-processing (classify, embed, detect)
 Wave B (optional add-ons):
-- [ ] `whisper`: whisper.cpp STT
+- [x] `whisper`: whisper.cpp STT (`agent-engine-whisper`, whisper.cpp v1.9.5 C API, opt-in `AGENT_ENGINE_WHISPER`): ASR (language / translate / beam size, streamed segments, progress, cancel) + whisper.cpp's Silero VAD (`AGENT_CAP_VAD`, also as a pre-filter); Linux x64 CPU tested with ggml-tiny.en + ggml-silero-v5.1.2 on samples/jfk.wav
 - [ ] `parakeet`: parakeet.cpp (ggml STT)
 - [ ] `qwen3tts`: Qwen3-TTS (voice cloning), after licence check
 - [ ] more 3D engines as ggml/ONNX ports appear (e.g. Hunyuan3D if a commercially licensed port exists)

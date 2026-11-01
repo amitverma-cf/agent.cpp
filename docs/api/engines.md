@@ -594,3 +594,58 @@ Limitation: sherpa-onnx validates configs and returns NULL for most errors, but 
 Licences: Kokoro (Apache-2.0), Whisper (MIT), Silero VAD (MIT), pyannote segmentation-3.0 (MIT) and the
 TitaNet embedding model (CC-BY-4.0) are fine for the catalogue. 3D-Speaker embedding models are Apache-2.0 according to
 the 3D-Speaker repository; check the individual model card.
+
+## The whisper engine
+
+`engines/whisper` (`agent-engine-whisper`) wraps [whisper.cpp](https://github.com/ggml-org/whisper.cpp)
+(`vendor/whisper.cpp`, pinned to the v1.9.5 release tag) through its C API (`whisper.h`) for speech-to-text, plus
+whisper.cpp's built-in Silero voice activity detection. Caps `AGENT_CAP_ASR | AGENT_CAP_VAD`, flags 0.
+
+It is opt-in because it builds another copy of ggml:
+
+```sh
+git submodule update --init --depth 1 vendor/whisper.cpp
+cmake -B build -G Ninja -DAGENT_ENGINE_WHISPER=ON [-DAGENT_WHISPER_BUILD_JOBS=2]
+```
+
+As with sdcpp, whisper.cpp's ggml has the same CMake target names as llama.cpp's, so it is a nested CMake
+project (`ExternalProject`) linked statically into the plugin with hidden visibility; on Linux also
+`-Wl,--exclude-libs,ALL` and a version script (`engines/common/exports.map`), so the plugin exports
+`agent_engine_get_v1` only. The nested build is CPU-only.
+
+`Config::model` is a ggml whisper model (`ggml-*.bin`, for example `ggml-tiny.en.bin` or `ggml-base.bin` from
+[ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp)). `Config::engine_options`:
+
+| Option | Meaning |
+|--------|---------|
+| `language` | `"en"`, `"de"`, ... or `"auto"`. Default: `"auto"` for multilingual models, `"en"` for `.en` models. An unknown code fails `create()` with `AGENT_ERR_INVALID_CONFIG` |
+| `translate` | translate to English instead of transcribing (multilingual models) |
+| `threads` | CPU threads (default 4) |
+| `beam_size` | 1 = greedy (default), 2..16 = beam search |
+| `temperature`, `initial_prompt` | decoding temperature (default 0), prompt text for the decoder |
+| `flash_attn`, `gpu` | whisper context flags (no effect in the CPU-only build) |
+| `verbose` | forward whisper.cpp info logs to stderr (errors always are) |
+| `vad` | `{"model": "ggml-silero-v5.1.2.bin", "threshold": 0.5, "min_speech_ms": 250, "min_silence_ms": 100, "max_speech_s": ..., "speech_pad_ms": 30, "filter": false}` enables the `VAD` task; `filter: true` also cuts the audio to speech before every transcription |
+
+`params_json` per request accepts `language`, `translate` and `beam_size`.
+
+| `task` | Last user message | Result |
+|---|---|---|
+| `ASR`, automatic, or `TEXT_GEN` | audio part | transcript as a `TEXT` part |
+| `ASR` / automatic / `TEXT_GEN` | no audio part | `AGENT_ERR_INVALID_CONFIG` |
+| `VAD` | audio part, `vad` configured | `TEXT` `[{"start":0.29,"end":2.21}, ...]` (seconds) + `TENSOR` `segments` F32 `[n, 2]`, as for sherpa |
+| `VAD` | no `vad` configured | `AGENT_ERR_UNSUPPORTED` |
+| anything else | | `AGENT_ERR_UNSUPPORTED` |
+
+Audio input follows the sherpa conventions: a `FILE` or `BYTES` WAV (PCM 8/16/24/32-bit or float, any channel
+count and sample rate; down-mixed and linearly resampled to 16 kHz) or an `F32` `TENSOR` of mono samples at
+16 kHz. Each decoded segment is streamed as a `TEXT` chunk (the chunks concatenate to the transcript), progress
+goes to `on_progress(percent, 100)`, and `cancel` is checked before every encoder pass and every ggml graph
+computation (`AGENT_ERR_CANCELLED`). whisper.cpp's logger is process-wide; one instance with `verbose` turns
+info logs on for all of them.
+
+Tests (`tests/unit/test_engine_whisper.cpp`) run on whisper.cpp's `samples/jfk.wav`; the real-model cases need
+`AGENT_TEST_WHISPER_MODEL` (and `AGENT_TEST_WHISPER_VAD_MODEL` for VAD).
+
+Licences: whisper.cpp (MIT), OpenAI Whisper weights in ggml form (MIT), Silero VAD in ggml form
+([ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad), MIT).
