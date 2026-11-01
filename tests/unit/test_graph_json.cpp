@@ -357,7 +357,7 @@ TEST_CASE("agent.json: warnings for unknown fields, unreachable nodes and static
 }
 
 TEST_CASE("agent.json: graph files and the bundled examples", "[graph_json]") {
-    for (const char *name : {"research_pipeline.json", "router.json", "mcp_filesystem.json"}) {
+    for (const char *name : {"research_pipeline.json", "router.json", "mcp_filesystem.json", "review_loop.json"}) {
         std::string path = std::string(AGENT_TEST_EXAMPLES_DIR) + "/" + name;
         auto parsed = agent::parse_graph_json(path);
         INFO(path << ": " << parsed.error.message);

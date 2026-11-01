@@ -114,6 +114,7 @@ Library users: `find_package(agent-cpp)` and link `agent-cpp::agent` (plus `agen
 | `AGENT_INSTALL` | `ON` (top level) | Generate install rules and the `agent-cpp` CMake package |
 | `AGENT_ENGINE_ONNX` | `OFF` | Build the ONNX Runtime engine plugin (`engines/onnx`); needs `-DONNXRUNTIME_ROOT=<prebuilt ORT>` |
 | `AGENT_ENGINE_TRELLIS` | `OFF` | Build the TRELLIS.2 image-to-3D (GLB) engine plugin (`engines/trellis`); needs the `vendor/trellis2cpp` submodule and its ggml; `AGENT_TRELLIS_BUILD_JOBS` caps the nested build |
+| `AGENT_BUILD_EXAMPLES` | `ON` | Build `examples/` (guide code, image critique, RAG over docs) and their mock-engine smoke tests (`ctest -L examples`) |
 | `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UBSan |
 | `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |
 
@@ -145,6 +146,12 @@ Library users: `find_package(agent-cpp)` and link `agent-cpp::agent` (plus `agen
 ## Documentation
 
 Full documentation here: [`docs`](docs/index.md)
+
+Guides: [embedding the library](docs/guides/getting-started-library.md) ·
+[writing an engine plugin](docs/guides/writing-an-engine.md) ([template](templates/engine-plugin)) ·
+[writing a tool](docs/guides/writing-a-tool.md) · [writing a graph](docs/guides/writing-a-graph.md) ·
+[a local voice assistant](docs/guides/voice-assistant.md). Their code builds and runs as tests from
+[`examples/guides/`](examples/guides).
 
 ---
 

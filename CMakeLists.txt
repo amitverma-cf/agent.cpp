@@ -357,6 +357,12 @@ target_link_options(test_agent PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 include(${CMAKE_CURRENT_SOURCE_DIR}/vendor/catch2/extras/Catch.cmake)
 catch_discover_tests(test_agent)
 
+# Example programs and the code of docs/guides (smoke tests on the mock engine: ctest -L examples).
+option(AGENT_BUILD_EXAMPLES "Build examples/ (guide code, image critique, RAG over docs) and their smoke tests" ON)
+if(AGENT_BUILD_EXAMPLES)
+    add_subdirectory(examples)
+endif()
+
 # ----------------------------------------------------------------------------------------------
 # Install / export: find_package(agent-cpp) gives agent-cpp::agent, agent-cpp::store_sqlite and
 # (when built) agent-cpp::hub. The CLI goes to bin/, engine plugins to lib/agent/engines/ (see

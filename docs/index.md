@@ -19,6 +19,10 @@ The library is designed around three principles:
 | [Getting Started](getting-started.md) | Build instructions, first program |
 | [Installing and packaging](packaging.md) | `cmake --install`, `find_package(agent-cpp)`, static/shared, Linux release tarball (`scripts/package.sh`) |
 | [The `agent` CLI](cli.md) | `agent setup`, `engine`, `model`, `chat`, `run`, `voice`: config files, permissions, slash commands |
+| [Guide: embedding the library](guides/getting-started-library.md) | `cmake --install`, `find_package(agent-cpp)`, a first program with the llama plugin under process isolation, sandbox defaults |
+| [Guide: writing an engine plugin](guides/writing-an-engine.md) | ABI 2 walkthrough: `struct_size` rules, tasks, parts, streaming / progress / cancel, isolation and sandbox, packaging (`agent_add_engine`, `agent_install_engine`, [template](../templates/engine-plugin)) |
+| [Guide: writing a tool](guides/writing-a-tool.md) | `Tool`, the permission gate, event hooks and per-node `ToolHook`s, MCP servers |
+| [Guide: writing a graph](guides/writing-a-graph.md) | C++ builders and `agent.json`, state scopes, checkpointers, interrupts, fork, a model per node |
 | [Guide: a local voice assistant](guides/voice-assistant.md) | `agent voice` with Silero VAD, Whisper, a llama.cpp model and Kokoro; file backend for headless runs |
 | [Architecture](architecture.md) | System diagrams, memory model, data flow |
 | [Limitations](LIMITATIONS.md) | Known limitations and planned fixes |
@@ -77,5 +81,6 @@ int main() {
 | `AGENT_ENGINE_LLAMA` | `ON` | Build the llama.cpp engine plugin |
 | `AGENT_ENGINE_ONNX` | `OFF` | Build the ONNX Runtime engine plugin (`engines/onnx`); needs `-DONNXRUNTIME_ROOT` |
 | `AGENT_ENGINE_TRELLIS` | `OFF` | Build the TRELLIS.2 image-to-3D engine plugin (`engines/trellis`); `AGENT_TRELLIS_BUILD_JOBS` caps the nested build |
+| `AGENT_BUILD_EXAMPLES` | `ON` | Build `examples/` (guide code, image critique, RAG over docs) and their mock-engine smoke tests (`ctest -L examples`) |
 | `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UBSan |
 | `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |
