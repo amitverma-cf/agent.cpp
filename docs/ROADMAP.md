@@ -241,7 +241,7 @@ Priority wave A (v1 **starter pack**, installed by default by `agent setup`):
   - [ ] IoBinding / device-resident outputs, more EPs (DirectML, CoreML, TensorRT), cancel during `Run()`, task-specific pre/post-processing (classify, embed, detect)
 Wave B (optional add-ons):
 - [x] `whisper`: whisper.cpp STT (`agent-engine-whisper`, whisper.cpp v1.9.5 C API, opt-in `AGENT_ENGINE_WHISPER`): ASR (language / translate / beam size, streamed segments, progress, cancel) + whisper.cpp's Silero VAD (`AGENT_CAP_VAD`, also as a pre-filter); Linux x64 CPU tested with ggml-tiny.en + ggml-silero-v5.1.2 on samples/jfk.wav
-- [ ] `parakeet`: parakeet.cpp (ggml STT)
+- [x] `parakeet`: parakeet.cpp (ggml STT) (`agent-engine-parakeet`, parakeet.cpp v0.6.1 C API, opt-in `AGENT_ENGINE_PARAKEET`): offline ASR with decoder / language selection; Linux x64 CPU tested with tdt_ctc-110m-q8_0 on the repo's speech.wav. Not yet: parakeet.cpp's VAD / diarization / streaming APIs, cancel inside a transcription (no hook)
 - [ ] `qwen3tts`: Qwen3-TTS (voice cloning), after licence check
 - [ ] more 3D engines as ggml/ONNX ports appear (e.g. Hunyuan3D if a commercially licensed port exists)
 Watch list: audio.cpp as a meta-engine; llama.cpp native TTS / image gen when they land. Fish Audio S2 and Phonon are revisited only if their licences change.

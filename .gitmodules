@@ -13,3 +13,6 @@
 [submodule "vendor/whisper.cpp"]
 	path = vendor/whisper.cpp
 	url = https://github.com/ggml-org/whisper.cpp.git
+[submodule "vendor/parakeet.cpp"]
+	path = vendor/parakeet.cpp
+	url = https://github.com/mudler/parakeet.cpp.git

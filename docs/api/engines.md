@@ -649,3 +649,51 @@ Tests (`tests/unit/test_engine_whisper.cpp`) run on whisper.cpp's `samples/jfk.w
 
 Licences: whisper.cpp (MIT), OpenAI Whisper weights in ggml form (MIT), Silero VAD in ggml form
 ([ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad), MIT).
+
+## The parakeet engine
+
+`engines/parakeet` (`agent-engine-parakeet`) wraps [parakeet.cpp](https://github.com/mudler/parakeet.cpp)
+(`vendor/parakeet.cpp`, pinned to the v0.6.1 release tag), a ggml port of NVIDIA's NeMo Parakeet (TDT, RNNT, CTC,
+hybrid) and Nemotron ASR models, through its C API (`parakeet_capi.h`). Caps `AGENT_CAP_ASR`, flags 0.
+
+```sh
+git submodule update --init --depth 1 vendor/parakeet.cpp
+git -C vendor/parakeet.cpp submodule update --init --depth 1 third_party/ggml
+cmake -B build -G Ninja -DAGENT_ENGINE_PARAKEET=ON [-DAGENT_PARAKEET_BUILD_JOBS=2]
+```
+
+Built like whisper and sdcpp: a nested CMake project with its own ggml, linked statically with hidden visibility
+(Linux: `--exclude-libs,ALL` + version script, only `agent_engine_get_v1` exported), CPU only. parakeet.cpp's
+configure step applies its own ggml patches (`third_party/ggml-patches`) to its ggml checkout, so
+`vendor/parakeet.cpp` shows modified submodule content after a build; that is expected. The sound-event
+(ced.cpp) and speaker-identification (voice-detect.cpp) parts are not built.
+
+`Config::model` is a parakeet.cpp GGUF from [mudler/parakeet-cpp-gguf](https://huggingface.co/mudler/parakeet-cpp-gguf),
+for example `tdt_ctc-110m-q8_0.gguf` (178 MB, English), or a bundle GGUF (its ASR component is loaded).
+`Config::engine_options`:
+
+| Option | Meaning |
+|--------|---------|
+| `threads` | CPU threads (default 4). parakeet.cpp keeps one process-wide compute thread count, so the last instance created wins |
+| `decoder` | `"default"` (by architecture), `"ctc"` or `"tdt"` (the transducer head) |
+| `language` | locale for prompt-conditioned multilingual models (Nemotron), e.g. `"de"`; ignored by other models |
+| `component` | the component of a bundle GGUF to load (default: its ASR component) |
+
+`params_json` per request accepts `language` and `decoder`. Requests follow the ASR row of the whisper engine:
+task `ASR` (or automatic / `TEXT_GEN`) with an audio part gives the transcript as one `TEXT` part (also sent as
+one `TEXT` chunk); no audio part is `AGENT_ERR_INVALID_CONFIG`; other tasks are `AGENT_ERR_UNSUPPORTED`. Audio is a
+`FILE` / `BYTES` WAV (any format the shared reader takes, resampled to 16 kHz) or a 16 kHz `F32` `TENSOR`.
+parakeet.cpp has no progress or abort hook inside one transcription: progress is 0/1 then 1/1, and `cancel` is
+honoured before (and checked after) the call. parakeet.cpp's own VAD, diarization and streaming APIs are not
+exposed yet.
+
+Every `parakeet_capi_*` entry catches C++ exceptions itself, so none cross the plugin boundary. The thread count
+is set through `pk::set_num_threads`, an internal (non-C-API) function of the statically linked library,
+because the C API has no thread setting for the default single backend.
+
+Licences: parakeet.cpp code (MIT). The weights keep their source model's licence (parakeet.cpp `docs/licenses.md`):
+the NVIDIA Parakeet TDT / CTC / RNNT checkpoints, including `parakeet-tdt_ctc-110m` used in the tests, are
+CC-BY-4.0 (attribution required); `parakeet_realtime_eou_120m-v1` is under the NVIDIA Open Model License and the
+Nemotron 3.5 / unified / diarization models under OpenMDW 1.1, so check those before shipping them.
+Tests (`tests/unit/test_engine_parakeet.cpp`) use parakeet.cpp's `tests/fixtures/speech.wav` and need
+`AGENT_TEST_PARAKEET_MODEL` for the real-model cases.
