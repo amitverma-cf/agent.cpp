@@ -23,6 +23,7 @@ The library is designed around three principles:
 | [Guide: writing an engine plugin](guides/writing-an-engine.md) | ABI 2 walkthrough: `struct_size` rules, tasks, parts, streaming / progress / cancel, isolation and sandbox, packaging (`agent_add_engine`, `agent_install_engine`, [template](../templates/engine-plugin)) |
 | [Guide: writing a tool](guides/writing-a-tool.md) | `Tool`, the permission gate, event hooks and per-node `ToolHook`s, MCP servers |
 | [Guide: writing a graph](guides/writing-a-graph.md) | C++ builders and `agent.json`, state scopes, checkpointers, interrupts, fork, a model per node |
+| [Examples](../examples/README.md) | Image critique loop (LLM → stable-diffusion.cpp → VLM), RAG over a folder of docs, graph JSON examples (router, review loop) |
 | [Guide: a local voice assistant](guides/voice-assistant.md) | `agent voice` with Silero VAD, Whisper, a llama.cpp model and Kokoro; file backend for headless runs |
 | [Architecture](architecture.md) | System diagrams, memory model, data flow |
 | [Limitations](LIMITATIONS.md) | Known limitations and planned fixes |

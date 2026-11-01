@@ -23,6 +23,10 @@ target_compile_options(agent-engine-reverse PRIVATE ${AGENT_WARNINGS})
 agent_example(guide_engine_host guides/writing_an_engine_host.cpp)
 add_dependencies(guide_engine_host agent-engine-reverse)
 
+# ---- examples ----------------------------------------------------------------------------------
+agent_example(image_critique image_critique/image_critique.cpp)
+agent_example(rag_docs rag_docs/rag_docs.cpp)
+
 # ---- smoke tests on the mock engine (ctest -L examples) -----------------------------------------
 set(_ws ${CMAKE_CURRENT_BINARY_DIR}/workspaces)
 set(_host_env "AGENT_ENGINE_HOST=$<TARGET_FILE:agent-engine-host>")
@@ -34,5 +38,10 @@ add_test(NAME example.guide_engine COMMAND guide_engine_host $<TARGET_FILE:agent
 add_test(NAME example.guide_tool COMMAND guide_tool $<TARGET_FILE:agent-engine-mock> $<TARGET_FILE:fake_mcp_server> ${_ws}/tool)
 add_test(NAME example.guide_graph
          COMMAND guide_graph $<TARGET_FILE:agent-engine-mock> ${CMAKE_CURRENT_SOURCE_DIR}/graphs ${_ws}/graph)
+add_test(NAME example.image_critique_unconfigured COMMAND image_critique)
+set_tests_properties(example.image_critique_unconfigured PROPERTIES PASS_REGULAR_EXPRESSION "not configured")
+add_test(NAME example.rag_docs_unconfigured COMMAND rag_docs)
+set_tests_properties(example.rag_docs_unconfigured PROPERTIES PASS_REGULAR_EXPRESSION "not configured")
 set_tests_properties(example.guide_getting_started example.guide_engine example.guide_tool example.guide_graph
+                     example.image_critique_unconfigured example.rag_docs_unconfigured
                      PROPERTIES LABELS examples ENVIRONMENT "${_host_env}")
