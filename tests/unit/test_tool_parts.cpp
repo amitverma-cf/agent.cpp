@@ -325,3 +325,137 @@ TEST_CASE("MCP image content becomes tool media", "[tools][tool_parts][mcp]") {
     CHECK(reply.value.find("/artifacts/mcp-fake-echo-") != std::string::npos);
     agent::disconnect_mcp_servers(session);
 }
+
+namespace {
+
+// A 64x64 BMP filled with one colour channel (0 = blue, 1 = green, 2 = red).
+std::string solid_bmp(uint32_t channel) {
+    const uint32_t w = 64, h = 64, row = w * 3, data = row * h;
+    std::string bmp(54 + data, '\0');
+    auto put32 = [&](size_t at, uint32_t v) {
+        for (size_t i = 0; i < 4; ++i) bmp[at + i] = static_cast<char>((v >> (8 * i)) & 0xff);
+    };
+    bmp[0] = 'B';
+    bmp[1] = 'M';
+    put32(2, 54 + data);
+    put32(10, 54);
+    put32(14, 40);
+    put32(18, w);
+    put32(22, h);
+    bmp[26] = 1;
+    bmp[28] = 24;
+    put32(34, data);
+    for (uint32_t i = 0; i < w * h; ++i) bmp[54 + i * 3 + channel] = static_cast<char>(0xff);
+    return bmp;
+}
+
+agent::Result<agent::ToolResult> red_camera(std::string_view, void *) {
+    const std::string path = std::string(kWorkspace) + "/frame.bmp";
+    std::filesystem::create_directories(kWorkspace);
+    std::ofstream(path, std::ios::binary) << solid_bmp(2);
+    agent::ToolResult r;
+    r.text = "Captured one frame.";
+    r.media.push_back(agent::Media{.path = path, .mime = "image/bmp"});
+    return agent::ok(std::move(r));
+}
+
+} // namespace
+
+// Real model: a tool returns an image and a vision model describes it on the next inference.
+// AGENT_TEST_LLAMA_ENGINE (a built agent-engine-llama plugin; defaults to the in-tree one when the
+// llama engine is built) + AGENT_TEST_LLAMA_VISION_MODEL / AGENT_TEST_LLAMA_VISION_MMPROJ, e.g.
+// SmolVLM-256M-Instruct-Q8_0.gguf + mmproj-SmolVLM-256M-Instruct-Q8_0.gguf. The model is too small to
+// emit the tool call itself, so the conversation is seeded with the call; the tool runs through
+// execute_tool_parts and run_turn continues after its result, as it would inside the tool loop.
+TEST_CASE("a vision model sees an image a tool returned", "[tools][tool_parts][llama][model]") {
+    const char *model = std::getenv("AGENT_TEST_LLAMA_VISION_MODEL");
+    const char *mmproj = std::getenv("AGENT_TEST_LLAMA_VISION_MMPROJ");
+    const char *engine = std::getenv("AGENT_TEST_LLAMA_ENGINE");
+#ifdef AGENT_TEST_LLAMA_ENGINE_PATH
+    if (!engine) engine = AGENT_TEST_LLAMA_ENGINE_PATH;
+#endif
+    if (!model || !mmproj || !engine)
+        SKIP("AGENT_TEST_LLAMA_ENGINE / AGENT_TEST_LLAMA_VISION_MODEL / AGENT_TEST_LLAMA_VISION_MMPROJ not set");
+
+    agent::Config cfg;
+    cfg.provider = agent::AiProvider::Engine;
+    cfg.engine = engine;
+    cfg.model = model;
+    cfg.engine_options = std::string(R"({"mmproj":")") + mmproj + "\"}";
+    cfg.workspace_dir = kWorkspace;
+    cfg.context_window = 2048;
+    cfg.max_tokens = 24;
+    cfg.temperature = 0.0f;
+    cfg.auto_default_tools = false;
+    cfg.tools = {parts_tool("camera", red_camera)};
+    auto session = open(cfg);
+
+    agent::FlowMemory memory;
+    memory.history.push_back(
+        agent::Message{.role = "user", .content = "Take a photo with the camera. What color is the photo? Answer in one word."});
+    agent::Message call;
+    call.role = "assistant";
+    call.tool_calls.push_back(agent::ToolCall{.id = "call_0", .name = "camera", .arguments = "{}"});
+    memory.history.push_back(call);
+    auto shot = agent::execute_tool_parts(session, "camera", "{}");
+    REQUIRE(shot.ok);
+    agent::Message tool_msg;
+    tool_msg.role = "tool";
+    tool_msg.tool_call_id = "call_0";
+    tool_msg.content = shot.value.text;
+    tool_msg.media = shot.value.media;
+    memory.history.push_back(tool_msg);
+
+    auto reply = agent::run_turn(session, memory, "");
+    INFO(reply.error.message);
+    REQUIRE(reply.ok);
+    std::string answer = reply.value;
+    for (char &c : answer) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    INFO(reply.value);
+    CHECK(answer.find("red") != std::string::npos);
+}
+
+// A text-only llama model (no mmproj) rejects media parts; tool media must not break the turn.
+// AGENT_TEST_LLAMA_ENGINE (or the in-tree plugin) + AGENT_TEST_LLAMA_MODEL.
+TEST_CASE("a text-only model keeps working after a tool returned an image", "[tools][tool_parts][llama][model]") {
+    const char *model = std::getenv("AGENT_TEST_LLAMA_MODEL");
+    const char *engine = std::getenv("AGENT_TEST_LLAMA_ENGINE");
+#ifdef AGENT_TEST_LLAMA_ENGINE_PATH
+    if (!engine) engine = AGENT_TEST_LLAMA_ENGINE_PATH;
+#endif
+    if (!model || !engine) SKIP("AGENT_TEST_LLAMA_ENGINE / AGENT_TEST_LLAMA_MODEL not set");
+
+    agent::Config cfg;
+    cfg.provider = agent::AiProvider::Engine;
+    cfg.engine = engine;
+    cfg.model = model;
+    cfg.workspace_dir = kWorkspace;
+    cfg.context_window = 1024;
+    cfg.max_tokens = 16;
+    cfg.temperature = 0.0f;
+    cfg.auto_default_tools = false;
+    cfg.tools = {parts_tool("camera", red_camera)};
+    auto session = open(cfg);
+
+    agent::FlowMemory memory;
+    memory.history.push_back(agent::Message{.role = "user", .content = "Take a photo, then say done."});
+    agent::Message call;
+    call.role = "assistant";
+    call.tool_calls.push_back(agent::ToolCall{.id = "call_0", .name = "camera", .arguments = "{}"});
+    memory.history.push_back(call);
+    auto shot = agent::execute_tool_parts(session, "camera", "{}");
+    REQUIRE(shot.ok);
+    agent::Message tool_msg;
+    tool_msg.role = "tool";
+    tool_msg.tool_call_id = "call_0";
+    tool_msg.content = shot.value.text;
+    tool_msg.media = shot.value.media;
+    memory.history.push_back(tool_msg);
+
+    auto reply = agent::run_turn(session, memory, "");
+    INFO(reply.error.message);
+    REQUIRE(reply.ok); // retried without the image
+    auto again = agent::run_turn(session, memory, "Say hi.");
+    INFO(again.error.message);
+    REQUIRE(again.ok);
+}

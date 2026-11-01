@@ -270,6 +270,7 @@ add_executable(test_agent
     tests/unit/test_context_compressor.cpp
     tests/unit/test_tools_ops.cpp
     tests/unit/test_tool_parts.cpp
+    tests/unit/test_builtin_tools_graph.cpp
     tests/unit/test_events.cpp
     tests/unit/test_arena.cpp
     tests/unit/test_skills.cpp

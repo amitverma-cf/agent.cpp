@@ -29,15 +29,14 @@ TEST_CASE("write_file then read_file round-trips content", "[filesystem_tools]")
     agent::Session session = std::move(session_result.value);
 
     const auto *write_tool = find_tool(session, "write_file");
-    const auto *read_tool = find_tool(session, "read_file");
+    REQUIRE(find_tool(session, "read_file") != nullptr);
     REQUIRE(write_tool != nullptr);
-    REQUIRE(read_tool != nullptr);
 
     auto write_res = write_tool->callback(R"({"path":"note.txt","content":"hello world"})", write_tool->user_data);
     REQUIRE(write_res.ok);
     REQUIRE(write_res.value.find("wrote 11 bytes") != std::string::npos);
 
-    auto read_res = read_tool->callback(R"({"path":"note.txt"})", read_tool->user_data);
+    auto read_res = agent::execute_tool(session, "read_file", R"({"path":"note.txt"})");
     REQUIRE(read_res.ok);
     REQUIRE(read_res.value == "hello world");
 }
@@ -49,12 +48,12 @@ TEST_CASE("read_file truncates at max_bytes", "[filesystem_tools]") {
     agent::Session session = std::move(session_result.value);
 
     const auto *write_tool = find_tool(session, "write_file");
-    const auto *read_tool = find_tool(session, "read_file");
+    REQUIRE(find_tool(session, "read_file") != nullptr);
 
     auto write_res = write_tool->callback(R"({"path":"big.txt","content":"0123456789"})", write_tool->user_data);
     REQUIRE(write_res.ok);
 
-    auto read_res = read_tool->callback(R"({"path":"big.txt","max_bytes":4})", read_tool->user_data);
+    auto read_res = agent::execute_tool(session, "read_file", R"({"path":"big.txt","max_bytes":4})");
     REQUIRE(read_res.ok);
     REQUIRE(read_res.value.find("0123") == 0);
     REQUIRE(read_res.value.find("[truncated at 4 bytes]") != std::string::npos);
@@ -66,8 +65,8 @@ TEST_CASE("read_file on missing file returns KeyNotFound", "[filesystem_tools]")
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
-    const auto *read_tool = find_tool(session, "read_file");
-    auto read_res = read_tool->callback(R"({"path":"nope.txt"})", read_tool->user_data);
+    REQUIRE(find_tool(session, "read_file") != nullptr);
+    auto read_res = agent::execute_tool(session, "read_file", R"({"path":"nope.txt"})");
     REQUIRE_FALSE(read_res.ok);
 }
 
@@ -78,14 +77,14 @@ TEST_CASE("append_file appends to an existing and a new file", "[filesystem_tool
     agent::Session session = std::move(session_result.value);
 
     const auto *append_tool = find_tool(session, "append_file");
-    const auto *read_tool = find_tool(session, "read_file");
+    REQUIRE(find_tool(session, "read_file") != nullptr);
 
     auto a1 = append_tool->callback(R"({"path":"log.txt","content":"line1\n"})", append_tool->user_data);
     REQUIRE(a1.ok);
     auto a2 = append_tool->callback(R"({"path":"log.txt","content":"line2\n"})", append_tool->user_data);
     REQUIRE(a2.ok);
 
-    auto read_res = read_tool->callback(R"({"path":"log.txt"})", read_tool->user_data);
+    auto read_res = agent::execute_tool(session, "read_file", R"({"path":"log.txt"})");
     REQUIRE(read_res.ok);
     REQUIRE(read_res.value == "line1\nline2\n");
 }
@@ -150,13 +149,13 @@ TEST_CASE("move_path renames a file", "[filesystem_tools]") {
 
     const auto *write_tool = find_tool(session, "write_file");
     const auto *move_tool = find_tool(session, "move_path");
-    const auto *read_tool = find_tool(session, "read_file");
+    REQUIRE(find_tool(session, "read_file") != nullptr);
 
     REQUIRE(write_tool->callback(R"({"path":"src.txt","content":"payload"})", write_tool->user_data).ok);
     auto move_res = move_tool->callback(R"({"from":"src.txt","to":"dst/dst.txt"})", move_tool->user_data);
     REQUIRE(move_res.ok);
 
-    auto read_res = read_tool->callback(R"({"path":"dst/dst.txt"})", read_tool->user_data);
+    auto read_res = agent::execute_tool(session, "read_file", R"({"path":"dst/dst.txt"})");
     REQUIRE(read_res.ok);
     REQUIRE(read_res.value == "payload");
 }
@@ -189,8 +188,8 @@ TEST_CASE("Filesystem tools reject paths that escape the workspace sandbox", "[f
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
-    const auto *read_tool = find_tool(session, "read_file");
-    auto res = read_tool->callback(R"({"path":"../../etc/passwd"})", read_tool->user_data);
+    REQUIRE(find_tool(session, "read_file") != nullptr);
+    auto res = agent::execute_tool(session, "read_file", R"({"path":"../../etc/passwd"})");
     REQUIRE_FALSE(res.ok);
     REQUIRE(res.error.code == agent::ErrorCode::SandboxViolation);
 }
