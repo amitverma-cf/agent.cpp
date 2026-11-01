@@ -32,4 +32,7 @@ ToolResult execute_for_message(Session &session, std::string_view name, std::str
 void append_tool_list(const Session &session, std::span<const std::string_view> allowed, std::string &out);
 bool tool_allowed(std::span<const std::string_view> allowed, std::string_view name);
 
+// Start of the system message compress_context leaves in place of the history it summarized.
+inline constexpr std::string_view kCompressedHistoryPrefix = "[Compressed history]: ";
+
 } // namespace agent::tools
