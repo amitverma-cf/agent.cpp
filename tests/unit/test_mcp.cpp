@@ -131,9 +131,10 @@ TEST_CASE("MCP env, image content and duplicate names", "[mcp]") {
 
     auto echo = agent::execute_tool(session, "fake.echo", R"({"text":"pic","image":true})");
     REQUIRE(echo.ok);
-    CHECK(echo.value.starts_with("echo: pic env=42\n[image saved to "));
-    auto start = echo.value.find("saved to ") + 9;
-    auto end = echo.value.find(" (image/png");
+    // The image is saved as an artifact and returned as media; the string form names it.
+    CHECK(echo.value.starts_with("echo: pic env=42\n[attached: "));
+    auto start = echo.value.find("[attached: ") + 11;
+    auto end = echo.value.find(" (image/png)]");
     REQUIRE(end != std::string::npos);
     std::string path = echo.value.substr(start, end - start);
     CHECK(path.find("/artifacts/") != std::string::npos);

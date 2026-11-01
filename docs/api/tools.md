@@ -17,6 +17,9 @@ struct Tool {
     using CallbackFn = Result<std::string>(*)(std::string_view arguments, void *user_data);
     CallbackFn callback  = nullptr;
     void      *user_data = nullptr;
+
+    using PartsCallbackFn = Result<ToolResult>(*)(std::string_view arguments, void *user_data);
+    PartsCallbackFn parts_callback = nullptr;   // set exactly one of callback / parts_callback
 };
 ```
 
@@ -27,6 +30,72 @@ The callback receives raw JSON arguments and a `user_data` pointer. It returns e
 - `fail(code, message)` — the error string `"Error: <message>"` is inserted instead; the turn continues.
 
 Tool callbacks **must not** call `session.arena.reset()` or modify `session.config.tools` without calling `rebuild_tool_index` afterward.
+
+### Tools that return parts
+
+A tool that produces files (an image, a recording, a mesh) or tensors sets `parts_callback` instead
+of `callback` and returns a `ToolResult`:
+
+```cpp
+struct ToolResult {
+    std::string             text;
+    std::vector<Media>      media;     // {path, mime}: images, audio, video, any file
+    std::vector<TensorData> tensors;
+    bool                    is_error = false;
+};
+```
+
+Exactly one of `callback` and `parts_callback` must be set (`execute_tool` fails with
+`InvalidConfig` otherwise). Both kinds go through the same `allowed_tools` check, permission gate
+and tool hooks.
+
+Inside `run_turn` (and graph Agent nodes, including tool calls approved on `resume_graph`):
+
+- `media` and `tensors` go on the `"tool"` `Message` (`Message::media` / `Message::tensors`). The
+  media persist with the history (`save_flow_memory`, graph checkpoints) and reach the engine as
+  `FILE` parts with every later inference of that conversation, so a vision model can look at an
+  image a tool produced. Relative paths are made absolute.
+- The message text is `text` followed by one `[attached: <path> (<mime>)]` line per media item (and
+  `[tensor: <name> [dims]]` per tensor), so models without that input modality still learn about the
+  file. `ToolHook::Post`, `EventType::OnToolResult` and the graph `ToolResult` event see this text
+  (the event payload keeps the attachment lines when it clips the text).
+- Media are only sent to an engine that declares the matching input capability (`image/*` →
+  `AGENT_CAP_VISION_IN`, `audio/*` → `AGENT_CAP_AUDIO_IN`, `video/*` → `AGENT_CAP_VIDEO_IN`); other
+  files stay in the history but out of the request. If the engine fails a request that carries tool
+  media (e.g. a llama model loaded without `mmproj`), the request is retried once without it and that
+  Session stops sending tool media (a warning is logged).
+- `is_error = true`: the tool ran but failed. The conversation gets `Error: <text>`; the media are
+  still attached. A failed `Result` from `parts_callback` is reported like a failed `callback`.
+
+Calling tools directly:
+
+```cpp
+// Text + "[attached: ...]" lines; is_error -> ErrorCode::ToolError.
+Result<std::string> execute_tool(Session &, std::string_view name, std::string_view arguments);
+// The whole ToolResult; is_error comes back as ok() with is_error set.
+Result<ToolResult>  execute_tool_parts(Session &, std::string_view name, std::string_view arguments);
+```
+
+A graph `Tool` node uses the string form: its `output_key` gets the text with the attachment lines,
+and an `is_error` result fails the node.
+
+```cpp
+agent::Tool snapshot{
+    .name = "snapshot",
+    .description = "Capture the current camera frame.",
+    .parameter_schema = R"({"type":"object","properties":{}})",
+    .user_data = &camera,
+    .parts_callback = [](std::string_view, void *ud) -> agent::Result<agent::ToolResult> {
+        std::string path = static_cast<Camera *>(ud)->capture_png();   // your code
+        agent::ToolResult r;
+        r.text = "Captured a frame.";
+        r.media.push_back({.path = path, .mime = "image/png"});
+        return agent::ok(std::move(r));
+    },
+};
+```
+
+MCP tools return `ToolResult`s: `image` / `audio` content items become media (see [mcp.md](mcp.md#tool-calls)).
 
 ---
 

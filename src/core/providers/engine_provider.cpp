@@ -2,11 +2,13 @@
 #include "../engines/engine_remote.hpp"
 #include "../executor/ambient_turn.hpp"
 #include "../sandbox/sandbox_policy.hpp"
+#include "../tools/tools_ops.hpp"
 #include "../utils/utils.hpp"
 #include "provider_ops.hpp"
 
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/engine_abi.h>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -29,6 +31,8 @@ struct EngineState {
     std::string name;
     uint64_t caps = 0;
     uint32_t flags = 0;
+    // Set once a request carrying tool-produced media failed; see reject_tool_media.
+    std::atomic<bool> tool_media_rejected{false};
 
     bool ready() const { return remote || (engine && instance); }
 
@@ -419,8 +423,38 @@ std::string_view injected_system_text(const Session &session) {
     if (session.config.provider != AiProvider::Engine) return {};
     auto *state = static_cast<EngineState *>(session.provider_state.get());
     if (!state) return {};
-    return (state->flags & AGENT_ENGINE_FLAG_NATIVE_TOOLS) ? std::string_view(session.skills_system_prompt)
-                                                           : std::string_view(session.tools_system_prompt);
+    const bool native = (state->flags & AGENT_ENGINE_FLAG_NATIVE_TOOLS) != 0;
+    if (ambient::allowed_tools.empty())
+        return native ? std::string_view(session.skills_system_prompt) : std::string_view(session.tools_system_prompt);
+
+    // A graph Agent node with allowed_tools: advertise only its tools (and the skills only when it
+    // may call use_skill). Rebuilt per call into a reused buffer, like build_tools_json.
+    const bool skills = !session.skills_system_prompt.empty() && tool_allowed("use_skill");
+    if (native) return skills ? std::string_view(session.skills_system_prompt) : std::string_view();
+    thread_local std::string buf;
+    buf.clear();
+    tools::append_tool_list(session, ambient::allowed_tools, buf);
+    if (skills) {
+        if (!buf.empty()) buf += "\n\n";
+        buf += session.skills_system_prompt;
+    }
+    return buf;
+}
+
+bool accepts_tool_media(const Session &session, std::string_view mime) {
+    if (session.config.provider != AiProvider::Engine) return true;
+    auto *state = static_cast<EngineState *>(session.provider_state.get());
+    if (!state || state->tool_media_rejected.load(std::memory_order_relaxed)) return false;
+    if (mime.starts_with("image/")) return (state->caps & AGENT_CAP_VISION_IN) != 0;
+    if (mime.starts_with("audio/")) return (state->caps & AGENT_CAP_AUDIO_IN) != 0;
+    if (mime.starts_with("video/")) return (state->caps & AGENT_CAP_VIDEO_IN) != 0;
+    return false;
+}
+
+void reject_tool_media(Session &session) {
+    if (session.config.provider != AiProvider::Engine) return;
+    if (auto *state = static_cast<EngineState *>(session.provider_state.get()))
+        state->tool_media_rejected.store(true, std::memory_order_relaxed);
 }
 
 int engine_host_starts(const Session &session) {

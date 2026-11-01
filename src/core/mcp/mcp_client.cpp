@@ -6,6 +6,7 @@
 // Session moves only the shared_ptr. Tool::user_data points at a RemoteTool owned by the McpServer.
 
 #include "../sandbox/sandbox_policy.hpp"
+#include "../tools/tools_ops.hpp"
 #include "../utils/utils.hpp"
 #include "hal/child_process.hpp"
 #include "hal/log_file.hpp"
@@ -160,7 +161,7 @@ class McpServer {
     McpServer &operator=(const McpServer &) = delete;
 
     Result<void> start();
-    Result<std::string> call_tool(std::string_view remote_name, std::string_view arguments);
+    Result<ToolResult> call_tool(std::string_view remote_name, std::string_view arguments);
     void shutdown();
 
   private:
@@ -188,8 +189,9 @@ class McpServer {
     Result<simdjson::dom::element> request(std::string_view method, std::string_view params_json);
     Result<void> mark_dead(std::string reason);
     Result<void> list_tools(bool advertised);
-    Result<std::string> map_call_result(simdjson::dom::element result, std::string_view remote_name);
-    std::string save_artifact(std::string_view remote_name, std::string_view base64, std::string_view mime, std::string_view kind);
+    Result<ToolResult> map_call_result(simdjson::dom::element result, std::string_view remote_name);
+    void save_artifact(ToolResult &result, std::string_view remote_name, std::string_view base64, std::string_view mime,
+                       std::string_view kind);
 };
 
 std::string McpServer::stderr_tail() {
@@ -460,32 +462,41 @@ Result<void> McpServer::list_tools(bool advertised) {
     return ok();
 }
 
-std::string McpServer::save_artifact(std::string_view remote_name, std::string_view base64, std::string_view mime, std::string_view kind) {
+// Decodes base64 content into <workspace>/artifacts/ and adds it to result.media; a content item that
+// can't be saved becomes a text note instead.
+void McpServer::save_artifact(ToolResult &result, std::string_view remote_name, std::string_view base64, std::string_view mime,
+                              std::string_view kind) {
+    auto note = [&result](std::string line) {
+        if (!result.text.empty()) result.text += "\n";
+        result.text += line;
+    };
     std::string bytes;
-    if (!base64_decode(base64, bytes)) return "[" + std::string(kind) + " content with invalid base64 data was dropped]";
-    if (!workspace || workspace->empty()) return "[" + std::string(kind) + " content dropped: no workspace]";
+    if (!base64_decode(base64, bytes)) return note("[" + std::string(kind) + " content with invalid base64 data was dropped]");
+    if (!workspace || workspace->empty()) return note("[" + std::string(kind) + " content dropped: no workspace]");
 
     std::error_code ec;
-    std::filesystem::path dir = std::filesystem::path(*workspace) / "artifacts";
+    std::filesystem::path dir = std::filesystem::absolute(std::filesystem::path(*workspace) / "artifacts", ec);
+    if (ec) dir = std::filesystem::path(*workspace) / "artifacts";
     std::filesystem::create_directories(dir, ec);
     const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     std::string file = "mcp-" + sanitize_for_filename(config.name) + "-" + sanitize_for_filename(remote_name) + "-" +
                        std::to_string(stamp) + "-" + std::to_string(++artifact_counter_) + "." + std::string(extension_for(mime));
     std::filesystem::path path = dir / file;
     std::ofstream out(path, std::ios::binary);
-    if (!out) return "[" + std::string(kind) + " content dropped: cannot write " + path.string() + "]";
+    if (!out) return note("[" + std::string(kind) + " content dropped: cannot write " + path.string() + "]");
     out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
     out.close();
-    if (!out) return "[" + std::string(kind) + " content dropped: cannot write " + path.string() + "]";
-    return "[" + std::string(kind) + " saved to " + path.string() + " (" + std::string(mime) + ", " + std::to_string(bytes.size()) +
-           " bytes)]";
+    if (!out) return note("[" + std::string(kind) + " content dropped: cannot write " + path.string() + "]");
+    result.media.push_back(Media{.path = path.string(), .mime = mime.empty() ? "application/octet-stream" : std::string(mime)});
 }
 
-Result<std::string> McpServer::map_call_result(simdjson::dom::element result, std::string_view remote_name) {
-    std::string text;
-    auto append = [&text](std::string_view part) {
-        if (!text.empty()) text += "\n";
-        text += part;
+// MCP content items -> ToolResult: text items (and text resources) become the text, image / audio
+// items and blob resources become media files, isError becomes is_error.
+Result<ToolResult> McpServer::map_call_result(simdjson::dom::element result, std::string_view remote_name) {
+    ToolResult out;
+    auto append = [&out](std::string_view part) {
+        if (!out.text.empty()) out.text += "\n";
+        out.text += part;
     };
 
     simdjson::dom::array content;
@@ -498,7 +509,7 @@ Result<std::string> McpServer::map_call_result(simdjson::dom::element result, st
                 if (item["text"].get(value) == simdjson::SUCCESS) append(value);
             } else if (type == "image" || type == "audio") {
                 try_get(item["mimeType"], mime);
-                if (item["data"].get(value) == simdjson::SUCCESS) append(save_artifact(remote_name, value, mime, type));
+                if (item["data"].get(value) == simdjson::SUCCESS) save_artifact(out, remote_name, value, mime, type);
             } else if (type == "resource") {
                 simdjson::dom::element res;
                 if (item["resource"].get(res) == simdjson::SUCCESS) {
@@ -506,7 +517,7 @@ Result<std::string> McpServer::map_call_result(simdjson::dom::element result, st
                     try_get(res["uri"], uri);
                     try_get(res["mimeType"], mime);
                     if (res["text"].get(value) == simdjson::SUCCESS) append(value);
-                    else if (res["blob"].get(value) == simdjson::SUCCESS) append(save_artifact(remote_name, value, mime, "resource"));
+                    else if (res["blob"].get(value) == simdjson::SUCCESS) save_artifact(out, remote_name, value, mime, "resource");
                     else append("[resource " + std::string(uri) + "]");
                 }
             } else if (type == "resource_link") {
@@ -520,25 +531,25 @@ Result<std::string> McpServer::map_call_result(simdjson::dom::element result, st
         }
     }
     simdjson::dom::element structured;
-    if (text.empty() && result["structuredContent"].get(structured) == simdjson::SUCCESS) text = simdjson::to_string(structured);
+    if (out.text.empty() && out.media.empty() && result["structuredContent"].get(structured) == simdjson::SUCCESS)
+        out.text = simdjson::to_string(structured);
 
-    bool is_error = false;
-    try_get(result["isError"], is_error);
-    if (is_error) return fail<std::string>(kRemoteError, text.empty() ? "tool reported an error" : text);
-    return ok(std::move(text));
+    try_get(result["isError"], out.is_error);
+    if (out.is_error && out.text.empty() && out.media.empty()) out.text = "tool reported an error";
+    return ok(std::move(out));
 }
 
-Result<std::string> McpServer::call_tool(std::string_view remote_name, std::string_view arguments) {
+Result<ToolResult> McpServer::call_tool(std::string_view remote_name, std::string_view arguments) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!process_) return fail<std::string>(ErrorCode::NetworkError, prefix() + " is disconnected");
+    if (!process_) return fail<ToolResult>(ErrorCode::NetworkError, prefix() + " is disconnected");
 
     std::string args = "{}";
     std::string_view trimmed = trim(arguments);
     if (!trimmed.empty()) {
         simdjson::dom::element parsed;
         if (parser_.parse(trimmed.data(), trimmed.size()).get(parsed) != simdjson::SUCCESS)
-            return fail<std::string>(ErrorCode::ParseError, "arguments are not valid JSON");
-        if (!parsed.is_object()) return fail<std::string>(ErrorCode::ParseError, "arguments must be a JSON object");
+            return fail<ToolResult>(ErrorCode::ParseError, "arguments are not valid JSON");
+        if (!parsed.is_object()) return fail<ToolResult>(ErrorCode::ParseError, "arguments must be a JSON object");
         args = simdjson::to_string(parsed); // minified: the request must stay on one line
     }
 
@@ -548,7 +559,7 @@ Result<std::string> McpServer::call_tool(std::string_view remote_name, std::stri
     params += args;
     params += "}";
     auto res = request("tools/call", params);
-    if (!res.ok) return fail<std::string>(res.error.code, res.error.message);
+    if (!res.ok) return fail<ToolResult>(res.error.code, res.error.message);
     return map_call_result(res.value, remote_name);
 }
 
@@ -567,9 +578,9 @@ void McpServer::shutdown() {
 
 // ---- Session glue ----
 
-Result<std::string> remote_tool_callback(std::string_view arguments, void *user_data) {
+Result<ToolResult> remote_tool_callback(std::string_view arguments, void *user_data) {
     auto *rt = static_cast<RemoteTool *>(user_data);
-    if (!rt || !rt->server) return fail<std::string>(ErrorCode::InvalidConfig, "MCP tool has no server");
+    if (!rt || !rt->server) return fail<ToolResult>(ErrorCode::InvalidConfig, "MCP tool has no server");
     return rt->server->call_tool(rt->remote_name, arguments);
 }
 
@@ -583,7 +594,11 @@ Result<std::string> server_query(void *state, std::string_view query, void *) {
         return fail<std::string>(ErrorCode::ParseError, "MCP query must be {\"name\": \"<tool>\", \"arguments\": {...}}");
     simdjson::dom::element args;
     std::string args_json = doc["arguments"].get(args) == simdjson::SUCCESS ? simdjson::to_string(args) : std::string("{}");
-    return server->call_tool(std::string(name), args_json);
+    auto res = server->call_tool(std::string(name), args_json);
+    if (!res.ok) return fail<std::string>(res.error.code, res.error.message);
+    std::string text = tools::render_tool_text(res.value);
+    if (res.value.is_error) return fail<std::string>(ErrorCode::ToolError, std::move(text));
+    return ok(std::move(text));
 }
 
 bool is_mcp_entry(const std::shared_ptr<DataSource> &ds) {
@@ -593,7 +608,7 @@ bool is_mcp_entry(const std::shared_ptr<DataSource> &ds) {
 void unregister_tools(Session &session, const McpServer *server) {
     auto &tools = session.config.tools;
     std::erase_if(tools, [server](const Tool &t) {
-        return t.callback == remote_tool_callback && t.user_data && static_cast<const RemoteTool *>(t.user_data)->server == server;
+        return t.parts_callback == remote_tool_callback && t.user_data && static_cast<const RemoteTool *>(t.user_data)->server == server;
     });
     rebuild_tool_index(session);
 }
@@ -631,8 +646,8 @@ Result<std::vector<Tool>> connect_mcp_server(Session &session, const McpServerCo
         Tool t{.name = rt->full_name,
                .description = rt->description,
                .parameter_schema = rt->schema,
-               .callback = remote_tool_callback,
-               .user_data = rt.get()};
+               .user_data = rt.get(),
+               .parts_callback = remote_tool_callback};
         session.config.tools.push_back(t);
         registered.push_back(t);
     }

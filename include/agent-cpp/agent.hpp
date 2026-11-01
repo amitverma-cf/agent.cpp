@@ -38,6 +38,9 @@ enum class ErrorCode {
     // A ModelRegistry could not fit a model in its RAM/VRAM budget (every other loaded model is in use
     // or pinned). See acquire_model.
     OutOfMemory,
+    // A tool reported a failure in its result (ToolResult::is_error), e.g. an MCP result with isError.
+    // Only the string-returning execute_tool reports it; execute_tool_parts returns the ToolResult.
+    ToolError,
 };
 
 struct Error {
@@ -152,17 +155,37 @@ struct ToolCall {
     std::string arguments;
 };
 
+// What a tool returns through Tool::parts_callback: text plus media (images, audio, ... by file path)
+// and/or tensors. Inside run_turn the media and tensors go on the "tool" Message, so they persist
+// with the history and reach the engine as FILE / TENSOR parts on the next inference (a vision model
+// can look at an image a tool produced). The message text lists every attachment as
+// "[attached: <path> (<mime>)]" so models without that input modality still learn about the file.
+// Relative media paths are made absolute. is_error: the tool ran but failed; the conversation gets
+// "Error: <text>" (the media are still attached) and the string execute_tool fails with ToolError.
+struct ToolResult {
+    std::string text;
+    std::vector<Media> media;
+    std::vector<TensorData> tensors;
+    bool is_error = false;
+};
+
+// Set exactly one of callback (text result) and parts_callback (ToolResult); execute_tool fails
+// with InvalidConfig otherwise.
 struct Tool {
     std::string_view name;
     std::string_view description;
     std::string_view parameter_schema;
     using CallbackFn = Result<std::string> (*)(std::string_view arguments, void *user_data);
-    // Always invoke via agent::execute_tool, never call this function pointer directly. Some
-    // built-in tools (e.g. use_skill, compress_context) close over a Session* cell that
-    // execute_tool refreshes right before dispatch; calling callback() directly can run against
-    // a stale or dangling Session pointer if the Session has since moved.
+    // Always invoke via agent::execute_tool / execute_tool_parts, never call these function pointers
+    // directly. Some built-in tools (e.g. use_skill, compress_context) close over a Session* cell
+    // that execute_tool refreshes right before dispatch; calling a callback directly can run against
+    // a stale or dangling Session pointer if the Session has since moved. They also skip the
+    // allowed_tools check and the permission gate.
     CallbackFn callback = nullptr;
     void *user_data = nullptr;
+    // A failed Result is reported to the model like a failed callback ("Error: <message>", no media).
+    using PartsCallbackFn = Result<ToolResult> (*)(std::string_view arguments, void *user_data);
+    PartsCallbackFn parts_callback = nullptr;
 };
 
 // Per-call tool dispatch policy, checked by execute_tool before a Tool::callback runs.
@@ -572,7 +595,14 @@ Result<void> save_flow_memory(Session &session, const FlowMemory &memory);
 Result<void> load_flow_memory(Session &session, FlowMemory &memory);
 
 Result<void> init_tools(Session &session);
+// Runs a tool through the allowed_tools check (graph Agent nodes) and the permission gate. Returns
+// the text, followed by one "[attached: <path> (<mime>)]" line per media item of a parts_callback
+// tool. A ToolResult with is_error fails with ErrorCode::ToolError (message = that text).
 Result<std::string> execute_tool(Session &session, std::string_view name, std::string_view arguments);
+// Same checks; returns the whole ToolResult (a text callback's result becomes ToolResult::text).
+// Tool-reported failures come back as ok() with is_error set; dispatch failures (unknown tool, not
+// allowed, permission denied) and failed callbacks as errors.
+Result<ToolResult> execute_tool_parts(Session &session, std::string_view name, std::string_view arguments);
 
 void rebuild_tool_index(Session &session);
 

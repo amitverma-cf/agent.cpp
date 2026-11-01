@@ -27,8 +27,17 @@ const ProviderOps *find_provider_ops(AiProvider provider);
 bool supports_parallel(const Session &session);
 // Plain-text instructions the core folds into the system message for this provider: the tool list
 // and skills for engines without AGENT_ENGINE_FLAG_NATIVE_TOOLS, only the skills for engines that
-// format tools natively, nothing otherwise.
+// format tools natively, nothing otherwise. Inside a graph Agent node with allowed_tools, only those
+// tools are listed (and the skills only when use_skill is allowed); the view then points into a
+// thread-local buffer that stays valid until the next call on this thread.
 std::string_view injected_system_text(const Session &session);
+// Whether media a tool returned (a "tool" message's Message::media) goes to the engine as FILE parts:
+// the engine declares the matching input capability (image/* VISION_IN, audio/* AUDIO_IN, video/*
+// VIDEO_IN) and has not rejected tool media before. Otherwise only the text note reaches it.
+bool accepts_tool_media(const Session &session, std::string_view mime);
+// Called when a request carrying tool media failed (e.g. a llama model without a projector): later
+// requests of this Session leave tool media out.
+void reject_tool_media(Session &session);
 // Process isolation: how many times the session's agent-engine-host was started (1 + restarts);
 // -1 when the engine runs in-process. For tests and diagnostics.
 int engine_host_starts(const Session &session);

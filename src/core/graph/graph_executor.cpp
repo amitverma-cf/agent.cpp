@@ -1,5 +1,6 @@
 #include "../executor/ambient_turn.hpp"
 #include "../providers/provider_ops.hpp"
+#include "../tools/tools_ops.hpp"
 #include "../utils/utils.hpp"
 #include "graph_internal.hpp"
 
@@ -29,10 +30,25 @@ std::string clip(std::string_view text) {
     return out;
 }
 
+// A tool result keeps its trailing "[attached: <path> (<mime>)]" lines when the text before them is
+// clipped, so the event log names the files a tool produced.
+std::string clip_tool_result(std::string_view text) {
+    if (text.size() <= kPayloadMax) return std::string(text);
+    const size_t at = text.find("[attached: ");
+    if (at == std::string_view::npos) return clip(text);
+    std::string out = clip(text.substr(0, at));
+    if (!out.empty() && out.back() != '\n') out += '\n';
+    out += text.substr(at, 4 * kPayloadMax);
+    return out;
+}
+
 void log_event(std::vector<GraphEvent> &events, GraphEventType type, std::string_view node, std::string_view key,
                std::string_view payload) {
-    events.push_back(GraphEvent{
-        .type = type, .node = std::string(node), .key = std::string(key), .timestamp_ms = graph::now_ms(), .payload = clip(payload)});
+    events.push_back(GraphEvent{.type = type,
+                                .node = std::string(node),
+                                .key = std::string(key),
+                                .timestamp_ms = graph::now_ms(),
+                                .payload = type == GraphEventType::ToolResult ? clip_tool_result(payload) : clip(payload)});
 }
 
 std::span<const uint8_t> bytes_of(std::string_view s) { return {reinterpret_cast<const uint8_t *>(s.data()), s.size()}; }
@@ -299,8 +315,8 @@ void fire_node_hooks(Session &session, FlowMemory &memory, const GraphNode &node
     }
 }
 
-std::string run_approved_call(Exec &x, Session &session, FlowMemory &memory, const GraphNode &node, const ToolCall &tc,
-                              const PendingResume &resume) {
+ToolResult run_approved_call(Exec &x, Session &session, FlowMemory &memory, const GraphNode &node, const ToolCall &tc,
+                             const PendingResume &resume) {
     log_event(x.events, GraphEventType::ToolCall, node.name, tc.name, tc.arguments);
     trigger_event(session, EventType::OnToolCall, bytes_of(tc.name));
 
@@ -308,21 +324,25 @@ std::string run_approved_call(Exec &x, Session &session, FlowMemory &memory, con
     if (session.config.permission_check)
         policy = session.config.permission_check(tc.name, tc.arguments, session.config.permission_user_data);
 
-    std::string result;
+    ToolResult result;
     if (policy == PermissionDecision::Ask && !resume.approved) {
-        result = "Error: tool call denied by human reviewer";
-        if (!resume.human_input.empty()) result += ": " + resume.human_input;
+        result.text = "Error: tool call denied by human reviewer";
+        if (!resume.human_input.empty()) result.text += ": " + resume.human_input;
+        result.is_error = true;
     } else {
         fire_node_hooks(session, memory, node, ToolHook::When::Pre, tc, {});
+        // Tools that act on the conversation (compress_context) see this node's history, as in run_turn.
+        FlowMemory *previous_memory = ambient::active_memory;
+        ambient::active_memory = &memory;
         ambient::tool_call_preapproved = (policy == PermissionDecision::Ask);
-        auto exec = execute_tool(session, tc.name, tc.arguments);
+        result = tools::execute_for_message(session, tc.name, tc.arguments);
         ambient::tool_call_preapproved = false;
-        result = exec.ok ? std::move(exec.value) : "Error: " + exec.error.message;
-        fire_node_hooks(session, memory, node, ToolHook::When::Post, tc, result);
+        ambient::active_memory = previous_memory;
+        fire_node_hooks(session, memory, node, ToolHook::When::Post, tc, result.text);
     }
 
-    log_event(x.events, GraphEventType::ToolResult, node.name, tc.name, result);
-    trigger_event(session, EventType::OnToolResult, bytes_of(result));
+    log_event(x.events, GraphEventType::ToolResult, node.name, tc.name, result.text);
+    trigger_event(session, EventType::OnToolResult, bytes_of(result.text));
     memory.stats.tool_calls++;
     {
         std::lock_guard<std::mutex> lock(*session.stats_mutex);
@@ -383,9 +403,12 @@ Result<NodeResult> run_agent_node(Exec &x, const GraphNode &node, const PendingR
     if (resume) {
         // The paused assistant message is the last one in the history; answer each of its calls.
         for (const auto &tc : resume->calls) {
+            ToolResult tr = run_approved_call(x, *session, memory, node, tc, *resume);
             Message tool_msg;
             tool_msg.role = "tool";
-            tool_msg.content = run_approved_call(x, *session, memory, node, tc, *resume);
+            tool_msg.content = std::move(tr.text);
+            tool_msg.media = std::move(tr.media);
+            tool_msg.tensors = std::move(tr.tensors);
             tool_msg.tool_call_id = tc.id;
             memory.history.push_back(std::move(tool_msg));
         }
@@ -441,6 +464,7 @@ Result<NodeResult> run_tool_node(Exec &x, const GraphNode &node) {
 
     log_event(x.events, GraphEventType::ToolCall, node.name, node.tool_name, args);
     trigger_event(x.session, EventType::OnToolCall, bytes_of(node.tool_name));
+    // The string form: attachment notes are part of the text, an is_error result fails the node.
     auto exec = execute_tool(x.session, node.tool_name, args);
     if (!exec.ok) {
         log_event(x.events, GraphEventType::ToolResult, node.name, node.tool_name, "Error: " + exec.error.message);
