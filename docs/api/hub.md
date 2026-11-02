@@ -137,10 +137,13 @@ the model.
 
 | Variable | Use |
 |---|---|
-| `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN` | `Authorization: Bearer`. Sent only to the endpoint host, never to CDN redirect hosts. |
+| `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN` | `Authorization: Bearer`. Falls back to the token file (`$HF_TOKEN_PATH`, `$HF_HOME/token`, `~/.cache/huggingface/token`). Set `HttpOptions::token` to override. Sent only to `huggingface.co` / `hf.co` (or the `HF_ENDPOINT` host), never to CDN redirect hosts. Never logged. |
 | `HF_ENDPOINT` | Mirror base URL (default `https://huggingface.co`) |
-| `HTTPS_PROXY` / `https_proxy` | `http://[user:pass@]host:port`. HTTPS goes through `CONNECT`. Proxy credentials are not supported yet. |
-| `NO_PROXY` / `no_proxy` | Comma-separated hosts or suffixes, or `*` |
+| `HTTPS_PROXY` / `https_proxy` | `http://[user:pass@]host:port`. HTTPS goes through `CONNECT`. `user:pass` (percent-decoded) is sent as basic proxy auth. |
+| `HTTP_PROXY` / `http_proxy` | Same format, used for plain `http://` URLs (e.g. an `http` `HF_ENDPOINT` mirror). |
+| `NO_PROXY` / `no_proxy` | Comma-separated hosts or suffixes (matched on dot boundaries), or `*` |
 | `AGENT_CA_BUNDLE`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE` | CA bundle for TLS verification (first one set wins). Default: OpenSSL's system store. |
 
 TLS verification is always on.
+
+Gated repos: if the API answers 401/403, the error asks you to accept the licence on the model page and set `HF_TOKEN`. HTTP 407 means the proxy wants credentials.

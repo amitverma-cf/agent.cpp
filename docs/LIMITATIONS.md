@@ -78,7 +78,7 @@ Status as of 2026-10-31. Each entry says what breaks, why, and the planned fix. 
 |---|---|
 | `agent setup` cannot download prebuilt engines yet. | Release pipeline publishing per-engine/per-backend archives. |
 | The CLI hides only the Hermes/Qwen `<tool_call>` markup from the token stream. | Use the engine's parsed message instead of filtering raw tokens. |
-| Hub: proxy credentials are ignored; gated repos are untested; split GGUF download is unit-tested only. | Proxy auth; test with `HF_TOKEN` and a real split repo. |
+| Hub: proxy auth and gated-repo tokens are unit-tested offline only; split GGUF download is unit-tested only. | Test with a real authenticating proxy, `HF_TOKEN` and a real split repo. |
 | MCP: stdio only (no HTTP transport), no resources/prompts/sampling, tested against a fake server only. | Implement Streamable HTTP and the remaining features; test with real servers. |
 | No multi-agent status view in the TUI. | Render graph events live in `agent run` / `agent chat`. |
 

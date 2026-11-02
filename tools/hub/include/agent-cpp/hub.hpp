@@ -88,11 +88,26 @@ Result<void> save_catalog(const std::string &path, std::span<const CatalogEntry>
 
 // -------------------------- Network options --------------------------
 
+struct ProxyAddress {
+    std::string host;
+    int port = 0;
+    std::string user; // percent-decoded; empty = no proxy auth
+    std::string pass;
+};
+// "http://host:port", "host:port", "http://user:pass@host:port/" -> {host, port, user, pass}.
+// Port defaults to 80. Credentials are percent-decoded.
+Result<ProxyAddress> parse_proxy_url(std::string_view url);
+
 struct HttpOptions {
     std::string endpoint = "https://huggingface.co"; // HF_ENDPOINT
-    std::string token;          // HF_TOKEN; sent only to the endpoint host, never to CDN redirects
+    // Explicit option, or HF_TOKEN / HUGGING_FACE_HUB_TOKEN / the HF token file (see resolve_hf_token).
+    // Sent only to hosts accepted by token_allowed_for_host(); never forwarded after a redirect to a CDN.
+    std::string token;
     std::string proxy_host;     // from HTTPS_PROXY / https_proxy; empty = direct
     int proxy_port = 0;
+    std::string proxy_user;     // "user:pass@" of HTTPS_PROXY, sent as Proxy-Authorization: Basic
+    std::string proxy_pass;
+    ProxyAddress http_proxy;    // from HTTP_PROXY / http_proxy, used for plain-http URLs (host empty = direct)
     std::string no_proxy;       // NO_PROXY / no_proxy, comma-separated host suffixes
     std::string ca_cert_path;   // AGENT_CA_BUNDLE, SSL_CERT_FILE or CURL_CA_BUNDLE; empty = system store
     int connect_timeout_sec = 30;
@@ -100,15 +115,17 @@ struct HttpOptions {
     int max_redirects = 10;
 };
 
-// Reads the environment variables named above.
+// Reads the environment variables named above (and the HF token file).
 HttpOptions http_options_from_env();
 
-struct ProxyAddress {
-    std::string host;
-    int port = 0;
-};
-// "http://host:port", "host:port", "http://user:pass@host:port/" -> {host, port}. Port defaults to 80.
-Result<ProxyAddress> parse_proxy_url(std::string_view url);
+// Token precedence: explicit option, HF_TOKEN, HUGGING_FACE_HUB_TOKEN, then the contents of the token file
+// ($HF_TOKEN_PATH, else $HF_HOME/token, else ~/.cache/huggingface/token). Values are trimmed.
+std::string resolve_hf_token(std::string_view explicit_token, std::string_view env_hf_token, std::string_view env_legacy_token,
+                             std::string_view token_file_contents);
+
+// True when the Authorization header may be sent to `host`: the endpoint host itself, plus hf.co and
+// huggingface.co when the endpoint is one of them. Redirect targets (CDN hosts) are pre-signed and get no token.
+bool token_allowed_for_host(std::string_view host, std::string_view endpoint);
 
 // True when `host` matches an entry of a NO_PROXY list ("*" , "example.com", ".example.com").
 bool host_bypasses_proxy(std::string_view host, std::string_view no_proxy);
