@@ -61,7 +61,7 @@ constexpr std::string_view kChatValue[] = {"model", "engine", "resume", "workspa
 constexpr std::string_view kChatBool[] = {"yes", "list", "verbose", "inprocess"};
 
 constexpr std::string_view kRunValue[] = {"model", "engine", "workspace", "thread", "set", "resume", "input", "engine-options"};
-constexpr std::string_view kRunBool[] = {"yes", "inprocess"};
+constexpr std::string_view kRunBool[] = {"yes", "inprocess", "json"};
 
 constexpr std::string_view kVoiceValue[] = {"model",     "engine", "asr-model",  "tts-model",      "vad-model", "input-wav", "output-dir",
                                             "workspace", "ctx",    "max-tokens", "engine-options", "resume",    "max-turns", "speaker-id"};
@@ -202,7 +202,7 @@ std::string usage_text() {
            "        [--inprocess]\n"
            "  run <graph.json>           run a declarative graph\n"
            "        [-m|--model NAME|PATH] [-e|--engine NAME|PATH] [--workspace DIR] [--thread ID] [--set k=v]\n"
-           "        [--resume ID] [--input TEXT] [--engine-options JSON] [-y|--yes] [--inprocess]\n"
+           "        [--resume ID] [--input TEXT] [--engine-options JSON] [-y|--yes] [--inprocess] [--json]\n"
            "  voice                      talk to the agent: mic -> VAD -> ASR -> LLM -> TTS -> speaker\n"
            "        --asr-model DIR --tts-model DIR [--vad-model silero_vad.onnx] [-m|--model NAME|PATH]\n"
            "        [--input-wav FILE] [--output-dir DIR] [--barge-in] [--max-turns N] [--speaker-id N]\n"

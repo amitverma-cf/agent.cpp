@@ -190,12 +190,30 @@ agent run examples/graphs/research_pipeline.json --model qwen2.5-0.5b --set "top
 | `--thread ID` | checkpoint thread (default `run`) |
 | `--resume ID [--input TEXT]` | continue an interrupted or failed run; `TEXT` is the human reply, or `approve` for pending tool calls |
 | `--yes` | approve tool calls the permission policy would ask about |
+| `--json` | print node events as one JSON object per line instead of the status table |
 | `--model`, `--engine`, `--engine-options`, `--workspace`, `--inprocess` | as for `agent chat` |
 
 Agent nodes can name their own model (`"model": "<catalogue name or path>"`). Those models are
 loaded through the [model registry](api/models.md) under `memory_budget_mb`, so a graph can use
 more models than fit in memory at once. The default model is then only loaded if some agent node
 has no `"model"`.
+
+While the graph runs, the CLI shows the state of every node on stderr: one line each with the node
+name, its kind, the state (`running`, `done`, `interrupted` or `error`), the elapsed time and the last
+tool call. Branches of a `Parallel` node appear as they start and run side by side. When stdout and
+stderr are both terminals, `TERM` is not `dumb` and `NO_COLOR` is not set, the table is redrawn in place
+with ANSI escapes (on Windows 10 and later the CLI turns on virtual terminal processing for this).
+Otherwise, for example in a pipe or a CI log, it prints one line per event as it happens:
+
+```
+[node] research (agent) running
+[node] research (agent) tool: web_search
+[node] research (agent) done in 4.2s
+```
+
+With `--json` each event line is a JSON object (`{"event":"node_start","node":"research","kind":"agent","ts":...}`;
+the events are `node_start`, `tool_call`, `node_end`, `interrupt` and `node_failed`). Library users get the same
+feed from `GraphRun::on_event` (see [api/graph.md](api/graph.md)).
 
 When the graph finishes, the CLI prints the status and the final state. When it is interrupted,
 it prints the reason, any paused parallel branches and pending tool calls, and the command to

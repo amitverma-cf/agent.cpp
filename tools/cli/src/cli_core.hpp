@@ -196,6 +196,12 @@ HardwareInfo detect_hardware();
 
 bool file_exists(std::string_view path);
 bool stdin_is_tty();
+bool stream_is_tty(std::FILE *stream);
+// Turns on ANSI escape processing for a console stream (Windows 10+ needs this; elsewhere a no-op
+// that returns true). False when the stream is not a console or the console cannot do it.
+bool enable_ansi(std::FILE *stream);
+// Columns of the terminal behind stream; 0 when unknown.
+int terminal_width(std::FILE *stream);
 
 enum class ReadStatus { Line, Eof, Interrupted };
 // Reads one line (without the trailing newline / CR). Interrupted = a signal arrived (Ctrl-C).

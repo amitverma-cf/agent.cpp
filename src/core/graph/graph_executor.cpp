@@ -189,6 +189,13 @@ struct Exec {
     int depth = 0; // 0 = the top-level chain, 1 = a branch of a top-level fan-out, 2+ = nested branches
 };
 
+// log_event, then the caller's GraphRun::on_event (if any). Branch chains call it from worker threads.
+void emit(Exec &x, GraphEventType type, std::string_view node, std::string_view key, std::string_view payload) {
+    log_event(x.events, type, node, key, payload);
+    const GraphRun &run = x.ctx->run;
+    if (run.on_event) run.on_event(x.events.back(), run.on_event_user_data);
+}
+
 struct NodeResult {
     bool interrupted = false;
     std::string reason;
@@ -237,18 +244,18 @@ Result<void> drain_writes(Exec &x, std::string_view node) {
 // ---- Agent nodes ----
 
 struct ToolLogCtx {
-    std::vector<GraphEvent> *events;
+    Exec *exec;
     std::string_view node;
 };
 
 void log_tool_pre(Session &, FlowMemory &, std::string_view tool, std::string_view args, std::string_view, void *ud) {
     auto *ctx = static_cast<ToolLogCtx *>(ud);
-    log_event(*ctx->events, GraphEventType::ToolCall, ctx->node, tool, args);
+    emit(*ctx->exec, GraphEventType::ToolCall, ctx->node, tool, args);
 }
 
 void log_tool_post(Session &, FlowMemory &, std::string_view tool, std::string_view, std::string_view result, void *ud) {
     auto *ctx = static_cast<ToolLogCtx *>(ud);
-    log_event(*ctx->events, GraphEventType::ToolResult, ctx->node, tool, result);
+    emit(*ctx->exec, GraphEventType::ToolResult, ctx->node, tool, result);
 }
 
 bool pause_before_tools(Session &session, std::span<const ToolCallView> calls) {
@@ -320,7 +327,7 @@ void fire_node_hooks(Session &session, FlowMemory &memory, const GraphNode &node
 
 ToolResult run_approved_call(Exec &x, Session &session, FlowMemory &memory, const GraphNode &node, const ToolCall &tc,
                              const PendingResume &resume) {
-    log_event(x.events, GraphEventType::ToolCall, node.name, tc.name, tc.arguments);
+    emit(x, GraphEventType::ToolCall, node.name, tc.name, tc.arguments);
     trigger_event(session, EventType::OnToolCall, bytes_of(tc.name));
 
     PermissionDecision policy = PermissionDecision::Ask;
@@ -344,7 +351,7 @@ ToolResult run_approved_call(Exec &x, Session &session, FlowMemory &memory, cons
         fire_node_hooks(session, memory, node, ToolHook::When::Post, tc, result.text);
     }
 
-    log_event(x.events, GraphEventType::ToolResult, node.name, tc.name, result.text);
+    emit(x, GraphEventType::ToolResult, node.name, tc.name, result.text);
     trigger_event(session, EventType::OnToolResult, bytes_of(result.text));
     memory.stats.tool_calls++;
     {
@@ -387,7 +394,7 @@ Result<NodeResult> run_agent_node(Exec &x, const GraphNode &node, const PendingR
     if (!node.input_key.empty() && has_state(x.state, node.input_key)) prompt = std::string(get_state(x.state, node.input_key));
 
     std::vector<std::string_view> allowed(node.allowed_tools.begin(), node.allowed_tools.end());
-    ToolLogCtx log_ctx{&x.events, node.name};
+    ToolLogCtx log_ctx{&x, node.name};
     // The event-log hooks wrap the node's own hooks.
     std::vector<ToolHook> hooks;
     hooks.reserve(node.hooks.size() + 2);
@@ -465,15 +472,15 @@ Result<NodeResult> run_tool_node(Exec &x, const GraphNode &node) {
         args = std::string(get_state(x.state, node.input_key));
     }
 
-    log_event(x.events, GraphEventType::ToolCall, node.name, node.tool_name, args);
+    emit(x, GraphEventType::ToolCall, node.name, node.tool_name, args);
     trigger_event(x.session, EventType::OnToolCall, bytes_of(node.tool_name));
     // The string form: attachment notes are part of the text, an is_error result fails the node.
     auto exec = execute_tool(x.session, node.tool_name, args);
     if (!exec.ok) {
-        log_event(x.events, GraphEventType::ToolResult, node.name, node.tool_name, "Error: " + exec.error.message);
+        emit(x, GraphEventType::ToolResult, node.name, node.tool_name, "Error: " + exec.error.message);
         return fail<NodeResult>(exec.error.code, exec.error.message);
     }
-    log_event(x.events, GraphEventType::ToolResult, node.name, node.tool_name, exec.value);
+    emit(x, GraphEventType::ToolResult, node.name, node.tool_name, exec.value);
     trigger_event(x.session, EventType::OnToolResult, bytes_of(exec.value));
     {
         std::lock_guard<std::mutex> lock(*x.session.stats_mutex);
@@ -816,7 +823,7 @@ Result<NodeResult> run_parallel_node(Exec &x, const GraphNode &node) {
 }
 
 Result<NodeResult> run_node(Exec &x, const GraphNode &node, const PendingResume *resume) {
-    log_event(x.events, GraphEventType::NodeStart, node.name, {}, {});
+    emit(x, GraphEventType::NodeStart, node.name, {}, {});
     trigger_event(x.session, EventType::OnStateTransition, bytes_of(node.name));
 
     Result<NodeResult> res;
@@ -828,9 +835,9 @@ Result<NodeResult> run_node(Exec &x, const GraphNode &node, const PendingResume 
     case GraphNodeKind::Loop: res = run_loop_node(x, node); break;
     }
 
-    if (!res.ok) log_event(x.events, GraphEventType::NodeFailed, node.name, {}, res.error.message);
-    else if (res.value.interrupted) log_event(x.events, GraphEventType::Interrupt, node.name, {}, res.value.reason);
-    else log_event(x.events, GraphEventType::NodeEnd, node.name, {}, {});
+    if (!res.ok) emit(x, GraphEventType::NodeFailed, node.name, {}, res.error.message);
+    else if (res.value.interrupted) emit(x, GraphEventType::Interrupt, node.name, {}, res.value.reason);
+    else emit(x, GraphEventType::NodeEnd, node.name, {}, {});
     return res;
 }
 

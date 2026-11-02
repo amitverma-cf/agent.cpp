@@ -264,7 +264,7 @@ Watch list: audio.cpp as a meta-engine; llama.cpp native TTS / image gen when th
 - [ ] `agent chat` / `agent run <agent.json>`: text TUI with streaming, tool-call display, approval prompts, multi-agent status; `open <artifact>` launches the OS app
   - [x] `agent chat`: streaming, tool calls + results, y/n/always approval prompts (`default_permission_policy`), `/exit /clear /model /image /open /stats`, Ctrl-C cancels a turn, conversations persisted with `agent_store_sqlite` (`--resume ID`, `--list`), model by catalogue name or path, engine by file type or `--engine`
   - [x] `agent run <agent.json>`: `--set`, `--thread`, `--resume/--input`, final state + interrupt report
-  - [ ] multi-agent status view
+  - [x] multi-agent status view: `agent run` shows one line per graph node (state, elapsed time, last tool call), redrawn in place on a terminal, parallel branches included (`GraphRun::on_event`)
 - [ ] Mic input / speaker output for voice agents (small C audio I/O library such as miniaudio, decided in Phase 0)
   - [x] miniaudio 0.11.26 vendored, CLI only (`tools/cli/src/audio.{hpp,cpp}`): 16 kHz mono capture, playback, plus a WAV file backend; `agent voice` with barge-in
   - [ ] verify capture / playback on real hardware (Linux ALSA/PulseAudio, Windows WASAPI); echo cancellation for barge-in on loudspeakers
