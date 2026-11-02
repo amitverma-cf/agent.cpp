@@ -236,7 +236,8 @@ Priority wave A (v1 **starter pack**, installed by default by `agent setup`):
   - [ ] VITS/Matcha/Kitten TTS, Windows build
 - [ ] `sdcpp`: stable-diffusion.cpp txt2img / img2img / video (Wan, LTX) with progress + cancel
   - [x] txt2img + img2img with progress + per-step cancel (`agent-engine-sdcpp`, stable-diffusion.cpp master-1028, opt-in `AGENT_ENGINE_SDCPP`)
-  - [ ] video (Wan, LTX)
+  - [x] video (`AGENT_CAP_VIDEO_GEN`): MJPEG AVI or PNG frames, no ffmpeg; tested with Wan2.1-T2V-1.3B Q4_0 (~1 min on CPU for a short clip)
+  - [ ] LTX video, image-to-video
 - [ ] `trellis`: TRELLIS.2 image → GLB (3D gen)
   - [x] image → GLB through trellis2.cpp's C API (`agent-engine-trellis`, localai-org/trellis2cpp `2f3e6e2`, opt-in `AGENT_ENGINE_TRELLIS`): coarse / 512 / 1024 / PBR paths chosen by the GGUFs present, seed/steps/guidance overrides, per-step progress; real generation verified on CPU for the coarse path only (2 steps, ~13 min on 4 shared cores)
   - [ ] verify the 512 / 1024 / textured paths end to end (needs a GPU or much more CPU time), cancel inside a generation (no hook in the port), GPU backends (nested build is CPU-only)
