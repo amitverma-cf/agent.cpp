@@ -13,6 +13,7 @@ set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)  # engines never download; the CLI hu
 set(LLAMA_BUILD_MTMD ON CACHE BOOL "" FORCE)
 set(MTMD_VIDEO OFF CACHE BOOL "" FORCE)
 add_subdirectory(${PROJECT_SOURCE_DIR}/vendor/llama.cpp ${CMAKE_CURRENT_BINARY_DIR}/llama.cpp EXCLUDE_FROM_ALL)
+include(${PROJECT_SOURCE_DIR}/cmake/ggml_no_amx.cmake)
 
 add_library(agent-engine-llama SHARED
     llama_engine.cpp
