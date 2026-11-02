@@ -120,11 +120,14 @@ std::vector<std::string> sandbox_system_read_only_paths(bool network) {
 #endif
 }
 
-std::vector<std::string> sandbox_system_read_write_paths() {
+std::vector<std::string> sandbox_system_read_write_paths(bool gpu) {
 #if defined(AGENT_HAL_LINUX)
-    std::vector<std::string> out = {"/dev/null",    "/dev/zero", "/dev/full", "/dev/random",
-                                    "/dev/urandom", "/dev/shm",  "/dev/dri",  "/dev/kfd"};
-    // NVIDIA device nodes (/dev/nvidia0, /dev/nvidiactl, /dev/nvidia-uvm, ...).
+    std::vector<std::string> out = {"/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/shm"};
+    if (!gpu) return out;
+    // DRM render/card nodes (Vulkan, ROCm, Intel), the AMD compute node, and the NVIDIA nodes
+    // (/dev/nvidia0, /dev/nvidiactl, /dev/nvidia-uvm, /dev/nvidia-caps, ...).
+    out.emplace_back("/dev/dri");
+    out.emplace_back("/dev/kfd");
     if (DIR *d = ::opendir("/dev")) {
         while (dirent *e = ::readdir(d))
             if (std::strncmp(e->d_name, "nvidia", 6) == 0) out.push_back(std::string("/dev/") + e->d_name);
@@ -132,8 +135,10 @@ std::vector<std::string> sandbox_system_read_write_paths() {
     }
     return out;
 #elif defined(AGENT_HAL_MACOS)
+    (void)gpu; // Metal goes through IOKit / Mach services, not device files
     return {"/dev/null", "/dev/zero", "/dev/random", "/dev/urandom"};
 #else
+    (void)gpu;
     return {};
 #endif
 }
@@ -332,7 +337,8 @@ Result<PreparedSandbox> prepare_sandbox(const SandboxPolicy &policy) {
                 if (policy.system_paths) {
                     for (const auto &p : sandbox_system_read_only_paths(!deny_net))
                         add_rule(out.landlock_fd, p, kFsReadOnly, fs, false, out.warnings);
-                    for (const auto &p : sandbox_system_read_write_paths()) add_rule(out.landlock_fd, p, fs, fs, false, out.warnings);
+                    for (const auto &p : sandbox_system_read_write_paths(policy.gpu))
+                        add_rule(out.landlock_fd, p, fs, fs, false, out.warnings);
                 }
                 if (policy.allow_tmp) {
                     add_rule(out.landlock_fd, temp_dir(), fs, fs, false, out.warnings);
@@ -417,7 +423,9 @@ Result<PreparedSandbox> prepare_sandbox(const SandboxPolicy &policy) {
     // Later rules take precedence in SBPL: start permissive, deny file access, re-allow the lists.
     std::string prof = "(version 1)\n(allow default)\n";
     if (policy.filesystem) {
-        prof += "(deny file-read* file-write*)\n(allow file-read* file-map-executable (literal \"/\")";
+        // file-read-metadata stays allowed everywhere (stat, realpath, getcwd and dyld walk the parents
+        // of allowed paths); it exposes names and attributes, not contents.
+        prof += "(deny file-read* file-write*)\n(allow file-read-metadata)\n(allow file-read* file-map-executable (literal \"/\")";
         auto ro = policy.read_only_paths;
         if (policy.system_paths)
             for (auto &p : sandbox_system_read_only_paths(policy.network == SandboxNetwork::Allow)) ro.push_back(p);
@@ -425,7 +433,7 @@ Result<PreparedSandbox> prepare_sandbox(const SandboxPolicy &policy) {
         prof += ")\n(allow file-read* file-write*";
         auto rw = policy.read_write_paths;
         if (policy.system_paths)
-            for (auto &p : sandbox_system_read_write_paths()) rw.push_back(p);
+            for (auto &p : sandbox_system_read_write_paths(policy.gpu)) rw.push_back(p);
         if (policy.allow_tmp) {
             rw.push_back(temp_dir());
             rw.push_back("/private/tmp");

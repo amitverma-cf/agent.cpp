@@ -152,7 +152,11 @@ Result<LoadedEngine> load_engine_for(const Context &ctx, std::string_view engine
     if (!ref.value.name.empty() && loaded.value.name != ref.value.name)
         return fail<LoadedEngine>(ErrorCode::InvalidConfig,
                                   path + " is the '" + loaded.value.name + "' engine, not '" + ref.value.name + "'");
-    if (const EngineEntry *entry = find_engine_entry(engines.value, loaded.value.name)) loaded.value.isolation = entry->isolation;
+    loaded.value.backend = ctx.config.backend;
+    if (const EngineEntry *entry = find_engine_entry(engines.value, loaded.value.name)) {
+        loaded.value.isolation = entry->isolation;
+        loaded.value.backend = entry->backend;
+    }
     return loaded;
 }
 
@@ -421,6 +425,7 @@ Result<void> register_graph_model(const Context &ctx, ModelRegistry &registry, c
     spec.name = name;
     spec.config.engine = engine.value.name;
     spec.config.engine_isolation = cli_engine_isolation(inprocess, engine.value.isolation);
+    spec.config.engine_sandbox.gpu = cli_engine_gpu(engine.value.backend);
     spec.on_load = share_home;
     spec.on_load_user_data = home;
     return register_model(registry, std::move(spec));
@@ -489,6 +494,7 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
         spec.config.provider = AiProvider::Engine;
         spec.config.engine = engine.value.name;
         spec.config.engine_isolation = cli_engine_isolation(cl.has("inprocess"), engine.value.isolation);
+        spec.config.engine_sandbox.gpu = cli_engine_gpu(engine.value.backend);
         spec.config.engine_options = std::string(cl.get("engine-options"));
         spec.config.model = model.value.path;
         spec.config.memory = {.store = store::sqlite_store()};

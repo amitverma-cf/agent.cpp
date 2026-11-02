@@ -197,6 +197,11 @@ TEST_CASE("cli: engines run out of process unless --inprocess or engines.json sa
     CHECK(cli_engine_isolation(false, "process") == agent::EngineIsolation::Process);
     CHECK(cli_engine_isolation(false, "inprocess") == agent::EngineIsolation::InProcess);
     CHECK(cli_engine_isolation(true, "process") == agent::EngineIsolation::InProcess);
+    // GPU device nodes are opened in the engine sandbox only for GPU backends.
+    CHECK_FALSE(cli_engine_gpu("cpu"));
+    CHECK_FALSE(cli_engine_gpu(""));
+    CHECK(cli_engine_gpu("cuda"));
+    CHECK(cli_engine_gpu("vulkan"));
 
     EngineEntry trusted{"llama", "/a/agent-engine-llama.so", "1", {"text_gen"}, "cpu"};
     trusted.isolation = "inprocess";

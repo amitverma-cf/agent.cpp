@@ -152,6 +152,7 @@ Config base_config(VoiceState &st, const LoadedEngine &engine) {
     cfg.provider = AiProvider::Engine;
     cfg.engine = engine.name;
     cfg.engine_isolation = cli_engine_isolation(st.settings.inprocess, engine.isolation);
+    cfg.engine_sandbox.gpu = cli_engine_gpu(engine.backend);
     cfg.workspace_dir = st.workspace;
     cfg.logger = log_fn;
     cfg.logger_user_data = &st;
