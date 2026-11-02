@@ -220,6 +220,9 @@ option(AGENT_ENGINE_SHERPA "Build the sherpa-onnx speech engine plugin (engines/
 option(AGENT_ENGINE_WHISPER "Build the whisper.cpp speech-to-text engine plugin (engines/whisper)" OFF)
 option(AGENT_ENGINE_PARAKEET "Build the parakeet.cpp speech-to-text engine plugin (engines/parakeet)" OFF)
 option(AGENT_ENGINE_QWEN3TTS "Build the Qwen3-TTS text-to-speech engine plugin (engines/qwen3tts, qwentts.cpp)" OFF)
+# ggml's AMX kernels break when another in-process engine touches the AMX tile state; see
+# cmake/ggml_no_amx.cmake. Only matters for GGML_NATIVE builds on AMX CPUs.
+option(AGENT_GGML_AMX "Keep Intel AMX in the engines' ggml (safe only with process-isolated engines)" OFF)
 
 add_executable(basic examples/basic/basic.cpp)
 target_link_libraries(basic PRIVATE agent)

@@ -112,7 +112,8 @@ left out: the tarball is the end-user CLI. Before packing it runs `bin/agent ver
 `ldd` reports an unresolved library for the binary or any plugin.
 
 By default ggml is built with `GGML_NATIVE=OFF`, which enables AVX, AVX2, FMA, F16C and BMI2 (roughly
-x86-64-v3) instead of `-march=native`; `--native` builds for the packaging machine only.
+x86-64-v3) instead of `-march=native`; `--native` builds for the packaging machine only. Native builds still leave out Intel AMX unless
+`-DAGENT_GGML_AMX=ON` (see [LIMITATIONS.md](LIMITATIONS.md#1-robustness-and-isolation)).
 
 The binary links the system OpenSSL 3 (`libssl.so.3`, `libcrypto.so.3`), `libstdc++` and glibc of the
 build machine, so build on the oldest distribution you want to support.
