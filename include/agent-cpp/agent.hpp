@@ -232,6 +232,9 @@ struct WorkspaceContext {
     bool sandbox = true;
     // Applied to run_command when it is built from this context (get_terminal_tool(ctx)).
     SandboxPolicy command_sandbox;
+    // Polled by run_command while it waits; non-zero stops the command and its child processes and
+    // the result reports "cancelled":true. The default tool set points it at the Session's cancel flag.
+    const volatile int32_t *cancel = nullptr;
 };
 
 std::vector<Tool> get_filesystem_tools(std::shared_ptr<WorkspaceContext> ctx);
