@@ -241,9 +241,9 @@ Priority wave A (v1 **starter pack**, installed by default by `agent setup`):
   - [x] v1: named tensors in/out (`AGENT_CAP_GENERIC`), concurrent `run()`, threads, graph optimization level, CPU/CUDA EP selection
   - [ ] IoBinding / device-resident outputs, more EPs (DirectML, CoreML, TensorRT), cancel during `Run()`, task-specific pre/post-processing (classify, embed, detect)
 Wave B (optional add-ons):
-- [ ] `whisper`: whisper.cpp STT
-- [ ] `parakeet`: parakeet.cpp (ggml STT)
-- [ ] `qwen3tts`: Qwen3-TTS (voice cloning), after licence check
+- [x] `whisper`: whisper.cpp STT (`agent-engine-whisper`, whisper.cpp v1.9.5 C API, opt-in `AGENT_ENGINE_WHISPER`): ASR (language / translate / beam size, streamed segments, progress, cancel) + whisper.cpp's Silero VAD (`AGENT_CAP_VAD`, also as a pre-filter); Linux x64 CPU tested with ggml-tiny.en + ggml-silero-v5.1.2 on samples/jfk.wav
+- [x] `parakeet`: parakeet.cpp (ggml STT) (`agent-engine-parakeet`, parakeet.cpp v0.6.1 C API, opt-in `AGENT_ENGINE_PARAKEET`): offline ASR with decoder / language selection; Linux x64 CPU tested with tdt_ctc-110m-q8_0 on the repo's speech.wav. Not yet: parakeet.cpp's VAD / diarization / streaming APIs, cancel inside a transcription (no hook)
+- [x] `qwen3tts`: Qwen3-TTS (voice cloning), after licence check (code MIT, weights Apache-2.0) (`agent-engine-qwen3tts`, qwentts.cpp `5916bf7` C API, opt-in `AGENT_ENGINE_QWEN3TTS`): TTS with streamed audio chunks, progress, per-frame cancel, voice cloning from a request audio part or `options.voice`, named speakers / voice design for the other talkers; Linux x64 CPU tested with qwen-talker-0.6b-base-Q8_0 ("hello world" and a jfk.wav-cloned "good morning" transcribed back by whisper tiny.en). Not yet tested: customvoice / voicedesign talkers, GPU, thread count control (qwentts picks it)
 - [ ] more 3D engines as ggml/ONNX ports appear (e.g. Hunyuan3D if a commercially licensed port exists)
 Watch list: audio.cpp as a meta-engine; llama.cpp native TTS / image gen when they land. Fish Audio S2 and Phonon are revisited only if their licences change.
 - [ ] Each engine: manifest, tiny-model smoke test, example graph, licence notes

@@ -10,3 +10,12 @@
 [submodule "vendor/trellis2cpp"]
 	path = vendor/trellis2cpp
 	url = https://github.com/localai-org/trellis2cpp.git
+[submodule "vendor/whisper.cpp"]
+	path = vendor/whisper.cpp
+	url = https://github.com/ggml-org/whisper.cpp.git
+[submodule "vendor/parakeet.cpp"]
+	path = vendor/parakeet.cpp
+	url = https://github.com/mudler/parakeet.cpp.git
+[submodule "vendor/qwentts.cpp"]
+	path = vendor/qwentts.cpp
+	url = https://github.com/ServeurpersoCom/qwentts.cpp.git

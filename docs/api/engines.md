@@ -594,3 +594,177 @@ Limitation: sherpa-onnx validates configs and returns NULL for most errors, but 
 Licences: Kokoro (Apache-2.0), Whisper (MIT), Silero VAD (MIT), pyannote segmentation-3.0 (MIT) and the
 TitaNet embedding model (CC-BY-4.0) are fine for the catalogue. 3D-Speaker embedding models are Apache-2.0 according to
 the 3D-Speaker repository; check the individual model card.
+
+## The whisper engine
+
+`engines/whisper` (`agent-engine-whisper`) wraps [whisper.cpp](https://github.com/ggml-org/whisper.cpp)
+(`vendor/whisper.cpp`, pinned to the v1.9.5 release tag) through its C API (`whisper.h`) for speech-to-text, plus
+whisper.cpp's built-in Silero voice activity detection. Caps `AGENT_CAP_ASR | AGENT_CAP_VAD`, flags 0.
+
+It is opt-in because it builds another copy of ggml:
+
+```sh
+git submodule update --init --depth 1 vendor/whisper.cpp
+cmake -B build -G Ninja -DAGENT_ENGINE_WHISPER=ON [-DAGENT_WHISPER_BUILD_JOBS=2]
+```
+
+As with sdcpp, whisper.cpp's ggml has the same CMake target names as llama.cpp's, so it is a nested CMake
+project (`ExternalProject`) linked statically into the plugin with hidden visibility; on Linux also
+`-Wl,--exclude-libs,ALL` and a version script (`engines/common/exports.map`), so the plugin exports
+`agent_engine_get_v1` only. The nested build is CPU-only.
+
+`Config::model` is a ggml whisper model (`ggml-*.bin`, for example `ggml-tiny.en.bin` or `ggml-base.bin` from
+[ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp)). `Config::engine_options`:
+
+| Option | Meaning |
+|--------|---------|
+| `language` | `"en"`, `"de"`, ... or `"auto"`. Default: `"auto"` for multilingual models, `"en"` for `.en` models. An unknown code fails `create()` with `AGENT_ERR_INVALID_CONFIG` |
+| `translate` | translate to English instead of transcribing (multilingual models) |
+| `threads` | CPU threads (default 4) |
+| `beam_size` | 1 = greedy (default), 2..16 = beam search |
+| `temperature`, `initial_prompt` | decoding temperature (default 0), prompt text for the decoder |
+| `flash_attn`, `gpu` | whisper context flags (no effect in the CPU-only build) |
+| `verbose` | forward whisper.cpp info logs to stderr (errors always are) |
+| `vad` | `{"model": "ggml-silero-v5.1.2.bin", "threshold": 0.5, "min_speech_ms": 250, "min_silence_ms": 100, "max_speech_s": ..., "speech_pad_ms": 30, "filter": false}` enables the `VAD` task; `filter: true` also cuts the audio to speech before every transcription |
+
+`params_json` per request accepts `language`, `translate` and `beam_size`.
+
+| `task` | Last user message | Result |
+|---|---|---|
+| `ASR`, automatic, or `TEXT_GEN` | audio part | transcript as a `TEXT` part |
+| `ASR` / automatic / `TEXT_GEN` | no audio part | `AGENT_ERR_INVALID_CONFIG` |
+| `VAD` | audio part, `vad` configured | `TEXT` `[{"start":0.29,"end":2.21}, ...]` (seconds) + `TENSOR` `segments` F32 `[n, 2]`, as for sherpa |
+| `VAD` | no `vad` configured | `AGENT_ERR_UNSUPPORTED` |
+| anything else | | `AGENT_ERR_UNSUPPORTED` |
+
+Audio input follows the sherpa conventions: a `FILE` or `BYTES` WAV (PCM 8/16/24/32-bit or float, any channel
+count and sample rate; down-mixed and linearly resampled to 16 kHz) or an `F32` `TENSOR` of mono samples at
+16 kHz. Each decoded segment is streamed as a `TEXT` chunk (the chunks concatenate to the transcript), progress
+goes to `on_progress(percent, 100)`, and `cancel` is checked before every encoder pass and every ggml graph
+computation (`AGENT_ERR_CANCELLED`). whisper.cpp's logger is process-wide; one instance with `verbose` turns
+info logs on for all of them.
+
+Tests (`tests/unit/test_engine_whisper.cpp`) run on whisper.cpp's `samples/jfk.wav`; the real-model cases need
+`AGENT_TEST_WHISPER_MODEL` (and `AGENT_TEST_WHISPER_VAD_MODEL` for VAD).
+
+Licences: whisper.cpp (MIT), OpenAI Whisper weights in ggml form (MIT), Silero VAD in ggml form
+([ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad), MIT).
+
+## The parakeet engine
+
+`engines/parakeet` (`agent-engine-parakeet`) wraps [parakeet.cpp](https://github.com/mudler/parakeet.cpp)
+(`vendor/parakeet.cpp`, pinned to the v0.6.1 release tag), a ggml port of NVIDIA's NeMo Parakeet (TDT, RNNT, CTC,
+hybrid) and Nemotron ASR models, through its C API (`parakeet_capi.h`). Caps `AGENT_CAP_ASR`, flags 0.
+
+```sh
+git submodule update --init --depth 1 vendor/parakeet.cpp
+git -C vendor/parakeet.cpp submodule update --init --depth 1 third_party/ggml
+cmake -B build -G Ninja -DAGENT_ENGINE_PARAKEET=ON [-DAGENT_PARAKEET_BUILD_JOBS=2]
+```
+
+Built like whisper and sdcpp: a nested CMake project with its own ggml, linked statically with hidden visibility
+(Linux: `--exclude-libs,ALL` + version script, only `agent_engine_get_v1` exported), CPU only. parakeet.cpp's
+configure step applies its own ggml patches (`third_party/ggml-patches`) to its ggml checkout, so
+`vendor/parakeet.cpp` shows modified submodule content after a build; that is expected. The sound-event
+(ced.cpp) and speaker-identification (voice-detect.cpp) parts are not built.
+
+`Config::model` is a parakeet.cpp GGUF from [mudler/parakeet-cpp-gguf](https://huggingface.co/mudler/parakeet-cpp-gguf),
+for example `tdt_ctc-110m-q8_0.gguf` (178 MB, English), or a bundle GGUF (its ASR component is loaded).
+`Config::engine_options`:
+
+| Option | Meaning |
+|--------|---------|
+| `threads` | CPU threads (default 4). parakeet.cpp keeps one process-wide compute thread count, so the last instance created wins |
+| `decoder` | `"default"` (by architecture), `"ctc"` or `"tdt"` (the transducer head) |
+| `language` | locale for prompt-conditioned multilingual models (Nemotron), e.g. `"de"`; ignored by other models |
+| `component` | the component of a bundle GGUF to load (default: its ASR component) |
+
+`params_json` per request accepts `language` and `decoder`. Requests follow the ASR row of the whisper engine:
+task `ASR` (or automatic / `TEXT_GEN`) with an audio part gives the transcript as one `TEXT` part (also sent as
+one `TEXT` chunk); no audio part is `AGENT_ERR_INVALID_CONFIG`; other tasks are `AGENT_ERR_UNSUPPORTED`. Audio is a
+`FILE` / `BYTES` WAV (any format the shared reader takes, resampled to 16 kHz) or a 16 kHz `F32` `TENSOR`.
+parakeet.cpp has no progress or abort hook inside one transcription: progress is 0/1 then 1/1, and `cancel` is
+honoured before (and checked after) the call. parakeet.cpp's own VAD, diarization and streaming APIs are not
+exposed yet.
+
+Every `parakeet_capi_*` entry catches C++ exceptions itself, so none cross the plugin boundary. The thread count
+is set through `pk::set_num_threads`, an internal (non-C-API) function of the statically linked library,
+because the C API has no thread setting for the default single backend.
+
+Licences: parakeet.cpp code (MIT). The weights keep their source model's licence (parakeet.cpp `docs/licenses.md`):
+the NVIDIA Parakeet TDT / CTC / RNNT checkpoints, including `parakeet-tdt_ctc-110m` used in the tests, are
+CC-BY-4.0 (attribution required); `parakeet_realtime_eou_120m-v1` is under the NVIDIA Open Model License and the
+Nemotron 3.5 / unified / diarization models under OpenMDW 1.1, so check those before shipping them.
+Tests (`tests/unit/test_engine_parakeet.cpp`) use parakeet.cpp's `tests/fixtures/speech.wav` and need
+`AGENT_TEST_PARAKEET_MODEL` for the real-model cases.
+
+## The qwen3tts engine
+
+`engines/qwen3tts` (`agent-engine-qwen3tts`) runs [Qwen3-TTS](https://huggingface.co/collections/Qwen/qwen3-tts)
+(12 Hz, 0.6B / 1.7B) through [qwentts.cpp](https://github.com/ServeurpersoCom/qwentts.cpp), a ggml port with a
+plain C99 API (`qwen.h`). `vendor/qwentts.cpp` is pinned to commit `5916bf7` (2026-10-16; the project has no
+release tags). Caps `AGENT_CAP_TTS`, flags 0.
+
+```sh
+git submodule update --init vendor/qwentts.cpp
+git -C vendor/qwentts.cpp submodule update --init --depth 1 ggml
+cmake -B build -G Ninja -DAGENT_ENGINE_QWEN3TTS=ON [-DAGENT_QWEN3TTS_BUILD_JOBS=2]
+```
+
+Built like whisper and sdcpp: a nested CMake project (only its `qwen-core` library target) with its own ggml
+fork, linked statically with hidden visibility (Linux: `--exclude-libs,ALL` + version script, only
+`agent_engine_get_v1` exported), CPU only.
+
+Why qwentts.cpp and not predict-woo/qwen3-tts.cpp: both are MIT, but qwen3-tts.cpp's library is a C++ class API
+(`std::function` callbacks, `std::string` results) that expects a separately prebuilt ggml in `ggml/build`,
+while qwentts.cpp builds its ggml in-tree and exposes a versioned C ABI that catches every C++ exception at its
+boundary (`qt_status` + `qt_last_error()`), with streaming, cancellation and voice cloning.
+
+Models: two GGUFs from [Serveurperso/Qwen3-TTS-GGUF](https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF), a talker
+(`qwen-talker-{0.6b,1.7b}-{base,customvoice,voicedesign}-{Q4_K_M,Q8_0,BF16,F32}.gguf`) as `Config::model` and the
+shared codec (`qwen-tokenizer-12hz-*.gguf`) as `options.codec`. `base` talkers speak in a default voice or clone
+one; `customvoice` talkers have named speakers (serena, vivian, uncle_fu, ryan, aiden, ono_anna, sohee, eric,
+dylan); `voicedesign` (1.7B) needs an `instruct` describing the voice. `Config::engine_options`:
+
+| Option | Meaning |
+|--------|---------|
+| `codec` | 12 Hz tokenizer GGUF (required) |
+| `language` | `"auto"` (default), a qwentts language name (`english`, `chinese`, `japanese`, `korean`, `german`, `french`, `russian`, `portuguese`, `spanish`, `italian`, ...) or an ISO code (`en`, `zh`, `ja`, `ko`, `de`, `fr`, `ru`, `pt`, `es`, `it`) |
+| `speaker` | named speaker (`customvoice` talkers; default: the model's first speaker) |
+| `instruct` | style / voice description (`voicedesign` required, `customvoice` optional, ignored for `base`) |
+| `voice` | `{"wav": "ref.wav", "text": "transcript of ref.wav"}`: default clone reference for `base` talkers, encoded once at `create()`. Without `text` only the speaker embedding is used (x-vector cloning); with it, in-context cloning |
+| `seed` | `-1` (default) = random, otherwise reproducible |
+| `temperature`, `top_k`, `top_p`, `repetition_penalty`, `max_new_tokens` | talker sampling (qwentts defaults: 0.9, 50, 1.0, 1.05, 2048 frames = 164 s) |
+| `device` | ggml device name (`CPU`, ...; default: best available) |
+| `flash_attn`, `verbose` | fused attention on GPU backends; forward qwentts info logs to stderr |
+
+`params_json` per request accepts `language`, `speaker`, `instruct`, `seed`, the sampling keys, and `ref_text`
+(the transcript of a per-request reference clip).
+
+| `task` | Last user message | Result |
+|---|---|---|
+| `TTS`, automatic, or `TEXT_GEN` | text | speech: TEXT summary + WAV in `output_dir` (`FILE`, `audio/wav`, 24 kHz mono 16-bit), as for sherpa |
+| `TTS` / automatic / `TEXT_GEN` | text + audio part | the same, in the voice of the audio part (`base` talkers; `FILE`/`BYTES` WAV resampled to 24 kHz, or a 16 kHz `F32` `TENSOR`); `params_json.ref_text` turns on in-context cloning |
+| `TTS` | no text | `AGENT_ERR_INVALID_CONFIG` |
+| anything else | | `AGENT_ERR_UNSUPPORTED` |
+
+A mode violation (an audio reference or `voice` on a non-`base` talker, a `voicedesign` talker without
+`instruct`) or an unknown language returns `AGENT_ERR_INVALID_CONFIG` with qwentts' message. Synthesis always
+runs qwentts' streaming decoder: each chunk (one codec frame first, then up to 8 frames = 0.64 s) goes to
+`on_chunk(AGENT_CHUNK_AUDIO, samples, n * sizeof(float))` (mono f32, 24 kHz) and the WAV holds exactly the
+streamed samples. Progress is `on_progress(frames, max_new_tokens)`, ending at `(max, max)`. `cancel` is polled
+before every talker step (about 80 ms of audio). Note that qwentts calls the chunk and cancel callbacks from its
+own compute worker thread while `run()` waits for it, so they never run concurrently with each other or with
+`run()`. qwentts picks its CPU thread count itself (half the hardware threads); there is no thread option.
+qwentts' logger is process-wide.
+
+Upstream bug worked around: at the pinned commit qwentts.cpp resets closed GGUF handles to `fd = 0` and closes
+them again on `qt_free` (and on `qt_init` failure), i.e. it calls `close(0)` and closes the host's stdin; the next
+descriptor the host opens then lands on fd 0. The plugin guards `qt_init` / `qt_free` by keeping a duplicate of
+fd 0 and restoring it afterwards (a regression test checks fd 0 survives a failed `create()`). A thread of the
+host that opens a file during that short window can still be affected; to be reported upstream.
+
+Licences: qwentts.cpp code (MIT); Qwen3-TTS weights (all five `Qwen/Qwen3-TTS-12Hz-*` checkpoints and
+`Qwen3-TTS-Tokenizer-12Hz`) and the converted GGUFs are Apache-2.0, so they fit the catalogue policy.
+Tests (`tests/unit/test_engine_qwen3tts.cpp`) need `AGENT_TEST_QWEN3TTS_TALKER` and `AGENT_TEST_QWEN3TTS_CODEC`; with
+the whisper engine built and `AGENT_TEST_WHISPER_MODEL` set, the generated speech is transcribed back.
