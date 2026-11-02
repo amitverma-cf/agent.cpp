@@ -437,3 +437,89 @@ TEST_CASE("agent.json: mcp_servers are connected at load and their tools used", 
     REQUIRE_FALSE(broken_res.ok);
     CHECK(broken_res.error.message.find("mcp_servers[0] (\"gone\")") != std::string::npos);
 }
+
+TEST_CASE("agent.json: mcp_servers sandbox objects are parsed and validated", "[graph_json][mcp][sandbox]") {
+    auto parse = [](std::string_view server) {
+        return agent::parse_graph_json(std::string(R"({"mcp_servers": [)") + std::string(server) +
+                                       R"(], "nodes": [{"name": "a", "kind": "agent", "prompt": "x"}]})");
+    };
+
+    auto none = parse(R"({"name": "s", "command": "srv"})");
+    REQUIRE(none.ok);
+    CHECK_FALSE(none.value.mcp_servers[0].sandbox.enabled); // opt-in
+
+    auto full = parse(R"({"name": "s", "command": "srv", "sandbox": {
+        "read_only_paths": ["/opt/node", "data"], "read_write_paths": ["/srv/out"], "network": "deny", "memory_limit_mb": 512}})");
+    INFO(full.error.message);
+    REQUIRE(full.ok);
+    CHECK(full.value.warnings.empty());
+    const agent::SandboxPolicy &sb = full.value.mcp_servers[0].sandbox;
+    CHECK(sb.enabled); // an object without "enabled" opts in
+    CHECK(sb.read_only_paths == std::vector<std::string>{"/opt/node", "data"});
+    CHECK(sb.read_write_paths == std::vector<std::string>{"/srv/out"});
+    CHECK(sb.network == agent::SandboxNetwork::Deny);
+    CHECK(sb.memory_limit_bytes == 512ull << 20);
+    CHECK(sb.filesystem);
+    CHECK(sb.system_paths);
+
+    auto off = parse(R"({"name": "s", "command": "srv", "sandbox": {"enabled": false, "network": "allow"}})");
+    REQUIRE(off.ok);
+    CHECK_FALSE(off.value.mcp_servers[0].sandbox.enabled);
+    CHECK(off.value.mcp_servers[0].sandbox.network == agent::SandboxNetwork::Allow);
+
+    auto shorthand = parse(R"({"name": "s", "command": "srv", "sandbox": true})");
+    REQUIRE(shorthand.ok);
+    CHECK(shorthand.value.mcp_servers[0].sandbox.enabled);
+    CHECK(shorthand.value.mcp_servers[0].sandbox.network == agent::SandboxNetwork::Allow);
+
+    auto typo = parse(R"({"name": "s", "command": "srv", "sandbox": {"netwrok": "deny"}})");
+    REQUIRE(typo.ok);
+    CHECK(has_warning(typo.value, "mcp_servers[0]: sandbox: unknown field \"netwrok\""));
+
+    auto err = [&](std::string_view server) {
+        auto r = parse(server);
+        return r.ok ? std::string("<ok>") : r.error.message;
+    };
+    CHECK(err(R"({"name": "s", "command": "srv", "sandbox": "yes"})").find("\"sandbox\" must be true, false or an object") !=
+          std::string::npos);
+    CHECK(err(R"({"name": "s", "command": "srv", "sandbox": {"network": "none"}})").find("\"network\" must be \"allow\" or \"deny\"") !=
+          std::string::npos);
+    CHECK(err(R"({"name": "s", "command": "srv", "sandbox": {"read_only_paths": "/x"}})")
+              .find("\"read_only_paths\" must be an array of strings") != std::string::npos);
+    CHECK(err(R"({"name": "s", "command": "srv", "sandbox": {"read_write_paths": [""]}})").find("paths must not be empty") !=
+          std::string::npos);
+    CHECK(err(R"({"name": "s", "command": "srv", "sandbox": {"memory_limit_mb": -1}})").find("\"memory_limit_mb\" must be an integer") !=
+          std::string::npos);
+    CHECK(err(R"({"name": "s", "command": "srv", "sandbox": {"memory_limit_mb": 1.5}})").find("\"memory_limit_mb\" must be an integer") !=
+          std::string::npos);
+    CHECK(err(R"({"name": "s", "command": "srv", "sandbox": {"enabled": 1}})").find("\"enabled\" must be true or false") !=
+          std::string::npos);
+}
+
+#if defined(__linux__)
+TEST_CASE("agent.json: a sandboxed MCP server is started under its policy", "[graph_json][mcp][sandbox]") {
+    auto session = make_session();
+    const std::string server = AGENT_TEST_FAKE_MCP_SERVER_PATH;
+    auto json = [&](std::string_view name, std::string_view sandbox) {
+        return std::string(R"({"mcp_servers": [{"name": ")") + std::string(name) + R"(", "command": ")" + server + R"(", "sandbox": )" +
+               std::string(sandbox) + R"(}], "nodes": [{"name": "t", "kind": "tool", "tool": ")" + std::string(name) +
+               R"(.echo", "args": {"text": "boxed"}, "output_key": "out"}]})";
+    };
+
+    auto boxed = agent::load_graph_json(session, json("boxed", R"({"network": "deny"})"));
+    INFO(boxed.error.message);
+    REQUIRE(boxed.ok);
+    agent::GraphRun run;
+    run.thread_id = "mcp_sandbox";
+    auto res = agent::run_graph(session, boxed.value.graph, run);
+    INFO(res.error.message);
+    REQUIRE(res.ok);
+    CHECK(agent::get_state(run.state, "out") == "echo: boxed");
+    agent::disconnect_mcp_servers(session);
+
+    // The policy reaches the spawn: 1 MiB of address space cannot even map the server's libraries.
+    auto starved = agent::load_graph_json(session, json("starved", R"({"memory_limit_mb": 1})"));
+    CHECK_FALSE(starved.ok);
+    CHECK(agent::list_mcp_servers(session).empty());
+}
+#endif
