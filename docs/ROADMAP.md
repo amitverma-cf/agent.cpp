@@ -228,6 +228,7 @@ Priority wave A (v1 **starter pack**, installed by default by `agent setup`):
   - [x] libmtmd image + audio input (`engine_options.mmproj`); video input still open (needs ffmpeg)
   - [x] embeddings + rerank (`engine_options.mode` `"embed"` / `"rerank"`, `AGENT_CAP_EMBED` / `AGENT_CAP_RERANK`; tested with bge-small-en-v1.5, jina-reranker-v1-tiny-en, bge-reranker-v2-m3)
   - [x] decision models, generic: `AGENT_CAP_DECIDE` choice / score / yes-no from option log-probabilities with any instruct GGUF (+ images via mmproj), `agent::decide` / `decide_score` / `decide_yes_no` ([api/decide.md](api/decide.md)); tested with Qwen2.5-0.5B-Instruct
+  - [x] OCR: `AGENT_CAP_OCR` with model-family prompts (PaddleOCR-VL, GLM-OCR, DeepSeek-OCR, dots.ocr, HunyuanOCR, generic fallback), `agent::ocr`; tested with GLM-OCR (Q8_0, MIT) and SmolVLM-256M (generic prompt)
   - [ ] native System One decision models (Julia-1, Laya, Kev-4B, lev, Clef: `<arch>.decision.type`); detected and rejected for now, their per-type heads/prompts live in llama-server only
 - [ ] `sherpa`: Kokoro TTS, Parakeet / Whisper STT, VAD, diarization (Windows-friendly breadth)
   - [x] v1 (`engines/sherpa`, sherpa-onnx 2.0.1 prebuilt C API): Kokoro TTS (WAV artifact + streamed audio chunks, progress, cancel), Whisper / NeMo transducer (Parakeet) ASR; Linux x64 tested with kokoro-en-v0_19 + whisper-tiny.en
