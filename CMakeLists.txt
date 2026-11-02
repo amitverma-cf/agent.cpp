@@ -100,6 +100,7 @@ add_library(agent
     src/core/rag/in_memory_vector_store.cpp
     src/core/rag/chunker.cpp
     src/core/rag/rag_pipeline.cpp
+    src/core/tasks/decide.cpp
     src/core/sandbox/sandbox_policy.cpp
     src/hal/time.cpp
     src/hal/path.cpp
@@ -301,6 +302,7 @@ add_executable(test_agent
     tests/unit/test_engine_sdcpp.cpp
     tests/unit/test_graph.cpp
     tests/unit/test_rag.cpp
+    tests/unit/test_decide.cpp
     tests/unit/test_graph_json.cpp
     tests/unit/test_graph_durability.cpp
     tests/unit/test_mcp.cpp

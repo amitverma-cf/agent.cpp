@@ -8,7 +8,9 @@
 
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/engine_abi.h>
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -345,10 +347,30 @@ Result<InferResponse> run_engine(Session &session, uint32_t task, const InferReq
 
     const int max_tokens = request.max_tokens > 0 ? request.max_tokens : session.config.max_tokens;
     const float temperature = request.temperature >= 0.0f ? request.temperature : session.config.temperature;
-    char *params = static_cast<char *>(arena.allocate(96, 1));
+    // InferRequest::params_json members go after the core's own (engines read the first occurrence of a key).
+    auto trim = [](std::string_view v) {
+        while (!v.empty() && std::isspace(static_cast<unsigned char>(v.front()))) v.remove_prefix(1);
+        while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.remove_suffix(1);
+        return v;
+    };
+    std::string_view extra = trim(request.params_json);
+    if (!extra.empty()) {
+        if (extra.size() < 2 || extra.front() != '{' || extra.back() != '}')
+            return fail<InferResponse>(ErrorCode::InvalidConfig, "InferRequest::params_json must be a JSON object.");
+        extra = trim(extra.substr(1, extra.size() - 2));
+    }
+    const size_t params_cap = 130 + extra.size();
+    char *params = static_cast<char *>(arena.allocate(params_cap, 1));
     if (!params) return arena_full();
-    const int params_len = std::snprintf(params, 96, "{\"max_tokens\":%d,\"temperature\":%.4f,\"stream\":%s}", max_tokens,
-                                         static_cast<double>(temperature), request.stream ? "true" : "false");
+    int params_len = std::snprintf(params, 128, "{\"max_tokens\":%d,\"temperature\":%.4f,\"stream\":%s", max_tokens,
+                                   static_cast<double>(temperature), request.stream ? "true" : "false");
+    params_len = std::clamp(params_len, 0, 127);
+    if (!extra.empty()) {
+        params[params_len++] = ',';
+        std::memcpy(params + params_len, extra.data(), extra.size());
+        params_len += static_cast<int>(extra.size());
+    }
+    params[params_len++] = '}';
 
     CallbackCtx cb_ctx{request.on_token, request.token_user_data, request.on_progress, request.progress_user_data};
     agent_request req{.struct_size = sizeof(agent_request),
