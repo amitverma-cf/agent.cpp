@@ -297,6 +297,61 @@ TEST_CASE("proxy URL parsing and NO_PROXY matching", "[hub]") {
     CHECK_FALSE(host_bypasses_proxy("huggingface.co", ""));
 }
 
+TEST_CASE("proxy URL credentials are split and percent-decoded", "[hub]") {
+    auto p = parse_proxy_url("http://alice:p%40ss%3Aw@proxy.corp:3128/");
+    REQUIRE(p.ok);
+    CHECK(p.value.host == "proxy.corp");
+    CHECK(p.value.port == 3128);
+    CHECK(p.value.user == "alice");
+    CHECK(p.value.pass == "p@ss:w");
+
+    p = parse_proxy_url("bob@proxy.corp:8080");
+    REQUIRE(p.ok);
+    CHECK(p.value.user == "bob");
+    CHECK(p.value.pass.empty());
+
+    p = parse_proxy_url("http://proxy.corp:8080");
+    REQUIRE(p.ok);
+    CHECK(p.value.user.empty());
+    CHECK_FALSE(parse_proxy_url("http://user:pw@").ok);
+}
+
+TEST_CASE("NO_PROXY matches host suffixes on label boundaries only", "[hub]") {
+    CHECK(host_bypasses_proxy("HuggingFace.co", "huggingface.co"));
+    CHECK(host_bypasses_proxy("cdn-lfs.huggingface.co", "huggingface.co"));
+    CHECK_FALSE(host_bypasses_proxy("evilhuggingface.co", "huggingface.co"));
+    CHECK_FALSE(host_bypasses_proxy("huggingface.co.evil.net", "huggingface.co"));
+    CHECK(host_bypasses_proxy("a.b.corp", " , .corp ,"));
+}
+
+TEST_CASE("HF token source precedence", "[hub]") {
+    CHECK(resolve_hf_token("explicit", "env", "legacy", "file") == "explicit");
+    CHECK(resolve_hf_token("", "env", "legacy", "file") == "env");
+    CHECK(resolve_hf_token("", "", "legacy", "file") == "legacy");
+    CHECK(resolve_hf_token("", "", "", "file\n") == "file");
+    CHECK(resolve_hf_token("  ", " \n", "", "  tok \r\n") == "tok");
+    CHECK(resolve_hf_token("", "", "", "").empty());
+}
+
+TEST_CASE("HF token is only sent to Hugging Face hosts", "[hub]") {
+    const std::string_view hf = "https://huggingface.co";
+    CHECK(token_allowed_for_host("huggingface.co", hf));
+    CHECK(token_allowed_for_host("HuggingFace.co", hf));
+    CHECK(token_allowed_for_host("hf.co", hf));
+    // Pre-signed CDN and third-party redirect targets never get the token.
+    CHECK_FALSE(token_allowed_for_host("cdn-lfs.huggingface.co", hf));
+    CHECK_FALSE(token_allowed_for_host("cas-bridge.xethub.hf.co", hf));
+    CHECK_FALSE(token_allowed_for_host("evilhuggingface.co", hf));
+    CHECK_FALSE(token_allowed_for_host("huggingface.co.evil.net", hf));
+    CHECK_FALSE(token_allowed_for_host("s3.amazonaws.com", hf));
+    CHECK_FALSE(token_allowed_for_host("", hf));
+
+    // A mirror endpoint: only the mirror host, not Hugging Face.
+    CHECK(token_allowed_for_host("hf-mirror.example", "https://hf-mirror.example:8443/"));
+    CHECK_FALSE(token_allowed_for_host("huggingface.co", "https://hf-mirror.example"));
+    CHECK_FALSE(token_allowed_for_host("hf.co", "https://hf-mirror.example"));
+}
+
 // Network test, opt-in: AGENT_TEST_HUB_NETWORK=1. Uses HTTPS_PROXY / SSL_CERT_FILE etc. from the env.
 TEST_CASE("hub downloads stories260K from Hugging Face", "[hub][network]") {
     const char *flag = std::getenv("AGENT_TEST_HUB_NETWORK");

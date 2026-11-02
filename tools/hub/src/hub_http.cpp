@@ -88,11 +88,6 @@ std::string encode_path(std::string_view path) {
     return out;
 }
 
-std::string host_of(std::string_view url) {
-    auto u = parse_url(url);
-    return u.ok ? u.value.host : std::string();
-}
-
 bool is_redirect(int status) { return status == 301 || status == 302 || status == 303 || status == 307 || status == 308; }
 
 // Per-request callbacks. Plain function pointers + user data: no std::function in our own API.
@@ -113,9 +108,8 @@ struct Reply {
 
 // GET with manual redirect handling: HF answers with a relative redirect (renamed repos) or an
 // absolute one to a CDN host, so every hop gets a fresh client for its host. The Authorization header
-// is only sent to the configured endpoint host; the CDN URLs are pre-signed.
+// is only sent to hosts accepted by token_allowed_for_host(); CDN URLs are pre-signed and get none.
 Result<Reply> http_get(std::string url, const httplib::Headers &extra, const HttpOptions &http, const Sink &sink) {
-    const std::string auth_host = host_of(http.endpoint);
     Reply reply;
     for (int hop = 0; hop <= http.max_redirects; ++hop) {
         auto parsed = parse_url(url);
@@ -127,7 +121,15 @@ Result<Reply> http_get(std::string url, const httplib::Headers &extra, const Htt
         cli.set_follow_location(false);
         cli.set_connection_timeout(http.connect_timeout_sec, 0);
         cli.set_read_timeout(http.read_timeout_sec, 0);
-        if (!http.proxy_host.empty() && !host_bypasses_proxy(u.host, http.no_proxy)) cli.set_proxy(http.proxy_host, http.proxy_port);
+        if (!host_bypasses_proxy(u.host, http.no_proxy)) {
+            if (u.scheme == "https" && !http.proxy_host.empty()) {
+                cli.set_proxy(http.proxy_host, http.proxy_port);
+                if (!http.proxy_user.empty()) cli.set_proxy_basic_auth(http.proxy_user, http.proxy_pass);
+            } else if (u.scheme == "http" && !http.http_proxy.host.empty()) {
+                cli.set_proxy(http.http_proxy.host, http.http_proxy.port);
+                if (!http.http_proxy.user.empty()) cli.set_proxy_basic_auth(http.http_proxy.user, http.http_proxy.pass);
+            }
+        }
         if (u.scheme == "https") {
             cli.enable_server_certificate_verification(true);
             if (!http.ca_cert_path.empty()) cli.set_ca_cert_path(http.ca_cert_path);
@@ -135,7 +137,7 @@ Result<Reply> http_get(std::string url, const httplib::Headers &extra, const Htt
 
         httplib::Headers headers = extra;
         headers.emplace("User-Agent", kUserAgent);
-        if (!http.token.empty() && u.host == auth_host) headers.emplace("Authorization", "Bearer " + http.token);
+        if (!http.token.empty() && token_allowed_for_host(u.host, http.endpoint)) headers.emplace("Authorization", "Bearer " + http.token);
 
         int status = 0;
         std::string location;
@@ -196,8 +198,11 @@ Result<Reply> http_get(std::string url, const httplib::Headers &extra, const Htt
 
 std::string status_message(const Reply &r, std::string_view what) {
     std::string msg = "hub: " + std::string(what) + " returned HTTP " + std::to_string(r.status);
-    if (r.status == 401 || r.status == 403) msg += " (gated or private repo: accept its terms on huggingface.co and set HF_TOKEN)";
+    if (r.status == 401 || r.status == 403)
+        msg += " (gated or private repo: accept the licence on the model page on huggingface.co, then set HF_TOKEN to a token "
+               "with read access, or run `huggingface-cli login`)";
     if (r.status == 404) msg += " (not found)";
+    if (r.status == 407) msg += " (proxy authentication required: put user:pass@ in HTTPS_PROXY)";
     if (!r.error_body.empty()) msg += ": " + r.error_body.substr(0, 300);
     return msg;
 }

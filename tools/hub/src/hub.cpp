@@ -505,16 +505,87 @@ std::string first_env(std::initializer_list<const char *> names) {
     return {};
 }
 
+int hex_value(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+std::string percent_decode(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '%' && i + 2 < s.size() && hex_value(s[i + 1]) >= 0 && hex_value(s[i + 2]) >= 0) {
+            out.push_back(static_cast<char>(hex_value(s[i + 1]) * 16 + hex_value(s[i + 2])));
+            i += 2;
+        } else {
+            out.push_back(s[i]);
+        }
+    }
+    return out;
+}
+
+std::string read_small_file(const std::filesystem::path &p) {
+    std::ifstream f(p, std::ios::binary);
+    if (!f) return {};
+    std::string s(512, '\0');
+    f.read(s.data(), static_cast<std::streamsize>(s.size()));
+    s.resize(static_cast<size_t>(f.gcount()));
+    return s;
+}
+
+std::string hf_token_file_path() {
+    if (std::string p = env_or_empty("HF_TOKEN_PATH"); !p.empty()) return p;
+    if (std::string h = env_or_empty("HF_HOME"); !h.empty()) return (std::filesystem::path(h) / "token").string();
+#ifdef _WIN32
+    const std::string home = env_or_empty("USERPROFILE");
+#else
+    const std::string home = env_or_empty("HOME");
+#endif
+    if (home.empty()) return {};
+    return (std::filesystem::path(home) / ".cache" / "huggingface" / "token").string();
+}
+
 } // namespace
+
+std::string resolve_hf_token(std::string_view explicit_token, std::string_view env_hf_token, std::string_view env_legacy_token,
+                             std::string_view token_file_contents) {
+    for (std::string_view v : {explicit_token, env_hf_token, env_legacy_token, token_file_contents}) {
+        v = trim(v);
+        if (!v.empty()) return std::string(v);
+    }
+    return {};
+}
+
+bool token_allowed_for_host(std::string_view host, std::string_view endpoint) {
+    const std::string h = to_lower(host);
+    std::string e = to_lower(endpoint);
+    if (const size_t scheme = e.find("://"); scheme != std::string::npos) e.erase(0, scheme + 3);
+    if (const size_t slash = e.find('/'); slash != std::string::npos) e.erase(slash);
+    if (e.find(']') == std::string::npos) {
+        if (const size_t colon = e.rfind(':'); colon != std::string::npos) e.erase(colon);
+    }
+    if (h.empty() || e.empty()) return false;
+    if (h == e) return true;
+    const bool hf = e == "huggingface.co" || e == "hf.co";
+    return hf && (h == "huggingface.co" || h == "hf.co");
+}
 
 Result<ProxyAddress> parse_proxy_url(std::string_view url) {
     url = trim(url);
     if (const size_t scheme = url.find("://"); scheme != std::string_view::npos) url.remove_prefix(scheme + 3);
-    if (const size_t at = url.rfind('@'); at != std::string_view::npos) url.remove_prefix(at + 1); // drop credentials
     if (const size_t slash = url.find('/'); slash != std::string_view::npos) url = url.substr(0, slash);
+    ProxyAddress out;
+    if (const size_t at = url.rfind('@'); at != std::string_view::npos) {
+        const std::string_view cred = url.substr(0, at);
+        url.remove_prefix(at + 1);
+        const size_t colon = cred.find(':');
+        out.user = percent_decode(cred.substr(0, colon));
+        if (colon != std::string_view::npos) out.pass = percent_decode(cred.substr(colon + 1));
+    }
     if (url.empty()) return fail<ProxyAddress>(ErrorCode::InvalidConfig, "hub: empty proxy URL");
 
-    ProxyAddress out;
     out.port = 80;
     std::string_view host = url;
     std::string_view port;
@@ -569,13 +640,25 @@ HttpOptions http_options_from_env() {
         while (!ep.empty() && ep.back() == '/') ep.pop_back();
         o.endpoint = ep;
     }
-    o.token = first_env({"HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"});
+    const std::string env_token = env_or_empty("HF_TOKEN");
+    const std::string legacy_token = env_or_empty("HUGGING_FACE_HUB_TOKEN");
+    std::string file_token;
+    if (trim(env_token).empty() && trim(legacy_token).empty()) {
+        if (const std::string path = hf_token_file_path(); !path.empty()) file_token = read_small_file(path);
+    }
+    o.token = resolve_hf_token({}, env_token, legacy_token, file_token);
     if (const std::string proxy = first_env({"HTTPS_PROXY", "https_proxy"}); !proxy.empty()) {
         auto p = parse_proxy_url(proxy);
         if (p.ok) {
             o.proxy_host = p.value.host;
             o.proxy_port = p.value.port;
+            o.proxy_user = p.value.user;
+            o.proxy_pass = p.value.pass;
         }
+    }
+    if (const std::string proxy = first_env({"HTTP_PROXY", "http_proxy"}); !proxy.empty()) {
+        auto p = parse_proxy_url(proxy);
+        if (p.ok) o.http_proxy = p.value;
     }
     o.no_proxy = first_env({"NO_PROXY", "no_proxy"});
     o.ca_cert_path = first_env({"AGENT_CA_BUNDLE", "SSL_CERT_FILE", "CURL_CA_BUNDLE"});
