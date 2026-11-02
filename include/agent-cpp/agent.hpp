@@ -888,6 +888,13 @@ struct GraphRun {
 
     // Resolves GraphNode::model. Not owned; must outlive the run_graph / resume_graph call.
     ModelRegistry *models = nullptr;
+
+    // Live event feed: called as each NodeStart, NodeEnd, NodeFailed, Interrupt, ToolCall and
+    // ToolResult event is logged (the same events that end up in `events`). Branches of a Parallel node
+    // call it from worker threads, so it must be thread-safe, and it must not call back into the run.
+    // The event reference is valid only during the call.
+    void (*on_event)(const GraphEvent &event, void *user_data) = nullptr;
+    void *on_event_user_data = nullptr;
 };
 
 // Runs graph from graph.entry. Per-thread state and Agent histories from this thread's latest

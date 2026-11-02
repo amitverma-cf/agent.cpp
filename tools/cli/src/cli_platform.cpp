@@ -22,6 +22,7 @@
 #else
 #include <fcntl.h>
 #include <spawn.h>
+#include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #if defined(__APPLE__)
@@ -168,6 +169,39 @@ bool stdin_is_tty() {
 #else
     return isatty(STDIN_FILENO) != 0;
 #endif
+}
+
+bool stream_is_tty(std::FILE *stream) {
+#if defined(_WIN32)
+    return _isatty(_fileno(stream)) != 0;
+#else
+    return isatty(fileno(stream)) != 0;
+#endif
+}
+
+bool enable_ansi(std::FILE *stream) {
+#if defined(_WIN32)
+    // Windows 10+ understands ANSI escapes once ENABLE_VIRTUAL_TERMINAL_PROCESSING is set on the console.
+    const HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stream)));
+    DWORD mode = 0;
+    if (h == INVALID_HANDLE_VALUE || !GetConsoleMode(h, &mode)) return false;
+    return (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0 || SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0;
+#else
+    (void)stream;
+    return true;
+#endif
+}
+
+int terminal_width(std::FILE *stream) {
+#if defined(_WIN32)
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    const HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stream)));
+    if (h != INVALID_HANDLE_VALUE && GetConsoleScreenBufferInfo(h, &info)) return info.srWindow.Right - info.srWindow.Left + 1;
+#else
+    struct winsize ws;
+    if (ioctl(fileno(stream), TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) return ws.ws_col;
+#endif
+    return 0;
 }
 
 ReadStatus read_line(std::FILE *in, std::string &line) {

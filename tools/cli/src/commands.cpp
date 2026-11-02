@@ -1,6 +1,7 @@
 // agent setup / engine / model / run, plus helpers shared with chat.cpp.
 
 #include "commands.hpp"
+#include "status_view.hpp"
 
 #include <agent-cpp/engine_abi.h>
 #include <agent-cpp/hub.hpp>
@@ -11,6 +12,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 
 namespace agent::cli {
@@ -377,6 +379,7 @@ int cmd_model(const CommandLine &cl, Context &ctx) {
 namespace {
 
 bool g_run_yes = false;
+StatusView *g_run_status = nullptr; // the live table, hidden while a permission prompt owns the terminal
 
 PermissionDecision run_permission(std::string_view name, std::string_view arguments, void *) {
     PermissionDecision d = tools::default_permission_policy(name, arguments, nullptr);
@@ -385,9 +388,12 @@ PermissionDecision run_permission(std::string_view name, std::string_view argume
 }
 
 bool run_prompt(std::string_view name, std::string_view arguments, void *) {
+    if (g_run_status) g_run_status->hold();
     std::fprintf(stderr, "[permission] %.*s %.*s\n", static_cast<int>(name.size()), name.data(), static_cast<int>(arguments.size()),
                  arguments.data());
-    return ask_yes_no("allow this tool call?");
+    const bool answer = ask_yes_no("allow this tool call?");
+    if (g_run_status) g_run_status->release();
+    return answer;
 }
 
 // ModelSpec::on_load for graph models: use the run's store (one SQLite connection for the whole run)
@@ -545,11 +551,22 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
     std::fprintf(stderr, "running %s (thread %s) with %s on %s\n", graph_path.c_str(), run.thread_id.c_str(), model_label.c_str(),
                  engine_label.c_str());
     for (const auto &name : node_models) std::fprintf(stderr, "  node model: %s\n", name.c_str());
+
+    // Node status: a table redrawn in place on a terminal, one line per event otherwise (see status_view.hpp).
+    // It is drawn on stderr, like the progress lines above; stdout keeps the final status and state.
+    const StatusMode status_mode = choose_status_mode(cl.has("json"), stream_is_tty(stdout), stream_is_tty(stderr), std::getenv("TERM"),
+                                                      std::getenv("NO_COLOR"));
+    StatusMode mode = status_mode;
+    if (mode == StatusMode::Live && !enable_ansi(stderr)) mode = StatusMode::Plain;
+    StatusView status(stderr, mode, graph.value.graph, mode == StatusMode::Live ? terminal_width(stderr) : 0);
+    run.on_event = StatusView::on_graph_event;
+    run.on_event_user_data = &status;
+    g_run_status = &status;
+
     auto res = resume_id.empty() ? run_graph(*session, graph.value.graph, run)
                                  : resume_graph(*session, graph.value.graph, resume_id, run, cl.get("input"));
-
-    for (const GraphEvent &e : run.events)
-        if (e.type == GraphEventType::NodeEnd) std::fprintf(stderr, "  done: %s\n", e.node.c_str());
+    g_run_status = nullptr;
+    status.finish();
     std::printf("status: %s\n", status_name(run.status));
     if (run.status == GraphRunStatus::Interrupted) {
         std::printf("interrupted at %s: %s\n", run.interrupt_node.c_str(), run.interrupt_reason.c_str());

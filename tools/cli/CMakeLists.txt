@@ -3,6 +3,7 @@
 add_library(agent_cli_core STATIC
     src/cli_core.cpp
     src/cli_platform.cpp
+    src/status_view.cpp
     src/audio.cpp
     src/voice_core.cpp
 )

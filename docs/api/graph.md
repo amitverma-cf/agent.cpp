@@ -396,6 +396,8 @@ Result<std::vector<GraphEvent>> list_graph_events(Session &, std::string_view th
 
 The log is also **persisted** through the checkpointer: each checkpoint write appends the events logged since the previous one (through the Async writer when the durability is `Async`), and the final write of every call appends the rest, so after `run_graph` / `resume_graph` / `fork_graph_run` returns, `list_graph_events` returns every event of every call on the thread, in order. A crash loses the same window as checkpoints. A checkpointer without `append_events` / `list_events` keeps no log (`list_graph_events` returns `UnsupportedProvider`); all three built-in ones have it. Payloads are the same 200-character excerpts as in memory: the log is an audit trail, not a record that tool results could be replayed from.
 
+To watch events as they happen instead of reading `run.events` afterwards, set `GraphRun::on_event` (and `on_event_user_data`). It is called for each `NodeStart`, `NodeEnd`, `NodeFailed`, `Interrupt`, `ToolCall` and `ToolResult` event as it is logged, on the thread that logged it. Branches of a `Parallel` node run on worker threads, so the callback must be thread-safe, and it must not call back into the run. `agent run` uses it for its status view.
+
 The existing `EventHook`s also fire: `OnStateTransition` with the node name when a node starts; `OnSubAgentComplete` with the branch's entry node name for each successful branch of a `Parallel` node (fired on the calling thread, in branch order, after the branches have joined); and `OnToolCall` / `OnToolResult` for Tool nodes and for approved pending calls (`run_turn` fires them itself for its own calls).
 
 ---
