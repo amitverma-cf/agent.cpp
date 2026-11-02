@@ -241,7 +241,7 @@ It sets `AGENT_ENGINE_FLAG_NATIVE_TOOLS` (the core only adds the skills list to 
 `AGENT_ENGINE_FLAG_CONCURRENT` (parallel graph branches share one continuously batched decode).
 
 `Config::engine_options`: `gpu_layers`, `threads`, `chat_template` (overrides the template embedded in the GGUF),
-`mmproj` (path to a multimodal projector GGUF, enables image / audio input), `mode` (`"generate"`, the
+`mmproj` (path to a multimodal projector GGUF, enables image / audio input), `ocr_prompt` (see OCR below), `mode` (`"generate"`, the
 default, `"embed"` or `"rerank"`, see below), `pooling` (embed mode: `"mean"`, `"cls"` or `"last"` to
 override the model's pooling).
 
@@ -315,6 +315,40 @@ prefill, and the sums are softmax-normalized. The response is a TEXT part with a
 f32 `"probs"` tensor. Native System One decision models (`<arch>.decision.type` in the GGUF) are
 detected and rejected with `AGENT_ERR_UNSUPPORTED`. Use it through `agent::decide` /
 `decide_score` / `decide_yes_no`; see [decide.md](decide.md) for the protocol and the scoring details.
+
+### OCR
+
+In generate mode with `mmproj`, the instance also serves `AGENT_CAP_OCR`: the request's image parts
+(FILE / BYTES, any message; text parts are ignored) are sent as one user message, images first, followed
+by the OCR instruction, and the reply is generated greedily (temperature 0, `max_tokens` from
+`params_json`, default 1024 through the raw ABI) and returned as one TEXT part, trimmed.
+
+OCR-tuned VLMs are trained on one fixed instruction each, so the engine picks it by model family. A
+family matches when its keywords all occur in the GGUF's `general.architecture` / `general.name` /
+`general.basename` or the model / mmproj file names (lowercased):
+
+| Family | Keywords | Prompt | Status |
+|---|---|---|---|
+| PaddleOCR-VL | `paddleocr` | `OCR:` | not tested here |
+| GLM-OCR | `glm` + `ocr` | `Text Recognition:` | tested (`ggml-org/GLM-OCR-GGUF` Q8_0, MIT) |
+| DeepSeek-OCR | `deepseek` + `ocr` | `Free OCR.` | not tested; llama.cpp recommends its `deepseek-ocr` chat template |
+| dots.ocr | `dots` + `ocr` | `Extract the text content from this image.` | not tested |
+| HunyuanOCR | `hunyuan` + `ocr` | `OCR` | not tested |
+| anything else | | `Transcribe all the text in this image exactly as written, line by line. Output only the text, nothing else.` | tested with SmolVLM-256M (weak: single words) |
+
+GLM-OCR's GGUF has no `general.name`, so its file name must contain "glm" and "ocr" (the ggml-org
+names do), or set the prompt yourself. Engine option `ocr_prompt` replaces the family prompt for the
+instance and `params_json` `"prompt"` for one call (e.g. `"Table Recognition:"` / `"Formula
+Recognition:"` for PaddleOCR-VL and GLM-OCR). Core API:
+
+```cpp
+cfg.model          = ".workspace/models/GLM-OCR-Q8_0.gguf";
+cfg.context_window = 4096; // the image alone can take ~1-2k tokens
+cfg.engine_options = R"({"mmproj": ".workspace/models/mmproj-GLM-OCR-Q8_0.gguf"})";
+auto session = agent::init(cfg);
+auto text = agent::ocr(session.value, agent::Media{"scan.png", "image/png"});            // family prompt
+auto table = agent::ocr(session.value, agent::Media{"scan.png", "image/png"}, "Table Recognition:");
+```
 
 `common_chat` reports errors by throwing, and exceptions must not cross the plugin ABI. So the
 plugin catches at exactly those calls (template load/render, output parsing) and converts them to

@@ -15,7 +15,8 @@
 // pooling for rerankers) and run() serves AGENT_CAP_EMBED / AGENT_CAP_RERANK instead of chat.
 //
 // In generate mode AGENT_CAP_DECIDE scores a fixed set of answers (choice / score / yes-no) from the
-// model's log-probabilities after one prompt prefill, without generating.
+// model's log-probabilities after one prompt prefill, without generating, and AGENT_CAP_OCR
+// transcribes image parts with the OCR prompt of the model's family (PaddleOCR-VL, GLM-OCR, ...).
 
 #include <agent-cpp/engine_abi.h>
 #include <algorithm>
@@ -288,6 +289,7 @@ struct Instance {
     std::mutex pool_mu;     // serializes embed / rerank decodes (they use every sequence slot)
     mtmd::context_ptr mtmd; // projector for image/audio input; null without options.mmproj. Freed before the model.
     common_chat_templates_ptr templates;
+    std::string ocr_prompt; // AGENT_CAP_OCR instruction: options.ocr_prompt or the family's
     std::mutex out_mu;
     std::unordered_map<std::thread::id, CallOutput> outputs;
     std::unordered_map<std::thread::id, std::string> errors;
@@ -950,7 +952,8 @@ struct TaskPrompt {
     bool has_media() const { return chunks.ptr != nullptr; }
 };
 
-int32_t render_task_prompt(Instance &inst, const agent_request *req, common_chat_templates_inputs in, TaskPrompt &out, std::string &error) {
+int32_t render_task_prompt(Instance &inst, const agent_request *req, common_chat_templates_inputs in, TaskPrompt &out,
+                           common_chat_session &session, std::string &error) {
     bool has_media = false;
     for (size_t i = 0; i < req->n_messages && !has_media; ++i)
         for (size_t k = 0; k < req->messages[i].n_parts && !has_media; ++k) has_media = is_media(req->messages[i].parts[k]);
@@ -962,7 +965,6 @@ int32_t render_task_prompt(Instance &inst, const agent_request *req, common_chat
         if (int32_t rc = load_media(inst, req, out.bitmaps, error); rc != AGENT_OK) return rc;
     in.tools.clear();
     const llama_vocab *vocab = llama_model_get_vocab(inst.batcher.model);
-    common_chat_session session;
     if (!start_session(inst, vocab, in, session, error)) return AGENT_ERR_INVALID_CONFIG;
     if (has_media) {
         out.chunks.ptr.reset(mtmd_input_chunks_init());
@@ -1006,7 +1008,8 @@ int32_t run_decide(Instance &inst, const agent_request *req, agent_response *res
         user->content += decide_instruction(p);
     }
     TaskPrompt prompt;
-    if (int32_t rc = render_task_prompt(inst, req, std::move(in), prompt, error); rc != AGENT_OK) return inst.fail(rc, error);
+    common_chat_session session;
+    if (int32_t rc = render_task_prompt(inst, req, std::move(in), prompt, session, error); rc != AGENT_OK) return inst.fail(rc, error);
 
     const llama_vocab *vocab = llama_model_get_vocab(b.model);
     llama_token end = llama_vocab_eot(vocab);
@@ -1092,6 +1095,168 @@ int32_t run_decide(Instance &inst, const agent_request *req, agent_response *res
     return AGENT_OK;
 }
 
+// Prefills the prompt (text tokens, or mtmd chunks when chunks is set) on a free sequence and samples
+// up to max_tokens tokens into generated, streaming them through on_chunk, until an end-of-generation
+// token or one of stops. Generation steps join the batcher's shared rounds.
+int32_t generate(Instance &inst, const agent_request *req, const std::vector<llama_token> &tokens, const mtmd_input_chunks *chunks,
+                 int max_tokens, float temperature, const std::vector<std::string> &stops, common_chat_input &generated, int &completion) {
+    Batcher &b = inst.batcher;
+    const llama_vocab *vocab = llama_model_get_vocab(b.model);
+    llama_seq_id seq = 0;
+    if (!b.acquire_seq(seq)) return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: no free sequence slot (raise max_parallel_subagents)");
+    llama_sampler *sampler = build_sampler(temperature);
+    int32_t status = AGENT_OK;
+    llama_token tok = 0;
+
+    const bool prefilled = chunks ? b.prefill_media(seq, inst.mtmd.get(), chunks, sampler, tok) : b.prefill(seq, tokens, sampler, tok);
+    if (!prefilled) {
+        status = inst.fail(AGENT_ERR_DECODE_FAILED, "llama: prompt decode failed");
+    } else {
+        char piece[256];
+        for (int i = 0; i < max_tokens; ++i) {
+            if (llama_vocab_is_eog(vocab, tok)) break;
+            if (req->cancel && *req->cancel) {
+                status = inst.fail(AGENT_ERR_CANCELLED, "llama: cancelled");
+                break;
+            }
+            int n = llama_token_to_piece(vocab, tok, piece, sizeof(piece), 0, true);
+            if (n > 0) {
+                generated.append(std::string(piece, static_cast<size_t>(n)), tok);
+                if (req->on_chunk) req->on_chunk(req->user_data, AGENT_CHUNK_TEXT, piece, static_cast<size_t>(n));
+            }
+            ++completion;
+            size_t cut = 0;
+            if (ends_with_stop(generated.text, stops, cut)) {
+                generated.truncate(cut);
+                break;
+            }
+            if (!b.next_token(seq, tok, sampler, tok)) {
+                status = inst.fail(AGENT_ERR_DECODE_FAILED, "llama: decode failed");
+                break;
+            }
+        }
+    }
+    llama_sampler_free(sampler);
+    b.release_seq(seq);
+    return status;
+}
+
+// ------------------------------------------------------------------ OCR
+
+// OCR-tuned VLMs are trained on one fixed instruction each (see vendor/llama.cpp/docs/multimodal.md and
+// the model cards). A family matches when all its needles occur in the model's identity: its
+// general.architecture / general.name / general.basename and the model and mmproj file names,
+// lowercased. Engine option "ocr_prompt" or params_json "prompt" override the prompt.
+struct OcrFamily {
+    const char *name;
+    const char *needles[2];
+    const char *prompt;
+};
+// clang-format off
+constexpr OcrFamily kOcrFamilies[] = {
+    {"paddleocr-vl", {"paddleocr", nullptr}, "OCR:"},
+    {"glm-ocr", {"glm", "ocr"}, "Text Recognition:"},
+    {"deepseek-ocr", {"deepseek", "ocr"}, "Free OCR."},
+    {"dots.ocr", {"dots", "ocr"}, "Extract the text content from this image."},
+    {"hunyuan-ocr", {"hunyuan", "ocr"}, "OCR"},
+};
+// clang-format on
+constexpr const char *kGenericOcrPrompt =
+    "Transcribe all the text in this image exactly as written, line by line. Output only the text, nothing else.";
+
+std::string lower_ascii(std::string s) {
+    for (char &c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+// The OCR prompt of the model's family, or the generic one.
+const char *ocr_family_prompt(const llama_model *model, const std::string &model_path, const std::string &mmproj) {
+    std::string id;
+    char buf[256];
+    for (const char *key : {"general.architecture", "general.name", "general.basename"})
+        if (llama_model_meta_val_str(model, key, buf, sizeof(buf)) > 0) (id += buf) += ' ';
+    auto file_name = [](const std::string &p) { return p.substr(p.find_last_of("/\\") + 1); };
+    id += file_name(model_path) + ' ' + file_name(mmproj);
+    id = lower_ascii(std::move(id));
+    for (const OcrFamily &f : kOcrFamilies) {
+        bool all = true;
+        for (const char *n : f.needles) all = all && (!n || id.find(n) != std::string::npos);
+        if (all) return f.prompt;
+    }
+    return kGenericOcrPrompt;
+}
+
+// AGENT_CAP_OCR: the request's image parts (FILE / BYTES, any message) are transcribed with the
+// family's OCR prompt; text parts in the request are ignored. Generation is greedy and stops at the
+// end of turn or max_tokens. Returns one TEXT part with the extracted text.
+int32_t run_ocr(Instance &inst, const agent_request *req, agent_response *resp) {
+    if (!inst.mtmd || !mtmd_support_vision(inst.mtmd.get()))
+        return inst.fail(AGENT_ERR_UNSUPPORTED, "llama: OCR needs a vision model and its projector (engine option \"mmproj\")");
+    size_t n_images = 0;
+    for (size_t i = 0; i < req->n_messages; ++i)
+        for (size_t k = 0; k < req->messages[i].n_parts; ++k) n_images += is_media(req->messages[i].parts[k]) ? 1 : 0;
+    if (n_images == 0) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: OCR needs an image FILE or BYTES part");
+
+    int max_tokens = 1024;
+    std::string prompt = inst.ocr_prompt;
+    if (req->params_json.size) {
+        simdjson::ondemand::parser parser;
+        simdjson::padded_string json(sv(req->params_json));
+        simdjson::ondemand::document doc;
+        simdjson::ondemand::object params;
+        if (!parser.iterate(json).get(doc) && !doc.get_object().get(params)) {
+            max_tokens = json_number<int>(params, "max_tokens", max_tokens);
+            std::string_view p;
+            if (!params["prompt"].get_string().get(p) && !p.empty()) prompt = std::string(p);
+        }
+    }
+
+    // One user message: the images first (the order OCR models are trained on), then the prompt.
+    common_chat_templates_inputs in;
+    in.use_jinja = true;
+    in.add_generation_prompt = true;
+    in.enable_thinking = false;
+    common_chat_msg msg;
+    msg.role = "user";
+    for (size_t i = 0; i < n_images; ++i) msg.content += mtmd_default_marker();
+    msg.content += prompt;
+    in.messages.push_back(std::move(msg));
+
+    std::string error;
+    TaskPrompt task;
+    common_chat_session session;
+    if (int32_t rc = render_task_prompt(inst, req, std::move(in), task, session, error); rc != AGENT_OK) return inst.fail(rc, error);
+    Batcher &b = inst.batcher;
+    if (task.n_tokens >= b.seq_ctx)
+        return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: prompt is " + std::to_string(task.n_tokens) +
+                                                       " tokens (the image) but context_window is " + std::to_string(b.seq_ctx));
+    max_tokens = std::clamp(max_tokens, 1, b.seq_ctx - task.n_tokens);
+
+    common_chat_input generated;
+    int completion = 0;
+    if (int32_t rc =
+            generate(inst, req, task.tokens, task.chunks.ptr.get(), max_tokens, 0.0f, session.additional_stops(), generated, completion);
+        rc != AGENT_OK)
+        return rc;
+
+    CallOutput &out = inst.output();
+    out = CallOutput{};
+    if (finish_session(session, generated, out.parsed, error)) out.content = out.parsed.content;
+    else out.content = generated.text;
+    while (!out.content.empty() && std::isspace(static_cast<unsigned char>(out.content.back()))) out.content.pop_back();
+    const size_t lead = out.content.find_first_not_of(" \t\r\n");
+    out.content.erase(0, lead == std::string::npos ? out.content.size() : lead);
+    agent_response_reset(resp);
+    resp->message.role = agent_str{"assistant", 9};
+    resp->usage = agent_usage{task.n_tokens, completion};
+    out.part = agent_part{};
+    out.part.kind = AGENT_PART_TEXT;
+    out.part.text = agent_str{out.content.data(), out.content.size()};
+    resp->message.parts = &out.part;
+    resp->message.n_parts = 1;
+    return AGENT_OK;
+}
+
 // llama.cpp has no public "has a classification head" query. Reranker GGUFs carry no
 // <arch>.pooling_type or declare rank pooling; embedding models declare mean / cls / last. So a
 // declared non-rank pooling type rules the model out.
@@ -1125,7 +1290,7 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     const int n_ctx = std::max(1, json_number<int>(cfg, "context_window", 2048));
     const int n_seq = std::max(1, json_number<int>(cfg, "parallel", 1));
     int gpu_layers = -1, threads = 0;
-    std::string chat_template, mmproj;
+    std::string chat_template, mmproj, ocr_prompt;
     Mode mode = Mode::Generate;
     enum llama_pooling_type pooling = LLAMA_POOLING_TYPE_UNSPECIFIED;
     simdjson::ondemand::object options;
@@ -1135,6 +1300,7 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         std::string_view t;
         if (!options["chat_template"].get_string().get(t)) chat_template = std::string(t);
         if (!options["mmproj"].get_string().get(t)) mmproj = std::string(t);
+        if (!options["ocr_prompt"].get_string().get(t)) ocr_prompt = std::string(t);
         if (!options["mode"].get_string().get(t)) {
             if (t == "embed") mode = Mode::Embed;
             else if (t == "rerank") mode = Mode::Rerank;
@@ -1237,6 +1403,8 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     }
     inst->batcher.seed_free_list(n_seq);
     inst->mtmd = std::move(mctx);
+    const char *family_prompt = ocr_family_prompt(model, model_str, mmproj);
+    inst->ocr_prompt = ocr_prompt.empty() ? family_prompt : ocr_prompt;
     // Exception firewall (see start_session): template loading parses Jinja and may throw.
     try {
         inst->templates = common_chat_templates_init(model, chat_template);
@@ -1258,8 +1426,9 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
     if (inst->mode == Mode::Embed && req->task == AGENT_CAP_EMBED) return run_embed(*inst, req, resp);
     if (inst->mode == Mode::Rerank && req->task == AGENT_CAP_RERANK) return run_rerank(*inst, req, resp);
     if (inst->mode == Mode::Generate && req->task == AGENT_CAP_DECIDE) return run_decide(*inst, req, resp);
+    if (inst->mode == Mode::Generate && req->task == AGENT_CAP_OCR) return run_ocr(*inst, req, resp);
     if (inst->mode != Mode::Generate || req->task != AGENT_CAP_TEXT_GEN) {
-        static constexpr const char *kModeTask[] = {"TEXT_GEN / DECIDE", "EMBED", "RERANK"};
+        static constexpr const char *kModeTask[] = {"TEXT_GEN / DECIDE / OCR", "EMBED", "RERANK"};
         static constexpr const char *kModeName[] = {"generate", "embed", "rerank"};
         const auto m = static_cast<size_t>(inst->mode);
         return inst->fail(AGENT_ERR_UNSUPPORTED, std::string("llama: this instance was created with mode \"") + kModeName[m] +
@@ -1315,48 +1484,12 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
                                                         std::to_string(b.seq_ctx));
     max_tokens = std::min(max_tokens, b.seq_ctx - n_prompt);
 
-    llama_seq_id seq = 0;
-    if (!b.acquire_seq(seq)) return inst->fail(AGENT_ERR_DECODE_FAILED, "llama: no free sequence slot (raise max_parallel_subagents)");
-    llama_sampler *sampler = build_sampler(temperature);
-
     common_chat_input generated;
-    const std::vector<std::string> &stops = session.additional_stops();
     int completion = 0;
-    int32_t status = AGENT_OK;
-    llama_token tok = 0;
-
-    const bool prefilled =
-        has_media ? b.prefill_media(seq, inst->mtmd.get(), chunks.ptr.get(), sampler, tok) : b.prefill(seq, tokens, sampler, tok);
-    if (!prefilled) {
-        status = inst->fail(AGENT_ERR_DECODE_FAILED, "llama: prompt decode failed");
-    } else {
-        char piece[256];
-        for (int i = 0; i < max_tokens; ++i) {
-            if (llama_vocab_is_eog(vocab, tok)) break;
-            if (req->cancel && *req->cancel) {
-                status = inst->fail(AGENT_ERR_CANCELLED, "llama: cancelled");
-                break;
-            }
-            int n = llama_token_to_piece(vocab, tok, piece, sizeof(piece), 0, true);
-            if (n > 0) {
-                generated.append(std::string(piece, static_cast<size_t>(n)), tok);
-                if (req->on_chunk) req->on_chunk(req->user_data, AGENT_CHUNK_TEXT, piece, static_cast<size_t>(n));
-            }
-            ++completion;
-            size_t cut = 0;
-            if (ends_with_stop(generated.text, stops, cut)) {
-                generated.truncate(cut);
-                break;
-            }
-            if (!b.next_token(seq, tok, sampler, tok)) {
-                status = inst->fail(AGENT_ERR_DECODE_FAILED, "llama: decode failed");
-                break;
-            }
-        }
-    }
-    llama_sampler_free(sampler);
-    b.release_seq(seq);
-    if (status != AGENT_OK) return status;
+    if (int32_t rc = generate(*inst, req, tokens, has_media ? chunks.ptr.get() : nullptr, max_tokens, temperature,
+                              session.additional_stops(), generated, completion);
+        rc != AGENT_OK)
+        return rc;
 
     CallOutput &out = inst->output();
     out = CallOutput{};
@@ -1427,7 +1560,7 @@ const agent_engine_v1 kLlamaEngine = {
     // EMBED / RERANK need an instance created with options.mode "embed" / "rerank"; an instance runs
     // only its own mode's task.
     AGENT_CAP_TEXT_GEN | AGENT_CAP_TOOL_CALL | AGENT_CAP_VISION_IN | AGENT_CAP_AUDIO_IN | AGENT_CAP_EMBED | AGENT_CAP_RERANK |
-        AGENT_CAP_DECIDE,
+        AGENT_CAP_DECIDE | AGENT_CAP_OCR,
     AGENT_ENGINE_FLAG_CONCURRENT | AGENT_ENGINE_FLAG_NATIVE_TOOLS,
     llama_create,
     llama_destroy,
