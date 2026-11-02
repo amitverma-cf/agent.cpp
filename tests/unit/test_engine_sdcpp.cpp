@@ -10,6 +10,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -215,12 +216,136 @@ TEST_CASE("sdcpp engine generates a PNG with a real model", "[engines][sdcpp][mo
         REQUIRE(ctx.calls > 0);
     }
 
+    SECTION("an image model rejects VIDEO_GEN") {
+        req.task = AGENT_CAP_VIDEO_GEN;
+        agent_response resp{.struct_size = sizeof(agent_response)};
+        REQUIRE(engine->run(inst, &req, &resp) == AGENT_ERR_UNSUPPORTED);
+        REQUIRE(std::string(engine->last_error(inst)).find("video") != std::string::npos);
+    }
+
     SECTION("non-image tasks are rejected") {
         req.task = AGENT_CAP_TEXT_GEN;
         agent_response resp{.struct_size = sizeof(agent_response)};
         REQUIRE(engine->run(inst, &req, &resp) == AGENT_ERR_UNSUPPORTED);
     }
 
+    engine->destroy(inst);
+}
+
+namespace {
+
+// Set AGENT_TEST_SDCPP_VIDEO_MODEL_DIR to a directory holding a Wan2.1 T2V 1.3B GGUF
+// (Wan2.1-T2V-1.3B-*.gguf), its VAE (wan_2.1_vae.safetensors) and a umt5-xxl encoder GGUF
+// (umt5-xxl-encoder-*.gguf); about 4 GB with Q4_0 + Q3_K_S. CPU generation is slow: the test makes
+// 5 frames at 128x128 with AGENT_TEST_SDCPP_VIDEO_STEPS (default 4) steps.
+std::string find_file(const std::string &dir, std::string_view prefix, std::string_view suffix) {
+    std::error_code ec;
+    for (const auto &e : std::filesystem::directory_iterator(dir, ec)) {
+        const std::string name = e.path().filename().string();
+        if (name.starts_with(prefix) && name.ends_with(suffix)) return e.path().string();
+    }
+    return {};
+}
+
+uint32_t read_u32(const std::string &b, size_t at) {
+    return static_cast<uint32_t>(static_cast<unsigned char>(b[at])) | static_cast<uint32_t>(static_cast<unsigned char>(b[at + 1])) << 8 |
+           static_cast<uint32_t>(static_cast<unsigned char>(b[at + 2])) << 16 |
+           static_cast<uint32_t>(static_cast<unsigned char>(b[at + 3])) << 24;
+}
+
+} // namespace
+
+TEST_CASE("sdcpp engine generates an MJPEG AVI with a Wan video model", "[engines][sdcpp][model][video]") {
+    const char *dir = std::getenv("AGENT_TEST_SDCPP_VIDEO_MODEL_DIR");
+    if (!dir) SKIP("AGENT_TEST_SDCPP_VIDEO_MODEL_DIR not set");
+    const std::string diffusion = find_file(dir, "Wan2.1-T2V-1.3B", ".gguf");
+    const std::string vae = find_file(dir, "wan_2.1_vae", ".safetensors");
+    const std::string t5 = find_file(dir, "umt5-xxl-encoder", ".gguf");
+    REQUIRE_FALSE(diffusion.empty());
+    REQUIRE_FALSE(vae.empty());
+    REQUIRE_FALSE(t5.empty());
+    const char *steps_env = std::getenv("AGENT_TEST_SDCPP_VIDEO_STEPS");
+    const std::string steps = steps_env ? steps_env : "4";
+
+    const agent_engine_v1 *engine = sdcpp_engine();
+    REQUIRE(engine != nullptr);
+    REQUIRE((engine->caps & AGENT_CAP_VIDEO_GEN) != 0);
+    const std::string config = R"({"options":{"diffusion_model":")" + diffusion + R"(","vae":")" + vae + R"(","t5xxl":")" + t5 +
+                               R"(","threads":4,"sampler":"euler","cfg_scale":6.0,"flow_shift":3.0,"seed":42}})";
+    void *inst = nullptr;
+    std::string error;
+    REQUIRE(create(engine, config, &inst, error) == AGENT_OK);
+    INFO(error);
+    REQUIRE(inst != nullptr);
+
+    std::filesystem::remove_all(kSdOutputDir);
+    std::filesystem::create_directories(kSdOutputDir);
+    const std::string prompt = "a red ball bouncing on green grass";
+    agent_part text_part{};
+    text_part.kind = AGENT_PART_TEXT;
+    text_part.text = str(prompt);
+    agent_message msg{};
+    msg.role = agent_str{"user", 4};
+    msg.parts = &text_part;
+    msg.n_parts = 1;
+    const std::string out_dir = kSdOutputDir;
+    const std::string params = R"({"width":128,"height":128,"video_frames":5,"fps":8,"steps":)" + steps + "}";
+    ProgressLog progress;
+    agent_request req{.struct_size = sizeof(agent_request)};
+    req.task = AGENT_CAP_VIDEO_GEN;
+    req.messages = &msg;
+    req.n_messages = 1;
+    req.params_json = str(params);
+    req.output_dir = str(out_dir);
+    req.on_progress = [](void *ud, uint64_t, uint64_t total) {
+        auto *p = static_cast<ProgressLog *>(ud);
+        ++p->calls;
+        p->last_total = total;
+    };
+    req.user_data = &progress;
+
+    // A video model can't serve IMAGE_GEN.
+    req.task = AGENT_CAP_IMAGE_GEN;
+    agent_response rejected{.struct_size = sizeof(agent_response)};
+    REQUIRE(engine->run(inst, &req, &rejected) == AGENT_ERR_UNSUPPORTED);
+    req.task = AGENT_CAP_VIDEO_GEN;
+
+    agent_response resp{.struct_size = sizeof(agent_response)};
+    const int32_t rc = engine->run(inst, &req, &resp);
+    INFO(engine->last_error(inst));
+    REQUIRE(rc == AGENT_OK);
+    REQUIRE(resp.message.n_parts == 2);
+    const agent_part &file = resp.message.parts[0];
+    REQUIRE(file.kind == AGENT_PART_FILE);
+    REQUIRE(std::string(file.mime.data, file.mime.size) == "video/x-msvideo");
+    const std::string path(file.path.data, file.path.size);
+    REQUIRE(path.ends_with(".avi"));
+    REQUIRE(progress.calls > 0);
+
+    std::FILE *f = std::fopen(path.c_str(), "rb");
+    REQUIRE(f != nullptr);
+    std::string avi(std::filesystem::file_size(path), '\0');
+    REQUIRE(std::fread(avi.data(), 1, avi.size(), f) == avi.size());
+    std::fclose(f);
+    REQUIRE(avi.compare(0, 4, "RIFF") == 0);
+    REQUIRE(read_u32(avi, 4) == avi.size() - 8);
+    REQUIRE(avi.compare(8, 4, "AVI ") == 0);
+    REQUIRE(avi.compare(24, 4, "avih") == 0);
+    const uint32_t frames = read_u32(avi, 48); // avih.dwTotalFrames
+    REQUIRE(frames >= 1);
+    REQUIRE(read_u32(avi, 64) == 128); // avih.dwWidth
+    REQUIRE(read_u32(avi, 68) == 128); // avih.dwHeight
+    REQUIRE(avi.find("MJPG") != std::string::npos);
+    REQUIRE(avi.find("idx1") != std::string::npos);
+    // Every frame chunk is a JPEG (SOI marker).
+    size_t jpegs = 0;
+    for (size_t at = avi.find("00dc"); at != std::string::npos && at + 10 < avi.size(); at = avi.find("00dc", at + 4))
+        if (static_cast<unsigned char>(avi[at + 8]) == 0xFF && static_cast<unsigned char>(avi[at + 9]) == 0xD8) ++jpegs;
+    REQUIRE(jpegs == frames);
+    const std::string text(resp.message.parts[1].text.data, resp.message.parts[1].text.size);
+    INFO(text);
+    REQUIRE(text.find("generated video: " + std::to_string(frames) + " frames") == 0);
+    engine->free_response(inst, &resp);
     engine->destroy(inst);
 }
 
