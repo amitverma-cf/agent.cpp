@@ -66,6 +66,7 @@ Status as of 2026-10-31. Each entry says what breaks, why, and the planned fix. 
 | TTS covers Kokoro only (sherpa); English Kokoro on sherpa 2.x needs a lexicon, and words missing from it are skipped. | Add more TTS families (VITS/Piper, Qwen3-TTS via its ggml port). |
 | Parakeet ASR (sherpa transducer) is untested; there is no VAD or diarization yet. | Test the transducer path; wire sherpa VAD/diarization. |
 | sd.cpp is tested only with a single-file SD1.x-class model; FLUX/SD3/Qwen-Image and video (Wan/LTX) are untested. | Test split-model configs and add a video task. |
+| Decisions (`AGENT_CAP_DECIDE`) use generic option log-probability scoring; native System One decision models (Julia-1, Laya, Kev, lev, Clef) are rejected. Image decisions are wired through mmproj but untested. | Port the per-type decision heads from llama-server's `server-decision.cpp`; test with a VLM. |
 | Rerank mode can't fully detect non-reranker GGUFs (llama.cpp exposes no classifier-head query). | Upstream API, or a model-card allow-list. |
 | No document loaders for RAG (PDF, HTML, ...). | Optional loaders in the CLI layer. |
 

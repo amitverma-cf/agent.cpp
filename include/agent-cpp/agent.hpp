@@ -267,6 +267,11 @@ struct InferRequest {
     // call fails with InvalidConfig / UnsupportedProvider. 0 = Config::default_task, and when that is 0
     // too, automatic: AGENT_CAP_TEXT_GEN if the engine supports it, else its lowest capability bit.
     uint32_t task = 0;
+    // AiProvider::Engine: extra per-call engine parameters, a JSON object whose members are appended to
+    // the agent_request::params_json the core builds ({"max_tokens":..,"temperature":..,"stream":..}),
+    // e.g. R"({"mode":"yesno"})" for AGENT_CAP_DECIDE. Empty = none. Use the fields above for
+    // max_tokens / temperature / stream. Anything but an object fails with InvalidConfig.
+    std::string_view params_json;
 };
 
 struct InferResponse {
@@ -1212,5 +1217,38 @@ std::vector<LoadedModelInfo> loaded_models(const ModelRegistry &registry);
 // Replaces the budget and evicts idle, unpinned models until the loaded ones fit it.
 void set_budget(ModelRegistry &registry, const ModelBudget &budget);
 ModelBudget get_budget(const ModelRegistry &registry);
+
+// ============================================================================================
+// -------------------------- Decisions: choice / score / yes-no --------------------------
+// Typed answers from a model's log-probabilities instead of generated text (AGENT_CAP_DECIDE): every
+// option is scored as the reply to the question and the scores are normalized into a probability
+// distribution. The llama engine does this with any instruct GGUF (and a VLM + mmproj for images).
+// See docs/api/decide.md.
+// ============================================================================================
+
+struct DecideOptions {
+    std::span<const Media> media; // images for a vision model (engine option "mmproj")
+    std::string_view system;      // optional system message
+    // false: the question is sent as is; true: the engine appends the answer format (the option list,
+    // "Answer with Yes or No.", "Answer with a single whole number from 1 to 5.").
+    bool instructions = true;
+};
+
+struct Decision {
+    std::vector<std::string> options; // in request order ("Yes","No" for yes/no; "1".."5" for a scale)
+    std::vector<float> probs;         // one per option, sums to 1
+    size_t choice = 0;                // index of the most likely option
+    float confidence = 0.0f;          // probs[choice]
+    float score = 0.0f;               // decide_score: the expected value; decide_yes_no: P(yes); decide: confidence
+};
+
+// Which of options answers question. session's engine must perform AGENT_CAP_DECIDE (at least two
+// options). Like embed(), safe to call from inside another session's tool call.
+Result<Decision> decide(Session &session, std::string_view question, std::span<const std::string_view> options,
+                        const DecideOptions &opts = {});
+// A rating on the integer scale [min, max] (at most 101 levels); Decision::score is the expected value.
+Result<Decision> decide_score(Session &session, std::string_view question, int min = 1, int max = 5, const DecideOptions &opts = {});
+// P(yes) for a yes/no question.
+Result<float> decide_yes_no(Session &session, std::string_view question, const DecideOptions &opts = {});
 
 } // namespace agent
