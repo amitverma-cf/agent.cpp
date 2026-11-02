@@ -197,6 +197,9 @@ for (auto &spec : agent::hub::model_specs_from_catalog(entries.value, base)) age
 `.gguf` → llama, `.onnx` → onnx, `.safetensors`/`.ckpt`/`.sft` → sdcpp. When the file is missing,
 the catalogued `size` becomes `estimated_bytes`.
 
+The file format is described in [hub.md](hub.md#modelsjson), and a JSON Schema for it is in
+[`schemas/models.schema.json`](../../schemas/models.schema.json).
+
 ## CLI
 
 `config.json` takes `"memory_budget_mb"` (default 0, unlimited):

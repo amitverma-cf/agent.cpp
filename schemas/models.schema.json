@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent.cpp/schemas/models.schema.json",
+  "title": "models.json",
+  "description": "Model catalogue read by catalog_from_json (tools/hub/src/hub.cpp) and written by catalog_to_json. Only \"name\" is checked by the parser; the other fields become an empty string or 0 when missing or of the wrong type. Unknown keys are ignored. load_catalog also accepts an empty file.",
+  "type": "object",
+  "required": ["models"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "models": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/model" }
+    }
+  },
+  "$defs": {
+    "model": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "description": "Catalogue name, usable as --model NAME." },
+        "repo": { "type": "string", "description": "Hugging Face repo id." },
+        "file": { "type": "string", "description": "File path inside the repo." },
+        "path": { "type": "string", "description": "Local path of the downloaded file." },
+        "size": { "type": "integer", "minimum": 0, "description": "File size in bytes." },
+        "sha256": { "type": "string" },
+        "license": { "type": "string", "description": "Licence id, or \"unknown\"." }
+      }
+    }
+  }
+}

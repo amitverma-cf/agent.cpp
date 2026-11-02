@@ -176,8 +176,8 @@ The checks cover: types of every field, required fields, unknown kinds, duplicat
 ## Schema (informal)
 
 ```text
-document     := { name?, description?, engine?, model?, entry?, max_steps?, mcp_servers?: [mcp_server], nodes: [node, ...], edges?: [edge] }
-mcp_server   := { name, command, args?: [string], env?: {string: string}, timeout_ms?: int>0, working_directory? }
+document     := { name?, description?, engine?, model?, entry?, max_steps?, checkpointer?: "sqlite" | "memory", mcp_servers?: [mcp_server], nodes: [node, ...], edges?: [edge] }
+mcp_server   := { name, command, args?: [string], env?: {string: string}, timeout_ms?: int>0, working_directory?, sandbox?: bool | object }
 node         := { name, kind: "agent",      system_prompt?, prompt?, input_key?, output_key?, allowed_tools?: [string], interrupt_before_tools?: bool, history_key?, model? }
               | { name, kind: "tool",       tool, args?: object, input_key?, output_key? }
               | { name, kind: "function",   function }
@@ -187,6 +187,10 @@ node         := { name, kind: "agent",      system_prompt?, prompt?, input_key?,
 edge         := { from: node name, to: node name | "__end__" }
               | { from: node name, route: { key, cases: { value: node name | "__end__" }, default?: node name | "__end__" } }
 ```
+
+## Schemas
+
+[`schemas/agent.schema.json`](../../schemas/agent.schema.json) is a JSON Schema (draft 2020-12) for this format; point an editor's `$schema` at it. It checks field types, required fields and enums. It does not check references between nodes, unique names or registered functions; the loader does.
 
 ## Examples
 

@@ -167,7 +167,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [ ] Spike: llama.cpp `llama_batch_ext`/`llama_process` + libmtmd image input from inside a plugin
 - [ ] Spike: sherpa-onnx (Kokoro TTS + Parakeet STT) as a plugin on Windows
 - [x] Draft `engine_abi.h` v1 and the capability taxonomy
-- [ ] Draft JSON schemas for `engines.json`, `models.json`, `agent.json`
+- [x] Draft JSON schemas for `engines.json`, `models.json`, `agent.json` ([schemas/](../schemas))
 - [ ] Pin submodules; CI matrix Windows (MSVC) + Linux (GCC/Clang) + macOS (build only)
 
 ### Phase 1: Clean slate (1 to 2 weeks)

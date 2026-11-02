@@ -80,6 +80,8 @@ An entry may also carry `"isolation": "process"` or `"inprocess"` (see [Isolatio
 `"name"`. `"process"` entries are not loaded into this process at all: the manifest only records the
 path, under `"name"` or the name derived from `agent-engine-<name>.<ext>`.
 
+A JSON Schema for the manifest is in [`schemas/engines.schema.json`](../../schemas/engines.schema.json).
+
 ## Isolation
 
 ```cpp
