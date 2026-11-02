@@ -154,7 +154,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [x] Model registry with RAM/VRAM budget and LRU unload (`ModelRegistry`, `acquire_model` leases, `GraphNode::model`, CLI `memory_budget_mb`; see [docs/api/models.md](api/models.md))
 - [x] ABI v2: `struct_size` fields for compatible growth (`AGENT_ENGINE_ABI_VERSION` 2, `AGENT_HAS_FIELD`)
 - [x] `CheckpointerOps` + persisted event log; per-branch checkpoints and interrupts in parallel fan-outs (SQLite checkpointer, background Async writer, `fork_graph_run`, nested fan-outs share the worker slots)
-- [ ] OS sandboxing follow-ups: test real engines under the default engine policy, macOS profile, Windows AppContainer (filesystem/network), `"sandbox"` for MCP servers in `agent.json`
+- [ ] OS sandboxing follow-ups: ~~test real engines under the default engine policy~~ (done: llama, onnx, sherpa, sdcpp, TRELLIS load paths; GPU device nodes now opt-in via `SandboxPolicy::gpu`), ~~`"sandbox"` for MCP servers in `agent.json`~~ (done); open: test the macOS profile (and apply it without allocating after `fork()`), Windows AppContainer (filesystem/network) and handle-list inheritance, GPU builds under the sandbox
 - [ ] Hub: proxy auth, gated repos (split GGUF downloads done)
 - [ ] Windows build + test pass (owner)
 - [x] Voice loop: mic/speaker I/O + VAD (sherpa) → ASR → LLM → TTS (`agent voice`, [guide](guides/voice-assistant.md)); file backend tested end to end, real sound devices untested
