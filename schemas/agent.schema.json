@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent.cpp/schemas/agent.schema.json",
+  "title": "agent.json",
+  "description": "Declarative graph read by parse_graph_json / load_graph_json (src/core/graph/graph_json.cpp). The loader warns about unknown fields but accepts them, so additionalProperties is not restricted. Checks that need the whole document are not expressible here: unique node names, node references, one outgoing edge per node, body/branch/step ownership, registered functions, unique MCP server names.",
+  "type": "object",
+  "required": ["nodes"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "//": {},
+    "name": { "type": "string", "description": "Graph::name. Default: file stem, or \"graph\" for inline JSON." },
+    "description": { "type": "string" },
+    "engine": { "type": "string", "description": "Hint for the host; the loader only returns it." },
+    "model": { "type": "string", "description": "Hint for the host; the loader only returns it." },
+    "checkpointer": { "enum": ["sqlite", "memory", ""], "description": "Hint for the host. Empty means host default." },
+    "entry": { "type": "string", "description": "Entry node. Default: first node. Empty is the same as missing." },
+    "max_steps": { "type": "integer", "minimum": 1, "maximum": 2147483647, "default": 1000 },
+    "mcp_servers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/mcp_server" }
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/edge" }
+    }
+  },
+  "$defs": {
+    "node_name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^#]+$",
+      "not": { "const": "__end__" },
+      "description": "Must not be empty, \"__end__\", or contain '#'."
+    },
+    "node_ref": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Name of a node in \"nodes\"."
+    },
+    "target": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Name of a node in \"nodes\", or \"__end__\"."
+    },
+    "string_array": { "type": "array", "items": { "type": "string" } },
+    "mcp_server": {
+      "type": "object",
+      "required": ["name", "command"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "command": { "type": "string", "minLength": 1 },
+        "args": { "$ref": "#/$defs/string_array" },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } },
+        "timeout_ms": { "type": "integer", "exclusiveMinimum": 0, "maximum": 2147483647, "default": 30000 },
+        "working_directory": { "type": "string" },
+        "sandbox": {
+          "description": "true: sandbox on with defaults. false: off. Object: on unless \"enabled\" is false. Default: off.",
+          "oneOf": [
+            { "type": "boolean" },
+            { "$ref": "#/$defs/sandbox" }
+          ]
+        }
+      }
+    },
+    "sandbox": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "read_only_paths": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] },
+        "read_write_paths": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] },
+        "network": { "enum": ["allow", "deny"], "default": "allow" },
+        "memory_limit_mb": { "type": "integer", "minimum": 0, "maximum": 16777216, "default": 0 }
+      }
+    },
+    "node": {
+      "type": "object",
+      "required": ["name", "kind"],
+      "properties": {
+        "name": { "$ref": "#/$defs/node_name" },
+        "kind": { "enum": ["agent", "tool", "function", "parallel", "loop", "sequential"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "agent" } } },
+          "then": {
+            "properties": {
+              "system_prompt": { "type": "string" },
+              "prompt": { "type": "string" },
+              "input_key": { "type": "string" },
+              "output_key": { "type": "string" },
+              "allowed_tools": { "$ref": "#/$defs/string_array" },
+              "interrupt_before_tools": { "type": "boolean" },
+              "history_key": { "type": "string" },
+              "model": { "type": "string", "description": "Name of a ModelRegistry model; needs GraphRun::models." }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "tool" } } },
+          "then": {
+            "required": ["tool"],
+            "properties": {
+              "tool": { "type": "string", "minLength": 1 },
+              "args": { "type": "object" },
+              "input_key": { "type": "string" },
+              "output_key": { "type": "string" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "function" } } },
+          "then": {
+            "required": ["function"],
+            "properties": { "function": { "type": "string", "minLength": 1 } }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "parallel" } } },
+          "then": {
+            "required": ["branches"],
+            "properties": {
+              "branches": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/node_ref" } }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "loop" } } },
+          "then": {
+            "required": ["body", "max_iterations"],
+            "properties": {
+              "body": { "$ref": "#/$defs/node_ref" },
+              "max_iterations": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+              "until": {
+                "type": "object",
+                "required": ["key", "equals"],
+                "properties": {
+                  "key": { "type": "string", "minLength": 1 },
+                  "equals": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "sequential" } } },
+          "then": {
+            "required": ["steps"],
+            "properties": {
+              "steps": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/node_ref" } }
+            }
+          }
+        }
+      ]
+    },
+    "edge": {
+      "type": "object",
+      "required": ["from"],
+      "properties": {
+        "from": { "$ref": "#/$defs/node_ref" },
+        "to": { "$ref": "#/$defs/target" },
+        "route": {
+          "type": "object",
+          "required": ["key", "cases"],
+          "properties": {
+            "key": { "type": "string", "minLength": 1 },
+            "cases": { "type": "object", "additionalProperties": { "$ref": "#/$defs/target" } },
+            "default": { "$ref": "#/$defs/target", "default": "__end__" }
+          }
+        }
+      },
+      "oneOf": [
+        { "required": ["to"] },
+        { "required": ["route"] }
+      ]
+    }
+  }
+}

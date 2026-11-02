@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent.cpp/schemas/engines.schema.json",
+  "title": "engines.json",
+  "description": "Engine plugin manifest read by load_engine_manifest (src/core/engines/engine_registry.cpp) and by the CLI (tools/cli/src/cli_core.cpp). Unknown keys are ignored by both parsers. load_engine_manifest treats a non-string \"name\" or \"isolation\" as absent.",
+  "type": "object",
+  "required": ["engines"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "engines": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/engine" }
+    }
+  },
+  "$defs": {
+    "engine": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Plugin file. A relative path resolves against the directory of engines.json."
+        },
+        "name": {
+          "type": "string",
+          "description": "Engine name. If missing or empty, derived from agent-engine-<name>.<ext>."
+        },
+        "isolation": {
+          "enum": ["process", "inprocess"],
+          "description": "Overrides the Default of Config::engine_isolation for this engine."
+        },
+        "version": { "type": "string", "description": "Written by the CLI; informational." },
+        "backend": { "type": "string", "default": "cpu", "description": "Written by the CLI; informational." },
+        "caps": { "type": "array", "items": { "type": "string" }, "description": "Written by the CLI; informational." }
+      }
+    }
+  }
+}
