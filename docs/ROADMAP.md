@@ -1,6 +1,6 @@
 # agent.cpp Roadmap (draft for agreement, rev 3)
 
-Status: **proposal**, nothing implemented yet. Date: 2026-10-31.
+Status: **in progress** (see the status board in §4). Drafted 2026-10-31, updated 2026-11-02.
 Rev 3 folds in all answers so far (see §6).
 
 ## 0. What we are building
@@ -137,7 +137,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 
 ## 4. Phased plan with checklists
 
-### Status board (updated 2026-10-31)
+### Status board (updated 2026-11-02)
 
 **In flight** (parallel worktrees, integrated to `main` one commit at a time after build + tests):
 - [x] Out-of-process engine host (`agent-engine-host`, per-engine `isolation`, crash → `EngineCrashed` + auto-restart, hang watchdog, cross-process cancel). Fixes [LIMITATIONS](LIMITATIONS.md) §1
@@ -159,7 +159,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [ ] Windows build + test pass (owner)
 - [x] Voice loop: mic/speaker I/O + VAD (sherpa) → ASR → LLM → TTS (`agent voice`, [guide](guides/voice-assistant.md)); file backend tested end to end, real sound devices untested
 
-**Recently done** (see the phase lists below): engine plugin ABI + loader + manifest; llama (b12020, Jinja templates, native tool calls, vision/audio input, embed/rerank), sdcpp, sherpa and onnx engines; media/progress/cancel in the turn loop; graph runtime + `agent.json` loader; MCP stdio client; RAG pipeline; Hugging Face hub; `agent` CLI (`setup`, `engine`, `model`, `chat`, `run`); SQLite moved out of the core.
+**Recently done** (see the phase lists below): llama decide (choice / score / yes-no) and OCR; sdcpp video without ffmpeg (MJPEG AVI or PNG frames); whisper, parakeet and Qwen3-TTS engines; tools returning media parts; every engine tested under the engine sandbox, GPU device nodes opt-in, `sandbox` for MCP servers in agent.json; ggml engines built without Intel AMX by default (in-process ORT engines corrupted its per-thread tile state, see [LIMITATIONS](LIMITATIONS.md) §1); SDK docs and benchmark harness. Earlier: engine plugin ABI + loader + manifest; llama (b12020, Jinja templates, native tool calls, vision/audio input, embed/rerank), sdcpp, sherpa and onnx engines; media/progress/cancel in the turn loop; graph runtime + `agent.json` loader; MCP stdio client; RAG pipeline; Hugging Face hub; `agent` CLI (`setup`, `engine`, `model`, `chat`, `run`); SQLite moved out of the core.
 
 ### Phase 0: Decide and de-risk (1 to 2 weeks)
 - [ ] Agree on this roadmap; record decisions as ADRs in `docs/adr/`
@@ -205,11 +205,11 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 
 ### Phase 3: Workflows, state, durability (3 weeks)
 - [x] Graph runtime: agent/tool/function nodes, conditional edges, **Sequential / Parallel / Loop** (see [docs/api/graph.md](api/graph.md))
-- [ ] Event log as the source of truth; hooks subscribe to events
+- [x] Event log as the source of truth; hooks subscribe to events
   - [x] v1: in-memory per-run `GraphRun::events` (node start/end, state writes, tool calls, interrupts, checkpoints) + existing `EventHook`s
   - [x] v2: persisted through the checkpointer (`list_graph_events`); not used to replay tool results
 - [x] Scoped state (`temp:`/session/`user:`/`app:`)
-- [ ] Checkpointing by `thread_id` through `CheckpointerOps`; resume / replay; durability modes
+- [x] Checkpointing by `thread_id` through `CheckpointerOps`; resume / replay; durability modes
   - [x] v1: checkpoints by `thread_id` through `StoreOps`, `resume_graph`, durability modes `Exit`/`Async`/`Sync`
   - [x] v2: `CheckpointerOps` (`GraphRun::checkpointer`; the StoreOps layout stays the default), real `Async` durability (background writer, bounded queue, flushed on return); time travel via `fork_graph_run` (continue any stored step as a new thread)
 - [ ] `agent-store-sqlite`: SQLite checkpointer/state + sqlite-vec vector store (CLI and opt-in)
@@ -224,13 +224,13 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 
 ### Phase 4: Engine add-ons (ongoing; each is an independent task)
 Priority wave A (v1 **starter pack**, installed by default by `agent setup`):
-- [ ] `llama`: + libmtmd (vision/audio/video in), OCR models, embeddings, rerank, **decision models** (choice/score/yes-no)
+- [x] `llama`: + libmtmd (vision/audio in), OCR models, embeddings, rerank, **decision models** (choice/score/yes-no); video input and native System One heads are the open sub-items below
   - [x] libmtmd image + audio input (`engine_options.mmproj`); video input still open (needs ffmpeg)
   - [x] embeddings + rerank (`engine_options.mode` `"embed"` / `"rerank"`, `AGENT_CAP_EMBED` / `AGENT_CAP_RERANK`; tested with bge-small-en-v1.5, jina-reranker-v1-tiny-en, bge-reranker-v2-m3)
   - [x] decision models, generic: `AGENT_CAP_DECIDE` choice / score / yes-no from option log-probabilities with any instruct GGUF (+ images via mmproj), `agent::decide` / `decide_score` / `decide_yes_no` ([api/decide.md](api/decide.md)); tested with Qwen2.5-0.5B-Instruct
   - [x] OCR: `AGENT_CAP_OCR` with model-family prompts (PaddleOCR-VL, GLM-OCR, DeepSeek-OCR, dots.ocr, HunyuanOCR, generic fallback), `agent::ocr`; tested with GLM-OCR (Q8_0, MIT) and SmolVLM-256M (generic prompt)
   - [ ] native System One decision models (Julia-1, Laya, Kev-4B, lev, Clef: `<arch>.decision.type`); detected and rejected for now, their per-type heads/prompts live in llama-server only
-- [ ] `sherpa`: Kokoro TTS, Parakeet / Whisper STT, VAD, diarization (Windows-friendly breadth)
+- [x] `sherpa`: Kokoro TTS, Parakeet / Whisper STT, VAD, diarization (Windows-friendly breadth); more TTS families and the Windows build are open below
   - [x] v1 (`engines/sherpa`, sherpa-onnx 2.0.1 prebuilt C API): Kokoro TTS (WAV artifact + streamed audio chunks, progress, cancel), Whisper / NeMo transducer (Parakeet) ASR; Linux x64 tested with kokoro-en-v0_19 + whisper-tiny.en
   - [x] Silero VAD (`AGENT_CAP_VAD`, offline + streaming mode) and pyannote + speaker-embedding diarization (`AGENT_CAP_DIARIZE`); audio input also as an F32 tensor; tested with silero_vad.onnx, pyannote segmentation-3.0 + NeMo TitaNet small
   - [ ] VITS/Matcha/Kitten TTS, Windows build
