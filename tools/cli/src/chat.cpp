@@ -180,6 +180,7 @@ Result<void> open_session(ChatState &st) {
     cfg.provider = AiProvider::Engine;
     cfg.engine = st.engine.name;
     cfg.engine_isolation = cli_engine_isolation(st.inprocess, st.engine.isolation);
+    cfg.engine_sandbox.gpu = cli_engine_gpu(st.engine.backend);
     cfg.engine_options = st.engine_options;
     cfg.model = st.model.path;
     cfg.workspace_dir = st.workspace;

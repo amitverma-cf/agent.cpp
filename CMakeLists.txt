@@ -309,6 +309,7 @@ add_executable(test_agent
     tests/unit/test_graph_durability.cpp
     tests/unit/test_mcp.cpp
     tests/unit/test_sandbox.cpp
+    tests/unit/test_engine_sandbox.cpp
     tests/unit/test_model_registry.cpp
     tests/integration/test_session.cpp
     tests/integration/test_turn.cpp

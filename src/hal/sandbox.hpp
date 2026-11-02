@@ -71,9 +71,10 @@ int apply_prepared_sandbox(const PreparedSandbox &prepared) noexcept;
 Result<void> apply_sandbox(const SandboxPolicy &policy);
 
 // Read-only system locations a sandboxed program typically needs (/usr, /lib*, selected /etc files,
-// /proc, /sys, ...) plus device nodes it may open read-write (/dev/null, GPUs). Exposed for docs/tests.
+// /proc, /sys, ...) plus device nodes it may open read-write (/dev/null, /dev/shm, and the GPU nodes
+// when gpu is set). Exposed for docs/tests.
 std::vector<std::string> sandbox_system_read_only_paths(bool network);
-std::vector<std::string> sandbox_system_read_write_paths();
+std::vector<std::string> sandbox_system_read_write_paths(bool gpu);
 
 #if defined(_WIN32)
 // Windows: creates a Job Object carrying the limits (kill-on-close, memory, process count, no

@@ -97,6 +97,26 @@ TEST_CASE("sandbox support on this kernel", "[sandbox]") {
     SUCCEED();
 }
 
+TEST_CASE("GPU device nodes are opt-in", "[sandbox]") {
+    auto has = [](const std::vector<std::string> &list, std::string_view p) {
+        for (const auto &e : list)
+            if (e == p) return true;
+        return false;
+    };
+    const auto base = agent::hal::sandbox_system_read_write_paths(false);
+    CHECK(has(base, "/dev/null"));
+    CHECK(has(base, "/dev/shm"));
+    CHECK_FALSE(has(base, "/dev/dri"));
+    CHECK_FALSE(has(base, "/dev/kfd"));
+    for (const auto &p : base) CHECK(p.rfind("/dev/nvidia", 0) != 0);
+    const auto gpu = agent::hal::sandbox_system_read_write_paths(true);
+    CHECK(has(gpu, "/dev/dri"));
+    CHECK(has(gpu, "/dev/kfd"));
+    CHECK_FALSE(agent::SandboxPolicy{}.gpu);
+    CHECK_FALSE(agent::Config{}.engine_sandbox.gpu);
+    CHECK_FALSE(agent::Config{}.tool_sandbox.gpu);
+}
+
 TEST_CASE("a disabled policy changes nothing", "[sandbox]") {
     auto prepared = agent::hal::prepare_sandbox(agent::SandboxPolicy{});
     REQUIRE(prepared.ok);
