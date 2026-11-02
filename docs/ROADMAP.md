@@ -218,7 +218,8 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [x] Per-branch checkpoints: a resumed fan-out re-runs only unfinished branches
 - [x] Load graphs from `agent.json` (`load_graph_json`, see [docs/api/agent-json.md](api/agent-json.md))
 - [x] Port skills, permissions, context compression, fs/terminal tools: tested under graph Agent nodes with the mock engine (allowed_tools, shared `history_key` conversations, approval interrupts, process-isolated engines); `read_file` returns images/audio/video as media; `compress_context` uses the Session's engine (TEXT_GEN, own arena) and keeps tool-call groups intact; leading system messages are merged and never pruned; per-node tool/skill lists; `use_skill` loads bundled files (see [docs/api/tools.md](api/tools.md#default-tools))
-  - [ ] `run_command` ignores `request_cancel()` (only its timeout stops it); compression is not tested with a real model
+  - [x] `run_command` stops on `request_cancel()`: the command and its child processes are killed (POSIX: SIGTERM to the process group, SIGKILL after 500 ms; Windows: Job Object) and the result reports `"cancelled":true` with the partial output; a timeout now kills the whole tree too (Windows path untested)
+  - [ ] context compression is not tested with a real model
 - [x] MCP stdio client (`connect_mcp_server`, see [docs/api/mcp.md](api/mcp.md))
 - [x] RAG pipeline: chunk → embed → `VectorStoreOps` → rerank → inject (`rag_index` / `rag_query` / `search_knowledge` tool via `make_rag_tool`; see [docs/api/rag.md](api/rag.md)). A dedicated graph node kind is not added: an Agent node with the tool, or a Function node calling `rag_query`, covers it
 

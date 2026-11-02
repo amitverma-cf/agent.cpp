@@ -11,7 +11,8 @@ namespace agent::tools {
 
 namespace {
 
-Result<std::string> run_command(const std::string &ws, std::string_view args, const SandboxPolicy *sandbox) {
+Result<std::string> run_command(const std::string &ws, std::string_view args, const SandboxPolicy *sandbox,
+                                const volatile int32_t *cancel) {
     simdjson::ondemand::parser parser;
     simdjson::padded_string json(args.data(), args.size());
     simdjson::ondemand::document doc;
@@ -38,11 +39,12 @@ Result<std::string> run_command(const std::string &ws, std::string_view args, co
     if (timeout_seconds < 0) timeout_seconds = 30;
     if (timeout_seconds > 86400) timeout_seconds = 86400;
 
-    auto proc = hal::run_shell_command(ws, command_sv, static_cast<int>(timeout_seconds), 32 * 1024, sandbox);
+    auto proc = hal::run_shell_command(ws, command_sv, static_cast<int>(timeout_seconds), 32 * 1024, sandbox, cancel);
     if (!proc.ok) return fail<std::string>(proc.error.code, proc.error.message);
 
     std::string result = "{\"exit_code\":" + std::to_string(proc.value.exit_code) +
-                         ",\"timed_out\":" + (proc.value.timed_out ? "true" : "false") + ",\"output\":\"";
+                         ",\"timed_out\":" + (proc.value.timed_out ? "true" : "false") +
+                         ",\"cancelled\":" + (proc.value.cancelled ? "true" : "false") + ",\"output\":\"";
     // The output cap can cut a UTF-8 sequence, and programs print arbitrary bytes: keep the JSON valid text.
     utils::sanitize_utf8(proc.value.output);
     utils::escape_json_string(proc.value.output, result);
@@ -60,7 +62,7 @@ Result<std::string> run_command(const std::string &ws, std::string_view args, co
 }
 
 Result<std::string> run_command_cb(std::string_view args, void *ud) {
-    return run_command(*static_cast<const std::string *>(ud), args, nullptr);
+    return run_command(*static_cast<const std::string *>(ud), args, nullptr, nullptr);
 }
 
 // The default tool set's run_command: the workspace is the only writable (and, outside the system
@@ -69,7 +71,7 @@ Result<std::string> run_command_sandboxed_cb(std::string_view args, void *ud) {
     const auto &ctx = *static_cast<const WorkspaceContext *>(ud);
     if (!ctx.workspace_dir) return fail<std::string>(ErrorCode::InvalidConfig, "workspace_dir is null.");
     const std::string &ws = *ctx.workspace_dir;
-    if (!ctx.command_sandbox.enabled) return run_command(ws, args, nullptr);
+    if (!ctx.command_sandbox.enabled) return run_command(ws, args, nullptr, ctx.cancel);
     SandboxPolicy policy = ctx.command_sandbox;
     policy.filesystem = policy.filesystem && ctx.sandbox;
     if (!ws.empty()) {
@@ -77,15 +79,16 @@ Result<std::string> run_command_sandboxed_cb(std::string_view args, void *ud) {
         auto abs = std::filesystem::absolute(ws, ec);
         policy.read_write_paths.push_back(ec ? ws : abs.string());
     }
-    return run_command(ws, args, &policy);
+    return run_command(ws, args, &policy, ctx.cancel);
 }
 
 constexpr const char *kDescription = "Run a shell command in the workspace directory. stdout and stderr are merged. "
-                                     "Returns JSON: {exit_code, timed_out, output}.\n"
+                                     "Returns JSON: {exit_code, timed_out, cancelled, output}.\n"
                                      "Parameters: command (string, required), timeout_seconds (integer, default 30, "
                                      "0=no timeout).\n"
-                                     "Timeout is enforced on all platforms (Windows CreateProcess wait, POSIX timeout/"
-                                     "wait).";
+                                     "The timeout is enforced on all platforms and stops the command's child processes "
+                                     "too. If the turn is cancelled the command is killed the same way and cancelled "
+                                     "is true; output holds what it printed so far.";
 
 constexpr const char *kSchema =
     R"({"type":"object","properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer","description":"max seconds, default 30, 0 = no timeout"}},"required":["command"]})";

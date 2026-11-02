@@ -46,7 +46,7 @@ Status as of 2026-10-31. Each entry says what breaks, why, and the planned fix. 
 |---|---|
 | Tool media is sent to an engine whenever it declares the input capability, but the llama plugin declares VISION_IN/AUDIO_IN even without an `mmproj`. The first request carrying tool media then fails and is retried without it (one wasted call; the Session stops sending tool media). | A per-instance capability query in the engine ABI. |
 | Tool tensors (`ToolResult::tensors`) reach the engine and the event log as a note, but are not persisted with the history (`save_flow_memory` / checkpoints store media, not tensors). | Persist tensors as artifacts if needed. |
-| `run_command` is not interrupted by `request_cancel()`; only `timeout_seconds` stops it. | Cancel hook in `hal::run_shell_command`. |
+| ~~`run_command` is not interrupted by `request_cancel()`~~: **resolved**: it polls the session's cancel flag and kills the command and its child processes (SIGTERM to the process group, SIGKILL after 500 ms; a Job Object on Windows, untested) and returns `"cancelled":true` with the partial output. A process that left the command's session / Job Object on its own can outlive the cancel. | None needed. |
 | Context compression is only tested with the mock engine (summary quality with small local models is unknown); the automatic trigger runs at most once per turn, at its start. | Test with a real model; trigger inside long tool loops. |
 
 ## 5. Graph runtime

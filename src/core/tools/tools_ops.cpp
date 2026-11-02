@@ -29,6 +29,7 @@ Result<void> default_init(Session &session) {
         fs_ctx->workspace_dir = session.workspace_path.get();
         fs_ctx->sandbox = session.config.sandbox_filesystem;
         fs_ctx->command_sandbox = session.config.tool_sandbox;
+        fs_ctx->cancel = session.cancel_flag.get(); // shared_ptr: the address survives Session moves
         session.tool_context = fs_ctx;
 
         auto fs_tools = get_filesystem_tools(fs_ctx);
