@@ -63,9 +63,10 @@ agent::Tool make_word_count_tool(WordCounter &counter) {
 - Return `agent::ok(result)` or `agent::fail<std::string>(code, message)`. A failure does not end the
   turn: the model sees `Error: <message>` and can retry. Never throw.
 - The callback may be called from a worker thread when the tool is used inside parallel graph branches.
-- **Tools that return media.** The string callback above is the stable form. Tools that return
-  structured parts (text plus artifacts such as images) are being added; see
-  [api/tools.md](../api/tools.md) for that callback.
+- **Tools that return media.** The string callback above is the stable form. A tool that produces
+  files (an image, a recording) or tensors sets `parts_callback` instead (exactly one of the two) and
+  returns a `ToolResult` with `text`, `media`, `tensors` and `is_error`; the media are attached to the
+  history and reach vision-capable engines. See [api/tools.md](../api/tools.md#tools-that-return-parts).
 
 Register tools in `Config::tools` before `init()`, next to the default filesystem and terminal tools
 (`auto_default_tools`), or later with `session.config.tools.push_back(tool)` followed by
