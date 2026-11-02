@@ -394,6 +394,11 @@ option(AGENT_BUILD_EXAMPLES "Build examples/ (guide code, image critique, RAG ov
 if(AGENT_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
+# Benchmark harness (bench/agent_bench, see docs/benchmarks.md).
+option(AGENT_BUILD_BENCH "Build the agent_bench benchmark harness (bench/)" OFF)
+if(AGENT_BUILD_BENCH)
+    add_subdirectory(bench)
+endif()
 
 # ----------------------------------------------------------------------------------------------
 # Install / export: find_package(agent-cpp) gives agent-cpp::agent, agent-cpp::store_sqlite and

@@ -24,6 +24,7 @@ The library is designed around three principles:
 | [Guide: writing a tool](guides/writing-a-tool.md) | `Tool`, the permission gate, event hooks and per-node `ToolHook`s, MCP servers |
 | [Guide: writing a graph](guides/writing-a-graph.md) | C++ builders and `agent.json`, state scopes, checkpointers, interrupts, fork, a model per node |
 | [Examples](../examples/README.md) | Image critique loop (LLM → stable-diffusion.cpp → VLM), RAG over a folder of docs, graph JSON examples (router, review loop) |
+| [Benchmarks](benchmarks.md) | `agent_bench` (`AGENT_BUILD_BENCH`): tokens/s, time to first token, peak RSS, process isolation overhead, parallel branches; machine details and caveats |
 | [Guide: a local voice assistant](guides/voice-assistant.md) | `agent voice` with Silero VAD, Whisper, a llama.cpp model and Kokoro; file backend for headless runs |
 | [Architecture](architecture.md) | System diagrams, memory model, data flow |
 | [Limitations](LIMITATIONS.md) | Known limitations and planned fixes |
@@ -86,5 +87,6 @@ int main() {
 | `AGENT_ENGINE_PARAKEET` | `OFF` | Build the parakeet.cpp speech-to-text engine plugin (`engines/parakeet`); `AGENT_PARAKEET_BUILD_JOBS` caps the nested build |
 | `AGENT_ENGINE_QWEN3TTS` | `OFF` | Build the Qwen3-TTS engine plugin (`engines/qwen3tts`); `AGENT_QWEN3TTS_BUILD_JOBS` caps the nested build |
 | `AGENT_BUILD_EXAMPLES` | `ON` | Build `examples/` (guide code, image critique, RAG over docs) and their mock-engine smoke tests (`ctest -L examples`) |
+| `AGENT_BUILD_BENCH` | `OFF` | Build `agent_bench`, the benchmark harness (`bench/`, results in [benchmarks.md](benchmarks.md)) |
 | `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UBSan |
 | `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |

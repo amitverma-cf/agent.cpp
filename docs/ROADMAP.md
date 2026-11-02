@@ -275,7 +275,7 @@ Watch list: audio.cpp as a meta-engine; llama.cpp native TTS / image gen when th
   - [x] image critique loop (`examples/image_critique`: LLM prompt → sdcpp → SmolVLM critique → repeat; run end to end with Qwen2.5-0.5B / SDXS / SmolVLM-256M, which are too small for useful critiques), RAG over a folder of docs (`examples/rag_docs`, run with bge-small + jina reranker + Qwen2.5-0.5B over `docs/`), graph JSON set (`examples/graphs/router.json`, `review_loop.json`, run on the mock engine in ctest and `review_loop.json` with `agent run` on Qwen2.5-0.5B); see [examples/README.md](../examples/README.md)
   - [ ] OCR → extraction and decision-model router (wait for OCR / decision-model engine support; TODO in examples/README.md), video storyboard (needs video generation)
 - [x] Engine plugin template: [`templates/engine-plugin/`](../templates/engine-plugin) (standalone CMake project against the installed package, C echo engine + test harness); not a separate repository or cookiecutter
-- [ ] Benchmarks: tokens/s, time to first audio, peak memory per pipeline
+- [ ] Benchmarks: tokens/s, time to first audio, peak memory per pipeline (done: `agent_bench` and [docs/benchmarks.md](benchmarks.md) with tokens/s, time to first token, peak RSS, in-process vs process isolation, parallel branches and per-turn core overhead, measured on a noisy shared 4-core VM; open: time to first audio, no TTS model was available, and a quiet-machine re-run)
 
 ---
 
