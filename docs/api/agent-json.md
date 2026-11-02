@@ -83,6 +83,24 @@ Keep the `LoadedGraph` alive while its `graph` is in use, because route tables, 
 
 `name` and `command` are required. `args` is an array of strings and `env` is an object whose values are strings. `timeout_ms` defaults to 30000 and must be > 0. These map one to one onto `McpServerConfig`. Each server's tools are available as `<name>.<tool>`, for Tool nodes and in `allowed_tools`.
 
+**`sandbox`** (optional) runs the server in the [OS sandbox](../security-sandbox.md) (`McpServerConfig::sandbox`). It is off when the field is missing, as in C++:
+
+```json
+{ "name": "notes", "command": "/opt/mcp/notes-server", "working_directory": "/srv/notes",
+  "sandbox": { "read_only_paths": ["/srv/reference"], "read_write_paths": ["/srv/notes/cache"],
+               "network": "deny", "memory_limit_mb": 1024 } }
+```
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | bool | `true` | Writing the object turns the sandbox on; `"enabled": false` keeps the settings but runs the server unsandboxed |
+| `read_only_paths` | array of strings | `[]` | `SandboxPolicy::read_only_paths`, added to the server's program directory |
+| `read_write_paths` | array of strings | `[]` | `SandboxPolicy::read_write_paths`, added to `working_directory` |
+| `network` | `"allow"` or `"deny"` | `"allow"` | `SandboxPolicy::network` |
+| `memory_limit_mb` | integer, 0 to 16777216 | 0 (none) | `SandboxPolicy::memory_limit_bytes` (MiB; `RLIMIT_AS` on Linux, so leave headroom for runtimes that reserve address space, such as Node or the JVM) |
+
+`"sandbox": true` is short for `{}` (sandbox on, nothing extra listed) and `"sandbox": false` for no sandbox. The rest of the policy keeps the `SandboxPolicy` defaults: system directories read-only, `$TMPDIR` and `/var/tmp` read-write, no GPU. Paths are passed to the kernel as written: a relative path is resolved against the host's current directory (not `working_directory`), and `~` is not expanded. A path that does not exist is skipped with a warning when the server starts. Wrong types, an empty path, an unknown `network` value or a negative or fractional `memory_limit_mb` are errors; unknown fields inside `sandbox` are warnings. Servers launched through `npx`/`uvx` need their runtime and package cache listed, see [mcp.md](mcp.md).
+
 ---
 
 ## Nodes

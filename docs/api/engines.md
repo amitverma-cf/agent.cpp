@@ -107,9 +107,11 @@ cfg.engine_max_restarts    = 3;     // automatic restarts per rolling minute
 Under Process isolation the host also runs in an **OS sandbox** (`Config::engine_sandbox`, on by
 default; Linux enforces it): the plugin, the model's directory and paths named in `engine_options`
 are read-only, the workspace is read-only, `workspace/artifacts` is read-write, the network and
-`/tmp` are off, and `engine_sandbox.memory_limit_bytes` becomes the host's `RLIMIT_AS`. An engine
-that needs more must have it listed in `engine_sandbox.read_only_paths` / `read_write_paths`. See
-[../security-sandbox.md](../security-sandbox.md).
+`/tmp` and the GPU device nodes are off, and `engine_sandbox.memory_limit_bytes` becomes the host's
+`RLIMIT_AS`. Every engine in this repository (llama, onnx, sherpa, sdcpp, trellis) has been run under
+this default policy without extra paths. GPU builds need `engine_sandbox.gpu = true`; an engine that
+needs more files must have them listed in `engine_sandbox.read_only_paths` / `read_write_paths`. See
+[../security-sandbox.md](../security-sandbox.md#real-engines-under-the-default-engine-policy).
 
 Failure semantics under Process isolation:
 
