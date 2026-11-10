@@ -3,7 +3,10 @@
 
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/store_sqlite.hpp>
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
+#include <map>
 #include <mutex>
 #include <simdjson.h>
 #include <sqlite-vec.h>
@@ -231,6 +234,8 @@ constexpr int kVecMaxK = 4096; // sqlite-vec's limit on a knn query's k
 struct SqliteVectorStore {
     SqliteVecState db; // connection, table names, dimensions, mutex
     std::string sql_find, sql_insert_chunk, sql_update_chunk, sql_delete_chunk, sql_insert_vec, sql_delete_vec, sql_query;
+    bool has_fts = false; // the FTS5 index exists (SQLite built with FTS5)
+    std::string fts_table, sql_fts_query;
 };
 
 // Finalizes on scope exit.
@@ -310,6 +315,31 @@ Result<std::shared_ptr<void>> vs_open(const VectorStoreConfig &config) {
                                " (rowid INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, text TEXT, metadata TEXT);";
     if (auto r = exec_simple(st->db.conn, schema); !r.ok) return fail<R>(r.error.code, r.error.message);
 
+    // Full-text index over the chunk text (an external-content FTS5 table: it stores no second copy of the text, and
+    // triggers keep it in step with the chunks table). A database made before this existed is indexed once. When SQLite
+    // was built without FTS5 the store still works, without hybrid search.
+    {
+        const std::string &fts = st->fts_table = config.name + "_fts";
+        bool existed = false;
+        {
+            Stmt probe(st->db.conn, "SELECT 1 FROM sqlite_master WHERE name = ?1;");
+            if (probe.s) {
+                bind_text(probe.s, 1, fts);
+                existed = sqlite3_step(probe.s) == SQLITE_ROW;
+            }
+        }
+        const std::string fts_schema =
+            "CREATE VIRTUAL TABLE IF NOT EXISTS " + fts + " USING fts5(text, content='" + chunks + "', content_rowid='rowid');" +
+            "CREATE TRIGGER IF NOT EXISTS " + fts + "_ai AFTER INSERT ON " + chunks + " BEGIN INSERT INTO " + fts + "(rowid, text) VALUES (new.rowid, new.text); END;" +
+            "CREATE TRIGGER IF NOT EXISTS " + fts + "_ad AFTER DELETE ON " + chunks + " BEGIN INSERT INTO " + fts + "(" + fts + ", rowid, text) VALUES ('delete', old.rowid, old.text); END;" +
+            "CREATE TRIGGER IF NOT EXISTS " + fts + "_au AFTER UPDATE ON " + chunks + " BEGIN INSERT INTO " + fts + "(" + fts + ", rowid, text) VALUES ('delete', old.rowid, old.text); INSERT INTO " +
+            fts + "(rowid, text) VALUES (new.rowid, new.text); END;";
+        st->has_fts = exec_simple(st->db.conn, fts_schema).ok;
+        if (st->has_fts && !existed) st->has_fts = exec_simple(st->db.conn, "INSERT INTO " + fts + "(" + fts + ") VALUES ('rebuild');").ok;
+        st->sql_fts_query = "SELECT c.id, c.text, c.metadata FROM " + fts + " f JOIN " + chunks + " c ON c.rowid = f.rowid WHERE " + fts +
+                            " MATCH ?1 ORDER BY bm25(" + fts + ") LIMIT ?2;";
+    }
+
     st->sql_find = "SELECT rowid FROM " + chunks + " WHERE id = ?1;";
     st->sql_insert_chunk = "INSERT INTO " + chunks + "(id, text, metadata) VALUES (?1, ?2, ?3);";
     st->sql_update_chunk = "UPDATE " + chunks + " SET text = ?2, metadata = ?3 WHERE rowid = ?1;";
@@ -385,6 +415,69 @@ Result<std::vector<VectorHit>> vs_query(void *state, std::span<const float> embe
     return ok(std::move(hits));
 }
 
+// "the quick, brown fox" -> "the" OR "quick" OR "brown" OR "fox": every word quoted, so punctuation and FTS5 operators in
+// a user's question cannot make the query invalid.
+std::string fts_match_expression(std::string_view text) {
+    std::string out, word;
+    int words = 0;
+    auto flush = [&] {
+        if (word.empty() || words >= 24) { word.clear(); return; }
+        out += std::string(out.empty() ? "" : " OR ") + "\"" + word + "\"";
+        ++words;
+        word.clear();
+    };
+    for (unsigned char c : text) {
+        if (std::isalnum(c) || c >= 0x80) word += static_cast<char>(std::tolower(c));
+        else flush();
+    }
+    flush();
+    return out;
+}
+
+constexpr int kRrfK = 60; // Reciprocal Rank Fusion damping constant
+
+Result<std::vector<VectorHit>> vs_query_hybrid(void *state, std::string_view text, std::span<const float> embedding, int k) {
+    using R = std::vector<VectorHit>;
+    auto &st = *static_cast<SqliteVectorStore *>(state);
+    if (k <= 0) return ok(R{});
+    const int pool = std::min(std::max(3 * k, 20), kVecMaxK);
+    auto semantic = vs_query(state, embedding, pool);
+    if (!semantic.ok) return semantic;
+
+    std::vector<VectorHit> lexical;
+    const std::string match = st.has_fts ? fts_match_expression(text) : std::string();
+    if (!match.empty()) {
+        std::lock_guard<std::mutex> lock(st.db.mutex);
+        Stmt q(st.db.conn, st.sql_fts_query);
+        if (q.s) {
+            bind_text(q.s, 1, match);
+            sqlite3_bind_int(q.s, 2, pool);
+            while (sqlite3_step(q.s) == SQLITE_ROW)
+                lexical.push_back(VectorHit{.id = column_text(q.s, 0), .text = column_text(q.s, 1), .metadata_json = column_text(q.s, 2), .score = 0.0f});
+        }
+    }
+
+    // score(id) = sum over the two rankings of 1 / (60 + rank)
+    std::vector<VectorHit> fused;
+    std::map<std::string, size_t> at;
+    auto add = [&](VectorHit &&hit, size_t rank) {
+        const float part = 1.0f / static_cast<float>(kRrfK + static_cast<int>(rank) + 1);
+        auto it = at.find(hit.id);
+        if (it == at.end()) {
+            at.emplace(hit.id, fused.size());
+            hit.score = part;
+            fused.push_back(std::move(hit));
+        } else {
+            fused[it->second].score += part;
+        }
+    };
+    for (size_t i = 0; i < semantic.value.size(); ++i) add(std::move(semantic.value[i]), i);
+    for (size_t i = 0; i < lexical.size(); ++i) add(std::move(lexical[i]), i);
+    std::stable_sort(fused.begin(), fused.end(), [](const VectorHit &a, const VectorHit &b) { return a.score > b.score; });
+    if (fused.size() > static_cast<size_t>(k)) fused.resize(static_cast<size_t>(k));
+    return ok(std::move(fused));
+}
+
 Result<bool> vs_erase(void *state, std::string_view id) {
     auto &st = *static_cast<SqliteVectorStore *>(state);
     std::lock_guard<std::mutex> lock(st.db.mutex);
@@ -408,7 +501,7 @@ Result<void> vs_clear(void *state) {
 }
 
 constexpr VectorStoreOps kSqliteVectorStore{
-    .open = vs_open, .upsert = vs_upsert, .query_topk = vs_query, .erase = vs_erase, .clear = vs_clear};
+    .open = vs_open, .upsert = vs_upsert, .query_topk = vs_query, .erase = vs_erase, .clear = vs_clear, .query_hybrid = vs_query_hybrid};
 
 } // namespace
 

@@ -1042,12 +1042,17 @@ struct VectorStoreOps {
     // true when an entry was removed, false when id was not present.
     using EraseFn = Result<bool> (*)(void *state, std::string_view id);
     using ClearFn = Result<void> (*)(void *state);
+    // Optional. Words and meaning together: the entries whose text matches `text` (full-text, BM25) and the entries
+    // closest to `embedding`, merged by Reciprocal Rank Fusion. VectorHit::score is the fused score (larger is better;
+    // it is not a cosine similarity). Stores without it answer hybrid queries with query_topk.
+    using QueryHybridFn = Result<std::vector<VectorHit>> (*)(void *state, std::string_view text, std::span<const float> embedding, int k);
 
     OpenFn open = nullptr;
     UpsertFn upsert = nullptr;
     QueryTopkFn query_topk = nullptr;
     EraseFn erase = nullptr;
     ClearFn clear = nullptr;
+    QueryHybridFn query_hybrid = nullptr;
 };
 
 // Brute-force cosine search over vectors kept in process memory (nothing persists). The optional
@@ -1070,6 +1075,9 @@ Result<std::vector<std::string_view>> chunk_text(std::string_view text, const Ch
 struct RagIndex {
     const VectorStoreOps *store = nullptr; // nullptr = in_memory_vector_store()
     VectorStoreConfig config;
+    // Search by words and meaning together when the store supports it (the sqlite store does): exact names, codes and
+    // rare terms that an embedding blurs are found by the full-text side. RagHit::similarity is then the fused score.
+    bool hybrid = false;
     // Opened by the first rag_index / rag_query (dimensions from that embedding when
     // config.dimensions is 0) or explicitly by open_rag_index. Not thread-safe until opened.
     std::shared_ptr<void> state;

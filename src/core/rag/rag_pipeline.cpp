@@ -97,7 +97,9 @@ Result<std::vector<RagHit>> rag_query(Session &embed_session, RagIndex &index, s
     if (auto r = ensure_open(index, vectors.value.front().size()); !r.ok) return fail<R>(r.error.code, r.error.message);
 
     const int fetch = rerank_session ? std::max(4 * k, 20) : k;
-    auto found = ops_of(index)->query_topk(index.state.get(), vectors.value.front(), fetch);
+    const VectorStoreOps *ops = ops_of(index);
+    auto found = index.hybrid && ops->query_hybrid ? ops->query_hybrid(index.state.get(), query, vectors.value.front(), fetch)
+                                                   : ops->query_topk(index.state.get(), vectors.value.front(), fetch);
     if (!found.ok) return fail<R>(found.error.code, found.error.message);
 
     R hits;

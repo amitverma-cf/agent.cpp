@@ -99,6 +99,9 @@ struct VectorStoreOps {
     Result<std::vector<VectorHit>> (*query_topk)(void *state, std::span<const float> embedding, int k);
     Result<bool> (*erase)(void *state, std::string_view id); // true if something was removed
     Result<void> (*clear)(void *state);
+    // Optional: words and meaning together, merged by Reciprocal Rank Fusion. score is the fused score.
+    Result<std::vector<VectorHit>> (*query_hybrid)(void *state, std::string_view text,
+                                                   std::span<const float> embedding, int k);
 };
 
 const VectorStoreOps *in_memory_vector_store();            // libagent
@@ -113,6 +116,15 @@ cosine similarities (1 = same direction), most similar first.
 |---|---|---|
 | `in_memory_vector_store()` | `libagent` | Brute-force cosine over unit vectors in a flat array, `std::shared_mutex` (parallel queries). Nothing persists. |
 | `store::sqlite_vector_store()` | `agent_store_sqlite` | sqlite-vec `vec0(embedding float[d] distance_metric=cosine)` table `<name>_vectors` plus `<name>_chunks(id UNIQUE, text, metadata)`; KNN via `MATCH ... AND k = ?` (k capped at 4096); score = 1 - cosine distance. An existing table keeps the dimensions it was created with. |
+
+**Hybrid search.** `RagIndex::hybrid = true` makes `rag_query` call `query_hybrid` when the store has it (the sqlite
+store does). The sqlite store keeps an FTS5 index over the chunk text (an external-content table `<name>_fts`, kept in
+step by triggers, built once for databases that predate it). A query returns the top candidates of two rankings, the
+embedding's nearest neighbours and the BM25 matches of the query's words, and scores each chunk with
+`sum 1 / (60 + rank)` over the rankings it appears in. Exact names, codes and rare words that an embedding blurs are
+found by the text side; paraphrases by the vector side. The words of the query are quoted, so punctuation or FTS5
+operators in a question cannot make the query fail. `RagHit::similarity` and `score` then hold the fused score, not a
+cosine similarity. A store without `query_hybrid`, or an SQLite built without FTS5, answers with the vector ranking.
 
 The older [`make_sqlite_vec_data_source`](data-sources.md#sqlite-vec-rag--vector-search-in-agent_store_sqlite)
 `DataSource` is unchanged and independent (it uses different tables).
