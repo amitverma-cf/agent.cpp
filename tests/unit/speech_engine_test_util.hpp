@@ -1,4 +1,4 @@
-// Helpers shared by the speech engine plugin tests (whisper, parakeet, qwen3tts).
+// Helpers shared by the speech engine plugin tests (whisper, parakeet).
 #pragma once
 
 #include <agent-cpp/agent.hpp>

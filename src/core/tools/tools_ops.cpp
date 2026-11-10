@@ -3,6 +3,7 @@
 #include "../executor/ambient_turn.hpp"
 
 #include <agent-cpp/agent.hpp>
+#include <algorithm>
 #include <filesystem>
 #include <system_error>
 
@@ -12,6 +13,8 @@ std::vector<Tool> get_filesystem_tools(std::shared_ptr<WorkspaceContext> ctx);
 Tool get_terminal_tool(const std::string *workspace_dir);
 Tool get_terminal_tool(std::shared_ptr<WorkspaceContext> ctx);
 Tool get_context_compressor_tool(Session **session_cell);
+Tool get_tool_search_tool(Session **session_cell);
+Tool get_load_tool_tool(Session **session_cell);
 
 namespace {
 
@@ -37,6 +40,11 @@ Result<void> default_init(Session &session) {
 
         add_if_missing(session.config.tools, get_terminal_tool(fs_ctx));
         add_if_missing(session.config.tools, get_context_compressor_tool(session.session_ptr_cell.get()));
+    }
+
+    if (session.config.lazy_tools) {
+        add_if_missing(session.config.tools, get_tool_search_tool(session.session_ptr_cell.get()));
+        add_if_missing(session.config.tools, get_load_tool_tool(session.session_ptr_cell.get()));
     }
 
     rebuild_tool_index(session);
@@ -71,6 +79,8 @@ Result<ToolResult> default_execute(Session &session, std::string_view name, std:
 
     if (!tool_allowed(ambient::allowed_tools, name))
         return fail<ToolResult>(ErrorCode::KeyNotFound, "Tool not allowed for the current agent node: " + std::string(name));
+    if (!tool_visible(session, ambient::allowed_tools, name))
+        return fail<ToolResult>(ErrorCode::KeyNotFound, "Tool '" + std::string(name) + "' is not loaded yet: call tool_search to find tools, then load_tool with the name.");
 
     if (session.config.permission_check) {
         auto decision = session.config.permission_check(name, arguments, session.config.permission_user_data);
@@ -111,6 +121,19 @@ bool tool_allowed(std::span<const std::string_view> allowed, std::string_view na
     for (auto a : allowed)
         if (a == name) return true;
     return false;
+}
+
+bool lazy_tools_active(const Session &session, std::span<const std::string_view> allowed) {
+    return session.config.lazy_tools && tool_allowed(allowed, "tool_search");
+}
+
+bool tool_visible(const Session &session, std::span<const std::string_view> allowed, std::string_view name) {
+    if (!tool_allowed(allowed, name)) return false;
+    if (!lazy_tools_active(session, allowed)) return true;
+    if (name == "tool_search" || name == "load_tool" || name == "use_skill") return true;
+    const FlowMemory *memory = ambient::active_memory;
+    if (!memory) return false;
+    return std::find(memory->active_tools.begin(), memory->active_tools.end(), name) != memory->active_tools.end();
 }
 
 std::string render_tool_text(const ToolResult &result) {
@@ -155,7 +178,7 @@ ToolResult execute_for_message(Session &session, std::string_view name, std::str
 void append_tool_list(const Session &session, std::span<const std::string_view> allowed, std::string &out) {
     bool any = false;
     for (const auto &tool : session.config.tools) {
-        if (!tool_allowed(allowed, tool.name)) continue;
+        if (!tool_visible(session, allowed, tool.name)) continue;
         if (!any) out += "You have access to the following tools:\n";
         any = true;
         out += "- ";

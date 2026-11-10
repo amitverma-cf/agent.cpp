@@ -96,6 +96,7 @@ add_library(agent
     src/core/tools/filesystem_tools.cpp
     src/core/tools/terminal_tools.cpp
     src/core/tools/context_compressor.cpp
+    src/core/tools/lazy_tools.cpp
     src/core/rag/engine_tasks.cpp
     src/core/rag/in_memory_vector_store.cpp
     src/core/rag/chunker.cpp
@@ -182,6 +183,7 @@ find_package(OpenSSL REQUIRED)
 add_library(agent_hub
     tools/hub/src/hub.cpp
     tools/hub/src/hub_http.cpp
+    tools/hub/src/registry.cpp
 )
 add_library(agent-cpp::hub ALIAS agent_hub)
 target_include_directories(agent_hub PUBLIC
@@ -219,7 +221,6 @@ option(AGENT_ENGINE_SHERPA "Build the sherpa-onnx speech engine plugin (engines/
 # Builds whisper.cpp + its own ggml, so off by default.
 option(AGENT_ENGINE_WHISPER "Build the whisper.cpp speech-to-text engine plugin (engines/whisper)" OFF)
 option(AGENT_ENGINE_PARAKEET "Build the parakeet.cpp speech-to-text engine plugin (engines/parakeet)" OFF)
-option(AGENT_ENGINE_QWEN3TTS "Build the Qwen3-TTS text-to-speech engine plugin (engines/qwen3tts, qwentts.cpp)" OFF)
 # ggml's AMX kernels break when another in-process engine touches the AMX tile state; see
 # cmake/ggml_no_amx.cmake. Only matters for GGML_NATIVE builds on AMX CPUs.
 option(AGENT_GGML_AMX "Keep Intel AMX in the engines' ggml (safe only with process-isolated engines)" OFF)
@@ -276,9 +277,6 @@ endif()
 if(AGENT_ENGINE_PARAKEET)
     add_subdirectory(engines/parakeet)
 endif()
-if(AGENT_ENGINE_QWEN3TTS)
-    add_subdirectory(engines/qwen3tts)
-endif()
 
 enable_testing()
 add_executable(test_agent
@@ -294,6 +292,7 @@ add_executable(test_agent
     tests/unit/test_terminal_tools.cpp
     tests/unit/test_hal_path.cpp
     tests/unit/test_context_compressor.cpp
+    tests/unit/test_lazy_tools.cpp
     tests/unit/test_tools_ops.cpp
     tests/unit/test_tool_parts.cpp
     tests/unit/test_builtin_tools_graph.cpp
@@ -332,7 +331,7 @@ if(AGENT_BUILD_HUB)
     target_link_libraries(test_agent PRIVATE agent_hub)
 endif()
 if(AGENT_BUILD_CLI)
-    target_sources(test_agent PRIVATE tests/unit/test_cli.cpp tests/unit/test_cli_status.cpp tests/unit/test_voice.cpp)
+    target_sources(test_agent PRIVATE tests/unit/test_cli.cpp tests/unit/test_cli_status.cpp tests/unit/test_voice.cpp tests/unit/test_home.cpp tests/unit/test_secrets.cpp tests/unit/test_doctor.cpp)
     target_link_libraries(test_agent PRIVATE agent_cli_core)
     # The agent voice end-to-end test runs the real binary.
     target_compile_definitions(test_agent PRIVATE AGENT_TEST_CLI_PATH="$<TARGET_FILE:agent_cli_bin>")
@@ -386,12 +385,12 @@ if(AGENT_ENGINE_PARAKEET)
                                                   AGENT_TEST_PARAKEET_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/vendor/parakeet.cpp/tests/fixtures")
     add_dependencies(test_agent agent-engine-parakeet)
 endif()
-if(AGENT_ENGINE_QWEN3TTS)
-    target_sources(test_agent PRIVATE tests/unit/test_engine_qwen3tts.cpp)
-    target_compile_definitions(test_agent PRIVATE AGENT_TEST_QWEN3TTS_ENGINE_PATH="$<TARGET_FILE:agent-engine-qwen3tts>")
-    add_dependencies(test_agent agent-engine-qwen3tts)
-endif()
 target_compile_options(test_agent PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
+if(MSVC)
+    # Catch2's CHECK(...) stringifies its argument; the traditional MSVC preprocessor mangles raw string
+    # literals that contain quotes (C2017 "illegal escape sequence"). The conforming one does not.
+    target_compile_options(test_agent PRIVATE /Zc:preprocessor)
+endif()
 target_link_options(test_agent PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/vendor/catch2/extras/Catch.cmake)

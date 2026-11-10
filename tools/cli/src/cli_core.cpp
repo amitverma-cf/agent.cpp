@@ -45,17 +45,22 @@ struct CommandSpec {
     std::span<const std::string_view> bool_flags;
 };
 
-constexpr std::string_view kGlobalValue[] = {"config-dir"};
+constexpr std::string_view kGlobalValue[] = {"config-dir", "home"};
 constexpr std::string_view kGlobalBool[] = {"help"};
 
-constexpr std::string_view kSetupValue[] = {"caps", "workspace", "models-dir", "engines-dir", "backend"};
-constexpr std::string_view kSetupBool[] = {"yes"};
+constexpr std::string_view kSetupValue[] = {"caps", "workspace", "models-dir", "engines-dir", "backend", "model"};
+constexpr std::string_view kSetupBool[] = {"yes", "no-models"};
 
 constexpr SubSpec kEngineSubs[] = {{"ls", 0, 0}, {"add", 1, 1}, {"rm", 1, 1}};
 
-constexpr SubSpec kModelSubs[] = {{"ls", 0, 0}, {"pull", 1, 1}, {"rm", 1, 1}};
-constexpr std::string_view kModelValue[] = {"name"};
-constexpr std::string_view kModelBool[] = {"allow-restricted", "keep-file"};
+constexpr SubSpec kSecretSubs[] = {{"set", 1, 1}, {"ls", 0, 0}, {"rm", 1, 1}, {"bind", 2, 2}, {"unbind", 2, 2}};
+constexpr std::string_view kCleanBool[] = {"downloads", "cache", "logs", "yes"};
+constexpr std::string_view kSecretValue[] = {"identity"};
+constexpr std::string_view kSecretBool[] = {"stdin"};
+
+constexpr SubSpec kModelSubs[] = {{"ls", 0, 0}, {"search", 0, 1}, {"info", 1, 1}, {"pull", 1, 1}, {"rm", 1, 1}};
+constexpr std::string_view kModelValue[] = {"name", "quant", "mmproj", "include", "task"};
+constexpr std::string_view kModelBool[] = {"allow-restricted", "keep-file", "no-mmproj"};
 
 constexpr std::string_view kChatValue[] = {"model", "engine", "resume", "workspace", "ctx", "max-tokens", "engine-options"};
 constexpr std::string_view kChatBool[] = {"yes", "list", "verbose", "inprocess"};
@@ -67,13 +72,21 @@ constexpr std::string_view kVoiceValue[] = {"model",     "engine", "asr-model", 
                                             "workspace", "ctx",    "max-tokens", "engine-options", "resume",    "max-turns", "speaker-id"};
 constexpr std::string_view kVoiceBool[] = {"yes", "verbose", "inprocess", "barge-in"};
 
+constexpr std::string_view kTaskValue[] = {"model", "engine", "engine-options", "text", "file", "params", "workspace", "max-tokens", "doc", "tensor"};
+constexpr std::string_view kTaskBool[] = {"inprocess"};
+
 constexpr CommandSpec kCommands[] = {
     {"setup", {}, 0, 0, kSetupValue, kSetupBool},
+    {"init", {}, 0, 1, {}, {}},
+    {"secret", kSecretSubs, 0, 0, kSecretValue, kSecretBool},
+    {"doctor", {}, 0, 0, {}, {}},
+    {"clean", {}, 0, 0, {}, kCleanBool},
     {"engine", kEngineSubs, 0, 0, {}, {}},
     {"model", kModelSubs, 0, 0, kModelValue, kModelBool},
     {"chat", {}, 0, 0, kChatValue, kChatBool},
     {"run", {}, 1, 1, kRunValue, kRunBool},
     {"voice", {}, 0, 0, kVoiceValue, kVoiceBool},
+    {"task", {}, 1, 1, kTaskValue, kTaskBool},
     {"help", {}, 0, 1, {}, {}},
     {"version", {}, 0, 0, {}, {}},
 };
@@ -182,18 +195,63 @@ Result<CommandLine> parse_command_line(std::span<const std::string_view> args) {
     return ok(std::move(cl));
 }
 
+std::string format_turn_footer(const TokenUsage &u) {
+    if (u.prefill_ms <= 0.0f && u.decode_ms <= 0.0f && u.kv_max_tokens <= 0) return {};
+    const char *kv_name[] = {"", "f32", "f16", "q8_0", "q4_0"};
+    char buf[200];
+    std::string out;
+    const int fresh = std::max(0, u.prompt_tokens - u.cached_tokens);
+    int n = std::snprintf(buf, sizeof(buf), "prompt %d tok", u.prompt_tokens);
+    out.append(buf, static_cast<size_t>(n));
+    if (u.cached_tokens > 0) {
+        n = std::snprintf(buf, sizeof(buf), " (%d cached)", u.cached_tokens);
+        out.append(buf, static_cast<size_t>(n));
+    }
+    if (u.prefill_ms > 0.0f && fresh > 0) {
+        n = std::snprintf(buf, sizeof(buf), " %.0f tok/s", static_cast<double>(fresh) / (static_cast<double>(u.prefill_ms) / 1000.0));
+        out.append(buf, static_cast<size_t>(n));
+    }
+    n = std::snprintf(buf, sizeof(buf), " | gen %d tok", u.completion_tokens);
+    out.append(buf, static_cast<size_t>(n));
+    if (u.decode_ms > 0.0f && u.completion_tokens > 1) {
+        n = std::snprintf(buf, sizeof(buf), " %.0f tok/s", static_cast<double>(u.completion_tokens - 1) / (static_cast<double>(u.decode_ms) / 1000.0));
+        out.append(buf, static_cast<size_t>(n));
+    }
+    if (u.kv_max_tokens > 0) {
+        n = std::snprintf(buf, sizeof(buf), " | KV %d/%d", u.kv_tokens, u.kv_max_tokens);
+        out.append(buf, static_cast<size_t>(n));
+        if (u.kv_type > 0 && u.kv_type < 5) (out += ' ') += kv_name[u.kv_type];
+        if (u.kv_bytes > 0) {
+            n = std::snprintf(buf, sizeof(buf), " %.1f MiB", static_cast<double>(u.kv_bytes) / (1024.0 * 1024.0));
+            out.append(buf, static_cast<size_t>(n));
+        }
+    }
+    return out;
+}
+
 std::string usage_text() {
     return "usage: agent <command> [options]\n"
            "\n"
            "commands:\n"
-           "  setup                      detect hardware, pick capabilities, write config.json + engines.json\n"
+           "  init [DIR]                 create .agents/ (skills, MCP config, private memory) in a project folder\n"
+           "  doctor                     what is installed, how much disk each area of the home uses, what is safe to clean\n"
+           "  clean --downloads|--cache|--logs [--yes]   remove partial downloads, rebuildable caches, or old logs (never models or memory)\n"
+           "  secret set NAME            store a key in the OS credential store (typed without echo, or --stdin); never shown again\n"
+           "  secret bind NAME CONSUMER  allow mcp:NAME / tool:NAME / group:NAME to use it (see `secret ls`); unbind, rm, ls too\n"
+           "  setup                      choose the global home, detect hardware, find engines, pick and smoke-test models\n"
+           "        [--home DIR] [--model NAME|owner/repo[:quant]]... [--no-models]\n"
            "        [--yes] [--caps llama,sherpa,sdcpp,onnx] [--workspace DIR] [--models-dir DIR]\n"
            "        [--engines-dir DIR] [--backend cpu|cuda|vulkan]\n"
            "  engine ls                  list engines in engines.json\n"
            "  engine add <plugin>        validate an engine plugin and record it\n"
            "  engine rm <name>           forget an engine\n"
            "  model pull <spec>          download from Hugging Face (owner/repo[:file-or-QUANT])\n"
-           "        [--name NAME] [--allow-restricted]\n"
+           "        owner/repo:*  pulls every file of a folder model (sherpa voices, TRELLIS); [--include STR[,STR]] narrows it\n"
+           "        [--name NAME] [--quant Q4_K_M] [--mmproj auto|none|QUANT|FILE] [--no-mmproj] [--allow-restricted]\n"
+           "        (vision / audio / OCR repos: the projector is fetched too, recorded, and used automatically)\n"
+           "  model search [TEXT] [--task T]  curated registry: short names for tested models (pull by name)\n"
+           "  model info <repo>          list a Hugging Face repo: quants with sizes, projectors, licence\n"
+           "        (pick a file, then: model pull owner/repo:QUANT)\n"
            "  model ls                   list downloaded models (models.json)\n"
            "  model rm <name> [--keep-file]\n"
            "  chat                       interactive chat with streaming and tools\n"
@@ -208,9 +266,16 @@ std::string usage_text() {
            "        [--input-wav FILE] [--output-dir DIR] [--barge-in] [--max-turns N] [--speaker-id N]\n"
            "        [--resume ID] [-e|--engine NAME|PATH] [--workspace DIR] [--ctx N] [--max-tokens N]\n"
            "        [--engine-options JSON] [-y|--yes] [--verbose] [--inprocess]\n"
+           "  task <capability>          run one engine capability once and print every output part\n"
+           "        (text_gen|ocr|asr|tts|vad|diarize|image_gen|image_edit|video_gen|mesh_gen|embed|rerank|decide|classify|generic)\n"
+           "        [-m|--model NAME|PATH] -e|--engine NAME|PATH [--text TEXT] [--file PATH] [--params JSON]\n"
+           "        [--engine-options JSON] [--workspace DIR] [--max-tokens N] [--inprocess]\n"
+           "        rerank: --text QUERY --doc DOCUMENT [--doc DOCUMENT ...]\n"
+           "        generic / onnx: --tensor name:dtype:d1,d2=v1,v2,... (repeatable; dtype f32|i64|i32|u8)\n"
            "  version                    print the version\n"
            "\n"
-           "global options: -h|--help, --config-dir DIR (default: $AGENT_CONFIG_DIR or the platform config dir)\n"
+           "global options: -h|--help, --home DIR (the global workspace: default $AGENT_HOME or the folder chosen at setup),\n"
+           "                 --config-dir DIR (old layout: default $AGENT_CONFIG_DIR or the platform config dir)\n"
            "engines run in a separate agent-engine-host process (a crash fails the turn, not the CLI);\n"
            "--inprocess, or \"isolation\": \"inprocess\" in engines.json, loads them into the CLI instead\n"
            "chat commands: /exit /clear /model [NAME] /image <path> [prompt] /open [n] /stats /help\n";

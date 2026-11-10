@@ -61,6 +61,25 @@ class Batcher {
         for (int i = n_seq_max - 1; i >= 0; --i) free_seq_ids_.push_back(i);
     }
 
+    // Prefix cache. Every sequence slot keeps the tokens whose keys/values are in its KV cache after a request.
+    // A new text prompt takes the free slot whose tokens share the longest prefix with it, drops only the
+    // differing tail and decodes just the rest, instead of reading the whole conversation again. The KV
+    // buffer of every slot is allocated when the context is created, so this costs no extra memory.
+    // Off for models that cannot drop the end of a sequence (recurrent / hybrid state) or that keep only a
+    // sliding window of keys (SWA); those recompute the whole prompt as before.
+    bool prefix_cache = true;
+    uint64_t reused_tokens = 0, prompt_tokens = 0; // totals over all text requests, for stats and tests
+    int kv_type_id = AGENT_KV_F16;                 // agent_kv_type of the K/V cache
+    uint64_t kv_bytes = 0;                         // estimated size of the whole KV cache
+
+    // Tokens currently in the slot's KV sequence.
+    int position(llama_seq_id seq) {
+        std::lock_guard<std::mutex> lock(mu_);
+        auto it = next_pos_.find(seq);
+        return it == next_pos_.end() ? 0 : static_cast<int>(it->second);
+    }
+
+    // Takes a free slot and clears it: DECIDE scoring and media prompts, which do not use the prefix cache.
     bool acquire_seq(llama_seq_id &seq) {
         std::lock_guard<std::mutex> lock(mu_);
         if (free_seq_ids_.empty()) return false;
@@ -68,21 +87,65 @@ class Batcher {
         free_seq_ids_.pop_back();
         llama_memory_seq_rm(llama_get_memory(ctx), seq, -1, -1);
         next_pos_[seq] = 0;
+        cached_[seq].clear();
+        reusable_[seq] = false;
         return true;
     }
 
-    void release_seq(llama_seq_id seq) {
+    // Takes the free slot that best matches `tokens` and trims it to the shared prefix. *reused tokens are
+    // already in the KV cache: the caller decodes tokens[*reused ...]. One token is always left to decode,
+    // because its logits give the first reply token.
+    bool acquire_seq_for(const std::vector<llama_token> &tokens, llama_seq_id &seq, size_t &reused) {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (free_seq_ids_.empty()) return false;
+        size_t best = free_seq_ids_.size() - 1; // default: the most recently released slot
+        size_t best_lcp = 0;
+        if (prefix_cache && reuse_ok_ && !tokens.empty()) {
+            for (size_t i = free_seq_ids_.size(); i-- > 0;) {
+                const std::vector<llama_token> &c = cached_[free_seq_ids_[i]];
+                const size_t n = std::min(c.size(), tokens.size());
+                size_t k = 0;
+                while (k < n && c[k] == tokens[k]) ++k;
+                if (k > best_lcp) {
+                    best_lcp = k;
+                    best = i;
+                }
+            }
+        }
+        seq = free_seq_ids_[best];
+        free_seq_ids_.erase(free_seq_ids_.begin() + static_cast<std::ptrdiff_t>(best));
+
+        reused = tokens.empty() ? 0 : std::min(best_lcp, tokens.size() - 1);
+        llama_memory_t mem = llama_get_memory(ctx);
+        if (reused > 0 && !llama_memory_seq_rm(mem, seq, static_cast<llama_pos>(reused), -1)) {
+            // This model cannot drop only the end of a sequence: stop trying and recompute the whole prompt.
+            reuse_ok_ = false;
+            reused = 0;
+        }
+        if (reused == 0) llama_memory_seq_rm(mem, seq, -1, -1);
+        cached_[seq].resize(reused);
+        next_pos_[seq] = static_cast<llama_pos>(reused);
+        reusable_[seq] = true;
+        reused_tokens += reused;
+        prompt_tokens += tokens.size();
+        return true;
+    }
+
+    // keep = false when the request failed or was cancelled: the slot's KV cache is then not trusted.
+    void release_seq(llama_seq_id seq, bool keep = true) {
         std::lock_guard<std::mutex> lock(mu_);
         next_pos_.erase(seq);
+        if (!keep || !reusable_[seq]) cached_[seq].clear();
+        reusable_[seq] = false;
         free_seq_ids_.push_back(seq);
     }
 
     // Prompt prefill runs as its own decodes (not batched across sequences), split into chunks of
     // at most n_batch tokens: a single llama_decode larger than n_batch aborts inside llama.cpp.
-    bool prefill(llama_seq_id seq, const std::vector<llama_token> &tokens, llama_sampler *sampler, llama_token &out) {
-        if (tokens.empty()) return false;
+    bool prefill(llama_seq_id seq, const std::vector<llama_token> &tokens, size_t begin, llama_sampler *sampler, llama_token &out) {
+        if (begin >= tokens.size()) return false;
         std::lock_guard<std::mutex> lock(mu_);
-        if (!decode_prompt_locked(seq, tokens)) return false;
+        if (!decode_prompt_locked(seq, tokens, begin)) return false;
         out = llama_sampler_sample(sampler, ctx, -1);
         return true;
     }
@@ -138,6 +201,12 @@ class Batcher {
         for (size_t i = 0; i < round.size(); ++i) {
             llama_seq_id s = round[i].seq;
             next_pos_[s] += 1;
+            if (rc == 0) {
+                if (reusable_[s]) cached_[s].push_back(round[i].token); // this token's keys/values are now in the cache
+            } else {
+                reusable_[s] = false;
+                cached_[s].clear();
+            }
             RoundResult rr;
             rr.ok = (rc == 0);
             if (rr.ok) rr.token = llama_sampler_sample(round[i].sampler, ctx, static_cast<int32_t>(i));
@@ -205,18 +274,26 @@ class Batcher {
     void clear() {
         std::lock_guard<std::mutex> lock(mu_);
         llama_memory_clear(llama_get_memory(ctx), true);
+        for (auto &entry : cached_) entry.second.clear();
+        for (auto &entry : reusable_) entry.second = false;
+    }
+
+    // Turns the prefix cache off for good (model without trimmable memory, option "prefix_cache": false).
+    void disable_prefix_reuse() {
+        std::lock_guard<std::mutex> lock(mu_);
+        reuse_ok_ = false;
     }
 
   private:
     // Decodes tokens on seq after its current position in chunks of at most n_batch, with logits for
     // the last token only. mu_ must be held.
-    bool decode_prompt_locked(llama_seq_id seq, const std::vector<llama_token> &tokens) {
-        if (tokens.empty()) return false;
+    bool decode_prompt_locked(llama_seq_id seq, const std::vector<llama_token> &tokens, size_t first = 0) {
+        if (first >= tokens.size()) return false;
         const size_t chunk = std::max<size_t>(1, llama_n_batch(ctx));
-        llama_batch batch = llama_batch_init(static_cast<int32_t>(std::min(chunk, tokens.size())), 0, 1);
+        llama_batch batch = llama_batch_init(static_cast<int32_t>(std::min(chunk, tokens.size() - first)), 0, 1);
         llama_pos pos = next_pos_[seq];
         bool ok = true;
-        for (size_t begin = 0; ok && begin < tokens.size(); begin += chunk) {
+        for (size_t begin = first; ok && begin < tokens.size(); begin += chunk) {
             const size_t n = std::min(chunk, tokens.size() - begin);
             for (size_t i = 0; i < n; ++i) {
                 batch.token[i] = tokens[begin + i];
@@ -230,7 +307,13 @@ class Batcher {
             pos += static_cast<llama_pos>(n);
         }
         llama_batch_free(batch);
-        if (ok) next_pos_[seq] = pos;
+        if (ok) {
+            next_pos_[seq] = pos;
+            if (reusable_[seq]) cached_[seq].insert(cached_[seq].end(), tokens.begin() + static_cast<std::ptrdiff_t>(first), tokens.end());
+        } else {
+            reusable_[seq] = false;
+            cached_[seq].clear();
+        }
         return ok;
     }
 
@@ -259,6 +342,9 @@ class Batcher {
     std::condition_variable cv_;
     std::vector<llama_seq_id> free_seq_ids_;
     std::unordered_map<llama_seq_id, llama_pos> next_pos_;
+    std::unordered_map<llama_seq_id, std::vector<llama_token>> cached_; // tokens whose KV is in each slot
+    std::unordered_map<llama_seq_id, bool> reusable_;                   // cached_ matches the slot's KV cache
+    bool reuse_ok_ = true;
     std::vector<RoundReq> pending_;
     bool batching_ = false;
     std::unordered_map<llama_seq_id, RoundResult> results_;
@@ -1095,20 +1181,34 @@ int32_t run_decide(Instance &inst, const agent_request *req, agent_response *res
     return AGENT_OK;
 }
 
+// AGENT_LLAMA_TRACE=1 prints how many prompt tokens each request found already in the KV cache.
+bool trace_prefix_cache() {
+    static const bool on = [] {
+        const char *v = std::getenv("AGENT_LLAMA_TRACE");
+        return v && *v && *v != '0';
+    }();
+    return on;
+}
+
 // Prefills the prompt (text tokens, or mtmd chunks when chunks is set) on a free sequence and samples
 // up to max_tokens tokens into generated, streaming them through on_chunk, until an end-of-generation
 // token or one of stops. Generation steps join the batcher's shared rounds.
 int32_t generate(Instance &inst, const agent_request *req, const std::vector<llama_token> &tokens, const mtmd_input_chunks *chunks,
-                 int max_tokens, float temperature, const std::vector<std::string> &stops, common_chat_input &generated, int &completion) {
+                 int max_tokens, float temperature, const std::vector<std::string> &stops, common_chat_input &generated, int &completion,
+                 agent_run_stats *stats = nullptr) {
     Batcher &b = inst.batcher;
     const llama_vocab *vocab = llama_model_get_vocab(b.model);
     llama_seq_id seq = 0;
-    if (!b.acquire_seq(seq)) return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: no free sequence slot (raise max_parallel_subagents)");
+    size_t reused = 0;
+    const bool acquired = chunks ? b.acquire_seq(seq) : b.acquire_seq_for(tokens, seq, reused);
+    if (!acquired) return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: no free sequence slot (raise max_parallel_subagents)");
+    if (trace_prefix_cache()) std::fprintf(stderr, "llama: prefix cache reused %zu of %zu prompt tokens (slot %d)\n", reused, tokens.size(), static_cast<int>(seq));
     llama_sampler *sampler = build_sampler(temperature);
     int32_t status = AGENT_OK;
     llama_token tok = 0;
-
-    const bool prefilled = chunks ? b.prefill_media(seq, inst.mtmd.get(), chunks, sampler, tok) : b.prefill(seq, tokens, sampler, tok);
+    const auto t_prefill = std::chrono::steady_clock::now();
+    const bool prefilled = chunks ? b.prefill_media(seq, inst.mtmd.get(), chunks, sampler, tok) : b.prefill(seq, tokens, reused, sampler, tok);
+    const auto t_first_token = std::chrono::steady_clock::now(); // the prompt is decoded and the first token sampled
     if (!prefilled) {
         status = inst.fail(AGENT_ERR_DECODE_FAILED, "llama: prompt decode failed");
     } else {
@@ -1136,8 +1236,19 @@ int32_t generate(Instance &inst, const agent_request *req, const std::vector<lla
             }
         }
     }
+    if (stats) {
+        const auto t_done = std::chrono::steady_clock::now();
+        auto ms = [](auto a, auto b2) { return static_cast<float>(std::chrono::duration<double, std::milli>(b2 - a).count()); };
+        stats->cached_tokens = static_cast<int32_t>(reused);
+        stats->kv_tokens = b.position(seq);
+        stats->kv_max_tokens = b.seq_ctx;
+        stats->kv_type = b.kv_type_id;
+        stats->kv_bytes = b.kv_bytes;
+        stats->prefill_ms = ms(t_prefill, t_first_token);
+        stats->decode_ms = ms(t_first_token, t_done);
+    }
     llama_sampler_free(sampler);
-    b.release_seq(seq);
+    b.release_seq(seq, status == AGENT_OK);
     return status;
 }
 
@@ -1290,6 +1401,12 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     const int n_ctx = std::max(1, json_number<int>(cfg, "context_window", 2048));
     const int n_seq = std::max(1, json_number<int>(cfg, "parallel", 1));
     int gpu_layers = -1, threads = 0;
+    bool prefix_cache = true;
+    // KV cache precision (llama.cpp's own quantized cache types). "auto" (the default) picks q4_0 when the model's
+    // keys are wide and q8_0 when they are narrow: measured on Qwen2.5-0.5B (2 KV heads x 64) a q4_0 cache
+    // produced garbage while f16 and q8_0 were fine, and LFM3-1.7B was fine at q4_0.
+    ggml_type kv_type = GGML_TYPE_Q4_0;
+    bool kv_auto = true;
     std::string chat_template, mmproj, ocr_prompt;
     Mode mode = Mode::Generate;
     enum llama_pooling_type pooling = LLAMA_POOLING_TYPE_UNSPECIFIED;
@@ -1301,6 +1418,19 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         if (!options["chat_template"].get_string().get(t)) chat_template = std::string(t);
         if (!options["mmproj"].get_string().get(t)) mmproj = std::string(t);
         if (!options["ocr_prompt"].get_string().get(t)) ocr_prompt = std::string(t);
+        // KV cache precision, using llama.cpp's own quantized cache types (needs flash attention).
+        if (!options["kv_cache"].get_string().get(t)) {
+            kv_auto = (t == "auto");
+            if (t == "auto") {}
+            else if (t == "f16") kv_type = GGML_TYPE_F16;
+            else if (t == "q8_0") kv_type = GGML_TYPE_Q8_0;
+            else if (t == "q4_0") kv_type = GGML_TYPE_Q4_0;
+            else {
+                std::snprintf(err, err_cap, "llama: options.kv_cache must be \"auto\", \"f16\", \"q8_0\" or \"q4_0\"");
+                return AGENT_ERR_INVALID_CONFIG;
+            }
+        }
+        if (bool flag = true; !options["prefix_cache"].get_bool().get(flag)) prefix_cache = flag;
         if (!options["mode"].get_string().get(t)) {
             if (t == "embed") mode = Mode::Embed;
             else if (t == "rerank") mode = Mode::Rerank;
@@ -1349,6 +1479,18 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     auto cparams = llama_context_default_params();
     cparams.n_ctx = static_cast<uint32_t>(n_ctx) * static_cast<uint32_t>(n_seq);
     cparams.n_seq_max = static_cast<uint32_t>(n_seq);
+    if (kv_auto) {
+        // Width of one layer's keys: kv heads x head size. Narrow keys lose too much at 4 bits.
+        const int n_head = llama_model_n_head(model), n_head_kv = llama_model_n_head_kv(model);
+        const double width = n_head > 0 ? static_cast<double>(n_head_kv) * llama_model_n_embd(model) / n_head : 0.0;
+        kv_type = width >= 512.0 ? GGML_TYPE_Q4_0 : GGML_TYPE_Q8_0;
+    }
+    if (mode != Mode::Generate) kv_type = GGML_TYPE_F16;  // pooled outputs keep no useful cache
+    if (kv_type != GGML_TYPE_F16) {
+        cparams.type_k = kv_type;
+        cparams.type_v = kv_type;
+        cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;  // a quantized V cache requires it
+    }
     if (threads > 0) {
         cparams.n_threads = threads;
         cparams.n_threads_batch = threads;
@@ -1371,6 +1513,14 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         cparams.kv_unified = true;
     }
     llama_context *ctx = llama_init_from_model(model, cparams);
+    if (!ctx && kv_type != GGML_TYPE_F16) {
+        // Some models (odd head sizes, no flash-attention support on the backend) cannot use a quantized
+        // cache: retry with the default f16 cache instead of failing the load.
+        cparams.type_k = GGML_TYPE_F16;
+        cparams.type_v = GGML_TYPE_F16;
+        cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
+        ctx = llama_init_from_model(model, cparams);
+    }
     if (ctx && mode == Mode::Embed && llama_pooling_type(ctx) == LLAMA_POOLING_TYPE_NONE) {
         // The model declares no pooling (e.g. a generative model used as an embedder): mean-pool.
         llama_free(ctx);
@@ -1396,6 +1546,20 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     inst->batcher.model = model;
     inst->batcher.ctx = ctx;
     inst->batcher.seq_ctx = n_ctx;
+    inst->batcher.prefix_cache = prefix_cache;
+    {
+        // The KV cache type actually in use (the f16 fallback may have replaced a quantized one) and its size:
+        // layers x 2 (K and V) x kv heads x head size x tokens x bytes per element. An estimate for hybrid models.
+        const ggml_type used = cparams.type_k;
+        inst->batcher.kv_type_id = used == GGML_TYPE_Q4_0 ? AGENT_KV_Q4_0 : used == GGML_TYPE_Q8_0 ? AGENT_KV_Q8_0 : used == GGML_TYPE_F32 ? AGENT_KV_F32 : AGENT_KV_F16;
+        const double bytes_per_elem = used == GGML_TYPE_Q4_0 ? 18.0 / 32.0 : used == GGML_TYPE_Q8_0 ? 34.0 / 32.0 : used == GGML_TYPE_F32 ? 4.0 : 2.0;
+        const int n_head = llama_model_n_head(model), n_head_kv = llama_model_n_head_kv(model);
+        if (n_head > 0 && n_head_kv > 0)
+            inst->batcher.kv_bytes = static_cast<uint64_t>(static_cast<double>(llama_model_n_layer(model)) * 2.0 * n_head_kv *
+                                                           (static_cast<double>(llama_model_n_embd(model)) / n_head) *
+                                                           static_cast<double>(llama_n_ctx(ctx)) * bytes_per_elem);
+    }
+    if (llama_model_n_swa(model) > 0) inst->batcher.disable_prefix_reuse(); // sliding-window keys are not all kept
     inst->mode = mode;
     if (mode != Mode::Generate) { // no chat template or sequence slots needed
         *out_instance = inst;
@@ -1486,8 +1650,9 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
 
     common_chat_input generated;
     int completion = 0;
+    agent_run_stats run_stats{};
     if (int32_t rc = generate(*inst, req, tokens, has_media ? chunks.ptr.get() : nullptr, max_tokens, temperature,
-                              session.additional_stops(), generated, completion);
+                              session.additional_stops(), generated, completion, &run_stats);
         rc != AGENT_OK)
         return rc;
 
@@ -1513,6 +1678,7 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
     agent_response_reset(resp);
     resp->message.role = agent_str{"assistant", 9};
     resp->usage = agent_usage{n_prompt, completion};
+    if (AGENT_HAS_FIELD(resp, agent_response, stats)) resp->stats = run_stats;
     out.part = agent_part{};
     out.part.kind = AGENT_PART_TEXT;
     out.part.text = agent_str{out.content.data(), out.content.size()};

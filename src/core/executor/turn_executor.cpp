@@ -341,8 +341,7 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
 
         auto message_views = arena.allocate_span<MessageView>(view_count);
         if (view_count != 0 && message_views.size() != view_count) {
-            return fail<std::string>(ErrorCode::DecodeFailed, "Arena capacity exhausted building message views. "
-                                                              "Increase Config::arena_capacity or reduce Config::context_window.");
+            return fail<std::string>(ErrorCode::DecodeFailed, "Out of memory building message views.");
         }
 
         size_t view_offset = 0;
@@ -361,7 +360,7 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
             size_t bytes = injected.empty() ? 0 : injected.size() + 1;
             for (size_t i = 0; i < n_lead; ++i) bytes += state.history[i].content.size() + 2;
             char *buf = static_cast<char *>(arena.allocate(bytes + 1, 1));
-            if (!buf) return fail<std::string>(ErrorCode::DecodeFailed, "Arena capacity exhausted building message views.");
+            if (!buf) return fail<std::string>(ErrorCode::DecodeFailed, "Out of memory building message views.");
             size_t off = 0;
             auto put = [&](std::string_view s) {
                 if (!s.empty()) std::memcpy(buf + off, s.data(), s.size());
@@ -392,7 +391,7 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
             if (!m.tool_calls.empty()) {
                 auto tcvs = arena.allocate_span<ToolCallView>(m.tool_calls.size());
                 if (tcvs.size() != m.tool_calls.size())
-                    return fail<std::string>(ErrorCode::DecodeFailed, "Arena capacity exhausted building message views.");
+                    return fail<std::string>(ErrorCode::DecodeFailed, "Out of memory building message views.");
                 for (size_t j = 0; j < m.tool_calls.size(); ++j)
                     tcvs[j] = {m.tool_calls[j].id, m.tool_calls[j].name, m.tool_calls[j].arguments};
                 mv.tool_calls = tcvs;
@@ -403,7 +402,7 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
             if (!m.tensors.empty()) {
                 auto tvs = arena.allocate_span<TensorView>(m.tensors.size());
                 if (tvs.size() != m.tensors.size())
-                    return fail<std::string>(ErrorCode::DecodeFailed, "Arena capacity exhausted building message views.");
+                    return fail<std::string>(ErrorCode::DecodeFailed, "Out of memory building message views.");
                 for (size_t j = 0; j < m.tensors.size(); ++j) {
                     const TensorData &td = m.tensors[j];
                     tvs[j] = {td.name, td.dtype, std::span<const int64_t>(td.shape.data(), td.shape.size()),
@@ -423,7 +422,7 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
             if (n_media != 0) {
                 auto mvs = arena.allocate_span<MediaView>(n_media);
                 if (mvs.size() != n_media)
-                    return fail<std::string>(ErrorCode::DecodeFailed, "Arena capacity exhausted building message views.");
+                    return fail<std::string>(ErrorCode::DecodeFailed, "Out of memory building message views.");
                 size_t k = 0;
                 for (const Media &md : m.media)
                     if (!tool_msg || providers::accepts_tool_media(session, md.mime)) mvs[k++] = {md.path, md.mime};
@@ -465,6 +464,8 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
 
         state.stats.prompt_tokens += resp.usage.prompt_tokens;
         state.stats.completion_tokens += resp.usage.completion_tokens;
+        state.stats.cached_tokens += resp.usage.cached_tokens;
+        state.stats.last = resp.usage;
         state.stats.turns++;
         {
             std::lock_guard<std::mutex> lock(*session.stats_mutex);

@@ -26,6 +26,11 @@
 //   - "barrier:<tag>:N" returns only once N runs with the same tag are inside run() at the same time
 //     (fails after 5 s): proof that requests overlap
 //
+// A third build, agent-engine-mock-all (name "mock_all", AGENT_MOCK_ALL), declares every capability and
+// answers each non-chat task with deterministic stand-in output (tiny WAV / PNG / GLB files, f32 embedding,
+// score and probs tensors, ASR/OCR text, VAD and diarization segments), so graphs, the CLI and the engine
+// host can be tested without model files.
+//
 // Built twice: agent-engine-mock (flags 0, run() serialized by the host) and, with
 // AGENT_MOCK_CONCURRENT, agent-engine-mock-concurrent (name "mock_concurrent",
 // AGENT_ENGINE_FLAG_CONCURRENT). run() keeps its output per thread, so both are thread-safe.
@@ -37,6 +42,8 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -105,6 +112,11 @@ struct MockOutput {
     std::vector<std::vector<uint8_t>> tensor_data;
     std::vector<uint32_t> tensor_dtypes;
     std::vector<agent_part> out_parts;
+    // Multi-task (AGENT_MOCK_ALL) outputs.
+    std::vector<agent_part> multi;
+    std::vector<std::string> strings;
+    std::vector<std::vector<float>> fbufs;
+    std::vector<std::vector<int64_t>> shapes;
 };
 
 MockOutput &thread_output() {
@@ -143,13 +155,320 @@ int32_t mock_create(agent_str config_json, void **out_instance, char *err, size_
 
 void mock_destroy(void *instance) { delete static_cast<MockInstance *>(instance); }
 
+#if defined(AGENT_MOCK_ALL)
+// Deterministic stand-ins for every non-chat task so graphs, the CLI and the host can be exercised
+// without model files. The output shapes mirror what the real engines return (llama, sdcpp, whisper,
+// parakeet), recorded by running them on real models; see docs/api/engines.md.
+void put_le(std::string &b, uint32_t v, int n) {
+    for (int i = 0; i < n; ++i) b.push_back(static_cast<char>((v >> (8 * i)) & 0xff));
+}
+
+bool write_file(const std::string &path, const std::string &bytes) {
+    FILE *f = std::fopen(path.c_str(), "wb");
+    if (!f) return false;
+    std::fwrite(bytes.data(), 1, bytes.size(), f);
+    std::fclose(f);
+    return true;
+}
+
+std::string tiny_wav() {  // 100 ms, 24 kHz (the Kokoro rate), mono, 16-bit, 440 Hz at low volume
+    const uint32_t rate = 24000, n = 2400;
+    std::string d;
+    for (uint32_t i = 0; i < n; ++i) {
+        const double t = static_cast<double>(i) / rate;
+        const auto v = static_cast<int16_t>(2000.0 * std::sin(6.283185307 * 440.0 * t));
+        put_le(d, static_cast<uint16_t>(v), 2);
+    }
+    std::string w = "RIFF";
+    put_le(w, 36 + n * 2, 4);
+    w += "WAVEfmt ";
+    put_le(w, 16, 4); put_le(w, 1, 2); put_le(w, 1, 2); put_le(w, rate, 4); put_le(w, rate * 2, 4);
+    put_le(w, 2, 2); put_le(w, 16, 2);
+    w += "data";
+    put_le(w, n * 2, 4);
+    return w + d;
+}
+
+std::string tiny_png() {  // a valid 1x1 PNG
+    static const unsigned char kPng[] = {
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00,
+        0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00,
+        0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18,
+        0xdd, 0x8d, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
+    return std::string(reinterpret_cast<const char *>(kPng), sizeof(kPng));
+}
+
+std::string tiny_glb() {  // header + an empty-scene JSON chunk
+    std::string json = R"({"asset":{"version":"2.0"},"scenes":[{}],"scene":0})";
+    while (json.size() % 4) json.push_back(' ');
+    std::string g = "glTF";
+    put_le(g, 2, 4);
+    put_le(g, static_cast<uint32_t>(12 + 8 + json.size()), 4);
+    put_le(g, static_cast<uint32_t>(json.size()), 4);
+    g += "JSON";
+    return g + json;
+}
+
+// Every string and buffer a response part points at lives here until the thread's next run().
+agent_part &new_part(MockOutput *o) {
+    o->multi.emplace_back();
+    return o->multi.back();
+}
+
+void add_text(MockOutput *o, std::string text) {
+    o->strings.push_back(std::move(text));
+    agent_part &p = new_part(o);
+    p.kind = AGENT_PART_TEXT;
+    p.text = agent_str{o->strings.back().data(), o->strings.back().size()};
+}
+
+void add_file(MockOutput *o, const std::string &path, const char *mime) {
+    o->strings.push_back(path);
+    agent_part &p = new_part(o);
+    p.kind = AGENT_PART_FILE;
+    p.path = agent_str{o->strings.back().data(), o->strings.back().size()};
+    p.mime = agent_str{mime, std::strlen(mime)};
+}
+
+void add_tensor(MockOutput *o, const char *name, std::vector<float> values, std::vector<int64_t> shape) {
+    o->strings.push_back(name);
+    o->fbufs.push_back(std::move(values));
+    o->shapes.push_back(std::move(shape));
+    agent_part &p = new_part(o);
+    p.kind = AGENT_PART_TENSOR;
+    p.name = agent_str{o->strings.back().data(), o->strings.back().size()};
+    p.dtype = AGENT_DTYPE_F32;
+    p.shape = o->shapes.back().data();
+    p.ndim = o->shapes.back().size();
+    p.data = o->fbufs.back().data();
+    p.size = o->fbufs.back().size() * sizeof(float);
+}
+
+std::vector<std::string> split_words(std::string_view s) {
+    std::vector<std::string> w;
+    std::string cur;
+    for (char c : s) {
+        if (c == ' ' || c == '\n') {
+            if (!cur.empty()) w.push_back(cur);
+            cur.clear();
+        } else {
+            cur.push_back(c);
+        }
+    }
+    if (!cur.empty()) w.push_back(cur);
+    return w;
+}
+
+std::string num(double v, int digits) {
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "%.*f", digits, v);
+    return buf;
+}
+
+// The option labels of a DECIDE request, from params_json: choice options, a score scale ("1".."5") or
+// "Yes"/"No". Also returns the mode name.
+std::vector<std::string> decide_options(std::string_view pj, std::string *mode) {
+    std::vector<std::string> out;
+    if (const size_t at = pj.find("\"options\""); at != std::string_view::npos) {
+        *mode = "choice";
+        const size_t open = pj.find('[', at), close = pj.find(']', at);
+        if (open != std::string_view::npos && close != std::string_view::npos) {
+            for (size_t i = open + 1; i < close;) {
+                const size_t q1 = pj.find('"', i);
+                if (q1 == std::string_view::npos || q1 >= close) break;
+                const size_t q2 = pj.find('"', q1 + 1);
+                if (q2 == std::string_view::npos || q2 > close) break;
+                out.emplace_back(pj.substr(q1 + 1, q2 - q1 - 1));
+                i = q2 + 1;
+            }
+        }
+    } else if (const size_t sc = pj.find("\"scale\""); sc != std::string_view::npos) {
+        *mode = "score";
+        const size_t open = pj.find('[', sc), comma = pj.find(',', sc);
+        if (open != std::string_view::npos && comma != std::string_view::npos) {
+            const int lo = std::atoi(std::string(pj.substr(open + 1, comma - open - 1)).c_str());
+            const int hi = std::atoi(std::string(pj.substr(comma + 1, 8)).c_str());
+            for (int v = lo; v <= hi && v - lo < 101; ++v) out.push_back(std::to_string(v));
+        }
+    } else {
+        *mode = "yesno";
+        out = {"Yes", "No"};
+    }
+    if (out.size() < 2) out = {"Yes", "No"};
+    return out;
+}
+
+int32_t run_other_task(const agent_request *req, agent_response *resp, MockOutput *o) {
+    std::vector<std::string_view> texts;
+    std::string first_file;
+    for (size_t i = 0; i < req->n_messages; ++i) {
+        if (sv(req->messages[i].role) != "user") continue;
+        texts.clear();
+        for (size_t p = 0; p < req->messages[i].n_parts; ++p) {
+            const agent_part &part = req->messages[i].parts[p];
+            if (part.kind == AGENT_PART_TEXT) texts.push_back(sv(part.text));
+            else if (part.kind == AGENT_PART_FILE && first_file.empty()) first_file = std::string(sv(part.path));
+        }
+    }
+    const std::string out_dir(sv(req->output_dir));
+    agent_response_reset(resp);
+    resp->message.role = agent_str{"assistant", 9};
+    o->multi.clear();
+    o->strings.clear();
+    o->fbufs.clear();
+    o->shapes.clear();
+    // Parts and buffers are referenced by pointer: reserve so push_back never moves them.
+    o->multi.reserve(256);
+    o->strings.reserve(256);
+    o->fbufs.reserve(256);
+    o->shapes.reserve(256);
+    for (uint64_t step = 1; step <= 4 && req->on_progress; ++step) req->on_progress(req->user_data, step, 4);
+    auto fail_write = [&] {
+        o->error = "mock: cannot write to output_dir";
+        return AGENT_ERR_UNSUPPORTED;
+    };
+    auto done = [&] {
+        resp->message.parts = o->multi.data();
+        resp->message.n_parts = o->multi.size();
+        resp->usage = agent_usage{0, 0};
+        return AGENT_OK;
+    };
+
+    switch (req->task) {
+    case AGENT_CAP_ASR:
+        if (first_file.empty()) {
+            o->error = "mock: ASR needs an audio part";
+            return AGENT_ERR_INVALID_CONFIG;
+        }
+        add_text(o, "mock transcript");
+        return done();
+    case AGENT_CAP_OCR:
+        add_text(o, "mock ocr text");
+        return done();
+    case AGENT_CAP_TTS: {
+        if (texts.empty()) {
+            o->error = "mock: TTS needs text";
+            return AGENT_ERR_INVALID_CONFIG;
+        }
+        if (req->on_chunk) {
+            std::vector<float> pcm(2400, 0.0f);
+            req->on_chunk(req->user_data, AGENT_CHUNK_AUDIO, pcm.data(), pcm.size() * sizeof(float));
+        }
+        const std::string path = out_dir + "/mock-tts-0.wav";
+        if (!write_file(path, tiny_wav())) return fail_write();
+        add_text(o, "Generated 0.10 s of speech (24000 Hz).");
+        add_file(o, path, "audio/wav");
+        return done();
+    }
+    case AGENT_CAP_VAD:
+        add_text(o, R"([{"start":0.500,"end":1.500}])");
+        add_tensor(o, "segments", {0.5f, 1.5f}, {1, 2});
+        return done();
+    case AGENT_CAP_DIARIZE:
+        add_text(o, R"([{"start":0.00,"end":1.00,"speaker":0},{"start":1.00,"end":2.00,"speaker":1}])");
+        add_tensor(o, "segments", {0.0f, 1.0f, 0.0f, 1.0f, 2.0f, 1.0f}, {2, 3});
+        return done();
+    case AGENT_CAP_IMAGE_GEN:
+    case AGENT_CAP_IMAGE_EDIT: {
+        const std::string path = out_dir + "/mock-0.png";
+        if (!write_file(path, tiny_png())) return fail_write();
+        add_file(o, path, "image/png");
+        add_text(o, "generated image: " + path);  // sdcpp returns the FILE part, then this text part
+        return done();
+    }
+    case AGENT_CAP_VIDEO_GEN: {
+        const std::string path = out_dir + "/mock-0.mp4";
+        if (!write_file(path, std::string("\0\0\0\x14" "ftypisom\0\0\0\0isom", 20))) return fail_write();
+        add_file(o, path, "video/mp4");
+        return done();
+    }
+    case AGENT_CAP_MESH_GEN: {
+        const std::string path = out_dir + "/mock-0.glb";
+        if (!write_file(path, tiny_glb())) return fail_write();
+        add_file(o, path, "model/gltf-binary");
+        return done();
+    }
+    case AGENT_CAP_EMBED: {
+        // One L2-normalised "embedding" tensor f32 [dim] per TEXT part, in order (llama: dim = n_embd).
+        for (size_t t = 0; t < std::max<size_t>(1, texts.size()); ++t) {
+            std::vector<float> v(8, 0.0f);
+            const std::string_view s = t < texts.size() ? texts[t] : std::string_view();
+            for (size_t i = 0; i < s.size(); ++i)
+                v[i % 8] += static_cast<float>(static_cast<unsigned char>(s[i])) / 255.0f;
+            float norm = 0;
+            for (float x : v) norm += x * x;
+            norm = norm > 0 ? std::sqrt(norm) : 1.0f;
+            for (float &x : v) x /= norm;
+            add_tensor(o, "embedding", std::move(v), {8});
+        }
+        return done();
+    }
+    case AGENT_CAP_RERANK: {
+        // First TEXT = query, later TEXT parts = documents; one "scores" tensor f32 [n_docs].
+        if (texts.size() < 2) {
+            o->error = "mock: rerank needs a query and at least one document text part";
+            return AGENT_ERR_INVALID_CONFIG;
+        }
+        const auto q = split_words(texts[0]);
+        std::vector<float> scores;
+        for (size_t d = 1; d < texts.size(); ++d) {
+            const auto dw = split_words(texts[d]);
+            size_t hit = 0;
+            for (const auto &a : q)
+                for (const auto &b : dw)
+                    if (a == b) {
+                        ++hit;
+                        break;
+                    }
+            scores.push_back(q.empty() ? 0.0f : static_cast<float>(hit) / static_cast<float>(q.size()));
+        }
+        add_tensor(o, "scores", scores, {static_cast<int64_t>(scores.size())});
+        return done();
+    }
+    case AGENT_CAP_DECIDE:
+    case AGENT_CAP_CLASSIFY: {
+        // Mirrors llama: a TEXT JSON summary plus one f32 "probs" tensor [n_options].
+        std::string mode;
+        const std::vector<std::string> options = decide_options(sv(req->params_json), &mode);
+        std::vector<float> probs;
+        float sum = 0;
+        for (size_t i = 0; i < options.size(); ++i) {
+            const float w = 1.0f / static_cast<float>(i + 1);
+            probs.push_back(w);
+            sum += w;
+        }
+        for (float &x : probs) x /= sum;
+        std::string j = "{\"mode\":\"" + mode + "\",\"choice\":\"" + options[0] + "\",\"index\":0,\"confidence\":" +
+                        num(static_cast<double>(probs[0]), 6);
+        if (mode == "yesno") j += ",\"yes\":" + num(static_cast<double>(probs[0]), 6);
+        j += ",\"options\":[";
+        for (size_t i = 0; i < options.size(); ++i) j += (i ? ",\"" : "\"") + options[i] + "\"";
+        j += "],\"probs\":[";
+        for (size_t i = 0; i < probs.size(); ++i) j += (i ? "," : "") + num(static_cast<double>(probs[i]), 6);
+        j += "]}";
+        add_text(o, j);
+        add_tensor(o, "probs", probs, {static_cast<int64_t>(probs.size())});
+        return done();
+    }
+    default:
+        o->error = "mock: unsupported task";
+        return AGENT_ERR_UNSUPPORTED;
+    }
+}
+#endif
+
 int32_t mock_run(void *instance, const agent_request *req, agent_response *resp) {
     MockOutput *inst = &thread_output();
     inst->error.clear();
+#if defined(AGENT_MOCK_ALL)
+    if (req->task != AGENT_CAP_TEXT_GEN && req->task != AGENT_CAP_TOOL_CALL && req->task != AGENT_CAP_GENERIC)
+        return run_other_task(req, resp, inst);
+#else
     if (req->task != AGENT_CAP_TEXT_GEN) {
         inst->error = "mock: only TEXT_GEN is supported";
         return AGENT_ERR_UNSUPPORTED;
     }
+#endif
     if (static_cast<MockInstance *>(instance)->model.find("reject-media") != std::string::npos) {
         for (size_t i = 0; i < req->n_messages; ++i)
             for (size_t p = 0; p < req->messages[i].n_parts; ++p)
@@ -238,6 +557,9 @@ int32_t mock_run(void *instance, const agent_request *req, agent_response *resp)
                 if (req->messages[i].parts[p].kind == AGENT_PART_FILE)
                     inst->reply += "\ntool media: " + std::string(sv(req->messages[i].parts[p].mime)) + " " +
                                    std::string(sv(req->messages[i].parts[p].path));
+    } else if (last_user == "show:tools") {
+        // The tools_json the host sent with this request: lets tests see which tools the model is told about.
+        inst->reply = std::string(sv(req->tools_json));
     } else if (last_user == "show:system") {
         // The system messages as the engine received them: "<count> system: <text>|<text>..."
         size_t n = 0;
@@ -312,12 +634,23 @@ void mock_free_response(void *, agent_response *resp) { agent_response_reset(res
 
 const char *mock_last_error(void *) { return thread_output().error.c_str(); }
 
-#if defined(AGENT_MOCK_CONCURRENT)
+#if defined(AGENT_MOCK_ALL)
+constexpr const char *kName = "mock_all";
+constexpr uint32_t kFlags = AGENT_ENGINE_FLAG_CONCURRENT;
+constexpr uint64_t kCaps = AGENT_CAP_TEXT_GEN | AGENT_CAP_TOOL_CALL | AGENT_CAP_VISION_IN | AGENT_CAP_AUDIO_IN |
+                           AGENT_CAP_VIDEO_IN | AGENT_CAP_OCR | AGENT_CAP_ASR | AGENT_CAP_TTS | AGENT_CAP_VAD |
+                           AGENT_CAP_DIARIZE | AGENT_CAP_IMAGE_GEN | AGENT_CAP_IMAGE_EDIT | AGENT_CAP_VIDEO_GEN |
+                           AGENT_CAP_MESH_GEN | AGENT_CAP_EMBED | AGENT_CAP_RERANK | AGENT_CAP_DECIDE |
+                           AGENT_CAP_CLASSIFY | AGENT_CAP_GENERIC;
+#elif defined(AGENT_MOCK_CONCURRENT)
 constexpr const char *kName = "mock_concurrent";
 constexpr uint32_t kFlags = AGENT_ENGINE_FLAG_CONCURRENT;
 #else
 constexpr const char *kName = "mock";
 constexpr uint32_t kFlags = 0;
+#endif
+#if !defined(AGENT_MOCK_ALL)
+constexpr uint64_t kCaps = AGENT_CAP_TEXT_GEN | AGENT_CAP_TOOL_CALL | AGENT_CAP_VISION_IN | AGENT_CAP_AUDIO_IN;
 #endif
 
 const agent_engine_v1 kMockEngine = {
@@ -325,7 +658,7 @@ const agent_engine_v1 kMockEngine = {
     sizeof(agent_engine_v1),
     kName,
     "1.0",
-    AGENT_CAP_TEXT_GEN | AGENT_CAP_TOOL_CALL | AGENT_CAP_VISION_IN | AGENT_CAP_AUDIO_IN,
+    kCaps,
     kFlags,
     mock_create,
     mock_destroy,

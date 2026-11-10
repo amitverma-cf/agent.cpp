@@ -132,7 +132,7 @@ public:
 
 ### Capacity
 
-Default: `context_window * 8 + 2 MiB`. Override via `Config::arena_capacity`. The arena is allocated once at `init()` time and never reallocated.
+The first block defaults to `context_window * 8 + 2 MiB` (override via `Config::arena_capacity`). The arena grows in chunks when a turn needs more, without moving anything already handed out, and the next `reset()` folds the chunks into one block sized to the peak. It has no size limit; `Arena::capacity()`, `used()` and `high_water()` report its size.
 
 ### Lifetime rules
 

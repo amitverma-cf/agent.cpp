@@ -416,3 +416,52 @@ TEST_CASE("hub downloads stories260K from Hugging Face", "[hub][network]") {
     CHECK_FALSE(std::filesystem::exists(pulled.value.path));
     std::filesystem::remove_all(dir);
 }
+
+TEST_CASE("select_mmproj picks the projector that goes with the model file", "[hub][mmproj]") {
+    auto info = parse_repo_info(R"({"id":"x/vlm","siblings":[
+        {"rfilename":"vlm-Q8_0.gguf","size":100},{"rfilename":"vlm-f16.gguf","size":200},
+        {"rfilename":"mmproj-vlm-Q8_0.gguf","size":10},{"rfilename":"mmproj-vlm-f16.gguf","size":20}]})");
+    REQUIRE(info.ok);
+
+    auto same_quant = select_mmproj(info.value, "vlm-f16.gguf");
+    REQUIRE(same_quant.ok);
+    REQUIRE(same_quant.value.has_value());
+    CHECK(same_quant.value->path == "mmproj-vlm-f16.gguf");
+
+    auto fallback = select_mmproj(info.value, "vlm-Q4_K_M.gguf");  // no Q4 projector: Q8_0 is the default
+    REQUIRE(fallback.ok);
+    CHECK(fallback.value->path == "mmproj-vlm-Q8_0.gguf");
+
+    auto wanted = select_mmproj(info.value, "vlm-Q8_0.gguf", "f16");
+    REQUIRE(wanted.ok);
+    CHECK(wanted.value->path == "mmproj-vlm-f16.gguf");
+
+    CHECK_FALSE(select_mmproj(info.value, "vlm-Q8_0.gguf", "none").value.has_value());
+    CHECK_FALSE(select_mmproj(info.value, "mmproj-vlm-Q8_0.gguf").value.has_value());  // already a projector
+    CHECK_FALSE(select_mmproj(info.value, "vlm-Q8_0.gguf", "bf16").ok);                  // asked for one that is not there
+
+    auto text_only = parse_repo_info(R"({"id":"x/llm","siblings":[{"rfilename":"llm-Q4_K_M.gguf","size":1}]})");
+    REQUIRE(text_only.ok);
+    CHECK_FALSE(select_mmproj(text_only.value, "llm-Q4_K_M.gguf").value.has_value());
+}
+
+TEST_CASE("with_mmproj_option adds the projector to engine options once", "[hub][mmproj]") {
+    CHECK(with_mmproj_option("", "/m/p.gguf") == R"({"mmproj":"/m/p.gguf"})");
+    CHECK(with_mmproj_option("{}", "/m/p.gguf") == R"({"mmproj":"/m/p.gguf"})");
+    CHECK(with_mmproj_option(R"({"threads":4})", "/m/p.gguf") == R"({"mmproj":"/m/p.gguf","threads":4})");
+    CHECK(with_mmproj_option(R"({"mmproj":"other.gguf"})", "/m/p.gguf") == R"({"mmproj":"other.gguf"})");  // the user's wins
+    CHECK(with_mmproj_option(R"({"threads":4})", "") == R"({"threads":4})");
+    CHECK(with_mmproj_option("", R"(C:\models\p.gguf)") == R"({"mmproj":"C:\\models\\p.gguf"})");      // Windows paths stay valid JSON
+}
+
+TEST_CASE("the catalogue keeps the projector of a model", "[hub][mmproj]") {
+    CatalogEntry e{.name = "vlm", .repo = "x/vlm", .file = "vlm.gguf", .path = "/m/vlm.gguf", .size = 5, .license = "mit",
+                   .mmproj = "/m/mmproj.gguf", .mmproj_file = "mmproj.gguf"};
+    auto back = catalog_from_json(catalog_to_json(std::span<const CatalogEntry>(&e, 1)));
+    REQUIRE(back.ok);
+    REQUIRE(back.value.size() == 1);
+    CHECK(back.value[0].mmproj == "/m/mmproj.gguf");
+    CHECK(back.value[0].mmproj_file == "mmproj.gguf");
+    CatalogEntry plain{.name = "llm", .repo = "x/llm", .file = "llm.gguf", .path = "/m/llm.gguf"};
+    CHECK(catalog_to_json(std::span<const CatalogEntry>(&plain, 1)).find("mmproj") == std::string::npos);  // old format unchanged
+}

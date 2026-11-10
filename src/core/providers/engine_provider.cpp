@@ -89,7 +89,7 @@ std::string_view build_tools_json(const Session &session) {
     buf += '[';
     bool first = true;
     for (const Tool &t : session.config.tools) {
-        if (!tool_allowed(t.name)) continue;
+        if (!tools::tool_visible(session, ambient::allowed_tools, t.name)) continue;
         if (!first) buf += ',';
         first = false;
         buf += "{\"name\":\"";
@@ -141,7 +141,7 @@ Result<void> check_task(const EngineState &state, uint32_t task) {
 }
 
 Result<InferResponse> arena_full() {
-    return fail<InferResponse>(ErrorCode::DecodeFailed, "Arena capacity exhausted. Increase Config::arena_capacity.");
+    return fail<InferResponse>(ErrorCode::DecodeFailed, "Out of memory (arena growth failed).");
 }
 
 } // namespace
@@ -199,6 +199,24 @@ Result<void> init_engine(Session &session) {
                                                                    .engine_options = cfg.engine_options,
                                                                    .workspace_dir = cfg.workspace_dir,
                                                                    .artifacts_dir = state->output_dir});
+        if (opts.sandbox.enabled && cfg.engine_sandbox.gpu) {
+            // Driver caches (compiled kernels / shaders) live under $HOME by default, which the sandbox hides;
+            // without a writable folder every start recompiles. Untested on real GPUs: see docs/gpu.md.
+            std::error_code gpu_ec;
+            const std::filesystem::path cache = cfg.gpu_cache_dir.empty() ? std::filesystem::path(cfg.workspace_dir) / "cache" / "gpu"
+                                                                          : std::filesystem::path(cfg.gpu_cache_dir);
+            std::filesystem::create_directories(cache / "cuda", gpu_ec);
+            std::filesystem::create_directories(cache / "mesa", gpu_ec);
+            std::filesystem::create_directories(cache / "nv", gpu_ec);
+            const std::string abs = std::filesystem::absolute(cache, gpu_ec).string();
+            opts.sandbox.read_write_paths.push_back(abs);
+            opts.env["CUDA_CACHE_PATH"] = abs + "/cuda";                // CUDA JIT (PTX -> SASS) cache
+            opts.env["CUDA_CACHE_MAXSIZE"] = "1073741824";              // 1 GiB; the default is 256 MiB
+            opts.env["MESA_SHADER_CACHE_DIR"] = abs + "/mesa";          // Mesa: radv, anv, llvmpipe, ...
+            opts.env["MESA_SHADER_CACHE_MAX_SIZE"] = "1G";
+            opts.env["__GL_SHADER_DISK_CACHE_PATH"] = abs + "/nv";      // NVIDIA OpenGL / Vulkan shader cache
+            opts.env["__GL_SHADER_DISK_CACHE_SKIP_CLEANUP"] = "1";
+        }
         auto remote = engines::start_remote_engine(std::move(opts));
         if (!remote.ok) return fail(remote.error.code, remote.error.message);
         state->remote = std::move(remote.value);
@@ -290,6 +308,7 @@ Result<InferResponse> to_infer_response(const agent_response &resp, Arena &arena
                                 arena.allocate_string(from_c(c.arguments))};
     }
     const agent_usage usage = resp.usage;
+    const agent_run_stats stats = AGENT_HAS_FIELD(&resp, agent_response, stats) ? resp.stats : agent_run_stats{};
     if (overflow) return arena_full();
 
     out.content = std::string_view(text, off);
@@ -299,7 +318,14 @@ Result<InferResponse> to_infer_response(const agent_response &resp, Arena &arena
     return ok(InferResponse{.message = out,
                             .usage = TokenUsage{.prompt_tokens = usage.prompt_tokens,
                                                 .completion_tokens = usage.completion_tokens,
-                                                .total_tokens = usage.prompt_tokens + usage.completion_tokens},
+                                                .total_tokens = usage.prompt_tokens + usage.completion_tokens,
+                                                .cached_tokens = stats.cached_tokens,
+                                                .kv_tokens = stats.kv_tokens,
+                                                .kv_max_tokens = stats.kv_max_tokens,
+                                                .kv_type = stats.kv_type,
+                                                .kv_bytes = stats.kv_bytes,
+                                                .prefill_ms = stats.prefill_ms,
+                                                .decode_ms = stats.decode_ms},
                             .output_tensors = tensors});
 }
 
@@ -446,7 +472,7 @@ std::string_view injected_system_text(const Session &session) {
     auto *state = static_cast<EngineState *>(session.provider_state.get());
     if (!state) return {};
     const bool native = (state->flags & AGENT_ENGINE_FLAG_NATIVE_TOOLS) != 0;
-    if (ambient::allowed_tools.empty())
+    if (ambient::allowed_tools.empty() && !session.config.lazy_tools)
         return native ? std::string_view(session.skills_system_prompt) : std::string_view(session.tools_system_prompt);
 
     // A graph Agent node with allowed_tools: advertise only its tools (and the skills only when it

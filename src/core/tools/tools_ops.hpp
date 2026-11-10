@@ -32,6 +32,12 @@ ToolResult execute_for_message(Session &session, std::string_view name, std::str
 void append_tool_list(const Session &session, std::span<const std::string_view> allowed, std::string &out);
 bool tool_allowed(std::span<const std::string_view> allowed, std::string_view name);
 
+// Lazy tool loading (Config::lazy_tools). True when it applies here: enabled, and tool_search is allowed.
+bool lazy_tools_active(const Session &session, std::span<const std::string_view> allowed);
+// Whether the model may see / call `name` right now: allowed by the node's list and, in lazy mode, one of the
+// always-visible tools (tool_search, load_tool, use_skill) or already loaded in the current conversation.
+bool tool_visible(const Session &session, std::span<const std::string_view> allowed, std::string_view name);
+
 // Start of the system message compress_context leaves in place of the history it summarized.
 inline constexpr std::string_view kCompressedHistoryPrefix = "[Compressed history]: ";
 

@@ -9,6 +9,7 @@
 //   llm        prompt tok/s, generation tok/s, time to first token, peak RSS; in process vs process isolation
 //   parallel   one Agent branch vs N parallel branches on one llama instance (continuous batching)
 //   overhead   per-turn cost of the core on the mock engine, in process vs through agent-engine-host
+//   longchat   --longchat N: an N-turn scripted chat (history, pruning, compression, planted facts); --ctx, --kv, --csv
 //   tts        time to first audio chunk (engine ABI, streaming) and whole-utterance time through libagent
 // Prints markdown tables to stdout; --json / --md also write them to files.
 
@@ -38,9 +39,10 @@ namespace {
 double ms_since(Clock::time_point t0) { return std::chrono::duration<double, std::milli>(Clock::now() - t0).count(); }
 
 struct Options {
-    std::string llama, model, mock, sherpa, tts_model, host, json_out, md_out;
+    std::string llama, model, mock, sherpa, tts_model, host, json_out, md_out, engine_options, kv, csv_out;
     std::string workspace = (fs::temp_directory_path() / "agent-bench").string();
     int reps = 3, gen_tokens = 128, prompt_words = 200, branches = 4, threads = 0, turns = 2000;
+    int longchat = 0, ctx = 4096; // longchat: number of conversation turns (0 = section off)
 };
 
 // ---- memory ------------------------------------------------------------------------------------
@@ -164,12 +166,19 @@ agent::Config llama_config(const Options &o, agent::EngineIsolation isolation) {
     cfg.model = o.model;
     cfg.workspace_dir = o.workspace;
     cfg.auto_default_tools = false;
-    cfg.context_window = 4096;
+    cfg.context_window = o.ctx;
     cfg.max_tokens = o.gen_tokens;
     cfg.temperature = 0.0f;
     cfg.engine_isolation = isolation;
     cfg.engine_host_path = o.host;
-    if (o.threads > 0) cfg.engine_options = "{\"threads\":" + std::to_string(o.threads) + "}";
+    if (!o.engine_options.empty()) {
+        cfg.engine_options = o.engine_options; // a complete JSON object: --threads / --kv are then ignored
+    } else {
+        std::string opts;
+        if (o.threads > 0) opts += "\"threads\":" + std::to_string(o.threads);
+        if (!o.kv.empty()) opts += std::string(opts.empty() ? "" : ",") + "\"kv_cache\":\"" + o.kv + "\"";
+        if (!opts.empty()) cfg.engine_options = "{" + opts + "}";
+    }
     return cfg;
 }
 
@@ -250,6 +259,126 @@ void bench_llm(const Options &o, std::vector<Table> &tables) {
                           fmt(median(gps)), fmt(median(ttft)), fmt(median(total), 0), fmt(load_ms, 0),
                           fmt(peak_rss_mib(), 0) + " / " + (host_rss > 0 ? fmt(host_rss, 0) : std::string("-"))});
     }
+    tables.push_back(std::move(t));
+}
+
+
+// ---- long conversation -------------------------------------------------------------------------
+// A scripted chat of N turns through run_turn (history, pruning and compression included), with two
+// facts planted early and asked about later. Shows how the time before the first token grows with the
+// history (the whole history is processed again each turn unless the engine reuses its KV cache), what
+// pruning / compression do to the context, and whether the model still knows the planted facts.
+
+struct ChatTurn {
+    int turn = 0, history = 0, prompt_tok = 0, gen_tok = 0, compressions = 0, prunes = 0;
+    double ttft_ms = 0, total_ms = 0, host_rss = 0;
+    std::string kind, reply;
+    int recalled = -1; // needle questions: 1 right, 0 wrong
+};
+
+void bench_longchat(const Options &o, std::vector<Table> &tables) {
+    static const char *kTopics[] = {"the moon", "bread",   "rivers",   "chess",   "volcanoes", "violins",  "tea",     "glaciers", "bridges",
+                                    "owls",     "coffee",  "deserts",  "clocks",  "bees",      "maps",     "thunder", "salt",     "mirrors",
+                                    "kites",    "forests", "rainbows", "marble",  "tides",     "lanterns", "honey",   "canyons"};
+    constexpr int kTopicCount = sizeof(kTopics) / sizeof(kTopics[0]);
+    auto cfg = llama_config(o, agent::EngineIsolation::Process);
+    cfg.max_tokens = o.gen_tokens;
+    const auto t_load = Clock::now();
+    auto sess = agent::init(cfg);
+    if (!sess.ok) {
+        std::fprintf(stderr, "longchat: %s\n", sess.error.message.c_str());
+        return;
+    }
+    const double load_ms = ms_since(t_load);
+
+    agent::FlowMemory conv;
+    conv.id = "longchat";
+    std::vector<ChatTurn> turns;
+    int last_prompt = 0, last_gen = 0, last_comp = 0, last_prune = 0;
+    for (int t = 1; t <= o.longchat; ++t) {
+        std::string prompt, kind = "filler";
+        const char *expect = nullptr;
+        if (t == 1) {
+            prompt = "Remember this: the secret code word is PELICAN-4821. Reply with just OK.";
+            kind = "plant";
+        } else if (t == 3) {
+            prompt = "Remember this too: my dog is named Biscuit. Reply with just OK.";
+            kind = "plant";
+        } else if (t == o.longchat / 2 || t == o.longchat - 5) {
+            prompt = "What was the secret code word I told you? Answer with only the code word.";
+            kind = "ask-code";
+            expect = "PELICAN-4821";
+        } else if (t == o.longchat / 2 + 1 || t == o.longchat - 4) {
+            prompt = "What is my dog's name? Answer with only the name.";
+            kind = "ask-dog";
+            expect = "Biscuit";
+        } else {
+            prompt = std::string("Tell me one fact about ") + kTopics[t % kTopicCount] + " in a single short sentence.";
+        }
+        Stream st{.start = Clock::now()};
+        auto res = agent::run_turn(sess.value, conv, prompt, true, on_token, &st);
+        ChatTurn row;
+        row.turn = t;
+        row.kind = kind;
+        row.total_ms = ms_since(st.start);
+        row.ttft_ms = st.first_ms < 0 ? row.total_ms : st.first_ms;
+        row.history = static_cast<int>(conv.history.size());
+        row.prompt_tok = conv.stats.prompt_tokens - last_prompt;
+        row.gen_tok = conv.stats.completion_tokens - last_gen;
+        row.compressions = conv.stats.compressions - last_comp;
+        row.prunes = conv.stats.prune_cycles - last_prune;
+        last_prompt = conv.stats.prompt_tokens;
+        last_gen = conv.stats.completion_tokens;
+        last_comp = conv.stats.compressions;
+        last_prune = conv.stats.prune_cycles;
+        row.host_rss = host_peak_rss_mib();
+        if (!res.ok) {
+            row.reply = "ERROR: " + res.error.message;
+        } else {
+            row.reply = res.value;
+            if (expect) row.recalled = row.reply.find(expect) != std::string::npos ? 1 : 0;
+        }
+        for (char &c : row.reply)
+            if (c == '\n' || c == ',') c = ' ';
+        if (row.reply.size() > 60) row.reply.resize(60);
+        turns.push_back(row);
+        std::fprintf(stderr, "[longchat] turn %3d  prompt %5d tok  ttft %7.0f ms  gen %3d tok  history %3d msgs  compress %d prune %d%s\n", t,
+                     row.prompt_tok, row.ttft_ms, row.gen_tok, row.history, row.compressions, row.prunes,
+                     row.recalled < 0 ? "" : (row.recalled ? "  recalled" : "  FORGOT"));
+        if (!res.ok) break;
+    }
+
+    if (!o.csv_out.empty()) {
+        std::ofstream csv(o.csv_out);
+        csv << "turn,kind,history_msgs,prompt_tokens,gen_tokens,ttft_ms,total_ms,compressions,prunes,host_peak_rss_mib,recalled,reply\n";
+        for (const auto &r : turns)
+            csv << r.turn << ',' << r.kind << ',' << r.history << ',' << r.prompt_tok << ',' << r.gen_tok << ',' << fmt(r.ttft_ms, 0) << ','
+                << fmt(r.total_ms, 0) << ',' << r.compressions << ',' << r.prunes << ',' << fmt(r.host_rss, 0) << ',' << r.recalled << ',' << r.reply << '\n';
+    }
+
+    Table t{.title = "Long conversation (" + std::to_string(o.longchat) + " turns, context " + std::to_string(o.ctx) + ", KV " +
+                     (o.kv.empty() ? std::string("default") : o.kv) + ")",
+            .note = "run_turn, temperature 0, process isolation, " + std::to_string(o.gen_tokens) + " max tokens per reply, model load " +
+                    fmt(load_ms, 0) + " ms. TTFT = time to the first token of the reply; prompt tok = tokens processed this turn.",
+            .columns = {"turn", "kind", "history msgs", "prompt tok", "TTFT ms", "gen tok", "compress", "prune", "host RSS MiB", "recall"}};
+    int forgotten = 0, asked = 0;
+    double ttft_first = 0, ttft_last = 0;
+    for (size_t i = 0; i < turns.size(); ++i) {
+        const auto &r = turns[i];
+        if (r.recalled >= 0) {
+            ++asked;
+            forgotten += r.recalled == 0;
+        }
+        if (i == 1) ttft_first = r.ttft_ms;
+        ttft_last = r.ttft_ms;
+        const bool show = i < 3 || (i + 1) % 10 == 0 || i + 1 == turns.size() || r.recalled >= 0 || r.compressions || r.prunes;
+        if (show)
+            t.rows.push_back({std::to_string(r.turn), r.kind, std::to_string(r.history), std::to_string(r.prompt_tok), fmt(r.ttft_ms, 0),
+                              std::to_string(r.gen_tok), std::to_string(r.compressions), std::to_string(r.prunes), fmt(r.host_rss, 0),
+                              r.recalled < 0 ? "-" : (r.recalled ? "yes" : "NO")});
+    }
+    t.note += " Needle questions answered right: " + std::to_string(asked - forgotten) + " of " + std::to_string(asked) + ". TTFT turn 2 " +
+              fmt(ttft_first, 0) + " ms, last turn " + fmt(ttft_last, 0) + " ms.";
     tables.push_back(std::move(t));
 }
 
@@ -487,9 +616,11 @@ void bench_tts(const Options &o, std::vector<Table> &tables) {
 bool parse(int argc, char **argv, Options &o) {
     std::map<std::string, std::string *> strings = {{"--llama", &o.llama},   {"--model", &o.model},         {"--mock", &o.mock},
                                                     {"--sherpa", &o.sherpa}, {"--tts-model", &o.tts_model}, {"--host", &o.host},
-                                                    {"--json", &o.json_out}, {"--md", &o.md_out},           {"--workspace", &o.workspace}};
+                                                    {"--json", &o.json_out}, {"--md", &o.md_out},           {"--workspace", &o.workspace},
+                                                    {"--engine-options", &o.engine_options}, {"--kv", &o.kv}, {"--csv", &o.csv_out}};
     std::map<std::string, int *> ints = {{"--reps", &o.reps},         {"--gen-tokens", &o.gen_tokens}, {"--prompt-words", &o.prompt_words},
-                                         {"--branches", &o.branches}, {"--threads", &o.threads},       {"--turns", &o.turns}};
+                                         {"--branches", &o.branches}, {"--threads", &o.threads},       {"--turns", &o.turns},
+                                         {"--longchat", &o.longchat}, {"--ctx", &o.ctx}};
     for (int i = 1; i < argc; i += 2) {
         if (i + 1 >= argc) return false;
         if (auto s = strings.find(argv[i]); s != strings.end()) *s->second = argv[i + 1];
@@ -507,7 +638,8 @@ int main(int argc, char **argv) {
         std::fprintf(stderr,
                      "usage: %s [--llama <plugin> --model <gguf>] [--mock <plugin>] [--sherpa <plugin> --tts-model <kokoro dir>]\n"
                      "          [--host <agent-engine-host>] [--reps N] [--gen-tokens N] [--prompt-words N] [--branches N]\n"
-                     "          [--threads N] [--turns N] [--workspace DIR] [--json FILE] [--md FILE]\n",
+                     "          [--threads N] [--turns N] [--workspace DIR] [--json FILE] [--md FILE]\n"
+                     "          [--longchat N --ctx N [--kv f16|q8_0|q4_0] [--engine-options JSON] [--csv FILE]]\n",
                      argv[0]);
         return 2;
     }
@@ -515,8 +647,12 @@ int main(int argc, char **argv) {
     std::vector<Table> tables;
     if (!o.mock.empty()) bench_overhead(o, tables);
     if (!o.llama.empty() && !o.model.empty()) {
-        bench_llm(o, tables);
-        bench_parallel(o, tables);
+        if (o.longchat > 0) {
+            bench_longchat(o, tables);
+        } else {
+            bench_llm(o, tables);
+            bench_parallel(o, tables);
+        }
     }
     if (!o.sherpa.empty() && !o.tts_model.empty()) bench_tts(o, tables);
 

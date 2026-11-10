@@ -74,9 +74,14 @@ inline Result<void> fail(ErrorCode code, std::string message) {
 }
 
 // -------------------------- Per-turn bump allocator --------------------------
+// Grows in chunks instead of failing: when the current block is full a new, larger one is added, and
+// pointers handed out earlier stay valid (chunks never move). reset() is O(1) while the turn fit in the
+// first block; after a turn that grew, the next reset() replaces all chunks with one block sized to the
+// peak, so turns of that size allocate nothing from then on. allocate() returns nullptr only for size 0
+// or when the system is out of memory.
 class Arena {
   public:
-    explicit Arena(size_t capacity = 0);
+    explicit Arena(size_t capacity = 0); // capacity = size of the first block (0: allocated on first use)
     ~Arena();
     Arena(const Arena &) = delete;
     Arena &operator=(const Arena &) = delete;
@@ -87,6 +92,11 @@ class Arena {
     void reset();
     std::string_view allocate_string(std::string_view src);
 
+    size_t capacity() const;   // bytes reserved across all blocks
+    size_t used() const;       // bytes handed out since the last reset (alignment padding included)
+    size_t high_water() const; // the largest used() seen so far
+    size_t blocks() const { return chunks_.size(); }
+
     template <typename T> std::span<T> allocate_span(size_t count) {
         if (count == 0) return {};
         void *mem = allocate(sizeof(T) * count, alignof(T));
@@ -95,9 +105,16 @@ class Arena {
     }
 
   private:
-    size_t capacity_ = 0;
-    char *ptr_ = nullptr;
-    size_t offset_ = 0;
+    struct Chunk {
+        std::unique_ptr<char[]> data;
+        size_t size = 0;
+    };
+    void *bump(size_t size, size_t alignment);
+
+    std::vector<Chunk> chunks_; // chunks_.back() is the one being filled
+    size_t offset_ = 0;         // bytes used in chunks_.back()
+    size_t full_ = 0;           // bytes used in the earlier, filled chunks
+    size_t high_water_ = 0;
 };
 
 // -------------------------- Model I/O views (arena-backed; live only for the current infer() call) --------------------------
@@ -107,6 +124,14 @@ struct TokenUsage {
     int prompt_tokens = 0;
     int completion_tokens = 0;
     int total_tokens = 0;
+    // Reported by engines that measure them (see agent_run_stats in engine_abi.h); 0 = not reported.
+    int cached_tokens = 0;     // prompt tokens already in the KV cache, not decoded again
+    int kv_tokens = 0;         // tokens in the request's KV sequence at the end
+    int kv_max_tokens = 0;     // capacity of one sequence
+    int kv_type = 0;           // AGENT_KV_*
+    uint64_t kv_bytes = 0;     // size of the engine's whole KV cache (an estimate for hybrid models)
+    float prefill_ms = 0;      // time decoding the prompt
+    float decode_ms = 0;       // time generating
 };
 
 enum class DType { Float32, Float16, Int8, Int32, Int64, UInt8 };
@@ -358,6 +383,8 @@ struct TurnStats {
     int compressions = 0;
     int prune_cycles = 0;
     int turns = 0;
+    int cached_tokens = 0; // prompt tokens served from the engine's KV cache over the whole conversation
+    TokenUsage last;       // the most recent model call: prompt / reused tokens, speeds, KV size
 };
 
 struct SessionStats {
@@ -383,6 +410,7 @@ struct FlowMemory {
     std::string id;
     std::vector<Message> history;
     TurnStats stats;
+    std::vector<std::string> active_tools; // tools loaded with load_tool (Config::lazy_tools); not part of the history
 };
 
 struct Session;
@@ -423,6 +451,11 @@ struct Config {
     int max_tool_call_rounds = 10;
     bool sandbox_filesystem = true;
     bool auto_default_tools = true;
+    // Lazy tool loading. The model starts with only tool_search, load_tool and use_skill; every other tool stays out of the
+    // prompt until the model calls load_tool(name), which keeps it for the rest of the conversation (FlowMemory::active_tools)
+    // even across context compression. Saves the prompt tokens of tools that are never used. Applies where tool_search is
+    // allowed: a graph Agent node whose allowed_tools omits it keeps its fixed list.
+    bool lazy_tools = false;
     bool enable_file_logging = false;
 
     // Concurrent engines only: worker arenas (one per thread) for the branches of a graph Parallel
@@ -469,6 +502,11 @@ struct Config {
     // network, no /tmp, no GPU (set engine_sandbox.gpu for CUDA/ROCm/Vulkan builds).
     // memory_limit_bytes becomes the host's RLIMIT_AS.
     SandboxPolicy engine_sandbox{.enabled = true, .allow_tmp = false, .network = SandboxNetwork::Deny};
+    // Where GPU drivers keep compiled kernels and shaders (CUDA JIT cache, Vulkan / OpenGL shader cache).
+    // Used only when engine_sandbox.gpu is set: the sandbox makes the drivers' default cache folders
+    // (under $HOME) unwritable, so without this every start would recompile. Empty = <workspace_dir>/cache/gpu.
+    // See docs/gpu.md (untested: this project has no GPU test hardware).
+    std::string gpu_cache_dir;
 
     // AiProvider::Engine: the task (an AGENT_CAP_* bit) for requests that don't set InferRequest::task,
     // including every inference of run_turn / run_turn_with_media. Checked against the engine's caps

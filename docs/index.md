@@ -87,7 +87,6 @@ int main() {
 | `AGENT_ENGINE_TRELLIS` | `OFF` | Build the TRELLIS.2 image-to-3D engine plugin (`engines/trellis`); `AGENT_TRELLIS_BUILD_JOBS` caps the nested build |
 | `AGENT_ENGINE_WHISPER` | `OFF` | Build the whisper.cpp speech-to-text engine plugin (`engines/whisper`); `AGENT_WHISPER_BUILD_JOBS` caps the nested build |
 | `AGENT_ENGINE_PARAKEET` | `OFF` | Build the parakeet.cpp speech-to-text engine plugin (`engines/parakeet`); `AGENT_PARAKEET_BUILD_JOBS` caps the nested build |
-| `AGENT_ENGINE_QWEN3TTS` | `OFF` | Build the Qwen3-TTS engine plugin (`engines/qwen3tts`); `AGENT_QWEN3TTS_BUILD_JOBS` caps the nested build |
 | `AGENT_BUILD_EXAMPLES` | `ON` | Build `examples/` (guide code, image critique, RAG over docs) and their mock-engine smoke tests (`ctest -L examples`) |
 | `AGENT_BUILD_BENCH` | `OFF` | Build `agent_bench`, the benchmark harness (`bench/`, results in [benchmarks.md](benchmarks.md)) |
 | `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UBSan |

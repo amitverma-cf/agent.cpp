@@ -504,7 +504,7 @@ struct Config {
     int    context_window   = 2048;
     int    max_tokens       = 512;
     float  temperature      = 0.7f;
-    size_t arena_capacity   = 0;        // 0 = auto (context_window*8 + 2 MiB)
+    size_t arena_capacity   = 0;        // first block size; 0 = auto (context_window*8 + 2 MiB); the arena grows past it
 
     // Safety
     int  max_tool_call_rounds = 10;     // tool call iterations per turn before ToolCallLimitExceeded

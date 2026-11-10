@@ -16,6 +16,3 @@
 [submodule "vendor/parakeet.cpp"]
 	path = vendor/parakeet.cpp
 	url = https://github.com/mudler/parakeet.cpp.git
-[submodule "vendor/qwentts.cpp"]
-	path = vendor/qwentts.cpp
-	url = https://github.com/ServeurpersoCom/qwentts.cpp.git

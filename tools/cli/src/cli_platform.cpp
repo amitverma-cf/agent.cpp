@@ -8,7 +8,15 @@
 #include <cstring>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iostream>
 #include <thread>
+#if !defined(_WIN32)
+#include <termios.h>
+#endif
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -118,12 +126,19 @@ std::vector<std::string> engine_search_dirs(std::string_view extra_dir) {
     if (!exe.empty()) {
         const fs::path e(exe);
         add(e);
-        add(e / "engines");
         std::error_code ec;
-        // Build tree: <build>/engines/<name>/agent-engine-<name>.so
-        if (fs::is_directory(e / "engines", ec))
-            for (const auto &sub : fs::directory_iterator(e / "engines", ec))
-                if (sub.is_directory(ec)) add(sub.path());
+        // Build tree: <build>/engines/<name>/agent-engine-<name>.so. With a multi-config generator (Visual
+        // Studio, Xcode) the binary is in <build>/<Config>/ and the plugins in <build>/engines/<name>/<Config>/,
+        // so also look one folder up.
+        for (const fs::path &root : {e, e.parent_path()}) {
+            add(root / "engines");
+            if (!fs::is_directory(root / "engines", ec)) continue;
+            for (const auto &sub : fs::directory_iterator(root / "engines", ec))
+                if (sub.is_directory(ec)) {
+                    add(sub.path());
+                    for (const char *config : {"Release", "RelWithDebInfo", "MinSizeRel", "Debug"}) add(sub.path() / config);
+                }
+        }
         add(e.parent_path() / "lib" / "agent" / "engines");
     }
     return dirs;
@@ -158,9 +173,65 @@ HardwareInfo detect_hardware() {
     return hw;
 }
 
+uint64_t total_ram_bytes() {
+#if defined(_WIN32)
+    MEMORYSTATUSEX m{};
+    m.dwLength = sizeof(m);
+    return GlobalMemoryStatusEx(&m) ? static_cast<uint64_t>(m.ullTotalPhys) : 0;
+#elif defined(__APPLE__)
+    uint64_t bytes = 0;
+    size_t len = sizeof(bytes);
+    return sysctlbyname("hw.memsize", &bytes, &len, nullptr, 0) == 0 ? bytes : 0;
+#else
+    std::ifstream in("/proc/meminfo");
+    std::string key;
+    uint64_t kib = 0;
+    while (in >> key) {
+        if (key == "MemTotal:") {
+            in >> kib;
+            return kib * 1024ULL;
+        }
+        in.ignore(4096, 10);
+    }
+    return 0;
+#endif
+}
+
 bool file_exists(std::string_view path) {
     std::error_code ec;
     return !path.empty() && fs::is_regular_file(fs::path(path), ec);
+}
+
+// A model can be a file or a folder (sherpa voices, TRELLIS).
+bool path_exists(std::string_view path) {
+    std::error_code ec;
+    return !path.empty() && fs::exists(fs::path(path), ec);
+}
+
+bool read_hidden_line(const char *prompt, std::string &out) {
+    out.clear();
+    if (!stdin_is_tty()) return false;
+    std::fputs(prompt, stderr);
+    std::fflush(stderr);
+#if defined(_WIN32)
+    HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode = 0;
+    if (!GetConsoleMode(in, &mode)) return false;
+    SetConsoleMode(in, mode & ~static_cast<DWORD>(ENABLE_ECHO_INPUT));
+    const bool got = std::getline(std::cin, out).good() || !out.empty();
+    SetConsoleMode(in, mode);
+#else
+    struct termios old {};
+    if (tcgetattr(STDIN_FILENO, &old) != 0) return false;
+    struct termios quiet = old;
+    quiet.c_lflag &= static_cast<tcflag_t>(~ECHO);
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &quiet);
+    const bool got = std::getline(std::cin, out).good() || !out.empty();
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &old);
+#endif
+    std::fputc(10, stderr); // the Enter key was not echoed
+    while (!out.empty() && (out.back() == 13 || out.back() == 10)) out.pop_back();
+    return got;
 }
 
 bool stdin_is_tty() {

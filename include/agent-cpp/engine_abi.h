@@ -173,10 +173,32 @@ typedef struct agent_usage {
     int32_t completion_tokens;
 } agent_usage;
 
+/* KV cache element types (agent_run_stats::kv_type). */
+enum agent_kv_type {
+    AGENT_KV_UNKNOWN = 0,
+    AGENT_KV_F32 = 1,
+    AGENT_KV_F16 = 2,
+    AGENT_KV_Q8_0 = 3,
+    AGENT_KV_Q4_0 = 4,
+};
+
+/* Optional measurements of one request. An engine fills what it knows and leaves the rest 0; the host
+ * shows them (per-turn line, stats). Present only when AGENT_HAS_FIELD(response, agent_response, stats). */
+typedef struct agent_run_stats {
+    int32_t cached_tokens;  /* prompt tokens that were already in the KV cache (not decoded again) */
+    int32_t kv_tokens;      /* tokens in the request's KV sequence when it finished */
+    int32_t kv_max_tokens;  /* capacity of one sequence (the context window) */
+    int32_t kv_type;        /* agent_kv_type */
+    uint64_t kv_bytes;      /* size of the whole KV cache (an estimate for hybrid models) */
+    float prefill_ms;       /* time spent decoding the prompt */
+    float decode_ms;        /* time spent generating the reply */
+} agent_run_stats;
+
 typedef struct agent_response {
     uint32_t struct_size;  /* set by the host before run(): the size of the struct it passes. Engines never write it */
     agent_message message; /* assistant output: text / file / tensor parts, tool calls */
     agent_usage usage;
+    agent_run_stats stats; /* optional, see agent_run_stats; added after the v2 baseline */
 } agent_response;
 
 typedef struct agent_engine_v1 {

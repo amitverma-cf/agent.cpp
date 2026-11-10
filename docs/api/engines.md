@@ -247,7 +247,22 @@ It sets `AGENT_ENGINE_FLAG_NATIVE_TOOLS` (the core only adds the skills list to 
 `Config::engine_options`: `gpu_layers`, `threads`, `chat_template` (overrides the template embedded in the GGUF),
 `mmproj` (path to a multimodal projector GGUF, enables image / audio input), `ocr_prompt` (see OCR below), `mode` (`"generate"`, the
 default, `"embed"` or `"rerank"`, see below), `pooling` (embed mode: `"mean"`, `"cls"` or `"last"` to
-override the model's pooling).
+override the model's pooling), `kv_cache` and `prefix_cache` (below).
+
+**KV cache precision (`kv_cache`).** `"auto"` (the default), `"f16"`, `"q8_0"` or `"q4_0"`: llama.cpp's own cache
+types, with flash attention. `auto` picks `q4_0` when one layer's keys are at least 512 values wide (KV heads x head
+size) and `q8_0` otherwise. The reason is measured: on Qwen2.5-0.5B (2 KV heads x 64 = 128 wide) a `q4_0` cache
+produced garbage text while `f16` and `q8_0` were fine; LFM3-1.7B was fine at `q4_0`. If a model cannot use a
+quantized cache the engine falls back to `f16`. Embed and rerank instances always use `f16`.
+
+**Prefix cache (`prefix_cache`, default `true`).** Every sequence slot keeps the tokens whose keys/values are in its KV
+cache. A new text prompt takes the free slot whose tokens share the longest prefix with it, drops only the differing
+tail and decodes just the rest, instead of reading the whole conversation again on every turn (the cost grows with the
+history: 0.3 s at turn 1 to 18 s at turn 100 on Qwen2.5-0.5B without it). It needs no extra memory, because the KV
+buffer of every slot is allocated when the context is created. It is switched off for models that cannot drop the end
+of a sequence (recurrent or hybrid state) or that keep only a sliding window of keys; those recompute the prompt.
+Prompts with images or audio and DECIDE requests never use it. `AGENT_LLAMA_TRACE=1` prints how many prompt tokens each
+request found in the cache.
 
 ### Image and audio input
 
@@ -747,73 +762,3 @@ Nemotron 3.5 / unified / diarization models under OpenMDW 1.1, so check those be
 Tests (`tests/unit/test_engine_parakeet.cpp`) use parakeet.cpp's `tests/fixtures/speech.wav` and need
 `AGENT_TEST_PARAKEET_MODEL` for the real-model cases.
 
-## The qwen3tts engine
-
-`engines/qwen3tts` (`agent-engine-qwen3tts`) runs [Qwen3-TTS](https://huggingface.co/collections/Qwen/qwen3-tts)
-(12 Hz, 0.6B / 1.7B) through [qwentts.cpp](https://github.com/ServeurpersoCom/qwentts.cpp), a ggml port with a
-plain C99 API (`qwen.h`). `vendor/qwentts.cpp` is pinned to commit `5916bf7` (2026-10-16; the project has no
-release tags). Caps `AGENT_CAP_TTS`, flags 0.
-
-```sh
-git submodule update --init vendor/qwentts.cpp
-git -C vendor/qwentts.cpp submodule update --init --depth 1 ggml
-cmake -B build -G Ninja -DAGENT_ENGINE_QWEN3TTS=ON [-DAGENT_QWEN3TTS_BUILD_JOBS=2]
-```
-
-Built like whisper and sdcpp: a nested CMake project (only its `qwen-core` library target) with its own ggml
-fork, linked statically with hidden visibility (Linux: `--exclude-libs,ALL` + version script, only
-`agent_engine_get_v1` exported), CPU only.
-
-Why qwentts.cpp and not predict-woo/qwen3-tts.cpp: both are MIT, but qwen3-tts.cpp's library is a C++ class API
-(`std::function` callbacks, `std::string` results) that expects a separately prebuilt ggml in `ggml/build`,
-while qwentts.cpp builds its ggml in-tree and exposes a versioned C ABI that catches every C++ exception at its
-boundary (`qt_status` + `qt_last_error()`), with streaming, cancellation and voice cloning.
-
-Models: two GGUFs from [Serveurperso/Qwen3-TTS-GGUF](https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF), a talker
-(`qwen-talker-{0.6b,1.7b}-{base,customvoice,voicedesign}-{Q4_K_M,Q8_0,BF16,F32}.gguf`) as `Config::model` and the
-shared codec (`qwen-tokenizer-12hz-*.gguf`) as `options.codec`. `base` talkers speak in a default voice or clone
-one; `customvoice` talkers have named speakers (serena, vivian, uncle_fu, ryan, aiden, ono_anna, sohee, eric,
-dylan); `voicedesign` (1.7B) needs an `instruct` describing the voice. `Config::engine_options`:
-
-| Option | Meaning |
-|--------|---------|
-| `codec` | 12 Hz tokenizer GGUF (required) |
-| `language` | `"auto"` (default), a qwentts language name (`english`, `chinese`, `japanese`, `korean`, `german`, `french`, `russian`, `portuguese`, `spanish`, `italian`, ...) or an ISO code (`en`, `zh`, `ja`, `ko`, `de`, `fr`, `ru`, `pt`, `es`, `it`) |
-| `speaker` | named speaker (`customvoice` talkers; default: the model's first speaker) |
-| `instruct` | style / voice description (`voicedesign` required, `customvoice` optional, ignored for `base`) |
-| `voice` | `{"wav": "ref.wav", "text": "transcript of ref.wav"}`: default clone reference for `base` talkers, encoded once at `create()`. Without `text` only the speaker embedding is used (x-vector cloning); with it, in-context cloning |
-| `seed` | `-1` (default) = random, otherwise reproducible |
-| `temperature`, `top_k`, `top_p`, `repetition_penalty`, `max_new_tokens` | talker sampling (qwentts defaults: 0.9, 50, 1.0, 1.05, 2048 frames = 164 s) |
-| `device` | ggml device name (`CPU`, ...; default: best available) |
-| `flash_attn`, `verbose` | fused attention on GPU backends; forward qwentts info logs to stderr |
-
-`params_json` per request accepts `language`, `speaker`, `instruct`, `seed`, the sampling keys, and `ref_text`
-(the transcript of a per-request reference clip).
-
-| `task` | Last user message | Result |
-|---|---|---|
-| `TTS`, automatic, or `TEXT_GEN` | text | speech: TEXT summary + WAV in `output_dir` (`FILE`, `audio/wav`, 24 kHz mono 16-bit), as for sherpa |
-| `TTS` / automatic / `TEXT_GEN` | text + audio part | the same, in the voice of the audio part (`base` talkers; `FILE`/`BYTES` WAV resampled to 24 kHz, or a 16 kHz `F32` `TENSOR`); `params_json.ref_text` turns on in-context cloning |
-| `TTS` | no text | `AGENT_ERR_INVALID_CONFIG` |
-| anything else | | `AGENT_ERR_UNSUPPORTED` |
-
-A mode violation (an audio reference or `voice` on a non-`base` talker, a `voicedesign` talker without
-`instruct`) or an unknown language returns `AGENT_ERR_INVALID_CONFIG` with qwentts' message. Synthesis always
-runs qwentts' streaming decoder: each chunk (one codec frame first, then up to 8 frames = 0.64 s) goes to
-`on_chunk(AGENT_CHUNK_AUDIO, samples, n * sizeof(float))` (mono f32, 24 kHz) and the WAV holds exactly the
-streamed samples. Progress is `on_progress(frames, max_new_tokens)`, ending at `(max, max)`. `cancel` is polled
-before every talker step (about 80 ms of audio). Note that qwentts calls the chunk and cancel callbacks from its
-own compute worker thread while `run()` waits for it, so they never run concurrently with each other or with
-`run()`. qwentts picks its CPU thread count itself (half the hardware threads); there is no thread option.
-qwentts' logger is process-wide.
-
-Upstream bug worked around: at the pinned commit qwentts.cpp resets closed GGUF handles to `fd = 0` and closes
-them again on `qt_free` (and on `qt_init` failure), i.e. it calls `close(0)` and closes the host's stdin; the next
-descriptor the host opens then lands on fd 0. The plugin guards `qt_init` / `qt_free` by keeping a duplicate of
-fd 0 and restoring it afterwards (a regression test checks fd 0 survives a failed `create()`). A thread of the
-host that opens a file during that short window can still be affected; to be reported upstream.
-
-Licences: qwentts.cpp code (MIT); Qwen3-TTS weights (all five `Qwen/Qwen3-TTS-12Hz-*` checkpoints and
-`Qwen3-TTS-Tokenizer-12Hz`) and the converted GGUFs are Apache-2.0, so they fit the catalogue policy.
-Tests (`tests/unit/test_engine_qwen3tts.cpp`) need `AGENT_TEST_QWEN3TTS_TALKER` and `AGENT_TEST_QWEN3TTS_CODEC`; with
-the whisper engine built and `AGENT_TEST_WHISPER_MODEL` set, the generated speech is transcribed back.

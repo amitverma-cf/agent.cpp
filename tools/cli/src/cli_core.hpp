@@ -40,6 +40,11 @@ Result<CommandLine> parse_command_line(std::span<const std::string_view> args);
 
 std::string usage_text();
 
+// The one-line summary printed after every chat turn from the last model call: prompt speed, generation
+// speed and KV cache size, e.g. "prompt 412 tok (380 cached) 548 tok/s | gen 63 tok 91 tok/s | KV 475/2048 q4_0 3.1 MiB".
+// Empty when the engine reported none of it (non-LLM engines). Speeds use the engine's own timings.
+std::string format_turn_footer(const TokenUsage &u);
+
 // -------------------------- JSON helpers --------------------------
 
 std::string json_escape(std::string_view s);
@@ -193,9 +198,15 @@ std::vector<std::string> engine_search_dirs(std::string_view extra_dir = {});
 std::string find_plugin(std::string_view engine_name, std::span<const std::string> dirs);
 
 HardwareInfo detect_hardware();
+// Installed RAM in bytes; 0 when it cannot be read.
+uint64_t total_ram_bytes();
 
 bool file_exists(std::string_view path);
+bool path_exists(std::string_view path); // file or folder
 bool stdin_is_tty();
+// Prints prompt on stderr and reads one line from the terminal without echoing it (passwords, keys). False when
+// stdin is not a terminal or reading failed.
+bool read_hidden_line(const char *prompt, std::string &out);
 bool stream_is_tty(std::FILE *stream);
 // Turns on ANSI escape processing for a console stream (Windows 10+ needs this; elsewhere a no-op
 // that returns true). False when the stream is not a console or the console cannot do it.

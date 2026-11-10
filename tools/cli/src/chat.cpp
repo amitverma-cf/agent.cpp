@@ -184,6 +184,7 @@ Result<void> open_session(ChatState &st) {
     cfg.engine_options = st.engine_options;
     cfg.model = st.model.path;
     cfg.workspace_dir = st.workspace;
+    cfg.lazy_tools = true; // the model sees tool_search / load_tool, not every tool, until it needs one
     cfg.context_window = st.context_window;
     cfg.max_tokens = st.max_tokens;
     cfg.temperature = st.ctx->config.temperature;
@@ -241,6 +242,10 @@ void print_stats(const ChatState &st) {
     std::printf("this session:  %d inference rounds, %d tool calls, %d prompt + %d completion tokens, %d compressions, %d prunes\n",
                 s.total_turns, s.total_tool_calls, s.total_prompt_tokens, s.total_completion_tokens, s.total_compressions,
                 s.total_prune_cycles);
+    if (c.cached_tokens > 0 && c.prompt_tokens > 0)
+        std::printf("prefix cache:  %d of %d prompt tokens served from the KV cache (%.0f%%)\n", c.cached_tokens, c.prompt_tokens,
+                    100.0 * c.cached_tokens / c.prompt_tokens);
+    if (const std::string footer = format_turn_footer(c.last); !footer.empty()) std::printf("last call:     %s\n", footer.c_str());
     std::printf("model %s (%s), engine %s %s\n", st.model.name.c_str(), st.model.path.c_str(), st.engine.name.c_str(),
                 st.engine.version.c_str());
     const ModelBudget budget = get_budget(st.registry);
@@ -288,6 +293,10 @@ void run_one_turn(ChatState &st, const std::string &text, std::span<const Media>
     out(flush_stream(st.filter));
     ensure_newline();
     collect_artifacts(st, before);
+    if (r.ok) {
+        const std::string footer = format_turn_footer(st.memory.stats.last);
+        if (!footer.empty()) std::fprintf(g_err, "[%s]\n", footer.c_str());
+    }
     remember_conversation(st);
 }
 
@@ -321,7 +330,7 @@ Result<int> parse_positive(std::string_view flag, std::string_view text) {
 
 // /model NAME: resolve, load the engine for it, re-create the session. On failure the old model stays.
 void switch_model(ChatState &st, const std::string &spec) {
-    auto m = resolve_model(spec, {}, catalog_refs(*st.ctx), file_exists);
+    auto m = resolve_model(spec, {}, catalog_refs(*st.ctx), path_exists);
     if (!m.ok) {
         out("[error] " + m.error.message + "\n");
         return;
@@ -400,9 +409,10 @@ int cmd_chat(const CommandLine &cl, Context &ctx) {
         st.max_tokens = v.value;
     }
 
-    auto model = resolve_model(cl.get("model"), ctx.config.default_model, catalog_refs(ctx), file_exists);
+    auto model = resolve_model(cl.get("model"), ctx.config.default_model, catalog_refs(ctx), path_exists);
     if (!model.ok) return report_error(model.error);
     st.model = model.value;
+    st.engine_options = catalog_engine_options(ctx, st.model.path, st.engine_options);
     auto engine = load_engine_for(ctx, st.engine_flag, st.model.path);
     if (!engine.ok) return report_error(engine.error);
     st.engine = engine.value;

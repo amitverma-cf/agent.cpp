@@ -12,7 +12,11 @@ set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)  # engines never download; the CLI hu
 # subprocess in mtmd's helpers, which a plugin must not spawn, so it stays off.
 set(LLAMA_BUILD_MTMD ON CACHE BOOL "" FORCE)
 set(MTMD_VIDEO OFF CACHE BOOL "" FORCE)
+# llama.cpp is a C++17 project (u8"" literals are passed to const char* APIs; under C++20 they are
+# char8_t, which MSVC rejects). Build it as C++17 and keep the plugin itself at C++20.
+set(CMAKE_CXX_STANDARD 17)
 add_subdirectory(${PROJECT_SOURCE_DIR}/vendor/llama.cpp ${CMAKE_CURRENT_BINARY_DIR}/llama.cpp EXCLUDE_FROM_ALL)
+set(CMAKE_CXX_STANDARD 20)
 include(${PROJECT_SOURCE_DIR}/cmake/ggml_no_amx.cmake)
 
 add_library(agent-engine-llama SHARED

@@ -205,7 +205,7 @@ If the number of tool-call rounds reaches `Config::max_tool_call_rounds` (defaul
 | Error | Meaning |
 |---|---|
 | `ToolCallLimitExceeded` | Model called tools more than `max_tool_call_rounds` times in one turn |
-| `DecodeFailed` | Arena capacity exhausted building `MessageView` array (increase `arena_capacity`) |
+| `DecodeFailed` | out of memory while the per-turn Arena grew (the Arena no longer has a size limit) |
 | Provider errors | Any error from `infer` is propagated unchanged |
 
 ---

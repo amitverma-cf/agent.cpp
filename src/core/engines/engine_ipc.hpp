@@ -19,7 +19,7 @@
 // call:    str id | str name | str arguments
 // message: str role | u32 n_parts | part* | u32 n_calls | call* | str tool_call_id
 // request: u32 task | u32 request_flags | u32 run_flags | u32 n_messages | message* | str tools_json | str params_json | str output_dir
-// response: message | i32 prompt_tokens | i32 completion_tokens
+// response: message | i32 prompt_tokens | i32 completion_tokens | agent_run_stats (raw)
 //
 // Every encoder appends to a caller-owned std::string whose capacity is reused across calls, and
 // every decoder returns views into the received frame (or the mapped segment); the agent_message /
@@ -37,7 +37,7 @@
 
 namespace agent::engine_ipc {
 
-inline constexpr uint32_t kProtocolVersion = 2;
+inline constexpr uint32_t kProtocolVersion = 3;
 inline constexpr size_t kHeaderSize = 16;
 // Largest frame either side accepts (payloads that don't go through shared memory travel inline).
 inline constexpr uint32_t kMaxFrame = 1u << 30;
@@ -182,6 +182,9 @@ class Writer {
         message(r.message);
         i32(r.usage.prompt_tokens);
         i32(r.usage.completion_tokens);
+        agent_run_stats stats{};
+        if (AGENT_HAS_FIELD(&r, agent_response, stats)) stats = r.stats;
+        raw(&stats, sizeof(stats));
     }
 
   private:
@@ -333,6 +336,7 @@ class Reader {
         if (!message(out.message, arena)) return false;
         out.usage.prompt_tokens = i32();
         out.usage.completion_tokens = i32();
+        out.stats = scalar<agent_run_stats>();
         return ok_;
     }
 

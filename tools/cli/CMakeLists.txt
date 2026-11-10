@@ -3,12 +3,22 @@
 add_library(agent_cli_core STATIC
     src/cli_core.cpp
     src/cli_platform.cpp
+    src/home.cpp
+    src/secrets.cpp
+    src/doctor.cpp
     src/status_view.cpp
     src/audio.cpp
     src/voice_core.cpp
 )
 target_include_directories(agent_cli_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(agent_cli_core PUBLIC agent)
+# Secrets: sha256 from the hub, AES-GCM / scrypt from OpenSSL, and the OS credential store.
+target_link_libraries(agent_cli_core PRIVATE agent_hub OpenSSL::Crypto)
+if(WIN32)
+    target_link_libraries(agent_cli_core PRIVATE advapi32)
+elseif(APPLE)
+    target_link_libraries(agent_cli_core PRIVATE "-framework Security" "-framework CoreFoundation")
+endif()
 target_include_directories(agent_cli_core PRIVATE ${AGENT_SIMDJSON_INCLUDE_DIR})
 # The CLI version string comes from project(VERSION) in the top-level CMakeLists.txt.
 target_compile_definitions(agent_cli_core PUBLIC AGENT_CLI_VERSION="${PROJECT_VERSION}")
@@ -44,6 +54,9 @@ add_executable(agent_cli_bin
     src/commands.cpp
     src/chat.cpp
     src/voice.cpp
+    src/task.cpp
+    src/secret_cmd.cpp
+    src/doctor_cmd.cpp
 )
 set_target_properties(agent_cli_bin PROPERTIES OUTPUT_NAME agent RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 target_link_libraries(agent_cli_bin PRIVATE agent_cli_core agent_hub agent_store_sqlite)

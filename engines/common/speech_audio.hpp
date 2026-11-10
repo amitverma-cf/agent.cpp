@@ -1,4 +1,4 @@
-// Header-only audio helpers shared by the speech engine plugins (whisper, parakeet, qwen3tts).
+// Header-only audio helpers shared by the speech engine plugins (whisper, parakeet).
 //
 // Plugins are self-contained shared libraries that cannot link libagent, so this lives here as
 // inline functions compiled into each plugin. No exceptions are thrown on purpose: failures are

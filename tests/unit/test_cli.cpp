@@ -375,3 +375,33 @@ TEST_CASE("cli: stream filter hides tool-call markup, also across token boundari
     CHECK(flush_stream(h).empty()); // an unterminated call is dropped
     CHECK(filter_stream(h, "plain") == "plain");
 }
+
+TEST_CASE("cli: turn footer shows prompt speed, generation speed and KV size", "[cli][footer]") {
+    using agent::TokenUsage;
+    using agent::cli::format_turn_footer;
+
+    // An engine that reports nothing (speech, image, ...) gets no footer.
+    CHECK(format_turn_footer(TokenUsage{.prompt_tokens = 10, .completion_tokens = 5}).empty());
+
+    TokenUsage u;
+    u.prompt_tokens = 412;
+    u.cached_tokens = 380;
+    u.completion_tokens = 64;
+    u.prefill_ms = 100.0f; // 32 fresh tokens in 0.1 s
+    u.decode_ms = 700.0f;  // 63 tokens after the first, in 0.7 s
+    u.kv_tokens = 476;
+    u.kv_max_tokens = 2048;
+    u.kv_type = 4;
+    u.kv_bytes = 3 * 1024 * 1024 + 100 * 1024;
+    CHECK(format_turn_footer(u) == "prompt 412 tok (380 cached) 320 tok/s | gen 64 tok 90 tok/s | KV 476/2048 q4_0 3.1 MiB");
+
+    // Without a cache hit nothing is claimed as cached, and a missing KV type or size is left out.
+    TokenUsage cold;
+    cold.prompt_tokens = 100;
+    cold.completion_tokens = 11;
+    cold.prefill_ms = 200.0f;
+    cold.decode_ms = 100.0f;
+    cold.kv_tokens = 111;
+    cold.kv_max_tokens = 4096;
+    CHECK(format_turn_footer(cold) == "prompt 100 tok 500 tok/s | gen 11 tok 100 tok/s | KV 111/4096");
+}

@@ -1,0 +1,84 @@
+// The curated model registry: short names for models that work with the engines in this repo.
+// `tested` means the entry was pulled with `agent model pull` and run end to end with agent.cpp
+// (see local test notes); the others exist on Hugging Face at the given file and size, and use the same
+// engine as a tested sibling.
+
+#include <agent-cpp/hub.hpp>
+
+#include <algorithm>
+
+namespace agent::hub {
+
+namespace {
+
+constexpr RegistryPart kQwen05[] = {{"Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M", ""}};
+constexpr RegistryPart kQwen3_17[] = {{"Qwen/Qwen3-1.7B-GGUF:Q8_0", ""}};
+constexpr RegistryPart kQwen3_4[] = {{"Qwen/Qwen3-4B-GGUF:Q4_K_M", ""}};
+constexpr RegistryPart kLlama1[] = {{"bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M", ""}};
+constexpr RegistryPart kLlama3[] = {{"bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M", ""}};
+constexpr RegistryPart kGemma1[] = {{"ggml-org/gemma-3-1b-it-GGUF:Q4_K_M", ""}};
+constexpr RegistryPart kPhi4[] = {{"unsloth/Phi-4-mini-instruct-GGUF:Q4_K_M", ""}};
+constexpr RegistryPart kSmolVlm[] = {{"ggml-org/SmolVLM-256M-Instruct-GGUF:Q8_0", ""}};
+constexpr RegistryPart kGemma4Vl[] = {{"ggml-org/gemma-3-4b-it-GGUF:Q4_K_M", ""}};
+constexpr RegistryPart kQwenVl3[] = {{"ggml-org/Qwen2.5-VL-3B-Instruct-GGUF:Q4_K_M", ""}};
+constexpr RegistryPart kGlmOcr[] = {{"ggml-org/GLM-OCR-GGUF:Q8_0", ""}};
+constexpr RegistryPart kVoxtral[] = {{"ggml-org/Voxtral-Mini-3B-2507-GGUF:Q4_K_M", ""}};
+constexpr RegistryPart kBge[] = {{"ggml-org/bge-small-en-v1.5-Q8_0-GGUF", ""}};
+constexpr RegistryPart kNomic[] = {{"nomic-ai/nomic-embed-text-v1.5-GGUF:Q8_0", ""}};
+constexpr RegistryPart kEmbGemma[] = {{"ggml-org/embeddinggemma-300M-qat-q4_0-GGUF:q4_0", ""}};
+constexpr RegistryPart kJina[] = {{"gpustack/jina-reranker-v1-tiny-en-GGUF:Q8_0", ""}};
+constexpr RegistryPart kBgeRerank[] = {{"gpustack/bge-reranker-v2-m3-GGUF:Q4_K_M", ""}};
+constexpr RegistryPart kSdxs[] = {{"concedo/sdxs-512-tinySDdistilled-GGUF:Q8_0", ""}};
+constexpr RegistryPart kSdTurbo[] = {{"Green-Sky/SD-Turbo-GGUF:sd_turbo-f16-q8_0.gguf", ""}};
+constexpr RegistryPart kWhisperTiny[] = {{"ggerganov/whisper.cpp:ggml-tiny.en.bin", ""}};
+constexpr RegistryPart kWhisperBase[] = {{"ggerganov/whisper.cpp:ggml-base.en-q5_1.bin", ""}};
+constexpr RegistryPart kWhisperVad[] = {{"ggml-org/whisper-vad:ggml-silero-v5.1.2.bin", ""}};
+constexpr RegistryPart kParakeet[] = {{"mudler/parakeet-cpp-gguf:tdt_ctc-110m-q4_k.gguf", ""}};
+constexpr RegistryPart kMiniLm[] = {{"Xenova/all-MiniLM-L6-v2:onnx/model_quantized.onnx", ""}};
+constexpr RegistryPart kSherpaWhisper[] = {{"csukuangfj/sherpa-onnx-whisper-tiny.en:*", "int8,tokens"}};
+constexpr RegistryPart kTrellis[] = {{"LocalAI-io/TRELLIS.2-4B-GGUF:ss_flow_f16.gguf", ""},
+                                     {"LocalAI-io/dinov3-vitl16-pretrain-lvd1689m-GGUF:dino_f16.gguf", ""},
+                                     {"LocalAI-io/TRELLIS-image-large-GGUF:ss_dec_f16.gguf", ""}};
+constexpr RegistryPart kJulia[] = {{"ggml-org/Julia-1-GGUF:Q8_0", ""}};
+
+constexpr RegistryEntry kRegistry[] = {
+    // alias, task, engine, parts, size MiB, engine options, notes, tested
+    {"qwen2.5-0.5b", "text_gen", "llama", kQwen05, 469, "", "chat, tool calls, decide; the default test model", true},
+    {"qwen3-1.7b", "text_gen", "llama", kQwen3_17, 1749, "", "thinking model; Q8_0", false},
+    {"qwen3-4b", "text_gen", "llama", kQwen3_4, 2382, "", "best small tool-calling model that fits 8 GB", false},
+    {"llama3.2-1b", "text_gen", "llama", kLlama1, 770, "", "", false},
+    {"llama3.2-3b", "text_gen", "llama", kLlama3, 1926, "", "", false},
+    {"gemma3-1b", "text_gen", "llama", kGemma1, 769, "", "", false},
+    {"phi4-mini", "text_gen", "llama", kPhi4, 2376, "", "3.8B", false},
+    {"smolvlm-256m", "vision", "llama", kSmolVlm, 267, "", "image input; the projector is pulled and used automatically", true},
+    {"gemma3-4b-vl", "vision", "llama", kGemma4Vl, 2374, "", "image input + projector", false},
+    {"qwen2.5-vl-3b", "vision", "llama", kQwenVl3, 1840, "", "image input + projector", false},
+    {"glm-ocr", "ocr", "llama", kGlmOcr, 1368, "", "OCR; licence unknown on the hub, pass --allow-restricted", true},
+    {"voxtral-mini-3b", "audio_in", "llama", kVoxtral, 2358, "", "audio input + projector", false},
+    {"bge-small", "embed", "llama", kBge, 35, "{\"mode\":\"embed\"}", "384 dims", true},
+    {"nomic-embed", "embed", "llama", kNomic, 139, "{\"mode\":\"embed\"}", "768 dims", false},
+    {"embeddinggemma", "embed", "llama", kEmbGemma, 265, "{\"mode\":\"embed\"}", "", false},
+    {"jina-reranker-tiny", "rerank", "llama", kJina, 35, "{\"mode\":\"rerank\"}", "ranked the right passage first in testing", true},
+    {"bge-reranker-v2-m3", "rerank", "llama", kBgeRerank, 418, "{\"mode\":\"rerank\"}", "multilingual", false},
+    {"sdxs-512", "image_gen", "sdcpp", kSdxs, 0, "", "one-step 512px; use {\"steps\":1,\"cfg_scale\":1}", true},
+    {"sd-turbo", "image_gen", "sdcpp", kSdTurbo, 1930, "", "", false},
+    {"whisper-tiny.en", "asr", "whisper", kWhisperTiny, 74, "", "", true},
+    {"whisper-base.en", "asr", "whisper", kWhisperBase, 57, "", "q5_1", false},
+    {"whisper-vad", "vad", "whisper", kWhisperVad, 1, "", "silero VAD; pass as engine option vad.model", true},
+    {"parakeet-110m", "asr", "parakeet", kParakeet, 125, "", "CC-BY-4.0", true},
+    {"minilm-onnx", "generic", "onnx", kMiniLm, 22, "", "feed input_ids / attention_mask / token_type_ids tensors", true},
+    {"sherpa-whisper-tiny.en", "asr", "sherpa", kSherpaWhisper, 99, "", "folder model; int8 encoder/decoder", true},
+    {"trellis-coarse", "mesh_gen", "trellis", kTrellis, 3300, "", "image to 3D, coarse path; ~6 min and 3.5 GB RAM on 4 CPU cores", true},
+    {"julia-1", "decide", "llama", kJulia, 160, "", "native System One decision model; NOT runnable in-process yet", false},
+};
+
+} // namespace
+
+std::span<const RegistryEntry> model_registry() { return kRegistry; }
+
+const RegistryEntry *find_registry_entry(std::string_view alias) {
+    const auto it = std::find_if(std::begin(kRegistry), std::end(kRegistry), [&](const RegistryEntry &e) { return e.alias == alias; });
+    return it == std::end(kRegistry) ? nullptr : &*it;
+}
+
+} // namespace agent::hub

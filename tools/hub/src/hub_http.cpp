@@ -378,12 +378,71 @@ Result<void> download_file(std::string_view url, const std::string &dest, const 
     return fail(ErrorCode::HttpError, "hub: server rejected resume twice for " + std::string(url));
 }
 
+namespace {
+
+// "owner/repo:*": every file of the repo (a speech or 3D model is a folder of files, not one GGUF), narrowed
+// by PullOptions::include (a file is kept when its path contains any of the strings). The catalogue entry
+// points at the folder.
+Result<CatalogEntry> pull_whole_repo(const ModelSpec &spec, const RepoInfo &ri, const PullOptions &opts) {
+    std::string license = ri.license.empty() ? std::string("unknown") : ri.license;
+    if (ri.license == "other" && !ri.license_name.empty()) license += " (" + ri.license_name + ")";
+    if (is_restricted_license(ri.license, ri.license_name) && !opts.allow_restricted_license)
+        return fail<CatalogEntry>(ErrorCode::PermissionDenied, "hub: " + spec.repo + " is under a restricted licence (" + license +
+                                                                   "); pass allow_restricted_license (--allow-restricted) if you are entitled to use it");
+
+    std::vector<const RemoteFile *> chosen;
+    for (const RemoteFile &f : ri.files) {
+        if (f.path == ".gitattributes" || f.path == "README.md" || f.path.rfind(".", 0) == 0) continue;
+        bool keep = opts.include.empty();
+        for (const std::string &needle : opts.include)
+            if (!needle.empty() && f.path.find(needle) != std::string::npos) keep = true;
+        if (keep) chosen.push_back(&f);
+    }
+    if (chosen.empty()) return fail<CatalogEntry>(ErrorCode::KeyNotFound, "hub: no files in " + spec.repo + " match the include filter");
+
+    const std::string models_dir = opts.models_dir.empty() ? default_models_dir() : opts.models_dir;
+    const std::string catalog_path = opts.catalog_path.empty() ? (std::filesystem::path(models_dir) / "models.json").string() : opts.catalog_path;
+    std::error_code ec;
+    const auto repo_dir = std::filesystem::absolute(std::filesystem::path(models_dir) / std::filesystem::path(spec.repo), ec).lexically_normal();
+
+    uint64_t total = 0;
+    for (const RemoteFile *f : chosen) {
+        const std::string dest = std::filesystem::absolute(repo_dir / f->path, ec).lexically_normal().string();
+        if (!(std::filesystem::is_regular_file(dest, ec) && (f->size == 0 || file_size_or_zero(dest) == f->size))) {
+            const std::string url = opts.http.endpoint + "/" + encode_path(spec.repo) + "/resolve/" + encode_path(spec.revision) + "/" + encode_path(f->path);
+            DownloadOptions dl{.expected_size = f->size,
+                               .expected_sha256 = f->sha256,
+                               .on_progress = opts.on_progress,
+                               .progress_user_data = opts.progress_user_data,
+                               .cancel = opts.cancel};
+            auto r = download_file(url, dest, opts.http, dl);
+            if (!r.ok) return fail<CatalogEntry>(r.error.code, r.error.message);
+        }
+        total += f->size ? f->size : file_size_or_zero(dest);
+    }
+
+    std::string name = opts.name;
+    if (name.empty()) name = spec.repo.substr(spec.repo.find('/') + 1);
+    CatalogEntry entry{.name = name, .repo = spec.repo, .file = "*", .path = repo_dir.string(), .size = total, .license = license};
+    auto cat = load_catalog(catalog_path);
+    if (!cat.ok) return fail<CatalogEntry>(cat.error.code, cat.error.message);
+    auto existing = std::find_if(cat.value.begin(), cat.value.end(), [&](const CatalogEntry &e) { return e.name == name; });
+    if (existing != cat.value.end()) *existing = entry;
+    else cat.value.push_back(entry);
+    auto saved = save_catalog(catalog_path, cat.value);
+    if (!saved.ok) return fail<CatalogEntry>(saved.error.code, saved.error.message);
+    return ok(std::move(entry));
+}
+
+} // namespace
+
 Result<CatalogEntry> pull_model(std::string_view spec_text, const PullOptions &opts) {
     auto spec = parse_spec(spec_text);
     if (!spec.ok) return fail<CatalogEntry>(spec.error.code, spec.error.message);
 
     auto info = fetch_repo_info(spec.value.repo, opts.http, spec.value.revision);
     if (!info.ok) return fail<CatalogEntry>(info.error.code, info.error.message);
+    if (spec.value.all) return pull_whole_repo(spec.value, info.value, opts);
 
     auto file = select_file(info.value, spec.value);
     if (!file.ok) return fail<CatalogEntry>(file.error.code, file.error.message);
@@ -449,6 +508,27 @@ Result<CatalogEntry> pull_model(std::string_view spec_text, const PullOptions &o
             if (!r.ok) return fail<CatalogEntry>(r.error.code, r.error.message);
         }
         total_size += shard.size ? shard.size : file_size_or_zero(shard_path);
+    }
+    // The multimodal projector of a vision / audio / OCR model lives in the same repo; fetch it too so
+    // the model works without a second command.
+    auto proj = select_mmproj(ri, file.value.path, opts.mmproj);
+    if (!proj.ok) return fail<CatalogEntry>(proj.error.code, proj.error.message);
+    if (proj.value) {
+        const RemoteFile &p = *proj.value;
+        const std::string proj_path = std::filesystem::absolute(repo_dir / p.path, ec).lexically_normal().string();
+        if (!(std::filesystem::is_regular_file(proj_path, ec) && (p.size == 0 || file_size_or_zero(proj_path) == p.size))) {
+            const std::string url = opts.http.endpoint + "/" + encode_path(spec.value.repo) + "/resolve/" + encode_path(spec.value.revision) + "/" +
+                                    encode_path(p.path);
+            DownloadOptions dl{.expected_size = p.size,
+                               .expected_sha256 = p.sha256,
+                               .on_progress = opts.on_progress,
+                               .progress_user_data = opts.progress_user_data,
+                               .cancel = opts.cancel};
+            auto r = download_file(url, proj_path, opts.http, dl);
+            if (!r.ok) return fail<CatalogEntry>(r.error.code, r.error.message);
+        }
+        entry.mmproj = proj_path;
+        entry.mmproj_file = p.path;
     }
     if (shards.value.size() > 1) entry.size = total_size;
     if (entry.size == 0) entry.size = file_size_or_zero(entry.path);

@@ -61,26 +61,60 @@ name, version, capabilities and backend, and keeps an optional `"isolation": "pr
 A hand-written entry that has only `"path"` also works. The CLI then takes the name from the file name
 (`agent-engine-<name>.so`).
 
+## Where files live
+
+agent.cpp keeps everything shared in one **global home**, a folder called `.agent.cpp-workspace` that you
+choose during `agent setup` (default: your user folder). Each project has a small `.agents/` folder of its own.
+See [workspace.md](workspace.md) for the full layout.
+
+```
+.agent.cpp-workspace/          global home
+  config.json  engines.json    settings and the engine list
+  engines/  models/            plugins, and model files with models.json
+  skills/  mcp/  plugins/      available in every project
+  runtimes/                    private bun / uv, never installed globally
+  cache/  logs/                downloads in progress, GPU kernel caches, logs
+  workspaces/default/          the default workspace (file tools, memory, artifacts)
+<project>/.agents/             one project
+  skills/  mcp.json            committed with the project
+  memory/  cache/  local/      private, git-ignored
+```
+
+The home is found from `--home DIR`, then `$AGENT_HOME`, then the folder `agent setup` recorded. An explicit
+`--config-dir` / `$AGENT_CONFIG_DIR` keeps the older layout (config and models in the platform folders).
+
 ## agent setup
 
 ```sh
 agent setup                         # asks questions on a terminal
-agent setup --yes                   # accepts the defaults; also what happens when stdin is not a TTY
-agent setup --caps llama,sdcpp --workspace ~/agent-ws --models-dir /data/models --engines-dir /opt/engines --backend cpu
+agent setup --yes --home ~/.agent.cpp-workspace --model qwen2.5-0.5b --model bge-small
+agent setup --no-models             # layout, engines and config only
+agent setup --caps llama,sdcpp --engines-dir /opt/engines --backend cpu
 ```
 
-1. **Detects hardware.** It reports the CPU core count, whether `nvidia-smi` is on `PATH`, whether
-   `/dev/nvidia0` exists, and which `/dev/dri/renderD*` nodes are present. From that it suggests a
-   backend: `cuda`, `vulkan` or `cpu`. The backend is only recorded for now.
-2. **Picks engines.** The default is the starter pack from ROADMAP §6: `llama,sherpa,sdcpp,onnx`.
-   `trellis` is not included yet because it has no engine.
-3. **Looks for each engine's plugin** (`agent-engine-<name>.so` / `.dll` / `.dylib`) in `--engines-dir`
-   and the default plugin directories. It loads each plugin it finds to check it and records the plugin
-   in `engines.json`. Engines already listed in `engines.json` are kept. For an engine it cannot find, it
-   prints a note that explains how to build the engine and register it with `agent engine add`.
-   Downloading prebuilt engine plugins from GitHub releases is not implemented yet.
-4. **Writes `config.json` and `engines.json`** and creates the workspace directory. If a `config.json`
-   already exists, its values are the defaults.
+1. **Asks where the global home goes** (`--home DIR` answers it), creates its folders and remembers the choice.
+2. **Detects hardware**: CPU cores, installed RAM, whether `nvidia-smi` is on `PATH`, `/dev/nvidia0`, and the
+   `/dev/dri/renderD*` nodes. From that it suggests a backend: `cuda`, `vulkan` or `cpu`.
+3. **Picks engines.** The default is the starter pack `llama,sherpa,sdcpp,onnx`.
+4. **Looks for each engine's plugin** (`agent-engine-<name>.so` / `.dll` / `.dylib`) in `--engines-dir`
+   and the default plugin directories, loads it to check it, and records it in `engines.json`. Engines already
+   listed are kept. Downloading prebuilt engine plugins is not implemented yet.
+5. **Shows the models this machine can run** and downloads **nothing by default**. On a terminal you choose numbers
+   from the list (registry models whose engine is installed and whose size fits in 70% of RAM with room for the KV
+   cache), or type any `owner/repo[:quant]`. Without a terminal, `--model NAME|owner/repo[:quant]` (repeatable) picks them.
+6. **Downloads and smoke-tests each model**: it runs the real `agent task` on it (a short chat reply, an embedding, a
+   rerank) and reports the speeds, so you know the engine, the model and the sandbox work together. Models that need
+   audio or image input are downloaded but not smoke-tested.
+
+## agent init
+
+```sh
+agent init            # creates .agents/ in the current folder
+agent init ~/code/app
+```
+
+Creates `.agents/` with `skills/`, `memory/`, `cache/`, `local/` and a `.gitignore` that keeps the last three out of
+git. The nearest ancestor of the working directory that has a `.agents/` folder is the project.
 
 ## agent engine
 
@@ -97,16 +131,39 @@ dependency libraries) is rejected and the load error is shown.
 ## agent model
 
 ```sh
+agent model search [TEXT] [--task asr]       # the curated registry: short names, sizes, [tested] marks
+agent model info owner/repo                  # quants with sizes, projectors, licence of any Hugging Face repo
+agent model pull qwen3-4b                    # a registry name (pulls every part, e.g. a talker and its codec)
 agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M [--name qwen] [--allow-restricted]
+agent model pull owner/repo --quant Q4_K_M [--mmproj auto|none|QUANT] [--no-mmproj]
+agent model pull owner/repo:* [--include int8,tokens]     # every file of a folder model (sherpa voices, TRELLIS)
 agent model ls
 agent model rm qwen [--keep-file]
 ```
+
+A vision, audio or OCR repo also gets its multimodal projector (`mmproj-*.gguf`) in the same pull: the one with the
+model's quant, else Q8_0, else F16. It is recorded in `models.json` and used automatically by `chat`, `task` and `run`.
 
 `pull` uses the hub (see [api/hub.md](api/hub.md)) for spec resolution, resumable downloads, sha256
 checks and the licence policy. Progress is drawn on stderr. Ctrl-C cancels the download and keeps the
 `.part` file, so the same command resumes it. If a model's licence restricts use, the pull is refused
 unless you pass `--allow-restricted`. On a terminal you are asked instead. The first chat model you pull
 becomes `default_model`.
+
+## agent task
+
+```sh
+agent task text_gen -e llama -m qwen3-4b --text "Say hi" --max-tokens 16
+agent task embed -e llama -m bge-small --engine-options '{"mode":"embed"}' --text "hello"
+agent task rerank -e llama -m jina-reranker-tiny --engine-options '{"mode":"rerank"}' --text "capital of France" --doc "Paris is..." --doc "Bananas are..."
+agent task image_gen -e sdcpp -m sdxs-512 --text "a red lighthouse" --params '{"steps":1,"cfg_scale":1}'
+agent task asr -e whisper -m whisper-tiny.en --file speech.wav
+agent task generic -e onnx -m minilm-onnx --tensor input_ids:i64:1,4=101,2023,2003,102 --tensor attention_mask:i64:1,4=1,1,1,1
+```
+
+Runs one engine capability once (`text_gen`, `ocr`, `asr`, `tts`, `vad`, `diarize`, `image_gen`, `image_edit`, `video_gen`,
+`mesh_gen`, `embed`, `rerank`, `decide`, `classify`, `generic`) and prints every output part: text, files with their size,
+tensors with dtype, shape and the first values, and a `stats:` line with the speeds. Tools are not added to the prompt.
 
 ## agent chat
 
@@ -133,6 +190,11 @@ does `"isolation": "inprocess"` on the engine's `engines.json` entry. See
 **Engine choice.** Unless you pass `--engine`, the engine follows from the model file type: `.gguf`
 uses `llama`, `.onnx` uses `onnx`, and `.safetensors` / `.ckpt` use `sdcpp`. The engine's path comes
 from `engines.json`. If the engine is not listed there, the CLI looks in the default plugin directories.
+
+**After every turn** a line on stderr shows the engine's own measurements of the last model call: prompt speed
+(tokens that were not already in the KV cache, per second), generation speed and the KV cache,
+for example `[prompt 412 tok (380 cached) 320 tok/s | gen 64 tok 90 tok/s | KV 476/2048 q4_0 3.1 MiB]`. Engines that report
+nothing (speech, image, ...) print no line. `/stats` adds the prefix-cache hit rate and the last call.
 
 **The chat screen.** Tokens stream as the model writes them. Tool-call markup in the Hermes / Qwen
 format (`<tool_call>...</tool_call>`) is hidden from the stream. Instead, each tool call is shown as

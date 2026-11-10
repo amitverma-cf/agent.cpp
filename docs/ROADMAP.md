@@ -43,7 +43,7 @@ Platforms: **Windows and Linux are first class** (CI + manual testing). macOS bu
 | **TTS** | Kokoro (via sherpa-onnx or TTS.cpp) | 82M, Apache-2.0 |
 | ~~TTS~~ | ~~Fish Audio S2 Pro~~ (`s2.cpp` / `audio.cpp`) | **Excluded for now**: Fish Audio Research License (non-commercial) |
 | ~~TTS~~ | ~~Phonon~~ (Gradium) | **Excluded for now**: CC BY-NC 4.0 weights, and no C++ runtime yet |
-| **TTS** | Qwen3-TTS via `qwen3-tts.cpp` / `qwentts.cpp` (ggml) | Voice cloning |
+| **TTS** | Kokoro via sherpa-onnx | Qwen3-TTS (qwentts.cpp) was tried and removed: 6.3 s for 1.76 s of speech and 2.6 GiB RSS on 4 CPU cores, against 2.4 s for 2.85 s and 584 MiB for Kokoro |
 | **Audio multi-model** | `audio.cpp` (ggml framework) | Several TTS/STT families behind one API: candidate "meta-engine" |
 | **Image + video gen** | **stable-diffusion.cpp** | SD/SDXL, FLUX.2/3 Klein, Qwen-Image 2.1, Z-Image; video: Wan 2.1/2.2, LTX-2.3/2.5, HunyuanVideo 1.5, MiniMax-H3 |
 | **3D** | TRELLIS.2 ggml ports: **`trellis2cpp`** (localai-org, MIT, flat C ABI; used by `engines/trellis`), `trellis.cpp` (pwilkin, MIT, C++ only, no library C API) | Image → GLB. TRELLIS.2 weights are MIT, but the required DINOv3 conditioning encoder is under the custom DINOv3 License: check it against the catalogue policy below before listing |
@@ -159,7 +159,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [ ] Windows build + test pass (owner)
 - [x] Voice loop: mic/speaker I/O + VAD (sherpa) → ASR → LLM → TTS (`agent voice`, [guide](guides/voice-assistant.md)); file backend tested end to end, real sound devices untested
 
-**Recently done** (see the phase lists below): llama decide (choice / score / yes-no) and OCR; sdcpp video without ffmpeg (MJPEG AVI or PNG frames); whisper, parakeet and Qwen3-TTS engines; tools returning media parts; every engine tested under the engine sandbox, GPU device nodes opt-in, `sandbox` for MCP servers in agent.json; ggml engines built without Intel AMX by default (in-process ORT engines corrupted its per-thread tile state, see [LIMITATIONS](LIMITATIONS.md) §1); SDK docs and benchmark harness. Earlier: engine plugin ABI + loader + manifest; llama (b12020, Jinja templates, native tool calls, vision/audio input, embed/rerank), sdcpp, sherpa and onnx engines; media/progress/cancel in the turn loop; graph runtime + `agent.json` loader; MCP stdio client; RAG pipeline; Hugging Face hub; `agent` CLI (`setup`, `engine`, `model`, `chat`, `run`); SQLite moved out of the core.
+**Recently done** (see the phase lists below): llama decide (choice / score / yes-no) and OCR; sdcpp video without ffmpeg (MJPEG AVI or PNG frames); whisper and parakeet engines; tools returning media parts; every engine tested under the engine sandbox, GPU device nodes opt-in, `sandbox` for MCP servers in agent.json; ggml engines built without Intel AMX by default (in-process ORT engines corrupted its per-thread tile state, see [LIMITATIONS](LIMITATIONS.md) §1); SDK docs and benchmark harness. Earlier: engine plugin ABI + loader + manifest; llama (b12020, Jinja templates, native tool calls, vision/audio input, embed/rerank), sdcpp, sherpa and onnx engines; media/progress/cancel in the turn loop; graph runtime + `agent.json` loader; MCP stdio client; RAG pipeline; Hugging Face hub; `agent` CLI (`setup`, `engine`, `model`, `chat`, `run`); SQLite moved out of the core.
 
 ### Phase 0: Decide and de-risk (1 to 2 weeks)
 - [ ] Agree on this roadmap; record decisions as ADRs in `docs/adr/`
@@ -248,7 +248,6 @@ Priority wave A (v1 **starter pack**, installed by default by `agent setup`):
 Wave B (optional add-ons):
 - [x] `whisper`: whisper.cpp STT (`agent-engine-whisper`, whisper.cpp v1.9.5 C API, opt-in `AGENT_ENGINE_WHISPER`): ASR (language / translate / beam size, streamed segments, progress, cancel) + whisper.cpp's Silero VAD (`AGENT_CAP_VAD`, also as a pre-filter); Linux x64 CPU tested with ggml-tiny.en + ggml-silero-v5.1.2 on samples/jfk.wav
 - [x] `parakeet`: parakeet.cpp (ggml STT) (`agent-engine-parakeet`, parakeet.cpp v0.6.1 C API, opt-in `AGENT_ENGINE_PARAKEET`): offline ASR with decoder / language selection; Linux x64 CPU tested with tdt_ctc-110m-q8_0 on the repo's speech.wav. Not yet: parakeet.cpp's VAD / diarization / streaming APIs, cancel inside a transcription (no hook)
-- [x] `qwen3tts`: Qwen3-TTS (voice cloning), after licence check (code MIT, weights Apache-2.0) (`agent-engine-qwen3tts`, qwentts.cpp `5916bf7` C API, opt-in `AGENT_ENGINE_QWEN3TTS`): TTS with streamed audio chunks, progress, per-frame cancel, voice cloning from a request audio part or `options.voice`, named speakers / voice design for the other talkers; Linux x64 CPU tested with qwen-talker-0.6b-base-Q8_0 ("hello world" and a jfk.wav-cloned "good morning" transcribed back by whisper tiny.en). Not yet tested: customvoice / voicedesign talkers, GPU, thread count control (qwentts picks it)
 - [ ] more 3D engines as ggml/ONNX ports appear (e.g. Hunyuan3D if a commercially licensed port exists)
 Watch list: audio.cpp as a meta-engine; llama.cpp native TTS / image gen when they land. Fish Audio S2 and Phonon are revisited only if their licences change.
 - [ ] Each engine: manifest, tiny-model smoke test, example graph, licence notes
@@ -312,7 +311,7 @@ None blocking. New questions get added here as Phase 0 spikes report back.
 - sherpa-onnx: https://p.codekk.com/detail/c++/k2-fsa/sherpa-onnx
 - Fish Audio S2 (s2.cpp): https://github.com/rodrigomatta/s2.cpp · audio.cpp: https://github.com/0xShug0/audio.cpp
 - Phonon: https://gradium.ai/blog/release-phonon-open-weight · https://huggingface.co/gradium/phonon-40m-en
-- qwen3-tts.cpp: https://github.com/predict-woo/qwen3-tts.cpp · TTS.cpp: https://github.com/lookbe/TTS.cpp
+- TTS.cpp: https://github.com/lookbe/TTS.cpp
 - TRELLIS.2 ggml: https://github.com/localai-org/trellis2cpp · https://github.com/pwilkin/trellis.cpp/wiki
 - LangGraph checkpointers: https://docs.langchain.com/oss/langgraph/checkpointers · ADK overview: https://futureagi.com/blog/what-is-google-adk-2026 · pi-mono: https://pyshine.com/Pi-Mono-Full-Stack-AI-Agent-Toolkit/
 - MCP transports (draft): https://modelcontextprotocol.net/specification/draft/basic/transports

@@ -30,9 +30,28 @@ int main(int argc, char **argv) {
     }
 
     Context ctx;
-    ctx.config_dir = cl.has("config-dir") ? std::string(cl.get("config-dir")) : default_config_dir();
-    ctx.config_path = (std::filesystem::path(ctx.config_dir) / "config.json").string();
-    ctx.engines_path = (std::filesystem::path(ctx.config_dir) / "engines.json").string();
+    // An explicit config folder (--config-dir or $AGENT_CONFIG_DIR) keeps the old layout; otherwise the global home
+    // (--home, $AGENT_HOME, or the one chosen at `agent setup`) holds config.json, engines.json, models, skills, ...
+    const char *env_config = std::getenv("AGENT_CONFIG_DIR");
+    const char *env_home = std::getenv("AGENT_HOME");
+    const bool explicit_config = cl.has("config-dir") || (env_config && *env_config);
+    const std::string home_root =
+        explicit_config ? std::string() : resolve_home_root(cl.get("home"), env_home ? env_home : "", home_pointer_path());
+    if (!home_root.empty()) {
+        ctx.home = home_layout(home_root);
+        ctx.has_home = true;
+        ctx.config_dir = ctx.home.root;
+        ctx.config_path = ctx.home.config;
+        ctx.engines_path = ctx.home.engines_json;
+    } else {
+        ctx.config_dir = cl.has("config-dir") ? std::string(cl.get("config-dir")) : default_config_dir();
+        ctx.config_path = (std::filesystem::path(ctx.config_dir) / "config.json").string();
+        ctx.engines_path = (std::filesystem::path(ctx.config_dir) / "engines.json").string();
+    }
+    {
+        std::error_code cwd_ec;
+        ctx.project_root = find_project_root(std::filesystem::current_path(cwd_ec).string());
+    }
     auto config = load_config(ctx.config_path);
     if (!config.ok) return report_error(config.error);
     ctx.config = std::move(config.value);
@@ -43,6 +62,11 @@ int main(int argc, char **argv) {
     if (cl.command == "model") return cmd_model(cl, ctx);
     if (cl.command == "chat") return cmd_chat(cl, ctx);
     if (cl.command == "run") return cmd_run(cl, ctx);
+    if (cl.command == "task") return cmd_task(cl, ctx);
+    if (cl.command == "init") return cmd_init(cl, ctx);
+    if (cl.command == "secret") return cmd_secret(cl, ctx);
+    if (cl.command == "doctor") return cmd_doctor(cl, ctx);
+    if (cl.command == "clean") return cmd_clean(cl, ctx);
     if (cl.command == "voice") return cmd_voice(cl, ctx);
     std::fprintf(stderr, "agent: unhandled command '%s'\n", cl.command.c_str());
     return 2;

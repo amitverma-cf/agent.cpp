@@ -73,3 +73,8 @@ local
 .workspace
 # Claude Code local state (subagent worktrees)
 .claude/
+
+# local secrets and sandbox test state
+.env
+scripts/sandbox/node_modules/
+scripts/sandbox/.sandbox-id

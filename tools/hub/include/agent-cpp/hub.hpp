@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdint>
 #include <span>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -23,6 +24,7 @@ struct ModelSpec {
     std::string revision = "main";
     std::string file;           // exact path inside the repo, when the selector looks like a file
     std::string quant;          // quant tag such as "Q4_K_M", when the selector is not a file
+    bool all = false;           // selector "*": every file of the repo (a folder model: sherpa voices, TRELLIS, ...)
 };
 
 Result<ModelSpec> parse_spec(std::string_view spec);
@@ -56,6 +58,12 @@ Result<RemoteFile> select_file(const RepoInfo &info, const ModelSpec &spec);
 // A file that isn't a shard yields just itself. Fails when a shard is missing from the repo.
 Result<std::vector<RemoteFile>> split_set(const RepoInfo &info, const RemoteFile &shard);
 
+// The multimodal projector (mmproj-*.gguf) that goes with a vision / audio model, or nullopt when the repo
+// has none or `want` is "none". `want`: "auto" (the projector whose quant matches the model file, else
+// Q8_0, else F16, else BF16, else the smallest), or a quant tag / file name fragment such as "f16".
+// A model file that is itself a projector never gets another one. Fails when `want` matches nothing.
+Result<std::optional<RemoteFile>> select_mmproj(const RepoInfo &info, std::string_view model_file, std::string_view want = "auto");
+
 // -------------------------- Licence policy --------------------------
 
 // True for licences that restrict use (non-commercial, research-only, no-derivatives ...). Policy
@@ -68,6 +76,29 @@ std::string sha256_hex(std::span<const uint8_t> data);
 std::string sha256_hex(std::string_view data);
 Result<std::string> sha256_file(const std::string &path);
 
+// -------------------------- Curated registry --------------------------
+
+// Short names for models known to work with the engines here ("qwen3-4b", "glm-ocr", "trellis-coarse").
+// A model may need several downloads (a TTS talker and its codec); the first part is the model.
+struct RegistryPart {
+    std::string_view spec;     // an `agent model pull` spec
+    std::string_view include;  // for "owner/repo:*" parts: comma separated path filters; otherwise ""
+};
+
+struct RegistryEntry {
+    std::string_view alias;
+    std::string_view task;            // text_gen, vision, ocr, embed, rerank, image_gen, asr, tts, vad, mesh_gen, ...
+    std::string_view engine;          // llama, sdcpp, whisper, parakeet, sherpa, onnx, trellis
+    std::span<const RegistryPart> parts;
+    uint32_t size_mib;                // total download, 0 = not measured
+    std::string_view engine_options;  // JSON the engine needs to serve this model, "" = none
+    std::string_view notes;
+    bool tested;                      // pulled and run end to end with agent.cpp
+};
+
+std::span<const RegistryEntry> model_registry();
+const RegistryEntry *find_registry_entry(std::string_view alias);
+
 // -------------------------- Catalogue (models.json) --------------------------
 
 struct CatalogEntry {
@@ -78,7 +109,13 @@ struct CatalogEntry {
     uint64_t size = 0;
     std::string sha256;
     std::string license;
+    std::string mmproj;         // local path of the multimodal projector pulled with the model; empty if none
+    std::string mmproj_file;    // its path inside the repo
 };
+
+// engine_options with "mmproj": <path> added (llama's multimodal projector), unless it already has one
+// or `mmproj_path` is empty. engine_options is "" or a JSON object.
+std::string with_mmproj_option(std::string_view engine_options, std::string_view mmproj_path);
 
 std::string catalog_to_json(std::span<const CatalogEntry> entries);
 Result<std::vector<CatalogEntry>> catalog_from_json(std::string_view json);
@@ -161,6 +198,8 @@ struct PullOptions {
     std::string catalog_path;        // empty = <models_dir>/models.json
     std::string name;                // catalogue name; empty = file basename without extension
     bool allow_restricted_license = false;
+    std::vector<std::string> include;  // with "owner/repo:*": keep files whose path contains any of these (empty = all)
+    std::string mmproj = "auto";    // "auto", "none", or a quant / file name fragment; see select_mmproj
     HttpOptions http = http_options_from_env();
     ProgressFn on_progress = nullptr;
     void *progress_user_data = nullptr;

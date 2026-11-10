@@ -190,7 +190,9 @@ Result<ModelSpec> parse_spec(std::string_view spec) {
         return fail<ModelSpec>(ErrorCode::InvalidConfig, "model spec must look like owner/repo[:file-or-quant], got '" + std::string(spec) + "'");
     out.repo = std::string(repo);
 
-    if (!selector.empty()) {
+    if (selector == "*") {
+        out.all = true;
+    } else if (!selector.empty()) {
         if (selector.find('.') != std::string_view::npos || selector.find('/') != std::string_view::npos) {
             if (!valid_repo_file(selector)) return fail<ModelSpec>(ErrorCode::InvalidConfig, "invalid file path in model spec");
             out.file = std::string(selector);
@@ -203,6 +205,72 @@ Result<ModelSpec> parse_spec(std::string_view spec) {
 
 bool quant_matches(std::string_view filename, std::string_view quant) {
     return !quant.empty() && ifind(basename_of(filename), quant) != std::string_view::npos;
+}
+
+std::string with_mmproj_option(std::string_view engine_options, std::string_view mmproj_path) {
+    if (mmproj_path.empty() || engine_options.find("\"mmproj\"") != std::string_view::npos) return std::string(engine_options);
+    std::string quoted = "\"mmproj\":\"";
+    for (char c : mmproj_path) {
+        if (c == '\\' || c == '"') quoted += '\\';
+        quoted += c;
+    }
+    quoted += '"';
+    const size_t brace = engine_options.find('{');
+    if (brace == std::string_view::npos) return "{" + quoted + "}";
+    size_t next = brace + 1;
+    while (next < engine_options.size() && std::isspace(static_cast<unsigned char>(engine_options[next]))) ++next;
+    const bool empty_object = next < engine_options.size() && engine_options[next] == '}';
+    std::string out(engine_options.substr(0, brace + 1));
+    out += quoted;
+    if (!empty_object) out += ',';
+    out.append(engine_options.substr(brace + 1));
+    return out;
+}
+
+namespace {
+
+constexpr std::string_view kQuantTags[] = {"IQ4_XS", "Q8_0", "Q6_K", "Q5_K_M", "Q5_K_S", "Q5_0", "Q4_K_M", "Q4_K_S", "Q4_0",
+                                           "Q3_K_M", "Q3_K_S", "Q2_K", "BF16", "F16", "F32"};
+
+// The quant tag a GGUF file name carries ("qwen-Q4_K_M.gguf" -> "Q4_K_M"), longest match; empty if none.
+std::string_view quant_tag_of(std::string_view filename) {
+    const std::string_view name = basename_of(filename);
+    std::string_view best;
+    for (std::string_view tag : kQuantTags)
+        if (ifind(name, tag) != std::string_view::npos && tag.size() > best.size()) best = tag;
+    return best;
+}
+
+bool is_mmproj_file(std::string_view path) {
+    const std::string_view name = basename_of(path);
+    return ifind(name, "mmproj") != std::string_view::npos && ifind(name, ".gguf") != std::string_view::npos;
+}
+
+} // namespace
+
+Result<std::optional<RemoteFile>> select_mmproj(const RepoInfo &info, std::string_view model_file, std::string_view want) {
+    using R = std::optional<RemoteFile>;
+    if (want == "none" || is_mmproj_file(model_file)) return ok(R{});
+    std::vector<const RemoteFile *> cands;
+    for (const RemoteFile &f : info.files)
+        if (is_mmproj_file(f.path)) cands.push_back(&f);
+    if (want.empty() || want == "auto") {
+        if (cands.empty()) return ok(R{});
+        auto first_with = [&](std::string_view tag) -> const RemoteFile * {
+            if (tag.empty()) return nullptr;
+            for (const RemoteFile *f : cands)
+                if (quant_matches_exact(f->path, tag)) return f;
+            return nullptr;
+        };
+        const RemoteFile *pick = first_with(quant_tag_of(model_file));
+        for (std::string_view tag : {"Q8_0", "F16", "BF16"})
+            if (!pick) pick = first_with(tag);
+        if (!pick) pick = *std::min_element(cands.begin(), cands.end(), [](const RemoteFile *a, const RemoteFile *b) { return a->size < b->size; });
+        return ok(R{*pick});
+    }
+    for (const RemoteFile *f : cands)
+        if (quant_matches(f->path, want)) return ok(R{*f});
+    return fail<R>(ErrorCode::KeyNotFound, "hub: " + info.repo + " has no mmproj matching '" + std::string(want) + "'");
 }
 
 Result<RepoInfo> parse_repo_info(std::string_view json) {
@@ -430,6 +498,12 @@ std::string catalog_to_json(std::span<const CatalogEntry> entries) {
         append_json_string(out, e.sha256);
         out += ", \"license\": ";
         append_json_string(out, e.license);
+        if (!e.mmproj.empty()) {
+            out += ", \"mmproj\": ";
+            append_json_string(out, e.mmproj);
+            out += ", \"mmproj_file\": ";
+            append_json_string(out, e.mmproj_file);
+        }
         out += "}";
     }
     out += first ? "]\n}\n" : "\n  ]\n}\n";
@@ -454,6 +528,8 @@ Result<std::vector<CatalogEntry>> catalog_from_json(std::string_view json) {
         e.size = get_uint_field(m, "size");
         e.sha256 = get_string_field(m, "sha256");
         e.license = get_string_field(m, "license");
+        e.mmproj = get_string_field(m, "mmproj");
+        e.mmproj_file = get_string_field(m, "mmproj_file");
         if (e.name.empty()) return fail<R>(ErrorCode::ParseError, "hub: models.json entry without a name");
         out.push_back(std::move(e));
     }
@@ -686,6 +762,7 @@ agent::ModelSpec model_spec_from_entry(const CatalogEntry &entry, const Config &
     spec.config = base;
     spec.config.provider = AiProvider::Engine;
     spec.config.model = entry.path;
+    spec.config.engine_options = with_mmproj_option(spec.config.engine_options, entry.mmproj);
     if (spec.config.engine.empty()) {
         std::string ext = std::filesystem::path(entry.path).extension().string();
         for (char &c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));

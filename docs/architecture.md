@@ -47,9 +47,9 @@ agent.cpp is structured around three core principles that inform every design de
 
 ### Arena allocator
 
-Every `Session` owns one `Arena` — a contiguous slab allocated once at `init()`. Its default size is `context_window * 8 + 2 MiB` (override with `Config::arena_capacity`).
+Every `Session` owns one `Arena`, a bump allocator whose first block is allocated at `init()` (default `context_window * 8 + 2 MiB`, override with `Config::arena_capacity`). It grows in chunks if a turn needs more, so it never fails for size; the next `reset()` replaces the chunks with one block sized to the peak, and later turns of that size allocate nothing.
 
-The arena is used only inside `run_turn` to construct zero-copy view spans before passing them to the provider. It resets at the top of every inference iteration, so no turn data leaks into the next. The reset is a single integer assignment — O(1) regardless of how much was allocated.
+The arena is used only inside `run_turn` to construct zero-copy view spans before passing them to the provider. It resets at the top of every inference iteration, so no turn data leaks into the next. The reset is O(1) while the turn fit in the first block (a single integer assignment).
 
 ```
 Session::Arena slab  (fixed, allocated once at init)

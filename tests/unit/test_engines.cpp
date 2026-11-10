@@ -263,6 +263,39 @@ TEST_CASE("llama engine generates text with a real model", "[engines][llama][mod
     REQUIRE(agent::clear_provider_kv_cache(session).ok);
 }
 
+TEST_CASE("llama engine prefix cache gives the same replies as recomputing the whole prompt", "[engines][llama][model][prefix]") {
+    if (!test_model()) SKIP("AGENT_TEST_LLAMA_MODEL not set");
+    auto cached_cfg = llama_config(test_model());
+    auto plain_cfg = llama_config(test_model());
+    plain_cfg.engine_options = R"({"prefix_cache":false})";
+    auto cached = agent::init(cached_cfg);
+    auto plain = agent::init(plain_cfg);
+    REQUIRE(cached.ok);
+    REQUIRE(plain.ok);
+
+    // The same multi-turn conversation on both: each turn's prompt extends the previous one, which is exactly
+    // what the cache reuses. Greedy decoding, so any difference means the cached keys/values were wrong.
+    agent::FlowMemory with_cache, without_cache;
+    with_cache.id = "prefix_a";
+    without_cache.id = "prefix_b";
+    const char *turns[] = {"Say a number.", "Say another number.", "Say a color.", "Say a fruit.", "Say an animal."};
+    for (const char *turn : turns) {
+        auto a = agent::run_turn(cached.value, with_cache, turn);
+        auto b = agent::run_turn(plain.value, without_cache, turn);
+        REQUIRE(a.ok);
+        REQUIRE(b.ok);
+        INFO("turn: " << turn);
+        CHECK(a.value == b.value);
+    }
+    // Same text again after the cache is dropped explicitly.
+    REQUIRE(agent::clear_provider_kv_cache(cached.value).ok);
+    auto again_a = agent::run_turn(cached.value, with_cache, "Say a city.");
+    auto again_b = agent::run_turn(plain.value, without_cache, "Say a city.");
+    REQUIRE(again_a.ok);
+    REQUIRE(again_b.ok);
+    CHECK(again_a.value == again_b.value);
+}
+
 TEST_CASE("llama engine runs parallel graph branches through continuous batching", "[engines][llama][model]") {
     if (!test_model()) SKIP("AGENT_TEST_LLAMA_MODEL not set");
     auto cfg = llama_config(test_model());

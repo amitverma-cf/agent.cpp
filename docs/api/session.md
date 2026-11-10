@@ -62,7 +62,7 @@ struct Config {
     float  temperature    = 0.7f;        // sampling temperature (>= 0.0)
 
     // Memory management
-    size_t arena_capacity = 0;           // 0 = auto (context_window*8 + 2 MiB)
+    size_t arena_capacity = 0;           // first block size; 0 = auto (context_window*8 + 2 MiB); the arena grows past it
 
     // Safety
     int  max_tool_call_rounds = 10;      // max tool-call loop iterations per turn

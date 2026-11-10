@@ -577,6 +577,7 @@ struct RemoteEngine {
         spawn.program = options.host_path;
         spawn.args = {options.plugin_path};
         spawn.sandbox = options.sandbox;
+        spawn.env = options.env;
         auto c = hal::spawn_child(spawn);
         if (!c.ok)
             return fail(ErrorCode::ProviderInitFailed, "Cannot start the engine host '" + options.host_path + "': " + c.error.message +
@@ -845,7 +846,7 @@ Result<void> remote_run(RemoteEngine &e, const agent_request &request, Arena &ar
         e.shm_responses.fetch_add(1, std::memory_order_relaxed);
     }
     if (!r.response(response, arena)) {
-        if (r.arena_exhausted()) return fail(ErrorCode::DecodeFailed, "Arena capacity exhausted. Increase Config::arena_capacity.");
+        if (r.arena_exhausted()) return fail(ErrorCode::DecodeFailed, "Out of memory (arena growth failed).");
         return malformed("Engine host for '" + e.info.name + "' sent a malformed response.");
     }
     return ok();
