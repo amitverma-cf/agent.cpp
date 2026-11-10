@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <mutex>
 #include <sqlite3.h>
+#include "sqlite_tuning.hpp"
 #include <string>
 #include <vector>
 
@@ -94,6 +95,7 @@ Result<std::shared_ptr<void>> cp_open(const CheckpointerConfig &config) {
         return fail<std::shared_ptr<void>>(ErrorCode::ProviderInitFailed, "sqlite checkpointer: cannot open '" + path + "': " + err);
     }
     sqlite3_busy_timeout(state->db, 5000);
+    apply_sqlite_tuning(state->db, true);
     for (const char *sql : {"PRAGMA journal_mode=WAL;", "PRAGMA synchronous=NORMAL;", kSchema}) {
         auto r = exec(state->db, sql);
         if (!r.ok) return fail<std::shared_ptr<void>>(r.error.code, r.error.message);

@@ -668,6 +668,7 @@ Result<std::vector<Tool>> connect_mcp_server(Session &session, const McpServerCo
         entry.second = std::move(expanded.value);
     }
 
+    if (session.config.mcp_launcher) session.config.mcp_launcher(resolved, session.config.mcp_launcher_user_data);
     LogSink sink{
         .fn = session.config.logger, .user_data = session.config.logger_user_data, .file = session.log_file, .mutex = session.log_mutex};
     auto server = std::make_shared<McpServer>(resolved, std::move(sink), session.workspace_path);

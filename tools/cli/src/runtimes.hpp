@@ -1,8 +1,15 @@
 #pragma once
 
-// Private bun and uv installs, so MCP servers and skills written for npx / uvx run without Node, npm or Python on the
-// machine. They live in <home>/runtimes/<name>/, are downloaded from the projects' GitHub releases (checked against the
-// published SHA-256), and keep every cache inside <home>/cache so nothing lands in the user's own profile.
+// Private JavaScript and Python tooling, so MCP servers and skills written for npx / uvx run without anything installed
+// on the machine. Installs live in <home>/runtimes/<name>/, are downloaded from the projects' releases and checked against
+// the published SHA-256 (SHA-512 integrity for the pnpm package), and every cache they write stays in the folder of the
+// server that runs them.
+//
+// JavaScript: the user picks one in `agent setup` (CliConfig::js_runtime):
+//   bun   bun x / bun install / bun run
+//   node  a private Node.js with pnpm (pnpm dlx / install / run). npm is never used.
+//   nub   the nub toolkit (a pnpm-compatible CLI over Node.js)
+// Python: uv (uvx -> uv tool run).
 
 #include "home.hpp"
 
@@ -19,11 +26,11 @@ namespace agent::cli {
 struct RuntimeAsset {
     std::string url;          // the archive
     std::string checksum_url; // a text file that holds its SHA-256
-    std::string archive_name; // file name of the archive
-    std::string binary;       // the executable inside it (bun, uv; with .exe on Windows)
+    std::string archive_name; // file name of the archive; empty for node (found in the checksum file)
+    std::string binary;       // the executable inside it
 };
 
-// Pure. name: "bun" or "uv"; version: "latest" or a release tag such as "1.2.3" / "0.5.1"; os: "linux", "macos" or
+// Pure. name: "bun", "uv", "nub" or "node"; version: "latest" or a release tag such as "1.2.3"; os: "linux", "macos" or
 // "windows"; arch: "x86_64" or "aarch64".
 Result<RuntimeAsset> runtime_asset(std::string_view name, std::string_view version, std::string_view os, std::string_view arch);
 
@@ -32,8 +39,15 @@ std::string host_arch(); // "x86_64" or "aarch64"
 
 // Pure. The SHA-256 of `file_name` in a checksum file ("<hash>  <name>" lines, or just one hash); empty when absent.
 std::string find_sha256(std::string_view text, std::string_view file_name);
+// Pure. From Node's SHASUMS256.txt: the archive for this platform, e.g. "node-v24.22.2-linux-x64.tar.gz".
+std::string find_node_archive(std::string_view shasums, std::string_view os, std::string_view arch);
 
-// Path of the installed executable, or "" when the runtime is not installed.
+// Names accepted by install/remove: "bun", "uv", "node", "pnpm", "nub".
+bool is_runtime_name(std::string_view name);
+// What `agent runtime install js` installs for a js_runtime choice: bun -> {bun}, node -> {node, pnpm}, nub -> {nub}.
+std::vector<std::string> runtimes_for_js(std::string_view js_runtime);
+
+// Path of the installed executable (for pnpm: its bin/pnpm.cjs, run with node), or "" when not installed.
 std::string runtime_binary_path(const HomeLayout &home, std::string_view name);
 
 struct InstallProgress {
@@ -47,18 +61,18 @@ Result<std::string> install_runtime(const HomeLayout &home, std::string_view nam
 
 Result<void> remove_runtime(const HomeLayout &home, std::string_view name);
 
-// Environment that keeps bun's and uv's caches, tools and Python installs inside <home>/cache.
-std::map<std::string, std::string> runtime_env(const HomeLayout &home);
-// Same, with every cache under `cache_root` (a server's own data folder: nothing is shared or written elsewhere).
+// Environment that keeps every cache, tool, Python install, HOME and temp folder under `cache_root` (a server's own data
+// folder: nothing is shared with other servers or written outside it).
 std::map<std::string, std::string> runtime_env_in(const std::string &cache_root);
+std::map<std::string, std::string> runtime_env(const HomeLayout &home); // cache_root = <home>/cache
 
-// npx / bunx -> `bun x`, uvx -> `uv tool run`, uv / bun -> the private executable, with the cache environment added.
-// Leaves the command alone (and says why in `note`) when the runtime is not installed.
 struct LauncherRewrite {
     bool rewritten = false;
     std::string note;
 };
-// `cache_root` empty = <home>/cache. npm / node run on bun too (npm install|add|run|exec map to bun's own commands).
-LauncherRewrite rewrite_launcher(McpServerConfig &server, const HomeLayout &home, const std::string &cache_root = {});
+// Rewrites npx / bunx / npm / node / uvx / uv / bun to the private runtime for `js_runtime` ("bun", "node" or "nub"),
+// adding the contained environment. Safe to call twice. Leaves the command alone, with a note, when the runtime is not
+// installed. The cache folder is <server.working_directory>/cache, else <home>/cache.
+LauncherRewrite rewrite_launcher(McpServerConfig &server, const HomeLayout &home, const std::string &js_runtime = "bun");
 
 } // namespace agent::cli

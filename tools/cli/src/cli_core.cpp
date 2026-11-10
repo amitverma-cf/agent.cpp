@@ -48,8 +48,8 @@ struct CommandSpec {
 constexpr std::string_view kGlobalValue[] = {"config-dir", "home"};
 constexpr std::string_view kGlobalBool[] = {"help"};
 
-constexpr std::string_view kSetupValue[] = {"caps", "workspace", "models-dir", "engines-dir", "backend", "model"};
-constexpr std::string_view kSetupBool[] = {"yes", "no-models", "download-engines"};
+constexpr std::string_view kSetupValue[] = {"caps", "workspace", "models-dir", "engines-dir", "backend", "model", "js-runtime"};
+constexpr std::string_view kSetupBool[] = {"yes", "no-models", "download-engines", "install-runtimes"};
 
 constexpr SubSpec kEngineSubs[] = {{"ls", 0, 0}, {"add", 1, 1}, {"rm", 1, 1}, {"pull", 1, 1}};
 constexpr std::string_view kEngineValue[] = {"tag", "repo"};
@@ -59,7 +59,7 @@ constexpr SubSpec kMcpSubs[] = {{"ls", 0, 0}, {"search", 1, 1}, {"add", 1, 1}, {
 constexpr std::string_view kMcpBool[] = {"project", "yes"};
 constexpr SubSpec kSkillSubs[] = {{"ls", 0, 0}, {"search", 1, 1}, {"add", 1, 1}, {"rm", 1, 1}};
 constexpr std::string_view kSkillBool[] = {"project", "yes"};
-constexpr SubSpec kRuntimeSubs[] = {{"ls", 0, 0}, {"install", 1, 1}, {"rm", 1, 1}, {"path", 1, 1}};
+constexpr SubSpec kRuntimeSubs[] = {{"ls", 0, 0}, {"install", 1, 1}, {"rm", 1, 1}, {"path", 1, 1}, {"use", 1, 1}};
 constexpr std::string_view kRuntimeValue[] = {"version"};
 constexpr std::string_view kCleanBool[] = {"downloads", "cache", "logs", "yes"};
 constexpr std::string_view kSecretValue[] = {"identity"};
@@ -425,7 +425,8 @@ std::string config_to_json(const CliConfig &c) {
     out += "  \"context_window\": " + std::to_string(c.context_window) + ",\n";
     out += "  \"max_tokens\": " + std::to_string(c.max_tokens) + ",\n";
     out += "  \"temperature\": " + std::string(temp) + ",\n";
-    out += "  \"memory_budget_mb\": " + std::to_string(c.memory_budget_mb) + "\n";
+    out += "  \"memory_budget_mb\": " + std::to_string(c.memory_budget_mb) + ",\n";
+    out += "  \"js_runtime\": \"" + c.js_runtime + "\"\n";
     out += "}\n";
     return out;
 }
@@ -454,6 +455,8 @@ Result<CliConfig> config_from_json(std::string_view json) {
     c.temperature = static_cast<float>(get_num(doc, "temperature", c.temperature));
     c.memory_budget_mb = get_int(doc, "memory_budget_mb", 0);
     if (c.memory_budget_mb < 0) return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: memory_budget_mb must be >= 0");
+    c.js_runtime = std::string(get_str(doc, "js_runtime", "bun"));
+    if (c.js_runtime != "bun" && c.js_runtime != "node" && c.js_runtime != "nub") return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: js_runtime must be \"bun\", \"node\" or \"nub\"");
     if (c.context_window <= 0 || c.max_tokens <= 0)
         return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: context_window and max_tokens must be positive");
     return ok(std::move(c));

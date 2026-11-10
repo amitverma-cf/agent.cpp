@@ -443,6 +443,8 @@ struct SecretRequest {
 using SecretResolverFn = Result<std::string> (*)(std::string_view text, const SecretRequest &who, std::vector<std::string> &secret_values,
                                                  void *user_data);
 
+struct McpServerConfig; // defined with the MCP client API below
+
 struct Config {
     AiProvider provider = AiProvider::Mock;
     // AiProvider::Engine only: a registered engine name, or a path to an engine shared library.
@@ -474,6 +476,12 @@ struct Config {
     // are visible to every process of the user.
     SecretResolverFn secret_resolver = nullptr;
     void *secret_user_data = nullptr;
+    // Called on a copy of every MCP server's config just before it is started, after secrets are resolved (so a secret's
+    // binding still names the command as written). The host can rewrite the command, for example to run npx / uvx on its
+    // own private runtimes. Applies to servers from code, from agent.json and from the CLI's mcp.json alike.
+    using McpLauncherFn = void (*)(McpServerConfig &server, void *user_data);
+    McpLauncherFn mcp_launcher = nullptr;
+    void *mcp_launcher_user_data = nullptr;
     bool enable_file_logging = false;
 
     // Concurrent engines only: worker arenas (one per thread) for the branches of a graph Parallel

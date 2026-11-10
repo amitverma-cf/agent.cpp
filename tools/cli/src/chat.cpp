@@ -199,6 +199,7 @@ Result<void> open_session(ChatState &st) {
     cfg.model = st.model.path;
     cfg.workspace_dir = st.workspace;
     cfg.lazy_tools = true; // the model sees tool_search / load_tool, not every tool, until it needs one
+    install_cli_hooks(cfg, *st.ctx);
     cfg.secret_resolver = cli_resolve_secrets;
     cfg.secret_user_data = st.secrets.get();
     cfg.context_window = st.context_window;

@@ -6,6 +6,7 @@
 #include <list>
 #include <mutex>
 #include <sqlite3.h>
+#include "sqlite_tuning.hpp"
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -203,6 +204,7 @@ Result<std::shared_ptr<void>> open_sqlite(const MemoryConfig &config, std::strin
         return fail<std::shared_ptr<void>>(ErrorCode::ProviderInitFailed, "Failed to open SQLite db (write): " + err);
     }
 
+    apply_sqlite_tuning(state->write_conn, true);
     if (auto r = exec_simple(state->write_conn, "PRAGMA journal_mode=WAL;"); !r.ok) return fail<std::shared_ptr<void>>(r.error.code, r.error.message);
     if (auto r = exec_simple(state->write_conn, "PRAGMA synchronous=NORMAL;"); !r.ok) return fail<std::shared_ptr<void>>(r.error.code, r.error.message);
     if (auto r = exec_simple(state->write_conn, "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT, created_at INTEGER, updated_at INTEGER);"); !r.ok) return fail<std::shared_ptr<void>>(r.error.code, r.error.message);
@@ -215,6 +217,7 @@ Result<std::shared_ptr<void>> open_sqlite(const MemoryConfig &config, std::strin
         return fail<std::shared_ptr<void>>(ErrorCode::ProviderInitFailed, "Failed to open SQLite db (read): " + err);
     }
 
+    apply_sqlite_tuning(state->read_conn, false);
     state->writer_thread = std::thread(writer_loop, state.get());
 
     return R{.ok = true, .value = std::move(state), .error = {}};

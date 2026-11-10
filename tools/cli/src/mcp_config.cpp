@@ -123,7 +123,7 @@ void add_file(const std::string &path, const std::string &data_root, const Conte
         const bool had = std::find(own_sandbox.begin(), own_sandbox.end(), s.name) != own_sandbox.end();
         apply_mcp_defaults(s, data_dir, runtimes, cache, had);
         if (ctx.has_home) { // npx / uvx run on the private bun / uv when they are installed
-            const LauncherRewrite launcher = rewrite_launcher(s, ctx.home, (fs::path(data_dir) / "cache").string()); // caches stay in the server's own folder
+            const LauncherRewrite launcher = rewrite_launcher(s, ctx.home, ctx.config.js_runtime); // caches stay in the server's own folder (its working directory)
             if (!launcher.note.empty()) warnings.push_back(launcher.note);
         }
         // A project entry replaces a global one with the same name.

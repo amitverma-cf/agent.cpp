@@ -80,6 +80,9 @@ struct CliConfig {
     // RAM budget of the model registry behind `chat` /model switches and multi-model `run` graphs.
     // 0 = unlimited. Exceeding it evicts the least recently used idle model.
     int64_t memory_budget_mb = 0;
+    // JavaScript tooling for MCP servers and skills, chosen in `agent setup`: "bun" (bun x / bun install), "node" (a private
+    // Node.js with pnpm; npm is never used) or "nub" (the nub toolkit, a pnpm-compatible CLI over Node.js).
+    std::string js_runtime = "bun";
 };
 
 std::string config_to_json(const CliConfig &config);

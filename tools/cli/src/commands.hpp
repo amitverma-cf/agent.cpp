@@ -62,6 +62,9 @@ int cmd_secret(const CommandLine &cl, Context &ctx);  // secret_cmd.cpp
 int cmd_mcp(const CommandLine &cl, Context &ctx);     // mcp_cmd.cpp
 Result<void> pull_and_register_engine(Context &ctx, std::vector<EngineEntry> &engines, const std::string &name, std::string_view repo, std::string_view tag);
 int cmd_runtime(const CommandLine &cl, Context &ctx); // runtime_cmd.cpp
+// Sets the hooks every CLI session shares: MCP servers started by npx / npm / node / uvx run on the private runtimes of the
+// chosen js_runtime (Config::mcp_launcher). `ctx` must outlive the session.
+void install_cli_hooks(Config &cfg, Context &ctx);
 int cmd_skill(const CommandLine &cl, Context &ctx);   // skill_cmd.cpp
 int cmd_doctor(const CommandLine &cl, Context &ctx);  // doctor_cmd.cpp
 int cmd_clean(const CommandLine &cl, Context &ctx);   // doctor_cmd.cpp

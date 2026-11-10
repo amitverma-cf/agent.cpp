@@ -1581,6 +1581,7 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     bool kv_auto = true;
     std::string chat_template, mmproj, ocr_prompt;
     std::vector<std::pair<std::string, float>> loras; // options.lora: adapter file and scale
+    int n_batch_opt = 0, n_ubatch_opt = 0;           // options.batch / options.ubatch (0 = llama.cpp default)
     Mode mode = Mode::Generate;
     enum llama_pooling_type pooling = LLAMA_POOLING_TYPE_UNSPECIFIED;
     simdjson::ondemand::object options;
@@ -1616,6 +1617,8 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
             }
         }
         if (bool flag = true; !options["prefix_cache"].get_bool().get(flag)) prefix_cache = flag;
+        n_batch_opt = json_number<int>(options, "batch", 0);   // tokens decoded per call; smaller = smaller compute buffer
+        n_ubatch_opt = json_number<int>(options, "ubatch", 0); // tokens per micro-batch (the compute buffer scales with it)
         if (!options["mode"].get_string().get(t)) {
             if (t == "embed") mode = Mode::Embed;
             else if (t == "rerank") mode = Mode::Rerank;
@@ -1672,6 +1675,8 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     auto cparams = llama_context_default_params();
     cparams.n_ctx = static_cast<uint32_t>(n_ctx) * static_cast<uint32_t>(n_seq);
     cparams.n_seq_max = static_cast<uint32_t>(n_seq);
+    if (n_batch_opt > 0) cparams.n_batch = static_cast<uint32_t>(n_batch_opt);
+    if (n_ubatch_opt > 0) cparams.n_ubatch = static_cast<uint32_t>(std::min(n_ubatch_opt, static_cast<int>(cparams.n_batch)));
     if (kv_auto) {
         // Width of one layer's keys: kv heads x head size. Narrow keys lose too much at 4 bits.
         const int n_head = llama_model_n_head(model), n_head_kv = llama_model_n_head_kv(model);

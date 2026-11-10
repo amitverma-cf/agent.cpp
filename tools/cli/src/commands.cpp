@@ -3,6 +3,7 @@
 #include "commands.hpp"
 #include "doctor.hpp"
 #include "engine_release.hpp"
+#include "runtimes.hpp"
 #include "status_view.hpp"
 
 #include <agent-cpp/engine_abi.h>
@@ -354,6 +355,15 @@ int cmd_setup(const CommandLine &cl, Context &ctx) {
     }
     cfg.backend = backend;
 
+    // JavaScript tooling for MCP servers and skills. npm is never used: node goes with pnpm.
+    std::string js = cl.has("js-runtime") ? std::string(cl.get("js-runtime")) : cfg.js_runtime;
+    js = ask_value(interactive, "JavaScript tooling for MCP servers: bun, node (with pnpm) or nub", js);
+    if (js != "bun" && js != "node" && js != "nub") {
+        std::fprintf(stderr, "error: unknown JavaScript tooling '%s' (expected bun, node or nub)\n", js.c_str());
+        return 2;
+    }
+    cfg.js_runtime = js;
+
     if (ctx.has_home) {
         // Everything lives under the home unless a flag says otherwise: no separate questions.
         cfg.workspace = cl.has("workspace") ? absolute_path(cl.get("workspace")) : std::string();
@@ -417,6 +427,18 @@ int cmd_setup(const CommandLine &cl, Context &ctx) {
 
     std::printf("\nwrote %s\nwrote %s (%zu engine%s)\n", ctx.config_path.c_str(), ctx.engines_path.c_str(), engines.size(),
                 engines.size() == 1 ? "" : "s");
+    // The chosen runtimes (and uv for Python servers) are downloaded only on request: they are 20-60 MB each.
+    if (ctx.has_home && (cl.has("install-runtimes") || (interactive && ask_yes_no("Download the private runtimes now (" + cfg.js_runtime + ", uv)?")))) {
+        std::vector<std::string> wanted = runtimes_for_js(cfg.js_runtime);
+        wanted.push_back("uv");
+        for (const std::string &n : wanted) {
+            if (!runtime_binary_path(ctx.home, n).empty()) continue;
+            std::fprintf(stderr, "downloading %s ...\n", n.c_str());
+            auto r = install_runtime(ctx.home, n, "latest", agent::hub::http_options_from_env());
+            if (!r.ok) std::printf("  %-5s %s\n", n.c_str(), r.error.message.c_str());
+            else std::printf("  %-5s %s\n", n.c_str(), r.value.c_str());
+        }
+    }
     setup_models(cl, ctx, interactive);
     std::printf("\nnext: agent chat   (or `agent model search` to see more models, `agent init` inside a project)\n");
     return 0;
@@ -773,6 +795,7 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
     base.context_window = ctx.config.context_window;
     base.max_tokens = ctx.config.max_tokens;
     base.temperature = ctx.config.temperature;
+    install_cli_hooks(base, ctx);
     base.permission_check = run_permission;
     base.permission_prompt = run_prompt;
 

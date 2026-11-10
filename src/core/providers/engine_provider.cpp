@@ -199,6 +199,9 @@ Result<void> init_engine(Session &session) {
                                                                    .engine_options = cfg.engine_options,
                                                                    .workspace_dir = cfg.workspace_dir,
                                                                    .artifacts_dir = state->output_dir});
+        opts.env["MALLOC_ARENA_MAX"] = "2";                    // glibc: at most 2 heaps instead of 8 x cores
+        opts.env["MALLOC_TRIM_THRESHOLD_"] = "131072";         // give freed memory back to the OS at 128 KiB
+        opts.env["MALLOC_MMAP_THRESHOLD_"] = "262144";         // large blocks come straight from mmap and are returned on free
         if (opts.sandbox.enabled && cfg.engine_sandbox.gpu) {
             // Driver caches (compiled kernels / shaders) live under $HOME by default, which the sandbox hides;
             // without a writable folder every start recompiles. Untested on real GPUs: see docs/gpu.md.

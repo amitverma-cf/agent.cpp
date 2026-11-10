@@ -24,7 +24,7 @@ TEST_CASE("runtimes: release assets for each platform", "[runtimes]") {
     CHECK(runtime_asset("uv", "0.5.1", "windows", "x86_64").value.url == "https://github.com/astral-sh/uv/releases/download/0.5.1/uv-x86_64-pc-windows-msvc.zip");
     CHECK(runtime_asset("uv", "", "macos", "x86_64").value.archive_name == "uv-x86_64-apple-darwin.tar.gz");
 
-    CHECK_FALSE(runtime_asset("node", "latest", "linux", "x86_64").ok);
+    CHECK_FALSE(runtime_asset("deno", "latest", "linux", "x86_64").ok);
     CHECK_FALSE(runtime_asset("uv", "latest", "plan9", "x86_64").ok);
     CHECK_FALSE(runtime_asset("uv", "latest", "linux", "riscv").ok);
 }
@@ -81,9 +81,11 @@ TEST_CASE("runtimes: npx / uvx run on the private runtimes, caches stay in the h
     npm.name = "n";
     npm.command = "npm";
     npm.args = {"i", "left-pad"};
-    CHECK(rewrite_launcher(npm, home, "/srv/own").rewritten);
+    npm.working_directory = "/srv/own";
+    CHECK(rewrite_launcher(npm, home).rewritten);
     CHECK(npm.args == std::vector<std::string>{"install", "left-pad"});
-    CHECK(npm.env.at("BUN_INSTALL_CACHE_DIR").starts_with("/srv/own"));
+    CHECK(fs::path(npm.env.at("BUN_INSTALL_CACHE_DIR")).generic_string().starts_with("/srv/own/cache"));
+    CHECK(npm.env.at("HOME").find("cache") != std::string::npos); // HOME and temp are contained too
     CHECK(npx.env.at("UV_CACHE_DIR").starts_with(home.cache));
 
     agent::McpServerConfig uvx;
@@ -106,5 +108,99 @@ TEST_CASE("runtimes: npx / uvx run on the private runtimes, caches stay in the h
     CHECK(remove_runtime(home, "bun").ok);
     CHECK_FALSE(remove_runtime(home, "bun").ok);
     CHECK_FALSE(remove_runtime(home, "node").ok);
+    fs::remove_all(root, ec);
+}
+
+TEST_CASE("runtimes: node (with pnpm) and nub assets", "[runtimes]") {
+    const std::string sums = std::string(64, 'a') + "  node-v24.22.2-darwin-arm64.tar.gz\n" + std::string(64, 'b') + "  node-v24.22.2-linux-x64.tar.gz\n" +
+                             std::string(64, 'c') + "  node-v24.22.2-win-x64.zip\n" + std::string(64, 'd') + "  node-v24.22.2-linux-x64.tar.xz\n";
+    CHECK(find_node_archive(sums, "linux", "x86_64") == "node-v24.22.2-linux-x64.tar.gz");
+    CHECK(find_node_archive(sums, "windows", "x86_64") == "node-v24.22.2-win-x64.zip");
+    CHECK(find_node_archive(sums, "macos", "aarch64") == "node-v24.22.2-darwin-arm64.tar.gz");
+    CHECK(find_node_archive(sums, "linux", "aarch64").empty());
+
+    auto node = runtime_asset("node", "latest", "linux", "x86_64");
+    REQUIRE(node.ok);
+    CHECK(node.value.checksum_url == "https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt");
+    CHECK(runtime_asset("node", "v22.1.0", "linux", "x86_64").value.url == "https://nodejs.org/dist/v22.1.0/");
+    CHECK(runtime_asset("nub", "latest", "linux", "x86_64").value.archive_name == "nub-linux-x64.tar.gz");
+    CHECK(runtime_asset("nub", "latest", "windows", "x86_64").value.archive_name == "nub-win32-x64.zip");
+    CHECK(runtime_asset("nub", "0.10.0", "macos", "aarch64").value.url == "https://github.com/nubjs/nub/releases/download/v0.10.0/nub-darwin-arm64.tar.gz");
+    CHECK(runtimes_for_js("node") == std::vector<std::string>{"node", "pnpm"});
+    CHECK(runtimes_for_js("nub") == std::vector<std::string>{"nub"});
+    CHECK(runtimes_for_js("bun") == std::vector<std::string>{"bun"});
+    CHECK(is_runtime_name("pnpm"));
+    CHECK_FALSE(is_runtime_name("npm"));
+}
+
+TEST_CASE("runtimes: the JavaScript choice decides what npx / npm / node become", "[runtimes]") {
+    const fs::path root = fs::temp_directory_path() / "agent_test_runtimes_js";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    HomeLayout home = home_layout(root.string());
+    REQUIRE(create_home_layout(home).ok);
+    auto touch = [&](const std::string &rel) {
+        fs::create_directories((fs::path(home.runtimes) / rel).parent_path());
+        std::ofstream(fs::path(home.runtimes) / rel) << "x";
+    };
+    auto server = [&](const char *command, std::vector<std::string> args) {
+        agent::McpServerConfig s;
+        s.name = "s";
+        s.command = command;
+        s.args = std::move(args);
+        s.working_directory = (root / "data").string();
+        return s;
+    };
+
+    // Nothing installed: left alone, with the command to run.
+    auto missing = server("npx", {"-y", "pkg"});
+    auto note = rewrite_launcher(missing, home, "node");
+    CHECK_FALSE(note.rewritten);
+    CHECK(note.note.find("agent runtime install node") != std::string::npos);
+
+    touch("node/" + std::string(
+#ifdef _WIN32
+                        "node.exe"
+#else
+                        "node"
+#endif
+                        ));
+    touch("pnpm/bin/pnpm.cjs");
+    touch("nub/" + std::string(
+#ifdef _WIN32
+                       "nub.exe"
+#else
+                       "nub"
+#endif
+                       ));
+
+    auto npx = server("npx", {"-y", "pkg", "--flag"});
+    REQUIRE(rewrite_launcher(npx, home, "node").rewritten);
+    CHECK(fs::path(npx.command).stem().string() == "node");
+    REQUIRE(npx.args.size() == 4);
+    CHECK(fs::path(npx.args[0]).filename().string() == "pnpm.cjs");
+    CHECK(npx.args[1] == "dlx");
+    CHECK(npx.args[2] == "pkg"); // -y dropped
+    CHECK(npx.env.at("npm_config_store_dir").find("data") != std::string::npos); // inside the server's folder
+    CHECK_FALSE(rewrite_launcher(npx, home, "node").rewritten); // a second pass changes nothing
+    CHECK(npx.args.size() == 4);
+
+    auto npm = server("npm", {"i", "left-pad"});
+    REQUIRE(rewrite_launcher(npm, home, "node").rewritten);
+    CHECK(fs::path(npm.command).stem().string() == "node");
+    CHECK(npm.args.size() == 3);
+    CHECK(npm.args[1] == "install");
+
+    auto plain_node = server("node", {"server.js"});
+    REQUIRE(rewrite_launcher(plain_node, home, "node").rewritten);
+    CHECK(plain_node.args == std::vector<std::string>{"server.js"});
+
+    auto nub_npx = server("npx", {"-y", "pkg"});
+    REQUIRE(rewrite_launcher(nub_npx, home, "nub").rewritten);
+    CHECK(fs::path(nub_npx.command).stem().string() == "nub");
+    CHECK(nub_npx.args == std::vector<std::string>{"dlx", "pkg"});
+
+    auto bun_npm = server("npm", {"exec", "pkg"});
+    REQUIRE(rewrite_launcher(bun_npm, home, "bun").rewritten == false); // bun is not installed here
     fs::remove_all(root, ec);
 }

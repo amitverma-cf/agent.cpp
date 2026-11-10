@@ -11,6 +11,7 @@
 #include <simdjson.h>
 #include <sqlite-vec.h>
 #include <sqlite3.h>
+#include "sqlite_tuning.hpp"
 #include <string>
 
 namespace agent {
@@ -157,6 +158,7 @@ Result<std::shared_ptr<DataSource>> make_sqlite_vec_data_source(std::string name
         return fail<std::shared_ptr<DataSource>>(ErrorCode::ProviderInitFailed, "sqlite-vec: failed to open db: " + err);
     }
     sqlite3_vec_init(state->conn, nullptr, nullptr);
+    store::apply_sqlite_tuning(state->conn, true);
 
     std::string create_vec =
         "CREATE VIRTUAL TABLE IF NOT EXISTS " + state->vec_table + " USING vec0(embedding FLOAT[" + std::to_string(dimensions) + "]);";
@@ -308,6 +310,7 @@ Result<std::shared_ptr<void>> vs_open(const VectorStoreConfig &config) {
         return fail<R>(ErrorCode::ProviderInitFailed, "sqlite-vec: failed to open db: " + err);
     }
     sqlite3_vec_init(st->db.conn, nullptr, nullptr);
+    store::apply_sqlite_tuning(st->db.conn, true);
 
     const std::string &vec = st->db.vec_table, &chunks = st->db.meta_table;
     const std::string schema = "CREATE VIRTUAL TABLE IF NOT EXISTS " + vec + " USING vec0(embedding float[" +
