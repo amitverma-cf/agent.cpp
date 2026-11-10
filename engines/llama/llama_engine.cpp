@@ -20,6 +20,7 @@
 
 #include <agent-cpp/engine_abi.h>
 #include <algorithm>
+#include <filesystem>
 #include <cctype>
 #include <chat.h>
 #include <chrono>
@@ -34,6 +35,7 @@
 #include <mtmd-helper.h>
 #include <mtmd.h>
 #include <mutex>
+#include <sampling.h>
 #include <simdjson.h>
 #include <string>
 #include <string_view>
@@ -44,6 +46,15 @@
 namespace {
 
 std::string_view sv(agent_str s) { return s.data ? std::string_view(s.data, s.size) : std::string_view(); }
+
+// ------------------------------------------------------------------ sampling
+
+// Samples the next token and feeds it back to the sampler (its grammar state, if any, follows the output).
+llama_token sample_token(common_sampler *sampler, llama_context *ctx, int32_t idx) {
+    const llama_token token = common_sampler_sample(sampler, ctx, idx);
+    common_sampler_accept(sampler, token, true);
+    return token;
+}
 
 // ------------------------------------------------------------------ batching engine
 
@@ -183,7 +194,7 @@ class Batcher {
 
     // Prompt prefill runs as its own decodes (not batched across sequences), split into chunks of
     // at most n_batch tokens: a single llama_decode larger than n_batch aborts inside llama.cpp.
-    bool prefill(llama_seq_id seq, const std::vector<llama_token> &tokens, size_t begin, llama_sampler *sampler, llama_token &out) {
+    bool prefill(llama_seq_id seq, const std::vector<llama_token> &tokens, size_t begin, common_sampler *sampler, llama_token &out) {
         if (begin >= tokens.size()) return false;
         std::lock_guard<std::mutex> lock(mu_);
         if (use_checkpoints && reusable_[seq] && tokens.size() > begin + kCheckpointMargin + 1) {
@@ -198,27 +209,27 @@ class Batcher {
             if (!decode_prompt_locked(seq, tokens, begin)) return false;
             if (use_checkpoints && reusable_[seq]) save_checkpoint_locked(seq);
         }
-        out = llama_sampler_sample(sampler, ctx, -1);
+        out = sample_token(sampler, ctx, -1);
         return true;
     }
 
     // Prefill for prompts with media. mtmd encodes images/audio with the projector and decodes text
     // and embedding chunks in turn; positions come back from the helper because M-RoPE models
     // advance fewer positions than tokens for an image. Runs under the batching mutex like prefill().
-    bool prefill_media(llama_seq_id seq, mtmd_context *mctx, const mtmd_input_chunks *chunks, llama_sampler *sampler,
+    bool prefill_media(llama_seq_id seq, mtmd_context *mctx, const mtmd_input_chunks *chunks, common_sampler *sampler,
                        llama_token &out) {
         std::lock_guard<std::mutex> lock(mu_);
         llama_pos n_past = next_pos_[seq];
         if (mtmd_helper_eval_chunks(mctx, ctx, chunks, n_past, seq, static_cast<int32_t>(llama_n_batch(ctx)), true, &n_past) != 0)
             return false;
         next_pos_[seq] = n_past;
-        out = llama_sampler_sample(sampler, ctx, -1);
+        out = sample_token(sampler, ctx, -1);
         return true;
     }
 
     // The first caller in a round leads it: waits a short debounce window so other active
     // generations can join, then decodes every joined sequence's next token in one call.
-    bool next_token(llama_seq_id seq, llama_token last, llama_sampler *sampler, llama_token &out) {
+    bool next_token(llama_seq_id seq, llama_token last, common_sampler *sampler, llama_token &out) {
         std::unique_lock<std::mutex> lock(mu_);
         pending_.push_back(RoundReq{seq, last, sampler});
 
@@ -261,7 +272,7 @@ class Batcher {
             }
             RoundResult rr;
             rr.ok = (rc == 0);
-            if (rr.ok) rr.token = llama_sampler_sample(round[i].sampler, ctx, static_cast<int32_t>(i));
+            if (rr.ok) rr.token = sample_token(round[i].sampler, ctx, static_cast<int32_t>(i));
             results_[s] = rr;
         }
 
@@ -404,7 +415,7 @@ class Batcher {
     struct RoundReq {
         llama_seq_id seq;
         llama_token token;
-        llama_sampler *sampler;
+        common_sampler *sampler;
     };
     struct RoundResult {
         llama_token token = -1;
@@ -445,7 +456,7 @@ struct CallOutput {
 
 // What the context was created for (create() option "mode"). Embedding and reranking models need a
 // context in embedding mode with pooling, which can't generate, so one instance does one of the three.
-enum class Mode { Generate, Embed, Rerank };
+enum class Mode { Generate, Embed, Rerank, Tools };
 
 struct Instance {
     Batcher batcher;
@@ -453,6 +464,7 @@ struct Instance {
     std::mutex pool_mu;     // serializes embed / rerank decodes (they use every sequence slot)
     mtmd::context_ptr mtmd; // projector for image/audio input; null without options.mmproj. Freed before the model.
     common_chat_templates_ptr templates;
+    std::string tools_input; // Mode::Tools: the model file the operations work on
     std::string ocr_prompt; // AGENT_CAP_OCR instruction: options.ocr_prompt or the family's
     std::mutex out_mu;
     std::unordered_map<std::thread::id, CallOutput> outputs;
@@ -474,13 +486,40 @@ struct Instance {
 
 std::once_flag g_backend_once;
 
-llama_sampler *build_sampler(float temperature) {
-    llama_sampler *s = llama_sampler_chain_init(llama_sampler_chain_default_params());
-    if (temperature <= 0.0f) {
-        llama_sampler_chain_add(s, llama_sampler_init_greedy());
+bool trace_grammar() {
+    static const bool on = [] {
+        const char *v = std::getenv("AGENT_LLAMA_TRACE");
+        return v && *v && *v != '0';
+    }();
+    return on;
+}
+
+// Plain greedy / temperature sampling, plus the chat session's tool-call grammar when the request has tools:
+// the model's own tool-call format (lazy: it only constrains the output once the call marker has been
+// produced), so a call is always well formed.
+common_sampler *build_sampler(const llama_model *model, float temperature, const common_chat_session *chat) {
+    common_params_sampling params;
+    params.temp = temperature;
+    if (temperature > 0.0f) { // keep the old behaviour: temperature only, no top-k / top-p / penalties
+        params.top_k = 0;
+        params.top_p = 1.0f;
+        params.min_p = 0.0f;
+        params.typ_p = 1.0f;
+        params.penalty_repeat = 1.0f;
+        params.penalty_freq = 0.0f;
+        params.penalty_present = 0.0f;
+        params.seed = LLAMA_DEFAULT_SEED;
     } else {
-        llama_sampler_chain_add(s, llama_sampler_init_temp(temperature));
-        llama_sampler_chain_add(s, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+        params.top_k = 1;
+    }
+    if (chat) chat->apply_sampling(params);
+    if (trace_grammar()) std::fprintf(stderr, "llama: tool-call grammar %s (%zu bytes, lazy=%d, %zu triggers)\n", params.grammar.grammar.empty() ? "off" : "on", params.grammar.grammar.size(), params.grammar_lazy ? 1 : 0, params.grammar_triggers.size());
+    common_sampler *s = common_sampler_init(model, params);
+    if (!s && !params.grammar.grammar.empty()) { // a grammar this build cannot use: sample without it
+        params.grammar = {};
+        params.grammar_lazy = false;
+        params.grammar_triggers.clear();
+        s = common_sampler_init(model, params);
     }
     return s;
 }
@@ -492,6 +531,54 @@ template <typename T> T json_number(simdjson::ondemand::object &obj, const char 
 }
 
 bool is_media(const agent_part &p) { return p.kind == AGENT_PART_FILE || p.kind == AGENT_PART_BYTES; }
+
+// Thinking is switched off, but several templates (Qwen3 style, LFM, TwIL) still make the model open and close an empty
+// reasoning block before the answer. Drops those leading empty blocks from the final text.
+void strip_empty_thinking(std::string &text, const common_chat_session &session) {
+    std::string start = session.thinking_start_tag();
+    std::vector<std::string> ends = session.thinking_end_tags();
+    if (start.empty()) start = "<think>";
+    if (ends.empty()) ends.push_back("</think>");
+    auto skip_space = [&](size_t i) {
+        while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) ++i;
+        return i;
+    };
+    for (int round = 0; round < 4; ++round) {
+        const size_t at = skip_space(0);
+        if (text.compare(at, start.size(), start) != 0) return;
+        const size_t after_start = skip_space(at + start.size());
+        bool removed = false;
+        for (const std::string &end : ends) {
+            if (end.empty() || text.compare(after_start, end.size(), end) != 0) continue;
+            text.erase(0, skip_space(after_start + end.size()));
+            removed = true;
+            break;
+        }
+        if (!removed) return; // a block with content in it is real reasoning: leave it alone
+    }
+}
+
+// A tool call's arguments must be a JSON object. A call cut off by max_tokens, or written wrongly by a small model,
+// is not: it must neither run nor be replayed into the next prompt, where the chat template would fail on it.
+bool is_json_object(std::string_view text) {
+    simdjson::dom::parser parser;
+    simdjson::dom::element doc;
+    simdjson::dom::object obj;
+    return !parser.parse(text).get(doc) && !doc.get(obj);
+}
+
+std::string json_quote(std::string_view s) {
+    std::string out = "\"";
+    for (unsigned char c : s) {
+        if (c == '"' || c == '\\') { out += '\\'; out += static_cast<char>(c); }
+        else if (c == '\n') out += "\\n";
+        else if (c == '\r') out += "\\r";
+        else if (c == '\t') out += "\\t";
+        else if (c < 0x20) { char b[8]; std::snprintf(b, sizeof(b), "\\u%04x", c); out += b; }
+        else out += static_cast<char>(c);
+    }
+    return out + "\"";
+}
 
 void erase_all(std::string &text, std::string_view needle) {
     if (needle.empty()) return;
@@ -523,9 +610,11 @@ common_chat_templates_inputs build_inputs(const agent_request *req, const char *
                 msg.content += marker;
             }
         }
-        for (size_t c = 0; c < m.n_tool_calls; ++c)
-            msg.tool_calls.push_back(common_chat_tool_call{std::string(sv(m.tool_calls[c].name)), std::string(sv(m.tool_calls[c].arguments)),
-                                                           std::string(sv(m.tool_calls[c].id))});
+        for (size_t c = 0; c < m.n_tool_calls; ++c) {
+            std::string arguments(sv(m.tool_calls[c].arguments));
+            if (!is_json_object(arguments)) arguments = "{\"unparsed\":" + json_quote(arguments) + "}"; // history from an older turn
+            msg.tool_calls.push_back(common_chat_tool_call{std::string(sv(m.tool_calls[c].name)), std::move(arguments), std::string(sv(m.tool_calls[c].id))});
+        }
         msg.tool_call_id = std::string(sv(m.tool_call_id));
         in.messages.push_back(std::move(msg));
     }
@@ -1273,7 +1362,7 @@ bool trace_prefix_cache() {
 // token or one of stops. Generation steps join the batcher's shared rounds.
 int32_t generate(Instance &inst, const agent_request *req, const std::vector<llama_token> &tokens, const mtmd_input_chunks *chunks,
                  int max_tokens, float temperature, const std::vector<std::string> &stops, common_chat_input &generated, int &completion,
-                 agent_run_stats *stats = nullptr) {
+                 agent_run_stats *stats = nullptr, const common_chat_session *chat = nullptr) {
     Batcher &b = inst.batcher;
     const llama_vocab *vocab = llama_model_get_vocab(b.model);
     llama_seq_id seq = 0;
@@ -1281,7 +1370,11 @@ int32_t generate(Instance &inst, const agent_request *req, const std::vector<lla
     const bool acquired = chunks ? b.acquire_seq(seq) : b.acquire_seq_for(tokens, seq, reused);
     if (!acquired) return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: no free sequence slot (raise max_parallel_subagents)");
     if (trace_prefix_cache()) std::fprintf(stderr, "llama: prefix cache reused %zu of %zu prompt tokens (slot %d%s)\n", reused, tokens.size(), static_cast<int>(seq), b.use_checkpoints ? ", checkpoint" : "");
-    llama_sampler *sampler = build_sampler(temperature);
+    common_sampler *sampler = build_sampler(b.model, temperature, chat);
+    if (!sampler) {
+        b.release_seq(seq, false);
+        return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: could not create the sampler");
+    }
     int32_t status = AGENT_OK;
     llama_token tok = 0;
     const auto t_prefill = std::chrono::steady_clock::now();
@@ -1325,7 +1418,7 @@ int32_t generate(Instance &inst, const agent_request *req, const std::vector<lla
         stats->prefill_ms = ms(t_prefill, t_first_token);
         stats->decode_ms = ms(t_first_token, t_done);
     }
-    llama_sampler_free(sampler);
+    common_sampler_free(sampler);
     b.release_seq(seq, status == AGENT_OK);
     return status;
 }
@@ -1432,6 +1525,7 @@ int32_t run_ocr(Instance &inst, const agent_request *req, agent_response *resp) 
     out = CallOutput{};
     if (finish_session(session, generated, out.parsed, error)) out.content = out.parsed.content;
     else out.content = generated.text;
+    strip_empty_thinking(out.content, session);
     while (!out.content.empty() && std::isspace(static_cast<unsigned char>(out.content.back()))) out.content.pop_back();
     const size_t lead = out.content.find_first_not_of(" \t\r\n");
     out.content.erase(0, lead == std::string::npos ? out.content.size() : lead);
@@ -1486,6 +1580,7 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     ggml_type kv_type = GGML_TYPE_Q4_0;
     bool kv_auto = true;
     std::string chat_template, mmproj, ocr_prompt;
+    std::vector<std::pair<std::string, float>> loras; // options.lora: adapter file and scale
     Mode mode = Mode::Generate;
     enum llama_pooling_type pooling = LLAMA_POOLING_TYPE_UNSPECIFIED;
     simdjson::ondemand::object options;
@@ -1496,6 +1591,18 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         if (!options["chat_template"].get_string().get(t)) chat_template = std::string(t);
         if (!options["mmproj"].get_string().get(t)) mmproj = std::string(t);
         if (!options["ocr_prompt"].get_string().get(t)) ocr_prompt = std::string(t);
+        simdjson::ondemand::array lora_list;
+        if (!options["lora"].get_array().get(lora_list)) {
+            for (auto item : lora_list) {
+                simdjson::ondemand::object lo;
+                std::string_view lp;
+                if (item.get_object().get(lo) || lo["path"].get_string().get(lp) || lp.empty()) {
+                    std::snprintf(err, err_cap, "llama: each options.lora entry needs a \"path\"");
+                    return AGENT_ERR_INVALID_CONFIG;
+                }
+                loras.push_back({std::string(lp), json_number<float>(lo, "scale", 1.0f)});
+            }
+        }
         // KV cache precision, using llama.cpp's own quantized cache types (needs flash attention).
         if (!options["kv_cache"].get_string().get(t)) {
             kv_auto = (t == "auto");
@@ -1512,8 +1619,9 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         if (!options["mode"].get_string().get(t)) {
             if (t == "embed") mode = Mode::Embed;
             else if (t == "rerank") mode = Mode::Rerank;
+            else if (t == "tools") mode = Mode::Tools;
             else if (t != "generate") {
-                std::snprintf(err, err_cap, "llama: options.mode must be \"generate\", \"embed\" or \"rerank\"");
+                std::snprintf(err, err_cap, "llama: options.mode must be \"generate\", \"embed\", \"rerank\" or \"tools\"");
                 return AGENT_ERR_INVALID_CONFIG;
             }
         }
@@ -1526,6 +1634,13 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
                 return AGENT_ERR_INVALID_CONFIG;
             }
         }
+    }
+    if (mode == Mode::Tools) { // file operations (quantize): the model is not loaded
+        auto *tools = new Instance();
+        tools->mode = Mode::Tools;
+        tools->tools_input = model_str;
+        *out_instance = tools;
+        return AGENT_OK;
     }
     if (mode != Mode::Generate && !mmproj.empty()) {
         std::snprintf(err, err_cap, "llama: options.mmproj is only used in generate mode");
@@ -1637,6 +1752,26 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
                                                            (static_cast<double>(llama_model_n_embd(model)) / n_head) *
                                                            static_cast<double>(llama_n_ctx(ctx)) * bytes_per_elem);
     }
+    if (!loras.empty()) {
+        // Adapters belong to the model and are freed with it. They apply to every sequence of this instance.
+        std::vector<llama_adapter_lora *> adapters;
+        std::vector<float> scales;
+        for (const auto &[path, scale] : loras) {
+            llama_adapter_lora *adapter = llama_adapter_lora_init(model, path.c_str());
+            if (!adapter) {
+                std::snprintf(err, err_cap, "llama: cannot load the LoRA adapter %s (a GGUF adapter made for this base model is needed)", path.c_str());
+                delete inst;
+                return AGENT_ERR_MODEL_LOAD_FAILED;
+            }
+            adapters.push_back(adapter);
+            scales.push_back(scale);
+        }
+        if (llama_set_adapters_lora(inst->batcher.ctx, adapters.data(), adapters.size(), scales.data()) != 0) {
+            std::snprintf(err, err_cap, "llama: the LoRA adapter does not fit this model");
+            delete inst;
+            return AGENT_ERR_MODEL_LOAD_FAILED;
+        }
+    }
     inst->batcher.use_checkpoints = llama_model_is_hybrid(model) || llama_model_is_recurrent(model);
     if (llama_model_n_swa(model) > 0 && !inst->batcher.use_checkpoints) inst->batcher.disable_prefix_reuse(); // sliding-window keys are not all kept
     inst->mode = mode;
@@ -1664,15 +1799,87 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
 
 void llama_destroy(void *instance) { delete static_cast<Instance *>(instance); }
 
+// ------------------------------------------------------------------ file operations (options.mode "tools")
+
+struct QuantType {
+    const char *name;
+    llama_ftype type;
+};
+constexpr QuantType kQuantTypes[] = {
+    {"F16", LLAMA_FTYPE_MOSTLY_F16},     {"BF16", LLAMA_FTYPE_MOSTLY_BF16},   {"Q8_0", LLAMA_FTYPE_MOSTLY_Q8_0},     {"Q6_K", LLAMA_FTYPE_MOSTLY_Q6_K},
+    {"Q5_K_M", LLAMA_FTYPE_MOSTLY_Q5_K_M}, {"Q5_K_S", LLAMA_FTYPE_MOSTLY_Q5_K_S}, {"Q5_0", LLAMA_FTYPE_MOSTLY_Q5_0},   {"Q5_1", LLAMA_FTYPE_MOSTLY_Q5_1},
+    {"Q4_K_M", LLAMA_FTYPE_MOSTLY_Q4_K_M}, {"Q4_K_S", LLAMA_FTYPE_MOSTLY_Q4_K_S}, {"Q4_0", LLAMA_FTYPE_MOSTLY_Q4_0},   {"Q4_1", LLAMA_FTYPE_MOSTLY_Q4_1},
+    {"Q3_K_L", LLAMA_FTYPE_MOSTLY_Q3_K_L}, {"Q3_K_M", LLAMA_FTYPE_MOSTLY_Q3_K_M}, {"Q3_K_S", LLAMA_FTYPE_MOSTLY_Q3_K_S}, {"Q2_K", LLAMA_FTYPE_MOSTLY_Q2_K},
+    {"IQ4_NL", LLAMA_FTYPE_MOSTLY_IQ4_NL}, {"IQ4_XS", LLAMA_FTYPE_MOSTLY_IQ4_XS},
+};
+
+// AGENT_CAP_GENERIC with params {"op":"quantize","output":"out.gguf","type":"Q4_K_M"}: rewrites the GGUF named by the
+// instance (config.model) at a lower precision. Needs no context and loads no weights into memory beyond what the
+// quantizer streams. {"threads":N,"allow_requantize":true,"overwrite":true} are optional.
+int32_t run_tools(Instance &inst, const agent_request *req, agent_response *resp) {
+    simdjson::ondemand::parser parser;
+    simdjson::padded_string json(sv(req->params_json));
+    simdjson::ondemand::document doc;
+    simdjson::ondemand::object params;
+    if (!req->params_json.size || parser.iterate(json).get(doc) || doc.get_object().get(params))
+        return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: tools mode needs params like {\"op\":\"quantize\",\"output\":\"out.gguf\",\"type\":\"Q4_K_M\"}");
+    std::string_view op, output, type;
+    if (params["op"].get_string().get(op) || op != "quantize") return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: tools mode supports op \"quantize\"");
+    if (params["output"].get_string().get(output) || output.empty()) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: quantize needs params.output (the new GGUF path)");
+    if (params["type"].get_string().get(type)) type = "Q4_K_M";
+
+    llama_ftype ftype = LLAMA_FTYPE_MOSTLY_Q4_K_M;
+    bool known = false;
+    for (const QuantType &q : kQuantTypes)
+        if (type == q.name) { ftype = q.type; known = true; }
+    if (!known) {
+        std::string list;
+        for (const QuantType &q : kQuantTypes) list += std::string(list.empty() ? "" : ", ") + q.name;
+        return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: unknown quantization type \"" + std::string(type) + "\" (" + list + ")");
+    }
+    std::error_code ec;
+    const std::string out_path(output);
+    bool overwrite = false;
+    if (params["overwrite"].get_bool().get(overwrite)) overwrite = false;
+    if (std::filesystem::equivalent(out_path, inst.tools_input, ec)) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: params.output is the input file");
+    if (!overwrite && std::filesystem::exists(out_path, ec)) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: " + out_path + " exists (set params.overwrite)");
+
+    llama_model_quantize_params qp = llama_model_quantize_default_params();
+    qp.ftype = ftype;
+    qp.nthread = json_number<int>(params, "threads", 0);
+    bool requantize = false;
+    if (!params["allow_requantize"].get_bool().get(requantize)) qp.allow_requantize = requantize;
+    const uint64_t in_bytes = std::filesystem::file_size(inst.tools_input, ec);
+    if (llama_model_quantize(inst.tools_input.c_str(), out_path.c_str(), &qp) != 0)
+        return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: quantization failed. Possible causes: the output folder is not writable by the sandboxed engine (use <workspace>/artifacts/), the disk is full, or the input is already quantized (set params.allow_requantize, or start from an F16/BF16 file)");
+    const uint64_t out_bytes = std::filesystem::file_size(out_path, ec);
+
+    CallOutput &out = inst.output();
+    out = CallOutput{};
+    out.content = "quantized " + inst.tools_input + " to " + std::string(type) + ": " + out_path + " (" + std::to_string(in_bytes) + " -> " + std::to_string(out_bytes) + " bytes)";
+    agent_response_reset(resp);
+    resp->message.role = agent_str{"assistant", 9};
+    out.part = agent_part{};
+    out.part.kind = AGENT_PART_TEXT;
+    out.part.text = agent_str{out.content.data(), out.content.size()};
+    resp->message.parts = &out.part;
+    resp->message.n_parts = 1;
+    return AGENT_OK;
+}
+
 int32_t llama_run(void *instance, const agent_request *req, agent_response *resp) {
     auto *inst = static_cast<Instance *>(instance);
+    if (inst->mode == Mode::Tools) {
+        if (req->task != AGENT_CAP_GENERIC) return inst->fail(AGENT_ERR_UNSUPPORTED, "llama: an instance created with mode \"tools\" only runs GENERIC requests");
+        return run_tools(*inst, req, resp);
+    }
     if (inst->mode == Mode::Embed && req->task == AGENT_CAP_EMBED) return run_embed(*inst, req, resp);
     if (inst->mode == Mode::Rerank && req->task == AGENT_CAP_RERANK) return run_rerank(*inst, req, resp);
     if (inst->mode == Mode::Generate && req->task == AGENT_CAP_DECIDE) return run_decide(*inst, req, resp);
     if (inst->mode == Mode::Generate && req->task == AGENT_CAP_OCR) return run_ocr(*inst, req, resp);
     if (inst->mode != Mode::Generate || req->task != AGENT_CAP_TEXT_GEN) {
-        static constexpr const char *kModeTask[] = {"TEXT_GEN / DECIDE / OCR", "EMBED", "RERANK"};
-        static constexpr const char *kModeName[] = {"generate", "embed", "rerank"};
+        static constexpr const char *kModeTask[] = {"TEXT_GEN / DECIDE / OCR", "EMBED", "RERANK", "GENERIC"};
+        static constexpr const char *kModeName[] = {"generate", "embed", "rerank", "tools"};
         const auto m = static_cast<size_t>(inst->mode);
         return inst->fail(AGENT_ERR_UNSUPPORTED, std::string("llama: this instance was created with mode \"") + kModeName[m] +
                                                      "\" and only runs " + kModeTask[m] + " requests (set options.mode)");
@@ -1731,7 +1938,7 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
     int completion = 0;
     agent_run_stats run_stats{};
     if (int32_t rc = generate(*inst, req, tokens, has_media ? chunks.ptr.get() : nullptr, max_tokens, temperature,
-                              session.additional_stops(), generated, completion, &run_stats);
+                              session.additional_stops(), generated, completion, &run_stats, &session);
         rc != AGENT_OK)
         return rc;
 
@@ -1739,11 +1946,20 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
     out = CallOutput{};
     if (finish_session(session, generated, out.parsed, error)) out.content = out.parsed.content;
     else out.content = generated.text; // unparseable output is returned verbatim rather than failing the turn
+    strip_empty_thinking(out.content, session);
 
     common_chat_tool_call loose;
     if (out.parsed.tool_calls.empty() && req->tools_json.size && find_loose_tool_call(generated.text, loose)) {
         out.parsed.tool_calls.push_back(std::move(loose));
         out.content.clear();
+    }
+    // Calls whose arguments are not a JSON object (cut off at max_tokens, or mis-written) are not run. The model's own text
+    // is returned instead, so the caller sees what happened.
+    {
+        auto &calls = out.parsed.tool_calls;
+        const size_t before = calls.size();
+        calls.erase(std::remove_if(calls.begin(), calls.end(), [](const common_chat_tool_call &c) { return !c.arguments.empty() && !is_json_object(c.arguments); }), calls.end());
+        if (calls.size() < before && calls.empty() && out.content.empty()) out.content = generated.text;
     }
     out.calls.reserve(out.parsed.tool_calls.size());
     for (size_t i = 0; i < out.parsed.tool_calls.size(); ++i) {
@@ -1805,7 +2021,7 @@ const agent_engine_v1 kLlamaEngine = {
     // EMBED / RERANK need an instance created with options.mode "embed" / "rerank"; an instance runs
     // only its own mode's task.
     AGENT_CAP_TEXT_GEN | AGENT_CAP_TOOL_CALL | AGENT_CAP_VISION_IN | AGENT_CAP_AUDIO_IN | AGENT_CAP_EMBED | AGENT_CAP_RERANK |
-        AGENT_CAP_DECIDE | AGENT_CAP_OCR,
+        AGENT_CAP_DECIDE | AGENT_CAP_OCR | AGENT_CAP_GENERIC,
     AGENT_ENGINE_FLAG_CONCURRENT | AGENT_ENGINE_FLAG_NATIVE_TOOLS,
     llama_create,
     llama_destroy,

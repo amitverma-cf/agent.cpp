@@ -264,6 +264,27 @@ of a sequence (recurrent or hybrid state) or that keep only a sliding window of 
 Prompts with images or audio and DECIDE requests never use it. `AGENT_LLAMA_TRACE=1` prints how many prompt tokens each
 request found in the cache.
 
+**LoRA adapters (`lora`).** `"lora": [{"path": "adapter.gguf", "scale": 1.0}]` applies GGUF LoRA adapters to the
+base model for every request of the instance. An adapter made for another base model is refused when the instance
+is created. Tested with `ggml-org/LoRA-Qwen2.5-3B-Instruct-abliterated-F16-GGUF` on Qwen2.5-3B-Instruct.
+
+**Tool calls.** When a request has tools, the plugin applies the grammar from llama.cpp's chat template for the model
+(lazy: it constrains the output only once the model has written the call marker, e.g. `<tool_call>`), so a call is
+well formed JSON in the model's own format. A call whose arguments still are not a JSON object (cut off at `max_tokens`)
+is never run and never replayed into the next prompt. `AGENT_LLAMA_TRACE=1` prints whether the grammar is on.
+
+**File operations (`"mode": "tools"`).** An instance created with this mode loads no weights and runs `AGENT_CAP_GENERIC`
+requests on the file named by `config.model`. The one operation is `quantize`:
+
+```sh
+agent task generic -e llama -m model-f16.gguf --engine-options '{"mode":"tools"}' \
+  --params '{"op":"quantize","output":"<workspace>/artifacts/model-q4.gguf","type":"Q4_K_M"}'
+```
+
+Types: F16, BF16, Q8_0, Q6_K, Q5_K_M, Q5_K_S, Q5_0, Q5_1, Q4_K_M, Q4_K_S, Q4_0, Q4_1, Q3_K_L, Q3_K_M, Q3_K_S, Q2_K,
+IQ4_NL, IQ4_XS. Options: `threads`, `allow_requantize` (needed to start from an already quantized file; quality
+suffers), `overwrite`. The engine host's sandbox allows writes only in `<workspace>/artifacts/` (and its other working folders), so the output goes there.
+
 ### Image and audio input
 
 With `mmproj` set, the plugin loads the projector with llama.cpp's libmtmd (linked statically into the
