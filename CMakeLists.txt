@@ -170,7 +170,7 @@ set_source_files_properties(
     vendor/sqlite-vec/sqlite-vec.c
     PROPERTIES COMPILE_OPTIONS "-w"
 )
-target_compile_definitions(agent_store_sqlite PRIVATE SQLITE_THREADSAFE=1 SQLITE_CORE SQLITE_VEC_STATIC)
+target_compile_definitions(agent_store_sqlite PRIVATE SQLITE_THREADSAFE=1 SQLITE_CORE SQLITE_VEC_STATIC SQLITE_ENABLE_FTS5)
 target_link_libraries(agent_store_sqlite PUBLIC agent PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
 target_compile_options(agent_store_sqlite PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 target_link_options(agent_store_sqlite PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
@@ -331,7 +331,7 @@ if(AGENT_BUILD_HUB)
     target_link_libraries(test_agent PRIVATE agent_hub)
 endif()
 if(AGENT_BUILD_CLI)
-    target_sources(test_agent PRIVATE tests/unit/test_cli.cpp tests/unit/test_cli_status.cpp tests/unit/test_voice.cpp tests/unit/test_home.cpp tests/unit/test_secrets.cpp tests/unit/test_doctor.cpp tests/unit/test_mcp_config.cpp)
+    target_sources(test_agent PRIVATE tests/unit/test_cli.cpp tests/unit/test_cli_status.cpp tests/unit/test_voice.cpp tests/unit/test_home.cpp tests/unit/test_secrets.cpp tests/unit/test_doctor.cpp tests/unit/test_mcp_config.cpp tests/unit/test_archive.cpp tests/unit/test_runtimes.cpp tests/unit/test_registries.cpp tests/unit/test_engine_release.cpp)
     target_link_libraries(test_agent PRIVATE agent_cli_core)
     # The agent voice end-to-end test runs the real binary.
     target_compile_definitions(test_agent PRIVATE AGENT_TEST_CLI_PATH="$<TARGET_FILE:agent_cli_bin>")

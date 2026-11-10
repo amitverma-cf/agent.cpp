@@ -6,6 +6,10 @@ add_library(agent_cli_core STATIC
     src/home.cpp
     src/secrets.cpp
     src/mcp_config.cpp
+    src/archive.cpp
+    src/runtimes.cpp
+    src/engine_release.cpp
+    src/registries.cpp
     src/doctor.cpp
     src/status_view.cpp
     src/audio.cpp
@@ -59,6 +63,8 @@ add_executable(agent_cli_bin
     src/secret_cmd.cpp
     src/doctor_cmd.cpp
     src/mcp_cmd.cpp
+    src/runtime_cmd.cpp
+    src/skill_cmd.cpp
 )
 set_target_properties(agent_cli_bin PROPERTIES OUTPUT_NAME agent RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 target_link_libraries(agent_cli_bin PRIVATE agent_cli_core agent_hub agent_store_sqlite)

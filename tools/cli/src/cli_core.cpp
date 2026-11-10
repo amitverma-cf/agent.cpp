@@ -49,12 +49,18 @@ constexpr std::string_view kGlobalValue[] = {"config-dir", "home"};
 constexpr std::string_view kGlobalBool[] = {"help"};
 
 constexpr std::string_view kSetupValue[] = {"caps", "workspace", "models-dir", "engines-dir", "backend", "model"};
-constexpr std::string_view kSetupBool[] = {"yes", "no-models"};
+constexpr std::string_view kSetupBool[] = {"yes", "no-models", "download-engines"};
 
-constexpr SubSpec kEngineSubs[] = {{"ls", 0, 0}, {"add", 1, 1}, {"rm", 1, 1}};
+constexpr SubSpec kEngineSubs[] = {{"ls", 0, 0}, {"add", 1, 1}, {"rm", 1, 1}, {"pull", 1, 1}};
+constexpr std::string_view kEngineValue[] = {"tag", "repo"};
 
 constexpr SubSpec kSecretSubs[] = {{"set", 1, 1}, {"ls", 0, 0}, {"rm", 1, 1}, {"bind", 2, 2}, {"unbind", 2, 2}};
-constexpr SubSpec kMcpSubs[] = {{"ls", 0, 0}};
+constexpr SubSpec kMcpSubs[] = {{"ls", 0, 0}, {"search", 1, 1}, {"add", 1, 1}, {"rm", 1, 1}};
+constexpr std::string_view kMcpBool[] = {"project", "yes"};
+constexpr SubSpec kSkillSubs[] = {{"ls", 0, 0}, {"search", 1, 1}, {"add", 1, 1}, {"rm", 1, 1}};
+constexpr std::string_view kSkillBool[] = {"project", "yes"};
+constexpr SubSpec kRuntimeSubs[] = {{"ls", 0, 0}, {"install", 1, 1}, {"rm", 1, 1}, {"path", 1, 1}};
+constexpr std::string_view kRuntimeValue[] = {"version"};
 constexpr std::string_view kCleanBool[] = {"downloads", "cache", "logs", "yes"};
 constexpr std::string_view kSecretValue[] = {"identity"};
 constexpr std::string_view kSecretBool[] = {"stdin"};
@@ -67,7 +73,7 @@ constexpr std::string_view kChatValue[] = {"model", "engine", "resume", "workspa
 constexpr std::string_view kChatBool[] = {"yes", "list", "verbose", "inprocess"};
 
 constexpr std::string_view kRunValue[] = {"model", "engine", "workspace", "thread", "set", "resume", "input", "engine-options"};
-constexpr std::string_view kRunBool[] = {"yes", "inprocess", "json"};
+constexpr std::string_view kRunBool[] = {"yes", "inprocess", "json", "swap-models"};
 
 constexpr std::string_view kVoiceValue[] = {"model",     "engine", "asr-model",  "tts-model",      "vad-model", "input-wav", "output-dir",
                                             "workspace", "ctx",    "max-tokens", "engine-options", "resume",    "max-turns", "speaker-id"};
@@ -81,9 +87,11 @@ constexpr CommandSpec kCommands[] = {
     {"init", {}, 0, 1, {}, {}},
     {"secret", kSecretSubs, 0, 0, kSecretValue, kSecretBool},
     {"doctor", {}, 0, 0, {}, {}},
-    {"mcp", kMcpSubs, 0, 0, {}, {}},
+    {"mcp", kMcpSubs, 0, 0, {}, kMcpBool},
+    {"skill", kSkillSubs, 0, 0, {}, kSkillBool},
+    {"runtime", kRuntimeSubs, 0, 0, kRuntimeValue, {}},
     {"clean", {}, 0, 0, {}, kCleanBool},
-    {"engine", kEngineSubs, 0, 0, {}, {}},
+    {"engine", kEngineSubs, 0, 0, kEngineValue, {}},
     {"model", kModelSubs, 0, 0, kModelValue, kModelBool},
     {"chat", {}, 0, 0, kChatValue, kChatBool},
     {"run", {}, 1, 1, kRunValue, kRunBool},
@@ -246,6 +254,7 @@ std::string usage_text() {
            "        [--engines-dir DIR] [--backend cpu|cuda|vulkan]\n"
            "  engine ls                  list engines in engines.json\n"
            "  engine add <plugin>        validate an engine plugin and record it\n"
+           "  engine pull <name>         download a prebuilt engine from the GitHub release (--tag, --repo)\n"
            "  engine rm <name>           forget an engine\n"
            "  model pull <spec>          download from Hugging Face (owner/repo[:file-or-QUANT])\n"
            "        owner/repo:*  pulls every file of a folder model (sherpa voices, TRELLIS); [--include STR[,STR]] narrows it\n"

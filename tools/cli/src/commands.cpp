@@ -1,6 +1,8 @@
 // agent setup / engine / model / run, plus helpers shared with chat.cpp.
 
 #include "commands.hpp"
+#include "doctor.hpp"
+#include "engine_release.hpp"
 #include "status_view.hpp"
 
 #include <agent-cpp/engine_abi.h>
@@ -393,11 +395,19 @@ int cmd_setup(const CommandLine &cl, Context &ctx) {
         std::printf("  %-8s %s (%s) %s\n", entry.name.c_str(), entry.version.c_str(), join(entry.caps, ",").c_str(), entry.path.c_str());
         upsert_engine(engines, std::move(entry));
     }
+    if (missing && (cl.has("download-engines") || (interactive && ask_yes_no("Download the missing engines from the GitHub release?")))) {
+        for (const auto &name : cfg.capabilities) {
+            if (!find_plugin(name, dirs).empty()) continue;
+            if (const EngineEntry *e = find_engine_entry(engines, name); e && file_exists(e->path)) continue;
+            if (auto r = pull_and_register_engine(ctx, engines, name, kDefaultReleaseRepo, "latest"); !r.ok) std::printf("  %-8s %s\n", name.c_str(), r.error.message.c_str());
+            else --missing;
+        }
+    }
     if (missing)
-        std::printf("\nnote: downloading prebuilt engine plugins from GitHub releases is not available yet. Build the missing\n"
-                    "      engines from source (e.g. -DAGENT_ENGINE_SDCPP=ON, see docs/api/engines.md) and register them with\n"
+        std::printf("\nnote: %d engine%s still missing. Run `agent engine pull NAME` to download a prebuilt one, or build it from\n"
+                    "      source (e.g. -DAGENT_ENGINE_SDCPP=ON, see docs/api/engines.md) and register it with\n"
                     "      `agent engine add <path/to/agent-engine-NAME%s>`, or rerun `agent setup --engines-dir DIR`.\n",
-                    plugin_file_name("").substr(std::string_view("agent-engine-").size()).c_str());
+                    missing, missing == 1 ? " is" : "s are", plugin_file_name("").substr(std::string_view("agent-engine-").size()).c_str());
 
     std::error_code ec;
     fs::create_directories(cfg.workspace.empty() ? workspace_dir(ctx) : cfg.workspace, ec);
@@ -413,6 +423,30 @@ int cmd_setup(const CommandLine &cl, Context &ctx) {
 }
 
 // -------------------------- agent engine --------------------------
+
+namespace {
+
+bool print_engine_progress(uint64_t done, uint64_t total, void *) {
+    if (total) std::fprintf(stderr, "\r  %s of %s   ", format_bytes(done).c_str(), format_bytes(total).c_str());
+    return true;
+}
+
+} // namespace
+
+// Downloads the release build of `name` for this machine, checks it, and records it in `engines`.
+Result<void> pull_and_register_engine(Context &ctx, std::vector<EngineEntry> &engines, const std::string &name, std::string_view repo, std::string_view tag) {
+    const std::string dir = ctx.has_home ? ctx.home.engines : (fs::path(ctx.config_dir) / "engines").string();
+    std::fprintf(stderr, "downloading the %s engine (%s) from github.com/%.*s ...\n", name.c_str(), std::string(tag).c_str(), static_cast<int>(repo.size()), repo.data());
+    auto plugin_path = pull_engine(dir, name, repo, tag, agent::hub::http_options_from_env(), print_engine_progress, nullptr);
+    std::fprintf(stderr, "\n");
+    if (!plugin_path.ok) return fail(plugin_path.error.code, plugin_path.error.message);
+    auto info = load_plugin_info(plugin_path.value);
+    if (!info.ok) return fail(info.error.code, "downloaded " + plugin_path.value + ", but it does not load on this machine: " + info.error.message);
+    EngineEntry entry{info.value.name, plugin_path.value, info.value.version, caps_to_names(info.value.caps), "local"};
+    std::printf("engine:  %s %s (%s)\npath:    %s\n", entry.name.c_str(), entry.version.c_str(), join(entry.caps, ", ").c_str(), entry.path.c_str());
+    upsert_engine(engines, std::move(entry));
+    return ok();
+}
 
 int cmd_engine(const CommandLine &cl, Context &ctx) {
     auto engines = load_engines(ctx.engines_path);
@@ -444,6 +478,13 @@ int cmd_engine(const CommandLine &cl, Context &ctx) {
         upsert_engine(engines.value, std::move(entry));
         if (auto r = save_engines(ctx.engines_path, engines.value); !r.ok) return report_error(r.error);
         std::printf("%s %s\n", replaced ? "updated" : "added to", ctx.engines_path.c_str());
+        return 0;
+    }
+
+    if (cl.subcommand == "pull") {
+        const std::string name = cl.positionals[0];
+        if (auto r = pull_and_register_engine(ctx, engines.value, name, cl.get("repo", kDefaultReleaseRepo), cl.get("tag", "latest")); !r.ok) return report_error(r.error);
+        if (auto r = save_engines(ctx.engines_path, engines.value); !r.ok) return report_error(r.error);
         return 0;
     }
 
@@ -715,6 +756,18 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
         else if (std::find(node_models.begin(), node_models.end(), n.model) == node_models.end()) node_models.push_back(n.model);
     }
 
+    // With a memory budget (or --swap-models) and nodes that name their own models, the default model is not pinned for
+    // the whole run: its nodes use it through the registry like any other model, so it is unloaded while a node runs
+    // a different one (a large main model next to small sub-agent models that do not fit in memory together).
+    std::string swap_default_path;
+    if (needs_default && !node_models.empty() && (ctx.config.memory_budget_mb > 0 || cl.has("swap-models"))) {
+        auto model = resolve_model(cl.get("model", hints.value.model), ctx.config.default_model, catalog_refs(ctx), path_exists);
+        if (!model.ok) return report_error(model.error);
+        swap_default_path = model.value.path;
+        node_models.push_back(swap_default_path);
+        needs_default = false;
+    }
+
     Config base;
     base.workspace_dir = workspace_dir(ctx, cl.get("workspace"));
     base.context_window = ctx.config.context_window;
@@ -765,6 +818,11 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
 
     auto graph = load_graph_json(*session, graph_path);
     if (!graph.ok) return report_error(graph.error);
+    if (!swap_default_path.empty()) {
+        for (GraphNode &n : graph.value.graph.nodes)
+            if (n.kind == GraphNodeKind::Agent && n.model.empty()) n.model = swap_default_path;
+        model_label = "swapping (" + std::filesystem::path(swap_default_path).filename().string() + " is the default)";
+    }
 
     // Checkpoints and the event log go to <workspace>/memory/checkpoints.sqlite3, so --resume works
     // across invocations; "checkpointer": "memory" in the file keeps them in this process only.

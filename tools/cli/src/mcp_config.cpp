@@ -1,5 +1,7 @@
 #include "mcp_config.hpp"
 
+#include "runtimes.hpp"
+
 #include <simdjson.h>
 
 #include <algorithm>
@@ -120,6 +122,10 @@ void add_file(const std::string &path, const std::string &data_root, const Conte
         fs::create_directories(data_dir, ec);
         const bool had = std::find(own_sandbox.begin(), own_sandbox.end(), s.name) != own_sandbox.end();
         apply_mcp_defaults(s, data_dir, runtimes, cache, had);
+        if (ctx.has_home) { // npx / uvx run on the private bun / uv when they are installed
+            const LauncherRewrite launcher = rewrite_launcher(s, ctx.home);
+            if (!launcher.note.empty()) warnings.push_back(launcher.note);
+        }
         // A project entry replaces a global one with the same name.
         out.erase(std::remove_if(out.begin(), out.end(), [&](const McpServerConfig &e) { return e.name == s.name; }), out.end());
         out.push_back(std::move(s));
@@ -128,12 +134,35 @@ void add_file(const std::string &path, const std::string &data_root, const Conte
 
 } // namespace
 
+namespace {
+
+// <dir>/mcp.d/*.json: servers added with `agent mcp add`, one file each (sorted by name).
+void add_dropins(const fs::path &dir, const std::string &data_root, const Context &ctx, std::vector<McpServerConfig> &out, std::vector<std::string> &warnings) {
+    std::error_code ec;
+    std::vector<std::string> files;
+    for (const auto &entry : fs::directory_iterator(dir / "mcp.d", ec))
+        if (entry.is_regular_file(ec) && entry.path().extension() == ".json") files.push_back(entry.path().string());
+    std::sort(files.begin(), files.end());
+    for (const std::string &f : files) add_file(f, data_root, ctx, out, warnings);
+}
+
+} // namespace
+
+std::string mcp_dropin_path(const Context &ctx, bool project, std::string_view server_name) {
+    const fs::path base = project ? fs::path(project_layout(ctx.project_root).agents) : fs::path(ctx.home.mcp);
+    return (base / "mcp.d" / (std::string(server_name) + ".json")).string();
+}
+
 std::vector<McpServerConfig> collect_mcp_servers(const Context &ctx, std::vector<std::string> &warnings) {
     std::vector<McpServerConfig> out;
-    if (ctx.has_home) add_file((fs::path(ctx.home.mcp) / "mcp.json").string(), ctx.home.plugins, ctx, out, warnings);
+    if (ctx.has_home) {
+        add_file((fs::path(ctx.home.mcp) / "mcp.json").string(), ctx.home.plugins, ctx, out, warnings);
+        add_dropins(ctx.home.mcp, ctx.home.plugins, ctx, out, warnings);
+    }
     if (!ctx.project_root.empty()) {
         const ProjectLayout project = project_layout(ctx.project_root);
         add_file(project.mcp_config, (fs::path(project.local) / "mcp").string(), ctx, out, warnings);
+        add_dropins(project.agents, (fs::path(project.local) / "mcp").string(), ctx, out, warnings);
     }
     return out;
 }

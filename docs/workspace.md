@@ -23,7 +23,7 @@ override it for a single run.
 | `logs/` | engine and session logs |
 | `workspaces/default/` | the default workspace: what the file tools may touch, plus memory and artifacts |
 
-`agent doctor` (planned) reports how much each of `models/`, `cache/` and `runtimes/` uses and what is safe to delete.
+`agent doctor` reports how much each of `models/`, `cache/` and `runtimes/` uses and what is safe to delete.
 
 ## A project: `.agents/`
 
@@ -46,9 +46,9 @@ ancestor of the working directory that contains a `.agents/` folder.
 An explicit `--config-dir` or `$AGENT_CONFIG_DIR` keeps the previous layout: `config.json` and `engines.json` in that
 folder, models and the workspace in the platform data folders.
 
-## Runtimes (planned)
+## Runtimes
 
 Many MCP servers are published as npm or Python packages. Instead of asking you to install Node or Python, agent.cpp
-will download `bun` (a drop-in for `npx`) and `uv` (for Python tools, including their own Python) into `runtimes/`
-with a checksum, point their caches at `cache/`, and run those servers there, sandboxed. Nothing touches your global
+`agent runtime install bun` / `uv` downloads `bun` (a drop-in for `npx`) and `uv` (for Python tools, including their own Python) into `runtimes/`
+with a checksum, points their caches at `cache/`, and runs those servers there, sandboxed. Nothing touches your global
 PATH.

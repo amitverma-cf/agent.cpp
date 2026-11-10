@@ -334,6 +334,28 @@ Result<RepoInfo> fetch_repo_info(std::string_view repo, const HttpOptions &http,
     return info;
 }
 
+Result<std::string> http_get_text(std::string_view url, const HttpOptions &http, size_t max_bytes) {
+    struct Body {
+        std::string text;
+        size_t max = 0;
+    } body;
+    body.max = max_bytes;
+    Sink sink;
+    sink.user = &body;
+    sink.on_data = [](const char *data, size_t len, void *user) {
+        auto *b = static_cast<Body *>(user);
+        if (b->text.size() + len > b->max) return false;
+        b->text.append(data, len);
+        return true;
+    };
+    httplib::Headers headers{{"User-Agent", "agent-cpp"}, {"Accept", "application/json, text/plain, */*"}};
+    auto reply = http_get(std::string(url), headers, http, sink);
+    if (!reply.ok) return fail<std::string>(reply.error.code, reply.error.message);
+    if (reply.value.aborted) return fail<std::string>(ErrorCode::HttpError, "hub: the response from " + std::string(url) + " is larger than " + std::to_string(max_bytes) + " bytes");
+    if (reply.value.status != 200) return fail<std::string>(ErrorCode::HttpError, status_message(reply.value, std::string(url)));
+    return ok(std::move(body.text));
+}
+
 Result<void> download_file(std::string_view url, const std::string &dest, const HttpOptions &http, const DownloadOptions &opts) {
     const std::string part = dest + ".part";
     std::error_code ec;

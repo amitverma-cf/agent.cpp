@@ -39,4 +39,7 @@ void apply_mcp_defaults(McpServerConfig &server, const std::string &data_dir, co
 // files and applies the defaults; unreadable or invalid entries become warnings.
 std::vector<McpServerConfig> collect_mcp_servers(const Context &ctx, std::vector<std::string> &warnings);
 
+// Where `agent mcp add` writes a server: <home>/mcp/mcp.d/<name>.json, or <project>/.agents/mcp.d/<name>.json.
+std::string mcp_dropin_path(const Context &ctx, bool project, std::string_view server_name);
+
 } // namespace agent::cli

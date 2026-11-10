@@ -67,6 +67,8 @@ int main(int argc, char **argv) {
     if (cl.command == "secret") return cmd_secret(cl, ctx);
     if (cl.command == "doctor") return cmd_doctor(cl, ctx);
     if (cl.command == "mcp") return cmd_mcp(cl, ctx);
+    if (cl.command == "runtime") return cmd_runtime(cl, ctx);
+    if (cl.command == "skill") return cmd_skill(cl, ctx);
     if (cl.command == "clean") return cmd_clean(cl, ctx);
     if (cl.command == "voice") return cmd_voice(cl, ctx);
     std::fprintf(stderr, "agent: unhandled command '%s'\n", cl.command.c_str());

@@ -128,6 +128,62 @@ agent engine rm sdcpp               # forgets the entry; the file stays
 capabilities before it records the plugin. A plugin that fails to load (wrong ABI version, missing
 dependency libraries) is rejected and the load error is shown.
 
+`agent engine pull NAME` downloads the prebuilt engine for this machine from the project's GitHub release
+(`--tag vX.Y.Z` for a specific one, `--repo owner/name` for a fork), checks its SHA-256 against the release's
+`manifest.json`, stores it in `<home>/engines/NAME/<version>/` and records it. `agent setup` offers the same for
+missing engines (`--download-engines` to do it without asking). The release is built by
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) for Linux, macOS and Windows on x86-64 and arm64
+without `-march=native` (x86-64 builds need AVX2). Until a release has been published the command reports that the
+manifest was not found.
+
+## agent runtime
+
+```sh
+agent runtime ls                    # bun and uv: installed or not
+agent runtime install bun           # --version 1.2.3 for a specific release
+agent runtime install uv
+agent runtime rm bun
+agent runtime path uv
+```
+
+Private copies of [bun](https://bun.sh) and [uv](https://docs.astral.sh/uv/) in `<home>/runtimes/`, so MCP servers and
+skills written for `npx` / `uvx` run without Node, npm or Python on the machine. The archive comes from the
+project's GitHub release and is checked against the published SHA-256 before it is unpacked. Once installed, an MCP
+server whose command is `npx` / `bunx` runs through `bun x`, and `uvx` through `uv tool run`; every cache, tool and
+Python install is redirected into `<home>/cache` (`BUN_INSTALL_CACHE_DIR`, `UV_CACHE_DIR`, `UV_TOOL_DIR`,
+`UV_PYTHON_INSTALL_DIR`), nothing is written to the user's own profile, and the runtimes folder is read-only inside
+the server's sandbox. Without the runtime the command is left alone and `agent mcp` says what to install.
+
+## agent skill
+
+```sh
+agent skill search pdf              # skills.sh
+agent skill add anthropics/skills/pdf        # --project for <project>/.agents/skills, --yes to skip the question
+agent skill ls
+agent skill rm pdf
+```
+
+`add` finds the skill's folder in its GitHub repository (one API call), shows the source, the number of files and
+size and the scripts it contains, and asks before it downloads anything. A skill is text the model follows plus
+optional helper files; scripts in it can only run through `run_command` in the sandbox, after you approve the
+command. `.source.json` in the skill's folder records the repository and a SHA-256 for each file. At most 200 files
+and 20 MiB.
+
+## agent mcp
+
+```sh
+agent mcp ls                        # configured servers, their sandbox and which keys they use
+agent mcp search filesystem         # the official MCP registry
+agent mcp add io.example/files      # exact registry name; --project, --yes
+agent mcp rm files                  # only servers added with `mcp add`
+```
+
+`add` turns an npm or pypi package that speaks stdio into a config entry (`npx -y pkg@version`, `uvx pkg@version`) and
+writes it to `<home>/mcp/mcp.d/<name>.json` (or `<project>/.agents/mcp.d/`), one file per server. Environment
+variables the registry marks secret become `${secret:name}` references: it prints the `agent secret set` and `bind`
+commands to run, and the value never passes through the config or the model. Required settings with no default are
+listed for you to fill in. Hosted-only and container-only servers are listed as such and are not added.
+
 ## agent model
 
 ```sh
@@ -251,6 +307,7 @@ agent run examples/graphs/research_pipeline.json --model qwen2.5-0.5b --set "top
 | `--set key=value` | seed graph state (repeatable) |
 | `--thread ID` | checkpoint thread. Default: a new thread `<graph name>-<unix time>` for every run; pass an id to continue that thread's state and conversations |
 | `--resume ID [--input TEXT]` | continue an interrupted or failed run; `TEXT` is the human reply, or `approve` for pending tool calls |
+| `--swap-models` | do not keep the default model loaded for the whole run: its nodes load it through the registry like any other model, so it is unloaded while a node runs another one. Implied when `memory_budget_mb` is set and some nodes name their own `"model"` |
 | `--yes` | approve tool calls the permission policy would ask about |
 | `--json` | print node events as one JSON object per line instead of the status table |
 | `--model`, `--engine`, `--engine-options`, `--workspace`, `--inprocess` | as for `agent chat` |

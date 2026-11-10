@@ -187,6 +187,11 @@ struct DownloadOptions {
 // kept for a later resume and ErrorCode::Cancelled is returned.
 Result<void> download_file(std::string_view url, const std::string &dest, const HttpOptions &http, const DownloadOptions &opts);
 
+// GET `url` (following redirects) and returns the body, for small JSON / text documents (registry search,
+// GitHub's API, checksum files). No HF token is sent: this is for third-party hosts. Bodies over `max_bytes`
+// fail instead of being cut.
+Result<std::string> http_get_text(std::string_view url, const HttpOptions &http, size_t max_bytes = 4u << 20);
+
 // -------------------------- High-level commands --------------------------
 
 // Default: $AGENT_MODELS_DIR, else %LOCALAPPDATA%\agent\models (Windows) or
