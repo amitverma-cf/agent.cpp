@@ -430,6 +430,19 @@ struct ToolHook {
     void *user_data = nullptr;
 };
 
+// Who is asking for a secret: an MCP server (or tool, plugin) and what it runs. The identity parts (program, arguments)
+// let the resolver notice that "the same" server now runs something else.
+struct SecretRequest {
+    std::string_view consumer;                     // "mcp:github"
+    std::span<const std::string> identity_parts;   // {command, arg0, arg1, ...}
+};
+
+// Expands every ${secret:NAME} in text for the consumer, or fails when the secret does not exist or is not bound to it.
+// Appends each secret value it inserted to secret_values, so the caller can keep it out of logs and tool output.
+// The model never calls this; the host does, when it starts the process the secret is bound to.
+using SecretResolverFn = Result<std::string> (*)(std::string_view text, const SecretRequest &who, std::vector<std::string> &secret_values,
+                                                 void *user_data);
+
 struct Config {
     AiProvider provider = AiProvider::Mock;
     // AiProvider::Engine only: a registered engine name, or a path to an engine shared library.
@@ -456,6 +469,11 @@ struct Config {
     // even across context compression. Saves the prompt tokens of tools that are never used. Applies where tool_search is
     // allowed: a graph Agent node whose allowed_tools omits it keeps its fixed list.
     bool lazy_tools = false;
+    // Resolves ${secret:NAME} placeholders in an MCP server's env when it is started (see SecretResolverFn). Without one, an
+    // env value that names a secret makes connect_mcp_server fail. Placeholders in args are always refused: command lines
+    // are visible to every process of the user.
+    SecretResolverFn secret_resolver = nullptr;
+    void *secret_user_data = nullptr;
     bool enable_file_logging = false;
 
     // Concurrent engines only: worker arenas (one per thread) for the branches of a graph Parallel

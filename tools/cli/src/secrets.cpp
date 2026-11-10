@@ -456,7 +456,7 @@ SecretAccess check_secret_access(const std::vector<SecretEntry> &index, std::str
 }
 
 Result<std::string> resolve_secret_placeholders(std::string_view text, const SecretBackend &backend, const std::vector<SecretEntry> &index,
-                                                std::string_view consumer, std::string_view identity) {
+                                                std::string_view consumer, std::string_view identity, std::vector<std::string> *values) {
     constexpr std::string_view kOpen = "${secret:";
     std::string out;
     size_t pos = 0;
@@ -484,9 +484,26 @@ Result<std::string> resolve_secret_placeholders(std::string_view text, const Sec
         auto value = backend.get(backend.state, name);
         if (!value.ok) return fail<std::string>(value.error.code, value.error.message);
         out += value.value;
+        if (values) values->push_back(value.value);
         pos = close + 1;
     }
     return ok(std::move(out));
+}
+
+Result<std::shared_ptr<SecretContext>> load_secret_context(const std::string &home_root, const std::string &index_path) {
+    auto index = load_secret_index(index_path);
+    if (!index.ok) return fail<std::shared_ptr<SecretContext>>(index.error.code, index.error.message);
+    auto ctx = std::make_shared<SecretContext>();
+    ctx->backend = default_secret_backend(home_root);
+    ctx->index = std::move(index.value);
+    return ok(std::move(ctx));
+}
+
+Result<std::string> cli_resolve_secrets(std::string_view text, const SecretRequest &who, std::vector<std::string> &secret_values, void *user_data) {
+    const auto *ctx = static_cast<const SecretContext *>(user_data);
+    if (!ctx) return fail<std::string>(ErrorCode::InvalidConfig, "no secrets are configured");
+    const std::vector<std::string> parts(who.identity_parts.begin(), who.identity_parts.end());
+    return resolve_secret_placeholders(text, ctx->backend, ctx->index, who.consumer, consumer_identity(parts), &secret_values);
 }
 
 std::string redact_secrets(std::string text, const std::vector<std::string> &values) {

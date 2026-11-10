@@ -54,6 +54,7 @@ constexpr std::string_view kSetupBool[] = {"yes", "no-models"};
 constexpr SubSpec kEngineSubs[] = {{"ls", 0, 0}, {"add", 1, 1}, {"rm", 1, 1}};
 
 constexpr SubSpec kSecretSubs[] = {{"set", 1, 1}, {"ls", 0, 0}, {"rm", 1, 1}, {"bind", 2, 2}, {"unbind", 2, 2}};
+constexpr SubSpec kMcpSubs[] = {{"ls", 0, 0}};
 constexpr std::string_view kCleanBool[] = {"downloads", "cache", "logs", "yes"};
 constexpr std::string_view kSecretValue[] = {"identity"};
 constexpr std::string_view kSecretBool[] = {"stdin"};
@@ -80,6 +81,7 @@ constexpr CommandSpec kCommands[] = {
     {"init", {}, 0, 1, {}, {}},
     {"secret", kSecretSubs, 0, 0, kSecretValue, kSecretBool},
     {"doctor", {}, 0, 0, {}, {}},
+    {"mcp", kMcpSubs, 0, 0, {}, {}},
     {"clean", {}, 0, 0, {}, kCleanBool},
     {"engine", kEngineSubs, 0, 0, {}, {}},
     {"model", kModelSubs, 0, 0, kModelValue, kModelBool},

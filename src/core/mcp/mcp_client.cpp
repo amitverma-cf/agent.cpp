@@ -151,6 +151,15 @@ class McpServer {
     std::vector<std::unique_ptr<RemoteTool>> tools;
     std::string protocol_version;
     std::string server_info;
+    std::vector<std::string> secret_values; // inserted into the environment; kept out of logs and tool results
+
+    // Replaces every secret value in text with "***".
+    void redact(std::string &text) const {
+        for (const std::string &v : secret_values) {
+            if (v.size() < 4) continue; // shorter values would mask ordinary text
+            for (size_t at = text.find(v); at != std::string::npos; at = text.find(v, at + 3)) text.replace(at, v.size(), "***");
+        }
+    }
 
     McpServer(McpServerConfig cfg, LogSink sink, std::shared_ptr<std::string> ws)
         : config(std::move(cfg)),
@@ -207,11 +216,19 @@ void McpServer::drain_stderr() {
             size_t nl = buf.find('\n', start);
             if (nl == std::string::npos) break;
             std::string_view line = trim(std::string_view(buf).substr(start, nl - start));
-            if (!line.empty()) log.write(LogLevel::Info, "[mcp:" + config.name + "] " + std::string(line));
+            if (!line.empty()) {
+                std::string text(line);
+                redact(text);
+                log.write(LogLevel::Info, "[mcp:" + config.name + "] " + text);
+            }
             start = nl + 1;
         }
         buf.erase(0, start);
-        if (all && !trim(buf).empty()) log.write(LogLevel::Info, "[mcp:" + config.name + "] " + std::string(trim(buf)));
+        if (all && !trim(buf).empty()) {
+            std::string text(trim(buf));
+            redact(text);
+            log.write(LogLevel::Info, "[mcp:" + config.name + "] " + text);
+        }
         if (all) buf.clear();
     };
     while (!stop_.load()) {
@@ -560,7 +577,9 @@ Result<ToolResult> McpServer::call_tool(std::string_view remote_name, std::strin
     params += "}";
     auto res = request("tools/call", params);
     if (!res.ok) return fail<ToolResult>(res.error.code, res.error.message);
-    return map_call_result(res.value, remote_name);
+    auto mapped = map_call_result(res.value, remote_name);
+    if (mapped.ok) redact(mapped.value.text);
+    return mapped;
 }
 
 void McpServer::shutdown() {
@@ -628,9 +647,31 @@ Result<std::vector<Tool>> connect_mcp_server(Session &session, const McpServerCo
         if (is_mcp_entry(ds) && ds->name == entry_name)
             return fail<std::vector<Tool>>(ErrorCode::InvalidConfig, "MCP server '" + config.name + "' is already connected");
 
+    // Secrets: only the environment may name one, and only through the host's resolver, which checks that the secret is
+    // bound to this server and to what it runs. The model has no way to read them.
+    McpServerConfig resolved = config;
+    std::vector<std::string> secret_values;
+    for (const std::string &a : config.args)
+        if (a.find("${secret:") != std::string::npos)
+            return fail<std::vector<Tool>>(ErrorCode::InvalidConfig, "MCP server '" + config.name + "': secrets are only allowed in env, not in args (command lines are visible to other processes)");
+    for (auto &entry : resolved.env) {
+        if (entry.second.find("${secret:") == std::string::npos) continue;
+        if (!session.config.secret_resolver)
+            return fail<std::vector<Tool>>(ErrorCode::InvalidConfig, "MCP server '" + config.name + "': env " + entry.first +
+                                                                         " uses a secret, but no secret resolver is configured");
+        std::vector<std::string> identity{config.command};
+        identity.insert(identity.end(), config.args.begin(), config.args.end());
+        const std::string consumer = "mcp:" + config.name;
+        const SecretRequest who{.consumer = consumer, .identity_parts = identity};
+        auto expanded = session.config.secret_resolver(entry.second, who, secret_values, session.config.secret_user_data);
+        if (!expanded.ok) return fail<std::vector<Tool>>(expanded.error.code, "MCP server '" + config.name + "': " + expanded.error.message);
+        entry.second = std::move(expanded.value);
+    }
+
     LogSink sink{
         .fn = session.config.logger, .user_data = session.config.logger_user_data, .file = session.log_file, .mutex = session.log_mutex};
-    auto server = std::make_shared<McpServer>(config, std::move(sink), session.workspace_path);
+    auto server = std::make_shared<McpServer>(resolved, std::move(sink), session.workspace_path);
+    server->secret_values = std::move(secret_values);
     auto started = server->start();
     if (!started.ok) return fail<std::vector<Tool>>(started.error.code, started.error.message);
 

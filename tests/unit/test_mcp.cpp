@@ -256,3 +256,81 @@ TEST_CASE("MCP serialises concurrent calls on one server", "[mcp]") {
     for (auto &t : threads) t.join();
     for (size_t i = 0; i < results.size(); ++i) CHECK(results[i] == "echo: " + std::to_string(i));
 }
+
+namespace {
+
+// A stand-in for the CLI's resolver: "token" resolves for mcp:fake, "denied" never does.
+agent::Result<std::string> fake_secret_resolver(std::string_view text, const agent::SecretRequest &who, std::vector<std::string> &values, void *user) {
+    auto *seen = static_cast<std::vector<std::string> *>(user);
+    seen->push_back(std::string(who.consumer) + " runs " + (who.identity_parts.empty() ? std::string() : who.identity_parts[0]));
+    if (text.find("${secret:denied}") != std::string_view::npos)
+        return agent::fail<std::string>(agent::ErrorCode::PermissionDenied, "secret 'denied' is not bound to mcp:fake");
+    std::string out(text);
+    const size_t at = out.find("${secret:token}");
+    if (at != std::string::npos) {
+        out.replace(at, std::string_view("${secret:token}").size(), "s3cr3t-value");
+        values.push_back("s3cr3t-value");
+    }
+    return agent::ok(std::move(out));
+}
+
+} // namespace
+
+TEST_CASE("MCP secrets reach the server's environment and never come back out", "[mcp][secrets]") {
+    std::vector<std::string> seen;
+    agent::Config cfg;
+    cfg.workspace_dir = kWorkspace;
+    cfg.auto_default_tools = false;
+    cfg.secret_resolver = fake_secret_resolver;
+    cfg.secret_user_data = &seen;
+    auto s = agent::init(cfg);
+    REQUIRE(s.ok);
+    agent::Session session = std::move(s.value);
+
+    auto config = fake();
+    config.env["FAKE_MCP_VAR"] = "${secret:token}";
+    auto connected = agent::connect_mcp_server(session, config);
+    REQUIRE(connected.ok);
+    REQUIRE(seen.size() == 1);
+    CHECK(seen[0].find("mcp:fake") == 0);
+
+    // The server received the real value (its echo tool prints env=<value>); the host replaced it with *** before
+    // the model could see it.
+    auto echoed = agent::execute_tool(session, "fake.echo", R"({"text":"hi"})");
+    REQUIRE(echoed.ok);
+    CHECK(echoed.value.find("env=***") != std::string::npos);
+    CHECK(echoed.value.find("s3cr3t-value") == std::string::npos);
+}
+
+TEST_CASE("MCP secrets: refused by the resolver, missing resolver, and placeholders in args", "[mcp][secrets]") {
+    std::vector<std::string> seen;
+    agent::Config cfg;
+    cfg.workspace_dir = kWorkspace;
+    cfg.auto_default_tools = false;
+    cfg.secret_resolver = fake_secret_resolver;
+    cfg.secret_user_data = &seen;
+    auto with = agent::init(cfg);
+    REQUIRE(with.ok);
+    auto refused = fake();
+    refused.env["FAKE_MCP_VAR"] = "${secret:denied}";
+    auto r = agent::connect_mcp_server(with.value, refused);
+    CHECK_FALSE(r.ok);
+    CHECK(r.error.message.find("not bound") != std::string::npos);
+
+    auto in_args = fake();
+    in_args.args.push_back("--token=${secret:token}");
+    auto a = agent::connect_mcp_server(with.value, in_args);
+    CHECK_FALSE(a.ok);
+    CHECK(a.error.message.find("only allowed in env") != std::string::npos);
+
+    agent::Config bare;
+    bare.workspace_dir = kWorkspace;
+    bare.auto_default_tools = false;
+    auto none = agent::init(bare);
+    REQUIRE(none.ok);
+    auto needs = fake();
+    needs.env["FAKE_MCP_VAR"] = "${secret:token}";
+    auto n = agent::connect_mcp_server(none.value, needs);
+    CHECK_FALSE(n.ok);
+    CHECK(n.error.message.find("no secret resolver") != std::string::npos);
+}

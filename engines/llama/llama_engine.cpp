@@ -25,6 +25,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -65,9 +66,13 @@ class Batcher {
     // A new text prompt takes the free slot whose tokens share the longest prefix with it, drops only the
     // differing tail and decodes just the rest, instead of reading the whole conversation again. The KV
     // buffer of every slot is allocated when the context is created, so this costs no extra memory.
-    // Off for models that cannot drop the end of a sequence (recurrent / hybrid state) or that keep only a
-    // sliding window of keys (SWA); those recompute the whole prompt as before.
+    // Models with recurrent state (hybrid conv/attention such as LFM, Mamba) cannot cut a sequence back to an
+    // earlier point, so they use checkpoints instead: when a prompt has been decoded, the recurrent part of the
+    // state is saved (a few MiB); the next request restores it, drops the attention keys after it and decodes the
+    // rest. Off for models that keep only a sliding window of keys (SWA); those recompute the whole prompt.
     bool prefix_cache = true;
+    bool use_checkpoints = false; // recurrent or hybrid model: reuse through checkpoints
+    uint64_t checkpoint_restores = 0;
     uint64_t reused_tokens = 0, prompt_tokens = 0; // totals over all text requests, for stats and tests
     int kv_type_id = AGENT_KV_F16;                 // agent_kv_type of the K/V cache
     uint64_t kv_bytes = 0;                         // estimated size of the whole KV cache
@@ -88,6 +93,7 @@ class Batcher {
         llama_memory_seq_rm(llama_get_memory(ctx), seq, -1, -1);
         next_pos_[seq] = 0;
         cached_[seq].clear();
+        ckpt_.erase(seq);
         reusable_[seq] = false;
         return true;
     }
@@ -102,10 +108,18 @@ class Batcher {
         size_t best_lcp = 0;
         if (prefix_cache && reuse_ok_ && !tokens.empty()) {
             for (size_t i = free_seq_ids_.size(); i-- > 0;) {
-                const std::vector<llama_token> &c = cached_[free_seq_ids_[i]];
+                const llama_seq_id id = free_seq_ids_[i];
+                const std::vector<llama_token> &c = cached_[id];
                 const size_t n = std::min(c.size(), tokens.size());
                 size_t k = 0;
                 while (k < n && c[k] == tokens[k]) ++k;
+                if (std::getenv("AGENT_LLAMA_TRACE"))
+                    std::fprintf(stderr, "llama: select slot %d lcp=%zu cached=%zu prompt=%zu ckpt_pos=%zu\n", static_cast<int>(id), k, c.size(), tokens.size(),
+                                 ckpt_.count(id) ? ckpt_[id].pos : static_cast<size_t>(0));
+                if (use_checkpoints) { // only the position of the saved checkpoint can be resumed from
+                    const auto ck = ckpt_.find(id);
+                    k = (ck != ckpt_.end() && ck->second.pos <= k) ? ck->second.pos : 0;
+                }
                 if (k > best_lcp) {
                     best_lcp = k;
                     best = i;
@@ -117,12 +131,36 @@ class Batcher {
 
         reused = tokens.empty() ? 0 : std::min(best_lcp, tokens.size() - 1);
         llama_memory_t mem = llama_get_memory(ctx);
-        if (reused > 0 && !llama_memory_seq_rm(mem, seq, static_cast<llama_pos>(reused), -1)) {
+        if (use_checkpoints) {
+            // Restore the recurrent state saved when the earlier prompt ended (it sits exactly at `reused`), then
+            // drop the attention keys of the reply that followed it.
+            bool restored = false;
+            if (reused > 0) {
+                const auto ck = ckpt_.find(seq);
+                bool set_ok = false;
+                if (ck != ckpt_.end() && ck->second.pos == reused) {
+                    set_ok = llama_state_seq_set_data_ext(ctx, ck->second.data.data(), ck->second.data.size(), seq, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) > 0;
+                    restored = set_ok && llama_memory_seq_rm(mem, seq, static_cast<llama_pos>(reused), -1);
+                }
+                if (std::getenv("AGENT_LLAMA_TRACE"))
+                    std::fprintf(stderr, "llama: checkpoint slot %d saved_pos=%zu want=%zu state_set=%d trimmed=%d\n", static_cast<int>(seq),
+                                 ck == ckpt_.end() ? size_t{0} : ck->second.pos, reused, set_ok ? 1 : 0, restored ? 1 : 0);
+            } else if (std::getenv("AGENT_LLAMA_TRACE")) {
+                const auto ck = ckpt_.find(seq);
+                std::fprintf(stderr, "llama: no resumable prefix: slot %d has_checkpoint=%d checkpoint_pos=%zu cached_tokens=%zu\n", static_cast<int>(seq),
+                             ck == ckpt_.end() ? 0 : 1, ck == ckpt_.end() ? size_t{0} : ck->second.pos, cached_[seq].size());
+            }
+            if (restored) ++checkpoint_restores;
+            else reused = 0;
+        } else if (reused > 0 && !llama_memory_seq_rm(mem, seq, static_cast<llama_pos>(reused), -1)) {
             // This model cannot drop only the end of a sequence: stop trying and recompute the whole prompt.
             reuse_ok_ = false;
             reused = 0;
         }
-        if (reused == 0) llama_memory_seq_rm(mem, seq, -1, -1);
+        if (reused == 0) {
+            llama_memory_seq_rm(mem, seq, -1, -1);
+            ckpt_.erase(seq);
+        }
         cached_[seq].resize(reused);
         next_pos_[seq] = static_cast<llama_pos>(reused);
         reusable_[seq] = true;
@@ -135,7 +173,10 @@ class Batcher {
     void release_seq(llama_seq_id seq, bool keep = true) {
         std::lock_guard<std::mutex> lock(mu_);
         next_pos_.erase(seq);
-        if (!keep || !reusable_[seq]) cached_[seq].clear();
+        if (!keep || !reusable_[seq]) {
+            cached_[seq].clear();
+            ckpt_.erase(seq);
+        }
         reusable_[seq] = false;
         free_seq_ids_.push_back(seq);
     }
@@ -145,7 +186,18 @@ class Batcher {
     bool prefill(llama_seq_id seq, const std::vector<llama_token> &tokens, size_t begin, llama_sampler *sampler, llama_token &out) {
         if (begin >= tokens.size()) return false;
         std::lock_guard<std::mutex> lock(mu_);
-        if (!decode_prompt_locked(seq, tokens, begin)) return false;
+        if (use_checkpoints && reusable_[seq] && tokens.size() > begin + kCheckpointMargin + 1) {
+            // Checkpoint a few tokens before the end of the prompt, not at the very end: the next turn's prompt ends the
+            // earlier one differently (the assistant header is followed by the reply, and its last tokens can split
+            // differently), so only the part before that is certain to be shared.
+            const size_t split = tokens.size() - kCheckpointMargin;
+            if (!decode_prompt_locked(seq, tokens, begin, split)) return false;
+            save_checkpoint_locked(seq);
+            if (!decode_prompt_locked(seq, tokens, split)) return false;
+        } else {
+            if (!decode_prompt_locked(seq, tokens, begin)) return false;
+            if (use_checkpoints && reusable_[seq]) save_checkpoint_locked(seq);
+        }
         out = llama_sampler_sample(sampler, ctx, -1);
         return true;
     }
@@ -276,6 +328,7 @@ class Batcher {
         llama_memory_clear(llama_get_memory(ctx), true);
         for (auto &entry : cached_) entry.second.clear();
         for (auto &entry : reusable_) entry.second = false;
+        ckpt_.clear();
     }
 
     // Turns the prefix cache off for good (model without trimmable memory, option "prefix_cache": false).
@@ -287,20 +340,23 @@ class Batcher {
   private:
     // Decodes tokens on seq after its current position in chunks of at most n_batch, with logits for
     // the last token only. mu_ must be held.
-    bool decode_prompt_locked(llama_seq_id seq, const std::vector<llama_token> &tokens, size_t first = 0) {
-        if (first >= tokens.size()) return false;
+    static constexpr size_t kCheckpointMargin = 8; // tokens decoded after the checkpoint (see prefill)
+
+    bool decode_prompt_locked(llama_seq_id seq, const std::vector<llama_token> &tokens, size_t first = 0, size_t last = SIZE_MAX) {
+        const size_t end = std::min(last, tokens.size());
+        if (first >= end) return false;
         const size_t chunk = std::max<size_t>(1, llama_n_batch(ctx));
-        llama_batch batch = llama_batch_init(static_cast<int32_t>(std::min(chunk, tokens.size() - first)), 0, 1);
+        llama_batch batch = llama_batch_init(static_cast<int32_t>(std::min(chunk, end - first)), 0, 1);
         llama_pos pos = next_pos_[seq];
         bool ok = true;
-        for (size_t begin = first; ok && begin < tokens.size(); begin += chunk) {
-            const size_t n = std::min(chunk, tokens.size() - begin);
+        for (size_t begin = first; ok && begin < end; begin += chunk) {
+            const size_t n = std::min(chunk, end - begin);
             for (size_t i = 0; i < n; ++i) {
                 batch.token[i] = tokens[begin + i];
                 batch.pos[i] = pos + static_cast<llama_pos>(i);
                 batch.n_seq_id[i] = 1;
                 batch.seq_id[i][0] = seq;
-                batch.logits[i] = (begin + i + 1 == tokens.size());
+                batch.logits[i] = (begin + i + 1 == end);
             }
             batch.n_tokens = static_cast<int32_t>(n);
             ok = llama_decode(ctx, batch) == 0;
@@ -309,12 +365,29 @@ class Batcher {
         llama_batch_free(batch);
         if (ok) {
             next_pos_[seq] = pos;
-            if (reusable_[seq]) cached_[seq].insert(cached_[seq].end(), tokens.begin() + static_cast<std::ptrdiff_t>(first), tokens.end());
+            if (reusable_[seq]) cached_[seq].insert(cached_[seq].end(), tokens.begin() + static_cast<std::ptrdiff_t>(first), tokens.begin() + static_cast<std::ptrdiff_t>(end));
         } else {
             reusable_[seq] = false;
             cached_[seq].clear();
+            ckpt_.erase(seq);
         }
         return ok;
+    }
+
+    // Saves the recurrent part of the sequence's state (the attention keys stay in the cache). mu_ must be held.
+    void save_checkpoint_locked(llama_seq_id seq) {
+        const size_t n = llama_state_seq_get_size_ext(ctx, seq, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        if (n == 0) {
+            ckpt_.erase(seq);
+            return;
+        }
+        Checkpoint &c = ckpt_[seq];
+        c.data.resize(n);
+        if (llama_state_seq_get_data_ext(ctx, c.data.data(), n, seq, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) != n) {
+            ckpt_.erase(seq);
+            return;
+        }
+        c.pos = cached_[seq].size();
     }
 
     // log softmax(logits)[token], computed in double.
@@ -344,6 +417,11 @@ class Batcher {
     std::unordered_map<llama_seq_id, llama_pos> next_pos_;
     std::unordered_map<llama_seq_id, std::vector<llama_token>> cached_; // tokens whose KV is in each slot
     std::unordered_map<llama_seq_id, bool> reusable_;                   // cached_ matches the slot's KV cache
+    struct Checkpoint {
+        size_t pos = 0; // tokens covered: the state is the recurrent state after tokens[0, pos)
+        std::vector<uint8_t> data;
+    };
+    std::unordered_map<llama_seq_id, Checkpoint> ckpt_;
     bool reuse_ok_ = true;
     std::vector<RoundReq> pending_;
     bool batching_ = false;
@@ -1202,7 +1280,7 @@ int32_t generate(Instance &inst, const agent_request *req, const std::vector<lla
     size_t reused = 0;
     const bool acquired = chunks ? b.acquire_seq(seq) : b.acquire_seq_for(tokens, seq, reused);
     if (!acquired) return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: no free sequence slot (raise max_parallel_subagents)");
-    if (trace_prefix_cache()) std::fprintf(stderr, "llama: prefix cache reused %zu of %zu prompt tokens (slot %d)\n", reused, tokens.size(), static_cast<int>(seq));
+    if (trace_prefix_cache()) std::fprintf(stderr, "llama: prefix cache reused %zu of %zu prompt tokens (slot %d%s)\n", reused, tokens.size(), static_cast<int>(seq), b.use_checkpoints ? ", checkpoint" : "");
     llama_sampler *sampler = build_sampler(temperature);
     int32_t status = AGENT_OK;
     llama_token tok = 0;
@@ -1559,7 +1637,8 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
                                                            (static_cast<double>(llama_model_n_embd(model)) / n_head) *
                                                            static_cast<double>(llama_n_ctx(ctx)) * bytes_per_elem);
     }
-    if (llama_model_n_swa(model) > 0) inst->batcher.disable_prefix_reuse(); // sliding-window keys are not all kept
+    inst->batcher.use_checkpoints = llama_model_is_hybrid(model) || llama_model_is_recurrent(model);
+    if (llama_model_n_swa(model) > 0 && !inst->batcher.use_checkpoints) inst->batcher.disable_prefix_reuse(); // sliding-window keys are not all kept
     inst->mode = mode;
     if (mode != Mode::Generate) { // no chat template or sequence slots needed
         *out_instance = inst;

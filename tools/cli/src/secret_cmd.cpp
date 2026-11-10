@@ -2,6 +2,7 @@
 // nothing here ever prints it, and the model has no tool that reads or manages secrets.
 
 #include "commands.hpp"
+#include "mcp_config.hpp"
 #include "secrets.hpp"
 
 #include <algorithm>
@@ -88,14 +89,26 @@ int cmd_secret(const CommandLine &cl, Context &ctx) {
     if (!entry) return report_error(Error{ErrorCode::KeyNotFound, "no secret named '" + name + "': add it with `agent secret set " + name + "`"});
 
     if (cl.subcommand == "bind") {
-        // The identity pins what the consumer runs. Until MCP servers and plugins report their command line, a consumer is
-        // identified by its declared name; once they do, `bind` records the hash of that command and a changed command is refused.
-        const std::string identity = consumer_identity({"declared", consumer});
+        // The identity pins what the consumer runs. For an MCP server it is the hash of its command and arguments as
+        // configured, so the same name with a different command is refused until the user binds it again. Tools, plugins
+        // and groups are identified by their declared name.
+        std::string identity = consumer_identity({"declared", consumer});
+        if (consumer.rfind("mcp:", 0) == 0) {
+            std::vector<std::string> warnings;
+            const auto servers = collect_mcp_servers(ctx, warnings);
+            const std::string server_name = consumer.substr(4);
+            const auto it = std::find_if(servers.begin(), servers.end(), [&](const agent::McpServerConfig &s) { return s.name == server_name; });
+            if (it == servers.end())
+                return report_error(Error{ErrorCode::KeyNotFound, "no MCP server named '" + server_name + "' is configured: define it in the home's mcp/mcp.json or the project's .agents/mcp.json first"});
+            std::vector<std::string> parts{it->command};
+            parts.insert(parts.end(), it->args.begin(), it->args.end());
+            identity = consumer_identity(parts);
+        }
         auto existing = std::find_if(entry->bindings.begin(), entry->bindings.end(), [&](const SecretBinding &b) { return b.consumer == consumer; });
         if (existing != entry->bindings.end()) existing->identity = identity;
         else entry->bindings.push_back(SecretBinding{consumer, identity});
         if (auto r = save_secret_index(path, index); !r.ok) return report_error(r.error);
-        std::printf("'%s' can now be used by %s (and only by it)\n", name.c_str(), consumer.c_str());
+        std::printf("'%s' can now be used by %s (and only by it; pinned to %.12s...)\n", name.c_str(), consumer.c_str(), identity.c_str());
         return 0;
     }
 

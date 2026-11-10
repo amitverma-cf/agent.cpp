@@ -16,6 +16,7 @@
 
 #include <agent-cpp/agent.hpp>
 
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -66,8 +67,19 @@ SecretAccess check_secret_access(const std::vector<SecretEntry> &index, std::str
 
 // Replaces every ${secret:NAME} in `text` with the value, after check_secret_access. Fails (and leaves `out`
 // empty) on the first name that is unknown, not bound to this consumer, or bound to a different identity.
+// Each value inserted is also appended to *values when given, so the caller can redact it from output.
 Result<std::string> resolve_secret_placeholders(std::string_view text, const SecretBackend &backend, const std::vector<SecretEntry> &index,
-                                                std::string_view consumer, std::string_view identity);
+                                                std::string_view consumer, std::string_view identity, std::vector<std::string> *values = nullptr);
+
+// The store and the index of names and bindings, loaded once for a session.
+struct SecretContext {
+    SecretBackend backend{};
+    std::vector<SecretEntry> index;
+};
+Result<std::shared_ptr<SecretContext>> load_secret_context(const std::string &home_root, const std::string &index_path);
+
+// Config::secret_resolver for the CLI: user_data is a SecretContext. The identity is the hash of command + args.
+Result<std::string> cli_resolve_secrets(std::string_view text, const SecretRequest &who, std::vector<std::string> &secret_values, void *user_data);
 
 // Replaces every known secret value found in `text` with "***". Defence in depth for tool output and logs.
 std::string redact_secrets(std::string text, const std::vector<std::string> &values);

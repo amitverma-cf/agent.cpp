@@ -3,6 +3,8 @@
 // workspace's SQLite store, and opens generated artifacts with the OS default app.
 
 #include "commands.hpp"
+#include "mcp_config.hpp"
+#include "secrets.hpp"
 
 #include <agent-cpp/store_sqlite.hpp>
 
@@ -86,6 +88,7 @@ struct ChatState {
     bool inprocess = false; // --inprocess: load the engine into the CLI instead of agent-engine-host
     bool interactive = false;
 
+    std::shared_ptr<SecretContext> secrets; // names and bindings; values are read only when an MCP server starts
     std::vector<std::string> always_allowed;
     std::vector<Media> artifacts;
     size_t streamed_bytes = 0;
@@ -165,6 +168,17 @@ Result<void> on_model_loaded(Session &session, const ModelSpec &, void *user_dat
     session.config.memory = st->store.config.memory;
     session.memory_state = st->store.memory_state;
     register_event_hook(session, EventType::OnToolResult, on_tool_result, st);
+
+    // MCP servers from the home's mcp/mcp.json and the project's .agents/mcp.json. Each runs sandboxed in its own data
+    // folder, and the keys it is bound to are put in its environment only now, as it starts.
+    std::vector<std::string> warnings;
+    const auto servers = collect_mcp_servers(*st->ctx, warnings);
+    for (const std::string &w : warnings) std::fprintf(g_err, "[mcp] warning: %s\n", w.c_str());
+    for (const McpServerConfig &server : servers) {
+        auto connected = connect_mcp_server(session, server);
+        if (connected.ok) std::fprintf(g_err, "[mcp] %s: %zu tool(s)\n", server.name.c_str(), connected.value.size());
+        else std::fprintf(g_err, "[mcp] %s not started: %s\n", server.name.c_str(), connected.error.message.c_str());
+    }
     return ok();
 }
 
@@ -185,6 +199,8 @@ Result<void> open_session(ChatState &st) {
     cfg.model = st.model.path;
     cfg.workspace_dir = st.workspace;
     cfg.lazy_tools = true; // the model sees tool_search / load_tool, not every tool, until it needs one
+    cfg.secret_resolver = cli_resolve_secrets;
+    cfg.secret_user_data = st.secrets.get();
     cfg.context_window = st.context_window;
     cfg.max_tokens = st.max_tokens;
     cfg.temperature = st.ctx->config.temperature;
@@ -394,6 +410,13 @@ int cmd_chat(const CommandLine &cl, Context &ctx) {
     st.auto_approve = cl.has("yes");
     st.inprocess = cl.has("inprocess");
     st.interactive = stdin_is_tty();
+    {
+        // Names and bindings of the secrets; a broken index only means that no server gets a key.
+        const std::string home_root = ctx.has_home ? ctx.home.root : ctx.config_dir;
+        auto secrets = load_secret_context(home_root, (fs::path(home_root) / "secrets.json").string());
+        if (secrets.ok) st.secrets = std::move(secrets.value);
+        else std::fprintf(g_err, "[secrets] warning: %s\n", secrets.error.message.c_str());
+    }
     st.engine_flag = std::string(cl.get("engine"));
     st.engine_options = std::string(cl.get("engine-options"));
     st.context_window = ctx.config.context_window;

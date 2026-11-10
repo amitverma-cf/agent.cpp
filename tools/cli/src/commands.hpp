@@ -59,6 +59,7 @@ int cmd_model(const CommandLine &cl, Context &ctx);
 int cmd_chat(const CommandLine &cl, Context &ctx);
 int cmd_run(const CommandLine &cl, Context &ctx);
 int cmd_secret(const CommandLine &cl, Context &ctx);  // secret_cmd.cpp
+int cmd_mcp(const CommandLine &cl, Context &ctx);     // mcp_cmd.cpp
 int cmd_doctor(const CommandLine &cl, Context &ctx);  // doctor_cmd.cpp
 int cmd_clean(const CommandLine &cl, Context &ctx);   // doctor_cmd.cpp
 int cmd_init(const CommandLine &cl, Context &ctx);   // creates .agents/ in a project
