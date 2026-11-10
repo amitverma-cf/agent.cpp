@@ -1075,9 +1075,9 @@ Result<std::vector<std::string_view>> chunk_text(std::string_view text, const Ch
 struct RagIndex {
     const VectorStoreOps *store = nullptr; // nullptr = in_memory_vector_store()
     VectorStoreConfig config;
-    // Search by words and meaning together when the store supports it (the sqlite store does): exact names, codes and
+    // Search by words and meaning together (the default) when the store supports it (the sqlite store does): exact names, codes and
     // rare terms that an embedding blurs are found by the full-text side. RagHit::similarity is then the fused score.
-    bool hybrid = false;
+    bool hybrid = true;
     // Opened by the first rag_index / rag_query (dimensions from that embedding when
     // config.dimensions is 0) or explicitly by open_rag_index. Not thread-safe until opened.
     std::shared_ptr<void> state;

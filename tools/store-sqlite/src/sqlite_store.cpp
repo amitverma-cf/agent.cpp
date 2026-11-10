@@ -106,7 +106,7 @@ void flush_dirty(SqliteMemoryState &state) {
 
     bool write_ok = true;
     sqlite3_stmt *stmt = nullptr;
-    if (sqlite3_prepare_v2(state.write_conn, "INSERT OR REPLACE INTO kv(key,value) VALUES(?,?);", -1, &stmt, nullptr) != SQLITE_OK) {
+    if (sqlite3_prepare_v2(state.write_conn, "INSERT INTO kv(key,value,created_at,updated_at) VALUES(?,?,CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at;", -1, &stmt, nullptr) != SQLITE_OK) {
         write_ok = false;
     } else {
         for (const auto &[key, value] : batch) {
@@ -205,7 +205,10 @@ Result<std::shared_ptr<void>> open_sqlite(const MemoryConfig &config, std::strin
 
     if (auto r = exec_simple(state->write_conn, "PRAGMA journal_mode=WAL;"); !r.ok) return fail<std::shared_ptr<void>>(r.error.code, r.error.message);
     if (auto r = exec_simple(state->write_conn, "PRAGMA synchronous=NORMAL;"); !r.ok) return fail<std::shared_ptr<void>>(r.error.code, r.error.message);
-    if (auto r = exec_simple(state->write_conn, "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);"); !r.ok) return fail<std::shared_ptr<void>>(r.error.code, r.error.message);
+    if (auto r = exec_simple(state->write_conn, "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT, created_at INTEGER, updated_at INTEGER);"); !r.ok) return fail<std::shared_ptr<void>>(r.error.code, r.error.message);
+    // Databases made before the time columns existed: add them (the error for an existing column is expected and ignored).
+    exec_simple(state->write_conn, "ALTER TABLE kv ADD COLUMN created_at INTEGER;");
+    exec_simple(state->write_conn, "ALTER TABLE kv ADD COLUMN updated_at INTEGER;");
 
     if (sqlite3_open_v2(open_uri.c_str(), &state->read_conn, open_flags, nullptr) != SQLITE_OK) {
         std::string err = state->read_conn ? sqlite3_errmsg(state->read_conn) : "unknown error";

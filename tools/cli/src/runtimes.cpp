@@ -193,8 +193,10 @@ Result<void> remove_runtime(const HomeLayout &home, std::string_view name) {
     return ok();
 }
 
-std::map<std::string, std::string> runtime_env(const HomeLayout &home) {
-    const fs::path cache(home.cache);
+std::map<std::string, std::string> runtime_env(const HomeLayout &home) { return runtime_env_in(home.cache); }
+
+std::map<std::string, std::string> runtime_env_in(const std::string &cache_root) {
+    const fs::path cache(cache_root);
     return {
         {"BUN_INSTALL", (cache / "bun" / "install").string()},
         {"BUN_INSTALL_CACHE_DIR", (cache / "bun" / "packages").string()},
@@ -206,10 +208,10 @@ std::map<std::string, std::string> runtime_env(const HomeLayout &home) {
     };
 }
 
-LauncherRewrite rewrite_launcher(McpServerConfig &server, const HomeLayout &home) {
+LauncherRewrite rewrite_launcher(McpServerConfig &server, const HomeLayout &home, const std::string &cache_root) {
     LauncherRewrite result;
     const std::string stem = command_stem(server.command);
-    const bool wants_bun = stem == "npx" || stem == "bunx" || stem == "bun";
+    const bool wants_bun = stem == "npx" || stem == "bunx" || stem == "bun" || stem == "npm" || stem == "node";
     const bool wants_uv = stem == "uvx" || stem == "uv";
     if (!wants_bun && !wants_uv) return result;
 
@@ -224,6 +226,13 @@ LauncherRewrite rewrite_launcher(McpServerConfig &server, const HomeLayout &home
         args.push_back("x");
         for (const std::string &a : server.args)
             if (a != "-y" && a != "--yes") args.push_back(a); // bun x never asks before installing
+    } else if (stem == "npm") { // npm install|i|add -> bun install|add, run -> bun run, exec|x -> bun x
+        args = server.args;
+        if (!args.empty()) {
+            if (args[0] == "i" || args[0] == "install" || args[0] == "ci") args[0] = "install";
+            else if (args[0] == "run-script") args[0] = "run";
+            else if (args[0] == "exec" || args[0] == "x") args[0] = "x";
+        }
     } else if (stem == "uvx") {
         args = {"tool", "run"};
         args.insert(args.end(), server.args.begin(), server.args.end());
@@ -232,7 +241,7 @@ LauncherRewrite rewrite_launcher(McpServerConfig &server, const HomeLayout &home
     }
     server.command = binary;
     server.args = std::move(args);
-    for (const auto &[key, value] : runtime_env(home)) server.env.emplace(key, value); // an explicit value in the file wins
+    for (const auto &[key, value] : runtime_env_in(cache_root.empty() ? home.cache : cache_root)) server.env.emplace(key, value); // an explicit value in the file wins
     result.rewritten = true;
     return result;
 }

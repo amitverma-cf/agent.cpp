@@ -88,12 +88,12 @@ Result<McpFile> parse_mcp_config(std::string_view json, const std::string &sourc
     return ok(std::move(file));
 }
 
-void apply_mcp_defaults(McpServerConfig &server, const std::string &data_dir, const std::string &runtimes_dir, const std::string &cache_dir, bool had_sandbox_object) {
+void apply_mcp_defaults(McpServerConfig &server, const std::string &data_dir, const std::string &runtimes_dir, const std::string & /*cache_dir*/, bool had_sandbox_object) {
     if (server.working_directory.empty()) server.working_directory = data_dir;
     if (had_sandbox_object) return;
     server.sandbox.enabled = true;
     server.sandbox.network = SandboxNetwork::Allow;
-    server.sandbox.read_write_paths = {data_dir, cache_dir};
+    server.sandbox.read_write_paths = {data_dir}; // nothing outside its own folder: package caches live in <data>/cache
     std::error_code ec;
     if (fs::is_directory(runtimes_dir, ec)) server.sandbox.read_only_paths = {runtimes_dir};
 }
@@ -123,7 +123,7 @@ void add_file(const std::string &path, const std::string &data_root, const Conte
         const bool had = std::find(own_sandbox.begin(), own_sandbox.end(), s.name) != own_sandbox.end();
         apply_mcp_defaults(s, data_dir, runtimes, cache, had);
         if (ctx.has_home) { // npx / uvx run on the private bun / uv when they are installed
-            const LauncherRewrite launcher = rewrite_launcher(s, ctx.home);
+            const LauncherRewrite launcher = rewrite_launcher(s, ctx.home, (fs::path(data_dir) / "cache").string()); // caches stay in the server's own folder
             if (!launcher.note.empty()) warnings.push_back(launcher.note);
         }
         // A project entry replaces a global one with the same name.

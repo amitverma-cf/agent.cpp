@@ -77,6 +77,13 @@ TEST_CASE("runtimes: npx / uvx run on the private runtimes, caches stay in the h
     CHECK(npx.args[1] == "@modelcontextprotocol/server-github"); // -y dropped
     CHECK(npx.args[2] == "--flag");
     CHECK(npx.env.at("BUN_INSTALL_CACHE_DIR").starts_with(home.cache));
+    agent::McpServerConfig npm;
+    npm.name = "n";
+    npm.command = "npm";
+    npm.args = {"i", "left-pad"};
+    CHECK(rewrite_launcher(npm, home, "/srv/own").rewritten);
+    CHECK(npm.args == std::vector<std::string>{"install", "left-pad"});
+    CHECK(npm.env.at("BUN_INSTALL_CACHE_DIR").starts_with("/srv/own"));
     CHECK(npx.env.at("UV_CACHE_DIR").starts_with(home.cache));
 
     agent::McpServerConfig uvx;

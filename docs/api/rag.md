@@ -117,7 +117,7 @@ cosine similarities (1 = same direction), most similar first.
 | `in_memory_vector_store()` | `libagent` | Brute-force cosine over unit vectors in a flat array, `std::shared_mutex` (parallel queries). Nothing persists. |
 | `store::sqlite_vector_store()` | `agent_store_sqlite` | sqlite-vec `vec0(embedding float[d] distance_metric=cosine)` table `<name>_vectors` plus `<name>_chunks(id UNIQUE, text, metadata)`; KNN via `MATCH ... AND k = ?` (k capped at 4096); score = 1 - cosine distance. An existing table keeps the dimensions it was created with. |
 
-**Hybrid search.** `RagIndex::hybrid = true` makes `rag_query` call `query_hybrid` when the store has it (the sqlite
+**Hybrid search.** `RagIndex::hybrid` (default `true`; set `false` for pure vector ranking) makes `rag_query` call `query_hybrid` when the store has it (the sqlite
 store does). The sqlite store keeps an FTS5 index over the chunk text (an external-content table `<name>_fts`, kept in
 step by triggers, built once for databases that predate it). A query returns the top candidates of two rankings, the
 embedding's nearest neighbours and the BM25 matches of the query's words, and scores each chunk with

@@ -71,8 +71,8 @@ TEST_CASE("sqlite vector store: hybrid search finds a rare word that the embeddi
     REQUIRE(updated.value.size() == 1);
     CHECK(updated.value[0].id == "a#0");
 
-    // The flag is opt-in on the index.
-    CHECK_FALSE(index.hybrid);
+    // The flag is on by default.
+    CHECK(index.hybrid); // on by default; stores without query_hybrid just use the vector ranking
     index.state.reset();
     std::filesystem::remove(db_path, ec);
 }

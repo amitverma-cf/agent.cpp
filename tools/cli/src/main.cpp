@@ -60,6 +60,11 @@ int main(int argc, char **argv) {
     if (cl.command == "setup") return cmd_setup(cl, ctx);
     if (cl.command == "engine") return cmd_engine(cl, ctx);
     if (cl.command == "model") return cmd_model(cl, ctx);
+    // No memory_budget_mb in config.json: use 85% of the installed RAM, so models that do not fit together are swapped
+    // (a large main model next to small sub-agent models) instead of the run failing or the machine swapping to disk.
+    if ((cl.command == "chat" || cl.command == "run") && ctx.config.memory_budget_mb == 0) {
+        if (const uint64_t ram = total_ram_bytes(); ram) ctx.config.memory_budget_mb = static_cast<int64_t>((ram / 100 * 85) >> 20);
+    }
     if (cl.command == "chat") return cmd_chat(cl, ctx);
     if (cl.command == "run") return cmd_run(cl, ctx);
     if (cl.command == "task") return cmd_task(cl, ctx);

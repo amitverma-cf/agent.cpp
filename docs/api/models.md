@@ -202,7 +202,7 @@ The file format is described in [hub.md](hub.md#modelsjson), and a JSON Schema f
 
 ## CLI
 
-`config.json` takes `"memory_budget_mb"` (default 0, unlimited):
+`config.json` takes `"memory_budget_mb"` (default: 85% of the installed RAM for `chat` and `run`):
 
 - **`agent chat`**: every model is loaded through a registry. `/model NAME` keeps the previous
   model loaded, idle, while the budget allows. Switching back is then instant, and the first

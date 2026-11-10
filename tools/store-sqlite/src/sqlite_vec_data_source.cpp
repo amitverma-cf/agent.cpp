@@ -312,8 +312,10 @@ Result<std::shared_ptr<void>> vs_open(const VectorStoreConfig &config) {
     const std::string &vec = st->db.vec_table, &chunks = st->db.meta_table;
     const std::string schema = "CREATE VIRTUAL TABLE IF NOT EXISTS " + vec + " USING vec0(embedding float[" +
                                std::to_string(config.dimensions) + "] distance_metric=cosine);" + "CREATE TABLE IF NOT EXISTS " + chunks +
-                               " (rowid INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, text TEXT, metadata TEXT);";
+                               " (rowid INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, text TEXT, metadata TEXT, created_at INTEGER, updated_at INTEGER);";
     if (auto r = exec_simple(st->db.conn, schema); !r.ok) return fail<R>(r.error.code, r.error.message);
+    exec_simple(st->db.conn, "ALTER TABLE " + chunks + " ADD COLUMN created_at INTEGER;"); // older databases; an existing column is fine
+    exec_simple(st->db.conn, "ALTER TABLE " + chunks + " ADD COLUMN updated_at INTEGER;");
 
     // Full-text index over the chunk text (an external-content FTS5 table: it stores no second copy of the text, and
     // triggers keep it in step with the chunks table). A database made before this existed is indexed once. When SQLite
@@ -341,8 +343,8 @@ Result<std::shared_ptr<void>> vs_open(const VectorStoreConfig &config) {
     }
 
     st->sql_find = "SELECT rowid FROM " + chunks + " WHERE id = ?1;";
-    st->sql_insert_chunk = "INSERT INTO " + chunks + "(id, text, metadata) VALUES (?1, ?2, ?3);";
-    st->sql_update_chunk = "UPDATE " + chunks + " SET text = ?2, metadata = ?3 WHERE rowid = ?1;";
+    st->sql_insert_chunk = "INSERT INTO " + chunks + "(id, text, metadata, created_at, updated_at) VALUES (?1, ?2, ?3, CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));";
+    st->sql_update_chunk = "UPDATE " + chunks + " SET text = ?2, metadata = ?3, updated_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) WHERE rowid = ?1;";
     st->sql_delete_chunk = "DELETE FROM " + chunks + " WHERE rowid = ?1;";
     st->sql_insert_vec = "INSERT INTO " + vec + "(rowid, embedding) VALUES (?1, ?2);";
     st->sql_delete_vec = "DELETE FROM " + vec + " WHERE rowid = ?1;";

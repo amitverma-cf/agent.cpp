@@ -49,6 +49,8 @@ Result<void> remove_runtime(const HomeLayout &home, std::string_view name);
 
 // Environment that keeps bun's and uv's caches, tools and Python installs inside <home>/cache.
 std::map<std::string, std::string> runtime_env(const HomeLayout &home);
+// Same, with every cache under `cache_root` (a server's own data folder: nothing is shared or written elsewhere).
+std::map<std::string, std::string> runtime_env_in(const std::string &cache_root);
 
 // npx / bunx -> `bun x`, uvx -> `uv tool run`, uv / bun -> the private executable, with the cache environment added.
 // Leaves the command alone (and says why in `note`) when the runtime is not installed.
@@ -56,6 +58,7 @@ struct LauncherRewrite {
     bool rewritten = false;
     std::string note;
 };
-LauncherRewrite rewrite_launcher(McpServerConfig &server, const HomeLayout &home);
+// `cache_root` empty = <home>/cache. npm / node run on bun too (npm install|add|run|exec map to bun's own commands).
+LauncherRewrite rewrite_launcher(McpServerConfig &server, const HomeLayout &home, const std::string &cache_root = {});
 
 } // namespace agent::cli
