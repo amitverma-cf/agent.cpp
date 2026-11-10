@@ -137,11 +137,13 @@ TEST_CASE("MCP env, image content and duplicate names", "[mcp]") {
     auto end = echo.value.find(" (image/png)]");
     REQUIRE(end != std::string::npos);
     std::string path = echo.value.substr(start, end - start);
-    CHECK(path.find("/artifacts/") != std::string::npos);
+    CHECK(std::filesystem::path(path).generic_string().find("/artifacts/") != std::string::npos);
     CHECK(path.ends_with(".png"));
-    std::ifstream f(path, std::ios::binary);
-    std::string bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    CHECK(bytes == "hello");
+    {
+        std::ifstream f(path, std::ios::binary);
+        std::string bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        CHECK(bytes == "hello");
+    }
     std::filesystem::remove(path);
 
     auto dup = agent::connect_mcp_server(session, cfg);

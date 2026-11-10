@@ -12,7 +12,7 @@ namespace {
 
 const char *kWorkspace = "/tmp/agent_test_tool_parts_ws";
 
-std::string snap_path() { return std::string(kWorkspace) + "/snap.png"; }
+std::string snap_path() { return std::filesystem::absolute(std::filesystem::path(std::string(kWorkspace) + "/snap.png")).make_preferred().string(); }
 
 // A tool that "takes a picture": returns text + an image file in the workspace.
 agent::Result<agent::ToolResult> snap_tool(std::string_view, void *) {
@@ -162,7 +162,7 @@ TEST_CASE("parts tools go through the permission gate and relative media paths b
     REQUIRE(res.ok);
     REQUIRE(res.value.media.size() == 1);
     CHECK(std::filesystem::path(res.value.media[0].path).is_absolute());
-    CHECK(res.value.media[0].path == (std::filesystem::current_path() / "some/pic.jpg").string());
+    CHECK(std::filesystem::path(res.value.media[0].path).lexically_normal() == (std::filesystem::current_path() / "some/pic.jpg").lexically_normal());
 }
 
 TEST_CASE("run_turn attaches tool media to the tool message and sends it to the engine", "[tools][tool_parts]") {
@@ -306,7 +306,7 @@ TEST_CASE("MCP image content becomes tool media", "[tools][tool_parts][mcp]") {
     CHECK(parts.value.text == "echo: pic");
     REQUIRE(parts.value.media.size() == 1);
     CHECK(parts.value.media[0].mime == "image/png");
-    CHECK(parts.value.media[0].path.find("/artifacts/mcp-fake-echo-") != std::string::npos);
+    CHECK(std::filesystem::path(parts.value.media[0].path).generic_string().find("/artifacts/mcp-fake-echo-") != std::string::npos);
     std::ifstream f(parts.value.media[0].path, std::ios::binary);
     std::string bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     CHECK(bytes == "hello");
@@ -322,7 +322,7 @@ TEST_CASE("MCP image content becomes tool media", "[tools][tool_parts][mcp]") {
     INFO(reply.error.message);
     REQUIRE(reply.ok);
     CHECK(reply.value.starts_with("tool done\ntool media: image/png "));
-    CHECK(reply.value.find("/artifacts/mcp-fake-echo-") != std::string::npos);
+    CHECK(std::filesystem::path(reply.value).generic_string().find("/artifacts/mcp-fake-echo-") != std::string::npos);
     agent::disconnect_mcp_servers(session);
 }
 

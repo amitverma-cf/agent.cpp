@@ -778,7 +778,11 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
     run.models = &registry;
     run.checkpointer = checkpointer.value;
     const std::string_view resume_id = cl.get("resume");
-    run.thread_id = std::string(resume_id.empty() ? cl.get("thread", "run") : resume_id);
+    // A new run gets its own thread: continuing a thread reuses its state and histories, so a fixed default would mix unrelated graphs.
+    // Pass --thread to continue one on purpose.
+    const std::string fresh_thread = (graph.value.graph.name.empty() ? std::string("run") : graph.value.graph.name) + "-" +
+                                     std::to_string(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+    run.thread_id = std::string(resume_id.empty() ? cl.get("thread", fresh_thread) : resume_id);
     for (const Flag &f : cl.flags) {
         if (f.name != "set") continue;
         const size_t eq = f.value.find('=');

@@ -717,7 +717,7 @@ bool find_loose_tool_call(std::string_view text, common_chat_tool_call &call) {
             else if (c == '{') ++depth;
             else if (c == '}' && --depth == 0) end = j;
         }
-        if (end == std::string_view::npos) return false;
+        if (end == std::string_view::npos) continue; // unbalanced here ("{{...}" copied from the template): retry from the next '{'
         simdjson::padded_string json(text.substr(i, end - i + 1));
         simdjson::ondemand::document doc;
         simdjson::ondemand::object obj;

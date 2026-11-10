@@ -249,7 +249,7 @@ agent run examples/graphs/research_pipeline.json --model qwen2.5-0.5b --set "top
 | Flag | |
 |---|---|
 | `--set key=value` | seed graph state (repeatable) |
-| `--thread ID` | checkpoint thread (default `run`) |
+| `--thread ID` | checkpoint thread. Default: a new thread `<graph name>-<unix time>` for every run; pass an id to continue that thread's state and conversations |
 | `--resume ID [--input TEXT]` | continue an interrupted or failed run; `TEXT` is the human reply, or `approve` for pending tool calls |
 | `--yes` | approve tool calls the permission policy would ask about |
 | `--json` | print node events as one JSON object per line instead of the status table |

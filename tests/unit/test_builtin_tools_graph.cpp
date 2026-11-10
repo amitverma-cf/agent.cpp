@@ -4,6 +4,7 @@
 
 #include <agent-cpp/agent.hpp>
 #include <catch_amalgamated.hpp>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -190,7 +191,7 @@ TEST_CASE("read_file of an image attaches it for the engine", "[builtin_tools][g
         auto out = run_node(session, "call:read_file {\"path\":\"" + outside + "\"}", {"read_file"});
         REQUIRE(out.tool.media.size() == 1);
         const std::string artifacts = std::filesystem::absolute(ws_path("artifacts")).string();
-        CHECK(out.tool.media[0].path.starts_with(artifacts + "/read-"));
+        CHECK(std::filesystem::path(out.tool.media[0].path).generic_string().starts_with(std::filesystem::path(artifacts).generic_string() + "/read-"));
         CHECK(out.tool.media[0].path.ends_with("dog.jpg"));
         CHECK(slurp(out.tool.media[0].path) == "jpeg");
         std::filesystem::remove_all("/tmp/agent_test_builtin_graph_outside");
@@ -203,7 +204,7 @@ TEST_CASE("run_command under a graph node: approval interrupt, then sandboxed ex
     cfg.permission_check = agent::tools::default_permission_policy; // run_command -> Ask
     auto session = open(cfg);
 
-    auto node = agent_node("shell", R"(call:run_command {"command":"echo hi > out.txt && cat out.txt"})", {"run_command"});
+    auto node = agent_node("shell", R"(call:run_command {"command":"echo hi>out.txt && cat out.txt"})", {"run_command"});
     node.interrupt_before_tools = true;
     auto graph = agent::make_graph(node);
 
@@ -224,9 +225,15 @@ TEST_CASE("run_command under a graph node: approval interrupt, then sandboxed ex
     std::string tool_content;
     for (const auto &m : resumed.state.histories.at("shell").history)
         if (m.role == "tool") tool_content = m.content;
+    INFO(tool_content);
     CHECK(tool_content.find("\"exit_code\":0") != std::string::npos);
-    CHECK(tool_content.find("\"output\":\"hi\\n\"") != std::string::npos);
-    CHECK(slurp(ws_path("out.txt")) == "hi\n");
+    // cmd.exe writes "hi" followed by a space and CRLF, so compare without trailing whitespace.
+    CHECK(tool_content.find("\"output\":\"hi") != std::string::npos);
+    {
+        std::string written = slurp(ws_path("out.txt"));
+        while (!written.empty() && std::isspace(static_cast<unsigned char>(written.back()))) written.pop_back();
+        CHECK(written == "hi");
+    }
 
     // Denied: nothing runs.
     std::filesystem::remove(ws_path("out.txt"));
