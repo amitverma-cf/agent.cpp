@@ -255,8 +255,14 @@ Watch list: audio.cpp as a meta-engine; llama.cpp native TTS / image gen when th
 ### Phase 5: CLI release (3 weeks, can start mid-Phase 3)
 - [ ] `agent setup` wizard: detect GPU (CUDA/Vulkan/CPU), pick capabilities (starter pack preselected), download matching **prebuilt** engine plugins from GitHub releases (checksum-verified)
   - [x] v1 (`tools/cli`, see [docs/cli.md](cli.md)): reports CPU cores / `nvidia-smi` / `/dev/nvidia0` / `/dev/dri` render nodes and suggests a backend, prompts on a TTY (flags otherwise), picks the starter pack, finds locally built plugins next to the binary or in `<prefix>/lib/agent/engines`, validates them by loading, writes `config.json` + `engines.json`
-  - [ ] download prebuilt plugins from GitHub releases (needs the release pipeline below)
+  - [x] download prebuilt plugins from GitHub releases: `agent engine pull NAME` and the `agent setup` prompt read `manifest.json` and check SHA-256. Written and unit-tested for parsing; **not yet run against a published release**
 - [ ] Release pipeline that builds every engine plugin × backend (cpu/cuda/vulkan) × OS (win/linux)
+  - [x] `.github/workflows/release.yml`: CLI + llama engine for Linux x64/arm64, macOS x64/arm64 and Windows x64 on a version tag, portable CPU flags (no `-march=native`), per-engine assets, `manifest.json` and `SHA256SUMS`. **Never run on GitHub yet**; CUDA/Vulkan builds and the other engines are not in it
+- [x] Private `bun` / `uv` runtimes (`agent runtime`), `npx` / `uvx` mapped onto them, caches kept in the home; skills.sh and MCP registry clients (`agent skill`, `agent mcp search|add`)
+- [x] llama engine: LoRA adapters (`options.lora`), quantize (`options.mode: "tools"`), tool-call grammar from the chat template
+- [x] Hybrid retrieval: FTS5 + vectors with reciprocal rank fusion (`RagIndex::hybrid`)
+- [ ] Speculative decoding (n-gram, draft model) and MTP in the llama engine: not started
+- [ ] Windows sandbox beyond a Job Object (restricted token / low integrity / AppContainer): not started
 - [x] `agent engine add|rm|ls`, `agent model pull|rm|ls` (HF download with resume + checksum, licence prompt)
   - [x] model hub library `agent_hub` (`tools/hub/`, see [docs/api/hub.md](api/hub.md)): HF spec/quant resolution, download with redirects + Range resume + sha256, proxy/CA support, `models.json` catalogue, restricted-licence refusal; `agent_pull` example
   - [x] wire it into the `agent` binary as `agent model pull|rm|ls` with an interactive licence prompt (progress bar, Ctrl-C cancel + resume)

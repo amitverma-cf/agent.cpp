@@ -134,7 +134,7 @@ Result<SkillFiles> find_skill_in_tree(std::string_view tree_json, std::string_vi
         simdjson::dom::object o;
         if (e.get(o) || str_field(o, "type") != "blob") continue;
         int64_t size = 0;
-        (void)o["size"].get(size);
+        if (o["size"].get(size)) size = 0;
         blobs.push_back({str_field(o, "path"), static_cast<uint64_t>(std::max<int64_t>(0, size))});
     }
     // Skill folders: the parent of every SKILL.md whose folder is named like the skill.
