@@ -87,3 +87,32 @@ should not be trusted.
   no TTS model was available on the machine used, so it has not been run. [ROADMAP](ROADMAP.md)
   keeps this open.
 - GPU backends, larger models, and Windows or macOS.
+
+## Graph evaluation, speculation and memory pressure (4 vCPU, 8 GB, CPU only)
+
+Measured with `scripts/sandbox/eval_graphs.sh`, `spec_test.sh` and `run_ram.sh`; temperature 0.
+
+**Graph suite** (chat, router, tool call through a grammar-constrained `read_file`, approval pause, resume, review loop, research
+pipeline with a parallel step). The checks are lenient: they show that a model can drive the graph machinery, not how good its
+answers are.
+
+| Model | Passed | Fastest check | Pipeline |
+|---|---|---|---|
+| Qwen2.5-0.5B Q4_K_M | 7/7 | 1 s | 13 s |
+| LFM3-1.7B Q4_K_M | 7/7 | 1 s | 26 s |
+| TwIL-8B Q3_K_M | 7/7 | 3 s | 186 s |
+
+LFM3 is the model for sub-agents: it passes everything at roughly seven times the speed of TwIL. TwIL is the main model when
+answer quality matters. Mixed graphs (TwIL planner and merger, LFM3 workers on a 6.5 GB budget) swap the models in and out of
+memory: 3 loads for one run.
+
+**Prompt-lookup speculation** on a request whose answer repeats its input: TwIL-8B 18.9 s to 10.3 s (113 drafted tokens accepted
+in 15 rounds), identical text. Qwen2.5-0.5B 1.8 s to 0.8 s, identical for the first four repetitions and then a different (earlier)
+stop, a near-tie in a very small model. LFM3 does not use it (hybrid).
+
+**Memory pressure** (TwIL-8B, 6 turns, peak RSS 6.4 GB; a ballast process takes RAM away, weights are re-read from the disk and
+the rest goes to the swap file): full RAM 10.4 s, 2 GB taken 11.4 s (+10%), 3.5 GB taken 13.4 s (+29%, 1.3 GB swapped). Memory
+is what limits how many models run together; the disk costs less than a third of the speed when it has to stand in for RAM.
+
+**No effect:** `batch` / `ubatch` (LFM3, peak RSS 1987 MiB at 4096 context for 512/256/128/64; the footprint is the mapped weights
+plus the KV cache) and a q8 instead of the automatic KV type.
