@@ -3,7 +3,7 @@
 // Wraps the sherpa-onnx C API (sherpa-onnx/c-api/c-api.h), which reports failures through NULL
 // returns, so no exception boundary is needed here. Components are created only when configured:
 //
-//   options.tts.kokoro            -> SherpaOnnxOfflineTts      (AGENT_CAP_TTS)
+//   options.tts.{kokoro,vits,matcha} -> SherpaOnnxOfflineTts   (AGENT_CAP_TTS)
 //   options.asr.whisper           -> SherpaOnnxOfflineRecognizer (AGENT_CAP_ASR)
 //   options.asr.nemo_transducer / options.asr.transducer
 //   options.vad.silero            -> SherpaOnnxVoiceActivityDetector (AGENT_CAP_VAD)
@@ -128,30 +128,64 @@ const char *or_null(const std::string &s) { return s.empty() ? nullptr : s.c_str
 
 int32_t create_tts(SherpaInstance &inst, simdjson::dom::object tts, int32_t threads, const std::string &provider, char *err,
                    size_t err_cap) {
-    simdjson::dom::object kokoro;
-    if (tts["kokoro"].get_object().get(kokoro)) {
-        std::snprintf(err, err_cap, "sherpa: options.tts needs a model family; supported: \"kokoro\"");
+    // One model family per instance: Kokoro (voices file), VITS (single model, lexicon or phonemizer-free tokens) or Matcha
+    // (acoustic model + vocoder).
+    simdjson::dom::object fam;
+    const char *family = nullptr;
+    for (const char *name : {"kokoro", "vits", "matcha"})
+        if (!tts[name].get_object().get(fam)) {
+            family = name;
+            break;
+        }
+    if (!family) {
+        std::snprintf(err, err_cap, "sherpa: options.tts needs a model family; supported: \"kokoro\", \"vits\", \"matcha\"");
         return AGENT_ERR_INVALID_CONFIG;
     }
+    const std::string section = std::string("tts.") + family;
+    const bool kokoro = std::strcmp(family, "kokoro") == 0, matcha = std::strcmp(family, "matcha") == 0;
     ComponentPaths p;
+    std::string vocoder, dict_dir, rule_fsts;
     int32_t rc = AGENT_OK;
-    if ((rc = require_path(kokoro, "tts.kokoro", "model", p.a, err, err_cap)) ||
-        (rc = require_path(kokoro, "tts.kokoro", "voices", p.b, err, err_cap)) ||
-        (rc = require_path(kokoro, "tts.kokoro", "tokens", p.tokens, err, err_cap)) ||
-        (rc = optional_path(kokoro, "tts.kokoro", "lexicon", p.lexicon, err, err_cap)) ||
-        (rc = optional_path(kokoro, "tts.kokoro", "data_dir", p.data_dir, err, err_cap)))
+    if ((rc = require_path(fam, section.c_str(), matcha ? "acoustic_model" : "model", p.a, err, err_cap)) ||
+        (kokoro && (rc = require_path(fam, section.c_str(), "voices", p.b, err, err_cap))) ||
+        (matcha && (rc = require_path(fam, section.c_str(), "vocoder", vocoder, err, err_cap))) ||
+        (rc = require_path(fam, section.c_str(), "tokens", p.tokens, err, err_cap)) ||
+        (rc = optional_path(fam, section.c_str(), "lexicon", p.lexicon, err, err_cap)) ||
+        (rc = optional_path(fam, section.c_str(), "data_dir", p.data_dir, err, err_cap)))
         return rc;
-    p.lang = json_str(kokoro, "lang");
+    p.lang = json_str(fam, "lang");
+    dict_dir = json_str(fam, "dict_dir"); // Matcha / VITS Chinese: the jieba dictionary folder
+    rule_fsts = json_str(fam, "rule_fsts"); // text normalisation grammars, comma separated
 
     SherpaOnnxOfflineTtsConfig cfg;
     std::memset(&cfg, 0, sizeof(cfg));
-    cfg.model.kokoro.model = p.a.c_str();
-    cfg.model.kokoro.voices = p.b.c_str();
-    cfg.model.kokoro.tokens = p.tokens.c_str();
-    cfg.model.kokoro.lexicon = or_null(p.lexicon);
-    cfg.model.kokoro.data_dir = or_null(p.data_dir); // espeak-ng-data; ignored by sherpa-onnx >= 2.0
-    cfg.model.kokoro.lang = or_null(p.lang);
-    cfg.model.kokoro.length_scale = 1.0f;
+    if (kokoro) {
+        cfg.model.kokoro.model = p.a.c_str();
+        cfg.model.kokoro.voices = p.b.c_str();
+        cfg.model.kokoro.tokens = p.tokens.c_str();
+        cfg.model.kokoro.lexicon = or_null(p.lexicon);
+        cfg.model.kokoro.data_dir = or_null(p.data_dir); // espeak-ng-data; ignored by sherpa-onnx >= 2.0
+        cfg.model.kokoro.lang = or_null(p.lang);
+        cfg.model.kokoro.length_scale = 1.0f;
+    } else if (matcha) {
+        cfg.model.matcha.acoustic_model = p.a.c_str();
+        cfg.model.matcha.vocoder = vocoder.c_str();
+        cfg.model.matcha.tokens = p.tokens.c_str();
+        cfg.model.matcha.lexicon = or_null(p.lexicon);
+        cfg.model.matcha.data_dir = or_null(p.data_dir);
+        cfg.model.matcha.dict_dir = or_null(dict_dir);
+        cfg.model.matcha.noise_scale = static_cast<float>(json_num(fam, "noise_scale", 1.0));
+        cfg.model.matcha.length_scale = static_cast<float>(json_num(fam, "length_scale", 1.0));
+    } else {
+        cfg.model.vits.model = p.a.c_str();
+        cfg.model.vits.tokens = p.tokens.c_str();
+        cfg.model.vits.lexicon = or_null(p.lexicon);
+        cfg.model.vits.data_dir = or_null(p.data_dir);
+        cfg.model.vits.noise_scale = static_cast<float>(json_num(fam, "noise_scale", 0.667));
+        cfg.model.vits.noise_scale_w = static_cast<float>(json_num(fam, "noise_scale_w", 0.8));
+        cfg.model.vits.length_scale = static_cast<float>(json_num(fam, "length_scale", 1.0));
+    }
+    cfg.rule_fsts = or_null(rule_fsts);
     cfg.model.num_threads = threads;
     cfg.model.provider = provider.c_str();
     cfg.max_num_sentences = 1; // one callback per sentence -> incremental audio chunks
@@ -159,7 +193,7 @@ int32_t create_tts(SherpaInstance &inst, simdjson::dom::object tts, int32_t thre
 
     inst.tts = SherpaOnnxCreateOfflineTts(&cfg);
     if (!inst.tts) {
-        std::snprintf(err, err_cap, "sherpa: failed to create Kokoro TTS from %s", p.a.c_str());
+        std::snprintf(err, err_cap, "sherpa: failed to create %s TTS from %s", family, p.a.c_str());
         return AGENT_ERR_MODEL_LOAD_FAILED;
     }
     inst.tts_sid = static_cast<int32_t>(json_num(tts, "speaker_id", 0));
@@ -167,7 +201,6 @@ int32_t create_tts(SherpaInstance &inst, simdjson::dom::object tts, int32_t thre
     if (inst.tts_speed <= 0.0f) inst.tts_speed = 1.0f;
     return AGENT_OK;
 }
-
 int32_t create_asr(SherpaInstance &inst, simdjson::dom::object asr, int32_t threads, const std::string &provider, char *err,
                    size_t err_cap) {
     SherpaOnnxOfflineRecognizerConfig cfg;

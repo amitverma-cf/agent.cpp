@@ -632,6 +632,8 @@ configured get loaded:
 }
 ```
 
+`tts` takes one family: `kokoro` (above), `vits` (`model`, `tokens`, `lexicon`; `noise_scale`, `noise_scale_w`, `length_scale`) or `matcha` (`acoustic_model`, `vocoder`, `tokens`, `lexicon`, optional `dict_dir` and `rule_fsts` for Chinese; `noise_scale`, `length_scale`). Tested: `vits-ljs`, and `matcha-icefall-zh-baker` with `vocos-22khz-univ.onnx`. sherpa-onnx 2.x has no espeak-ng, so a VITS / Matcha model without a lexicon (Piper voices, `matcha-icefall-en_US-ljspeech`) loads but cannot tokenize text.
+
 `asr` takes exactly one family: `whisper` (`encoder`, `decoder`, `tokens`, optional `language`, `task`),
 `nemo_transducer` (Parakeet TDT: `encoder`, `decoder`, `joiner`, `tokens`) or `transducer` (same files, plus an
 optional `model_type`). `lexicon`, `data_dir` and `lang` are optional for Kokoro, but sherpa-onnx 2.x removed

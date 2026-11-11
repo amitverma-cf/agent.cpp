@@ -157,7 +157,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [ ] OS sandboxing follow-ups: ~~test real engines under the default engine policy~~ (done: llama, onnx, sherpa, sdcpp, TRELLIS load paths; GPU device nodes now opt-in via `SandboxPolicy::gpu`), ~~`"sandbox"` for MCP servers in `agent.json`~~ (done); open: test the macOS profile (and apply it without allocating after `fork()`), Windows AppContainer (filesystem/network) and handle-list inheritance, GPU builds under the sandbox
 - [x] Hub: proxy auth (`user:pass@` in `HTTPS_PROXY`/`HTTP_PROXY`, `NO_PROXY`), gated repos (`HF_TOKEN` or the HF token file, sent only to Hugging Face hosts); split GGUF downloads done. Unit-tested offline, not against a live gated repo
 - [ ] Windows build + test pass (owner)
-- [x] Voice loop: mic/speaker I/O + VAD (sherpa) → ASR → LLM → TTS (`agent voice`, [guide](guides/voice-assistant.md)); file backend tested end to end, real sound devices untested
+- [x] Voice loop: mic/speaker I/O + VAD (sherpa) → ASR → LLM → TTS (`agent voice`, [guide](guides/voice-assistant.md)); file backend tested end to end; the device backend tested on Linux with PulseAudio virtual devices (a spoken question was transcribed, answered and played)
 
 **Recently done** (see the phase lists below): llama decide (choice / score / yes-no) and OCR; sdcpp video without ffmpeg (MJPEG AVI or PNG frames); whisper and parakeet engines; tools returning media parts; every engine tested under the engine sandbox, GPU device nodes opt-in, `sandbox` for MCP servers in agent.json; ggml engines built without Intel AMX by default (in-process ORT engines corrupted its per-thread tile state, see [LIMITATIONS](LIMITATIONS.md) §1); SDK docs and benchmark harness. Earlier: engine plugin ABI + loader + manifest; llama (b12020, Jinja templates, native tool calls, vision/audio input, embed/rerank), sdcpp, sherpa and onnx engines; media/progress/cancel in the turn loop; graph runtime + `agent.json` loader; MCP stdio client; RAG pipeline; Hugging Face hub; `agent` CLI (`setup`, `engine`, `model`, `chat`, `run`); SQLite moved out of the core.
 
@@ -219,7 +219,7 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 - [x] Load graphs from `agent.json` (`load_graph_json`, see [docs/api/agent-json.md](api/agent-json.md))
 - [x] Port skills, permissions, context compression, fs/terminal tools: tested under graph Agent nodes with the mock engine (allowed_tools, shared `history_key` conversations, approval interrupts, process-isolated engines); `read_file` returns images/audio/video as media; `compress_context` uses the Session's engine (TEXT_GEN, own arena) and keeps tool-call groups intact; leading system messages are merged and never pruned; per-node tool/skill lists; `use_skill` loads bundled files (see [docs/api/tools.md](api/tools.md#default-tools))
   - [x] `run_command` stops on `request_cancel()`: the command and its child processes are killed (POSIX: SIGTERM to the process group, SIGKILL after 500 ms; Windows: Job Object) and the result reports `"cancelled":true` with the partial output; a timeout now kills the whole tree too (Windows path untested)
-  - [ ] context compression is not tested with a real model
+  - [x] context compression tested with a real model (Qwen3.5-4B; see LIMITATIONS)
 - [x] MCP stdio client (`connect_mcp_server`, see [docs/api/mcp.md](api/mcp.md))
 - [x] RAG pipeline: chunk → embed → `VectorStoreOps` → rerank → inject (`rag_index` / `rag_query` / `search_knowledge` tool via `make_rag_tool`; see [docs/api/rag.md](api/rag.md)). A dedicated graph node kind is not added: an Agent node with the tool, or a Function node calling `rag_query`, covers it
 
@@ -234,7 +234,7 @@ Priority wave A (v1 **starter pack**, installed by default by `agent setup`):
 - [x] `sherpa`: Kokoro TTS, Parakeet / Whisper STT, VAD, diarization (Windows-friendly breadth); more TTS families and the Windows build are open below
   - [x] v1 (`engines/sherpa`, sherpa-onnx 2.0.1 prebuilt C API): Kokoro TTS (WAV artifact + streamed audio chunks, progress, cancel), Whisper / NeMo transducer (Parakeet) ASR; Linux x64 tested with kokoro-en-v0_19 + whisper-tiny.en
   - [x] Silero VAD (`AGENT_CAP_VAD`, offline + streaming mode) and pyannote + speaker-embedding diarization (`AGENT_CAP_DIARIZE`); audio input also as an F32 tensor; tested with silero_vad.onnx, pyannote segmentation-3.0 + NeMo TitaNet small
-  - [ ] VITS/Matcha/Kitten TTS, Windows build
+  - [x] VITS and Matcha TTS families (tested on Linux); [ ] Kitten TTS, Windows build
 - [ ] `sdcpp`: stable-diffusion.cpp txt2img / img2img / video (Wan, LTX) with progress + cancel
   - [x] txt2img + img2img with progress + per-step cancel (`agent-engine-sdcpp`, stable-diffusion.cpp master-1028, opt-in `AGENT_ENGINE_SDCPP`)
   - [x] video (`AGENT_CAP_VIDEO_GEN`): MJPEG AVI or PNG frames, no ffmpeg; tested with Wan2.1-T2V-1.3B Q4_0 (~1 min on CPU for a short clip)

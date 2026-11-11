@@ -399,8 +399,9 @@ single header, 0.11.26, public domain / MIT-0; it loads ALSA / PulseAudio / JACK
 run time, so the binary has no link-time audio dependency; `-DAGENT_CLI_AUDIO_DEVICE=OFF` leaves it out).
 Only the CLI links it, never `libagent`. When there is no microphone, `agent voice` stops with a hint to use
 `--input-wav`; when there is no speaker, replies go to `<workspace>/voice/` as WAV files. The device backend
-has not been tested on real hardware yet (the development machine has no sound card); the file backend is
-what the tests run.
+was tested on Linux against PulseAudio virtual devices (a null sink as the microphone, another as the speaker: the question
+was transcribed, answered and played), not on a physical sound card or on Windows / macOS; the file backend is what the unit
+tests run.
 
 **Graph form.** A graph file cannot express this loop today: a graph runs on one engine session, and
 `agent run` registers no function nodes for ASR / TTS.
