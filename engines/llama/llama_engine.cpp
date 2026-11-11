@@ -1989,7 +1989,10 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     inst->batcher.use_checkpoints = llama_model_is_hybrid(model) || llama_model_is_recurrent(model);
     if (llama_model_n_swa(model) > 0 && !inst->batcher.use_checkpoints) inst->batcher.disable_prefix_reuse();
     inst->batcher.spec_enabled = speculative && mode == Mode::Generate && llama_model_n_swa(model) == 0; // hybrid models too (state snapshots)
-    if (trace_prefix_cache()) std::fprintf(stderr, "llama: speculation %s (n_swa=%d, hybrid=%d)\n", inst->batcher.spec_enabled ? "on" : "off", llama_model_n_swa(model), inst->batcher.use_checkpoints ? 1 : 0);
+    // What the file itself says: layers of a multi-token-prediction head. They are read from the GGUF, not assumed from a model name.
+    if (trace_prefix_cache())
+        std::fprintf(stderr, "llama: speculation %s (n_swa=%d, hybrid=%d, mtp_layers=%d%s)\n", inst->batcher.spec_enabled ? "on" : "off", llama_model_n_swa(model),
+                     inst->batcher.use_checkpoints ? 1 : 0, llama_model_n_layer_nextn(model), llama_model_n_layer_nextn(model) > 0 ? ": the file has an MTP head, drafting uses prompt lookup" : "");
     inst->mode = mode;
     if (mode != Mode::Generate) { // no chat template or sequence slots needed
         inst->mtmd = std::move(mctx); // an embedding model with a projector takes images / audio too

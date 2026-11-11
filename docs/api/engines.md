@@ -794,3 +794,10 @@ Nemotron 3.5 / unified / diarization models under OpenMDW 1.1, so check those be
 Tests (`tests/unit/test_engine_parakeet.cpp`) use parakeet.cpp's `tests/fixtures/speech.wav` and need
 `AGENT_TEST_PARAKEET_MODEL` for the real-model cases.
 
+
+**MTP heads.** The engine reads the number of multi-token-prediction layers from the GGUF itself (`llama_model_n_layer_nextn`;
+`AGENT_LLAMA_TRACE=1` prints `mtp_layers=N`), so nothing depends on a model's name. It does not drive an MTP head yet: that needs the
+target's hidden state at every prompt position, a second context for the head with its own rollback, and per-sequence bookkeeping, which
+is a rework of the batcher rather than an option. Models with a head use prompt-lookup speculation. Measured with upstream's
+`llama-cli` on four CPU cores, MTP is +51% on output that repeats the input and -20% on open generation (see
+[benchmarks](../benchmarks.md)), so the gain is conditional even where it is supported.
