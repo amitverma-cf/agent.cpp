@@ -168,7 +168,7 @@ TEST_CASE("read_file of an image attaches it for the engine", "[builtin_tools][g
     SECTION("in process") {
         auto session = open(base_config());
         auto out = run_node(session, R"(call:read_file {"path":"pics/cat.png"})", {"read_file"});
-        const std::string abs = std::filesystem::absolute(ws_path("pics/cat.png")).string();
+        const std::string abs = std::filesystem::weakly_canonical(ws_path("pics/cat.png")).string(); // macOS: /tmp resolves to /private/tmp
         CHECK(out.reply == "tool done\ntool media: image/png " + abs);
         REQUIRE(out.tool.media.size() == 1);
         CHECK(out.tool.media[0].mime == "image/png");

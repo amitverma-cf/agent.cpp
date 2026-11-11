@@ -21,7 +21,7 @@ TEST_CASE("resolve_under_workspace accepts a relative path inside the workspace"
     std::string ws = make_workspace("valid");
     auto res = agent::hal::resolve_under_workspace(ws, "sub/file.txt", true);
     REQUIRE(res.ok);
-    REQUIRE(std::filesystem::path(res.value).generic_string().find(std::filesystem::absolute(ws).generic_string()) == 0);
+    REQUIRE(std::filesystem::path(res.value).generic_string().find(std::filesystem::weakly_canonical(ws).generic_string()) == 0);
 }
 
 TEST_CASE("resolve_under_workspace rejects .. traversal that escapes the workspace", "[hal][path][sandbox]") {
