@@ -126,6 +126,8 @@ bool parse_tensor_arg(std::string_view arg, TensorBuf &out, std::string &err) {
     return true;
 }
 
+bool g_all_values = false; // --all-values: print every element of a tensor, not the first four
+
 void print_tensor(const TensorView &t) {
     std::string shape;
     for (size_t i = 0; i < t.shape.size(); ++i) shape += (i ? "," : "") + std::to_string(t.shape[i]);
@@ -133,7 +135,7 @@ void print_tensor(const TensorView &t) {
                 t.data.size());
     const size_t esize = dtype_size(t.dtype);
     if (esize && (t.dtype == DType::Float32 || t.dtype == DType::Int64 || t.dtype == DType::Int32) && t.data.size() >= esize) {
-        const size_t n = std::min<size_t>(4, t.data.size() / esize);
+        const size_t n = g_all_values ? t.data.size() / esize : std::min<size_t>(4, t.data.size() / esize);
         std::printf("  first:");
         for (size_t i = 0; i < n; ++i) {
             if (t.dtype == DType::Float32) { float v = 0; std::memcpy(&v, t.data.data() + i * esize, esize); std::printf(" %.4g", static_cast<double>(v)); }
@@ -147,6 +149,7 @@ void print_tensor(const TensorView &t) {
 } // namespace
 
 int cmd_task(const CommandLine &cl, Context &ctx) {
+    g_all_values = cl.has("all-values");
     const std::string cap_name = cl.positionals[0];
     uint32_t task = 0;
     for (const auto &c : kCaps)

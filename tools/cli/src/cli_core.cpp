@@ -83,7 +83,7 @@ constexpr std::string_view kVoiceValue[] = {"model",     "engine", "asr-model", 
 constexpr std::string_view kVoiceBool[] = {"yes", "verbose", "inprocess", "barge-in"};
 
 constexpr std::string_view kTaskValue[] = {"model", "engine", "engine-options", "text", "file", "params", "workspace", "max-tokens", "doc", "tensor", "tools"};
-constexpr std::string_view kTaskBool[] = {"inprocess"};
+constexpr std::string_view kTaskBool[] = {"inprocess", "all-values"};
 
 constexpr CommandSpec kCommands[] = {
     {"setup", {}, 0, 0, kSetupValue, kSetupBool},

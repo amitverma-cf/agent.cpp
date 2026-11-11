@@ -1072,9 +1072,94 @@ int32_t reject_media(Instance &inst, const agent_request *req) {
     return AGENT_OK;
 }
 
-// AGENT_CAP_EMBED: one pooled, L2-normalized "embedding" tensor (f32 [n_embd]) per TEXT part, in order.
+// Embedding with media (image / audio next to text, for projector-equipped embedding models such as Qwen3-VL-Embedding): one
+// embedding per message, made of the message's parts in order. The projector (options.mmproj) turns media into embeddings
+// that go through the model like prompt tokens; the vector is the model's pooled output after the last of them. Whether the
+// model can make sense of the media is for the model to say: nothing here rejects it ahead of time.
+int32_t run_embed_media(Instance &inst, const agent_request *req, agent_response *resp) {
+    if (!inst.mtmd) return inst.fail(AGENT_ERR_UNSUPPORTED, "llama: the request has images or audio, but this instance has no projector (set options.mmproj)");
+    llama_context *ctx = inst.batcher.ctx;
+    const auto n_embd = static_cast<size_t>(llama_model_n_embd_out(inst.batcher.model));
+    std::vector<float> floats;
+    int32_t n_prompt = 0;
+    size_t rows = 0;
+    for (size_t mi = 0; mi < req->n_messages; ++mi) {
+        const agent_message &m = req->messages[mi];
+        if (m.n_parts == 0) continue;
+        agent_request one = *req;
+        one.messages = &m;
+        one.n_messages = 1;
+        std::string error;
+        std::vector<mtmd::bitmap> bitmaps;
+        if (int32_t rc = load_media(inst, &one, bitmaps, error); rc != AGENT_OK) return inst.fail(rc, error);
+
+        std::vector<mtmd_input_text> texts;
+        std::vector<std::pair<bool, size_t>> order;
+        texts.reserve(m.n_parts);
+        size_t n_bitmaps = 0;
+        for (size_t p = 0; p < m.n_parts; ++p) {
+            if (m.parts[p].kind == AGENT_PART_TEXT) {
+                const std::string_view t = sv(m.parts[p].text);
+                if (t.empty()) continue;
+                texts.push_back(mtmd_input_text{t.data(), t.size(), false, false});
+                order.emplace_back(false, texts.size() - 1);
+            } else if (is_media(m.parts[p])) {
+                order.emplace_back(true, n_bitmaps++);
+            }
+        }
+        if (order.empty()) continue;
+        std::vector<mtmd_input_part> parts(order.size());
+        std::vector<const mtmd_input_part *> ptrs(order.size());
+        for (size_t i = 0; i < order.size(); ++i) {
+            if (order[i].first) parts[i] = mtmd_input_part{nullptr, bitmaps[order[i].second].ptr.get()};
+            else parts[i] = mtmd_input_part{&texts[order[i].second], nullptr};
+            ptrs[i] = &parts[i];
+        }
+        mtmd::input_chunks chunks(mtmd_input_chunks_init());
+        if (mtmd_tokenize_from_parts(inst.mtmd.get(), chunks.ptr.get(), ptrs.data(), ptrs.size(), true) != 0)
+            return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: media tokenization failed");
+        n_prompt += static_cast<int32_t>(mtmd_helper_get_n_tokens(chunks.ptr.get()));
+
+        std::lock_guard<std::mutex> lock(inst.pool_mu);
+        llama_memory_clear(llama_get_memory(ctx), true);
+        llama_pos n_past = 0;
+        if (mtmd_helper_eval_chunks(inst.mtmd.get(), ctx, chunks.ptr.get(), 0, 0, static_cast<int32_t>(llama_n_batch(ctx)), true, &n_past) != 0)
+            return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: the model could not process the media (does this embedding model take images or audio?)");
+        const float *e = llama_get_embeddings_seq(ctx, 0);
+        if (!e) e = llama_get_embeddings_ith(ctx, -1);
+        if (!e) return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: the context produced no pooled output for the media");
+        floats.insert(floats.end(), e, e + n_embd);
+        llama_memory_clear(llama_get_memory(ctx), true);
+        ++rows;
+    }
+    if (rows == 0) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: nothing to embed");
+    for (size_t r = 0; r < rows; ++r) {
+        float *v = floats.data() + r * n_embd;
+        double sum = 0.0;
+        for (size_t k = 0; k < n_embd; ++k) sum += static_cast<double>(v[k]) * static_cast<double>(v[k]);
+        const float inv = sum > 0.0 ? static_cast<float>(1.0 / std::sqrt(sum)) : 0.0f;
+        for (size_t k = 0; k < n_embd; ++k) v[k] *= inv;
+    }
+    CallOutput &out = inst.output();
+    out = CallOutput{};
+    out.floats = std::move(floats);
+    out.shape = static_cast<int64_t>(n_embd);
+    tensor_parts(out, "embedding", rows, resp);
+    resp->usage = agent_usage{n_prompt, 0};
+    return AGENT_OK;
+}
+
+bool request_has_media(const agent_request *req) {
+    for (size_t i = 0; i < req->n_messages; ++i)
+        for (size_t p = 0; p < req->messages[i].n_parts; ++p)
+            if (is_media(req->messages[i].parts[p])) return true;
+    return false;
+}
+
+// AGENT_CAP_EMBED: one pooled, L2-normalized "embedding" tensor (f32 [n_embd]) per TEXT part, in order; with media in the
+// request, one per message (see run_embed_media).
 int32_t run_embed(Instance &inst, const agent_request *req, agent_response *resp) {
-    if (int32_t rc = reject_media(inst, req); rc != AGENT_OK) return rc;
+    if (request_has_media(req)) return run_embed_media(inst, req, resp);
     const llama_model *model = inst.batcher.model;
     const llama_vocab *vocab = llama_model_get_vocab(model);
     const size_t n_batch = llama_n_batch(inst.batcher.ctx);
@@ -1773,10 +1858,6 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         *out_instance = tools;
         return AGENT_OK;
     }
-    if (mode != Mode::Generate && !mmproj.empty()) {
-        std::snprintf(err, err_cap, "llama: options.mmproj is only used in generate mode");
-        return AGENT_ERR_INVALID_CONFIG;
-    }
 
     auto mparams = llama_model_default_params();
     if (gpu_layers >= 0) mparams.n_gpu_layers = gpu_layers;
@@ -1911,6 +1992,7 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     if (trace_prefix_cache()) std::fprintf(stderr, "llama: speculation %s (n_swa=%d, hybrid=%d)\n", inst->batcher.spec_enabled ? "on" : "off", llama_model_n_swa(model), inst->batcher.use_checkpoints ? 1 : 0);
     inst->mode = mode;
     if (mode != Mode::Generate) { // no chat template or sequence slots needed
+        inst->mtmd = std::move(mctx); // an embedding model with a projector takes images / audio too
         *out_instance = inst;
         return AGENT_OK;
     }
