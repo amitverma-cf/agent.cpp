@@ -795,9 +795,4 @@ Tests (`tests/unit/test_engine_parakeet.cpp`) use parakeet.cpp's `tests/fixtures
 `AGENT_TEST_PARAKEET_MODEL` for the real-model cases.
 
 
-**MTP heads.** The engine reads the number of multi-token-prediction layers from the GGUF itself (`llama_model_n_layer_nextn`;
-`AGENT_LLAMA_TRACE=1` prints `mtp_layers=N`), so nothing depends on a model's name. It does not drive an MTP head yet: that needs the
-target's hidden state at every prompt position, a second context for the head with its own rollback, and per-sequence bookkeeping, which
-is a rework of the batcher rather than an option. Models with a head use prompt-lookup speculation. Measured with upstream's
-`llama-cli` on four CPU cores, MTP is +51% on output that repeats the input and -20% on open generation (see
-[benchmarks](../benchmarks.md)), so the gain is conditional even where it is supported.
+**MTP heads.** A GGUF that carries a multi-token-prediction head (llama.cpp looks for the tensor `blk.<last>.nextn.eh_proj.weight`; `AGENT_LLAMA_TRACE=1` prints `mtp_layers=N`) is run by llama.cpp's own engine, the scheduler behind `llama-server` and `llama-cli`, linked into the plugin and called in process with in-memory requests (no socket is opened, nothing listens). It drives the head with its `draft-mtp` speculation (3 tokens per step); nothing depends on a model's name. That path does text generation with tools, images and audio (`options.mmproj`), streaming and cancel; embed, rerank, OCR and DECIDE use the plugin's own engine, so set `options.mtp=false` for those, or to skip the head. Measured on Qwen3.5-4B (4 cores): output that repeats the input accepts 98% of drafted tokens; open generation is slower with the head (upstream reports about -20%). Build with `-DAGENT_LLAMA_UPSTREAM=OFF` to leave it out.

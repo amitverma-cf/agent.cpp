@@ -19,6 +19,7 @@
 // transcribes image parts with the OCR prompt of the model's family (PaddleOCR-VL, GLM-OCR, ...).
 
 #include <agent-cpp/engine_abi.h>
+#include "upstream_engine.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <cctype>
@@ -539,6 +540,7 @@ struct CallOutput {
     std::string content;
     common_chat_msg parsed;
     std::vector<agent_tool_call> calls;
+    std::vector<upstream::ToolCall> up_calls; // storage behind `calls` when llama.cpp's engine answered
     agent_part part{};
     // AGENT_CAP_EMBED / AGENT_CAP_RERANK: tensor parts pointing into floats.
     std::vector<float> floats;
@@ -551,6 +553,7 @@ struct CallOutput {
 enum class Mode { Generate, Embed, Rerank, Tools };
 
 struct Instance {
+    std::unique_ptr<upstream::Engine> up; // llama.cpp's own engine, for models whose GGUF has an MTP head
     Batcher batcher;
     Mode mode = Mode::Generate;
     std::mutex pool_mu;     // serializes embed / rerank decodes (they use every sequence slot)
@@ -1792,6 +1795,7 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     bool kv_auto = true;
     std::string chat_template, mmproj, ocr_prompt;
     std::vector<std::pair<std::string, float>> loras; // options.lora: adapter file and scale
+    bool use_mtp = true;                              // options.mtp: drive the GGUF's MTP head when it has one
     bool speculative = true;                          // options.speculative: prompt-lookup speculation (greedy requests only)
     int n_batch_opt = 0, n_ubatch_opt = 0;           // options.batch / options.ubatch (0 = llama.cpp default)
     Mode mode = Mode::Generate;
@@ -1829,6 +1833,7 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
             }
         }
         if (bool flag = true; !options["prefix_cache"].get_bool().get(flag)) prefix_cache = flag;
+        if (bool flag = true; !options["mtp"].get_bool().get(flag)) use_mtp = flag;
         if (bool flag = true; !options["speculative"].get_bool().get(flag)) speculative = flag;
         n_batch_opt = json_number<int>(options, "batch", 0);   // tokens decoded per call; smaller = smaller compute buffer
         n_ubatch_opt = json_number<int>(options, "ubatch", 0); // tokens per micro-batch (the compute buffer scales with it)
@@ -1857,6 +1862,31 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         tools->tools_input = model_str;
         *out_instance = tools;
         return AGENT_OK;
+    }
+
+    // A model whose file carries a multi-token-prediction head runs on llama.cpp's own engine, which drives the head.
+    // Nothing names a model: llama.cpp looks for the head's tensors in the file.
+    if (mode == Mode::Generate && use_mtp && upstream::gguf_has_mtp(model_str)) {
+        upstream::Settings us;
+        us.model = model_str;
+        us.mmproj = mmproj;
+        us.context = n_ctx;
+        us.parallel = n_seq;
+        us.threads = threads;
+        us.gpu_layers = gpu_layers;
+        us.loras = loras;
+        if (!kv_auto) us.kv_type = kv_type == GGML_TYPE_F16 ? "f16" : kv_type == GGML_TYPE_Q8_0 ? "q8_0" : "q4_0";
+        std::string uerr;
+        auto up = upstream::Engine::create(us, uerr);
+        if (up) {
+            auto *inst = new Instance();
+            inst->mode = Mode::Generate;
+            inst->up = std::move(up);
+            *out_instance = inst;
+            return AGENT_OK;
+        }
+        // llama.cpp's engine could not start: fall back to the plugin's own (without the MTP head).
+        std::fprintf(stderr, "llama: MTP engine unavailable (%s); using the built-in engine\n", uerr.c_str());
     }
 
     auto mparams = llama_model_default_params();
@@ -2093,6 +2123,53 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
         if (req->task != AGENT_CAP_GENERIC) return inst->fail(AGENT_ERR_UNSUPPORTED, "llama: an instance created with mode \"tools\" only runs GENERIC requests");
         return run_tools(*inst, req, resp);
     }
+    if (inst->up) {
+        if (req->task != AGENT_CAP_TEXT_GEN)
+            return inst->fail(AGENT_ERR_UNSUPPORTED, "llama: this model runs on llama.cpp's MTP engine, which does text generation only (set options.mtp=false for other tasks)");
+        int max_tokens = 512;
+        float temperature = 0.7f;
+        if (req->params_json.size) {
+            simdjson::ondemand::parser parser;
+            simdjson::padded_string json(sv(req->params_json));
+            simdjson::ondemand::document doc;
+            simdjson::ondemand::object params;
+            if (!parser.iterate(json).get(doc) && !doc.get_object().get(params)) {
+                max_tokens = json_number<int>(params, "max_tokens", max_tokens);
+                temperature = json_number<float>(params, "temperature", temperature);
+            }
+        }
+        std::string error;
+        const bool stream = req->on_chunk != nullptr;
+        const std::string body = upstream::chat_body_from_request(req, max_tokens, temperature, stream, error);
+        if (body.empty()) return inst->fail(AGENT_ERR_INVALID_CONFIG, error);
+        upstream::Result r;
+        auto on_text = [&](const std::string &piece) {
+            if (stream) req->on_chunk(req->user_data, AGENT_CHUNK_TEXT, piece.data(), piece.size());
+        };
+        if (!inst->up->chat(body, req->cancel, on_text, r, error)) return inst->fail(AGENT_ERR_DECODE_FAILED, "llama: " + error);
+        CallOutput &out = inst->output();
+        out = CallOutput{};
+        out.content = r.content;
+        out.up_calls = std::move(r.calls);
+        for (size_t i = 0; i < out.up_calls.size(); ++i) {
+            auto &c = out.up_calls[i];
+            if (c.id.empty()) c.id = "call_" + std::to_string(i);
+            if (c.arguments.empty()) c.arguments = "{}";
+            out.calls.push_back(agent_tool_call{agent_str{c.id.data(), c.id.size()}, agent_str{c.name.data(), c.name.size()},
+                                                agent_str{c.arguments.data(), c.arguments.size()}});
+        }
+        agent_response_reset(resp);
+        resp->message.role = agent_str{"assistant", 9};
+        resp->usage = agent_usage{r.prompt_tokens, r.completion_tokens};
+        out.part = agent_part{};
+        out.part.kind = AGENT_PART_TEXT;
+        out.part.text = agent_str{out.content.data(), out.content.size()};
+        resp->message.parts = &out.part;
+        resp->message.n_parts = 1;
+        resp->message.tool_calls = out.calls.data();
+        resp->message.n_tool_calls = out.calls.size();
+        return AGENT_OK;
+    }
     if (inst->mode == Mode::Embed && req->task == AGENT_CAP_EMBED) return run_embed(*inst, req, resp);
     if (inst->mode == Mode::Rerank && req->task == AGENT_CAP_RERANK) return run_rerank(*inst, req, resp);
     if (inst->mode == Mode::Generate && req->task == AGENT_CAP_DECIDE) return run_decide(*inst, req, resp);
@@ -2220,6 +2297,10 @@ const char *llama_last_error(void *instance) {
 
 int32_t llama_count_tokens(void *instance, agent_str text, int32_t *out_count) {
     auto *inst = static_cast<Instance *>(instance);
+    if (inst->up) { // the engine keeps its vocabulary to itself: a close estimate
+        *out_count = static_cast<int32_t>(text.size / 4 + 1);
+        return AGENT_OK;
+    }
     const llama_vocab *vocab = llama_model_get_vocab(inst->batcher.model);
     int32_t n = llama_tokenize(vocab, text.data, static_cast<int32_t>(text.size), nullptr, 0, false, false);
     *out_count = n < 0 ? -n : n;
@@ -2227,7 +2308,8 @@ int32_t llama_count_tokens(void *instance, agent_str text, int32_t *out_count) {
 }
 
 int32_t llama_reset_cache(void *instance) {
-    static_cast<Instance *>(instance)->batcher.clear();
+    auto *inst = static_cast<Instance *>(instance);
+    if (!inst->up) inst->batcher.clear();
     return AGENT_OK;
 }
 

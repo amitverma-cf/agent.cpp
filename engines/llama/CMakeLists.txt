@@ -3,8 +3,18 @@ set(BUILD_SHARED_LIBS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+# llama.cpp's own in-process engine (tools/server: the scheduler llama-server and llama-cli run on) is used for models whose GGUF
+# carries an MTP head, because it already implements multi-token prediction, its checkpoints and its prompt cache. Nothing listens
+# on a socket: the plugin calls its request handlers directly. AGENT_LLAMA_UPSTREAM=OFF leaves it out.
+option(AGENT_LLAMA_UPSTREAM "Link llama.cpp's server engine (in process) for MTP models" ON)
+if(AGENT_LLAMA_UPSTREAM)
+    set(LLAMA_BUILD_TOOLS ON CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_SERVER ON CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_UI OFF CACHE BOOL "" FORCE) # the web page is not used: no download at configure time
+else()
+    set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+endif()
 set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
 set(LLAMA_OPENSSL OFF CACHE BOOL "" FORCE)  # engines never download; the CLI hub does
@@ -21,6 +31,7 @@ include(${PROJECT_SOURCE_DIR}/cmake/ggml_no_amx.cmake)
 
 add_library(agent-engine-llama SHARED
     llama_engine.cpp
+    upstream_engine.cpp
     ${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader/simdjson.cpp
 )
 target_include_directories(agent-engine-llama PRIVATE
@@ -28,6 +39,11 @@ target_include_directories(agent-engine-llama PRIVATE
     ${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader
 )
 target_link_libraries(agent-engine-llama PRIVATE llama llama-common mtmd)
+if(AGENT_LLAMA_UPSTREAM)
+    target_link_libraries(agent-engine-llama PRIVATE llama-server-impl)
+    target_include_directories(agent-engine-llama PRIVATE ${PROJECT_SOURCE_DIR}/vendor/llama.cpp/tools/server)
+    target_compile_definitions(agent-engine-llama PRIVATE AGENT_LLAMA_UPSTREAM=1)
+endif()
 set_target_properties(agent-engine-llama PROPERTIES PREFIX "" CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 set_source_files_properties(${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader/simdjson.cpp PROPERTIES COMPILE_OPTIONS "-w")
 target_compile_options(agent-engine-llama PRIVATE ${AGENT_WARNINGS})
