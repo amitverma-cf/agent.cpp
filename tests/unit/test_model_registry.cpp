@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <agent-cpp/agent.hpp>
 #include <atomic>
 #include <catch_amalgamated.hpp>
@@ -70,13 +71,15 @@ void touch(agent::ModelRegistry &registry, std::string_view name) {
 TEST_CASE("estimate_model_memory: mock = file size, overrides, extra files, gpu_layers", "[models]") {
     auto spec = mock_spec("est", 3 * kMiB);
     auto est = agent::estimate_model_memory(spec);
+    INFO(est.error.message);
     REQUIRE(est.ok);
     REQUIRE(est.value.file_bytes == 3 * kMiB);
     REQUIRE(est.value.ram_bytes == 3 * kMiB);
     REQUIRE(est.value.vram_bytes == 0);
 
     // Files named in engine_options (mmproj, ...) are added; non-file strings are ignored.
-    const std::string proj = fake_model("est-mmproj.bin", 1 * kMiB);
+    std::string proj = fake_model("est-mmproj.bin", 1 * kMiB);
+    std::replace(proj.begin(), proj.end(), '\\', '/'); // a Windows path must not put backslashes into the JSON below
     spec.config.engine_options = R"({"mmproj":")" + proj + R"(","mode":"generate","nested":{"x":[")" + proj + R"("]}})";
     est = agent::estimate_model_memory(spec);
     REQUIRE(est.ok);

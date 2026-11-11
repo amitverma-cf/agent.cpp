@@ -326,7 +326,7 @@ TEST_CASE("A crashing engine fails the turn, and the next turn restarts the host
     const Case cases[] = {
         {"crash:segv", "died during run"},
         {"crash:abort", "died during run"},
-        {"crash:exit", "exited with status 3"},
+        {"crash:exit", "exited with"}, // "status 3" on POSIX, "code 0x00000003" on Windows
     };
     for (const Case &c : cases) {
         DYNAMIC_SECTION(c.prompt) {
