@@ -199,6 +199,10 @@ Result<void> init_engine(Session &session) {
                                                                    .engine_options = cfg.engine_options,
                                                                    .workspace_dir = cfg.workspace_dir,
                                                                    .artifacts_dir = state->output_dir});
+#ifdef AGENT_COVERAGE_RW_DIR
+        // Coverage builds only: the host and its plugin write their .gcda files into the build tree when they exit.
+        if (opts.sandbox.enabled) opts.sandbox.read_write_paths.push_back(AGENT_COVERAGE_RW_DIR);
+#endif
         opts.env["MALLOC_ARENA_MAX"] = "2";                    // glibc: at most 2 heaps instead of 8 x cores
         opts.env["MALLOC_TRIM_THRESHOLD_"] = "131072";         // give freed memory back to the OS at 128 KiB
         opts.env["MALLOC_MMAP_THRESHOLD_"] = "262144";         // large blocks come straight from mmap and are returned on free

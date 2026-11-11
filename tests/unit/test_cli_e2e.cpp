@@ -2,97 +2,10 @@
 // Covers the command dispatcher, the small commands and the chat / task / run paths end to end.
 #if defined(AGENT_TEST_CLI_PATH) && defined(AGENT_TEST_MOCK_ENGINE_PATH)
 
-#include <catch_amalgamated.hpp>
+#include "cli_e2e_util.hpp"
 
-#include <cstdio>
-#ifndef _WIN32
-#include <sys/wait.h>
-#endif
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <string>
+using namespace cli_e2e;
 
-namespace fs = std::filesystem;
-
-namespace {
-
-struct CliResult {
-    int code = -1;
-    std::string out; // stdout and stderr together
-};
-
-#ifdef _WIN32
-#define AGENT_POPEN _popen
-#define AGENT_PCLOSE _pclose
-#else
-#define AGENT_POPEN popen
-#define AGENT_PCLOSE pclose
-#endif
-
-void set_env(const char *name, const std::string &value) {
-#ifdef _WIN32
-    _putenv_s(name, value.c_str());
-#else
-    setenv(name, value.c_str(), 1);
-#endif
-}
-
-std::string quote(const std::string &s) { return "\"" + s + "\""; }
-
-struct Home {
-    fs::path root = fs::temp_directory_path() / "agent_test_cli_e2e";
-    fs::path workspace = root / "ws";
-    fs::path model = root / "model.gguf"; // the mock engine ignores the file's content; the CLI wants it to exist
-    fs::path graph = root / "graph.json";
-    Home() {
-        std::error_code ec;
-        fs::remove_all(root, ec);
-        fs::create_directories(workspace);
-        std::ofstream(model) << "x";
-        std::ofstream(graph) << R"({"name":"g","engine":"mock","entry":"a","nodes":[{"name":"a","kind":"agent","system_prompt":"s","input_key":"request","output_key":"answer"}],"edges":[]})";
-        set_env("AGENT_HOME", (root / "home").string());
-        set_env("AGENT_CONFIG_DIR", "");
-    }
-    ~Home() {
-        std::error_code ec;
-        fs::remove_all(root, ec);
-    }
-    // `agent <args>`, with stdin from a file when given.
-    CliResult run(const std::string &args, const std::string &stdin_text = {}) const {
-        std::string cmd;
-        if (!stdin_text.empty()) {
-            const fs::path in = root / "stdin.txt";
-            std::ofstream(in) << stdin_text;
-            cmd = quote(AGENT_TEST_CLI_PATH) + " " + args + " < " + quote(in.string()) + " 2>&1";
-        } else {
-            cmd = quote(AGENT_TEST_CLI_PATH) + " " + args + " 2>&1";
-        }
-#ifdef _WIN32
-        cmd = "\"" + cmd + "\"";
-#endif
-        CliResult r;
-        FILE *p = AGENT_POPEN(cmd.c_str(), "r");
-        if (!p) return r;
-        char buf[4096];
-        size_t n;
-        while ((n = fread(buf, 1, sizeof(buf), p)) > 0) r.out.append(buf, n);
-        const int status = AGENT_PCLOSE(p);
-#ifdef _WIN32
-        r.code = status;
-#else
-        r.code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-#endif
-        return r;
-    }
-    std::string engine_args() const {
-        return "-e " + quote(AGENT_TEST_MOCK_ENGINE_PATH) + " -m " + quote(model.string()) + " --inprocess --workspace " + quote(workspace.string());
-    }
-};
-
-bool has(const CliResult &r, const std::string &text) { return r.out.find(text) != std::string::npos; }
-
-} // namespace
 
 TEST_CASE("cli e2e: version, help and bad commands", "[cli_e2e]") {
     Home h;
@@ -329,6 +242,32 @@ TEST_CASE("cli e2e: task drives every capability of the mock-all engine", "[cli_
     // Out of process, through the engine host.
     auto isolated = h.run("task embed -e " + quote(AGENT_TEST_MOCK_ALL_ENGINE_PATH) + " -m " + quote(h.model.string()) + " --text hello --workspace " + quote(h.workspace.string()));
     CHECK(has(isolated, "embedding"));
+}
+#endif
+
+#if defined(__linux__)
+// The encrypted file store (AGENT_SECRETS_PASSPHRASE): the OS credential stores of Windows and macOS are not touched by tests.
+TEST_CASE("cli e2e: secrets are stored, bound to a consumer, unbound and removed", "[cli_e2e][secrets]") {
+    Home h;
+    set_env("AGENT_SECRETS_PASSPHRASE", "test passphrase");
+    auto set = h.run("secret set MYKEY --stdin", "sk-test-123\n");
+    INFO(set.out);
+    CHECK(set.code == 0);
+    CHECK_FALSE(has(set, "sk-test-123")); // the value is never printed
+    auto ls = h.run("secret ls");
+    CHECK(has(ls, "MYKEY"));
+    CHECK(has(ls, "not bound"));
+    CHECK(has(h.run("secret bind MYKEY tool:web_fetch"), "tool:web_fetch"));
+    CHECK(has(h.run("secret ls"), "usable by: tool:web_fetch"));
+    CHECK(h.run("secret bind MYKEY nonsense").code != 0);
+    CHECK(h.run("secret bind NOPE tool:x").code != 0);
+    CHECK(h.run("secret set \"bad name\" --stdin", "x\n").code != 0);
+    CHECK(h.run("secret set EMPTY --stdin", "\n").code != 0);
+    CHECK(h.run("secret unbind MYKEY tool:web_fetch").code == 0);
+    CHECK(has(h.run("secret ls"), "not bound"));
+    CHECK(h.run("secret rm MYKEY").code == 0);
+    CHECK(has(h.run("secret ls"), "no secrets"));
+    set_env("AGENT_SECRETS_PASSPHRASE", "");
 }
 #endif
 

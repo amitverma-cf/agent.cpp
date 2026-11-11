@@ -108,12 +108,33 @@ struct Reply {
     bool aborted = false;   // a sink callback returned false
 };
 
+// AGENT_HTTP_REWRITE="https://github.com=https://mirror.example/gh;https://skills.sh=http://127.0.0.1:8080": a URL that starts with
+// the text before an "=" is fetched from the text after it instead (first match wins). For mirrors of the hosts the CLI downloads
+// from (GitHub releases, registries) when they are not reachable directly, and for tests against a local stand-in.
+std::string apply_url_rewrites(const std::string &url) {
+    const char *env = std::getenv("AGENT_HTTP_REWRITE");
+    if (!env || !*env) return url;
+    const std::string rules(env);
+    for (size_t at = 0; at < rules.size();) {
+        size_t end = rules.find(';', at);
+        if (end == std::string::npos) end = rules.size();
+        const std::string rule = rules.substr(at, end - at);
+        at = end + 1;
+        const size_t eq = rule.find('=');
+        if (eq == std::string::npos || eq == 0) continue;
+        const std::string from = rule.substr(0, eq);
+        if (url.compare(0, from.size(), from) == 0) return rule.substr(eq + 1) + url.substr(from.size());
+    }
+    return url;
+}
+
 // GET with manual redirect handling: HF answers with a relative redirect (renamed repos) or an
 // absolute one to a CDN host, so every hop gets a fresh client for its host. The Authorization header
 // is only sent to hosts accepted by token_allowed_for_host(); CDN URLs are pre-signed and get none.
 Result<Reply> http_get(std::string url, const httplib::Headers &extra, const HttpOptions &http, const Sink &sink) {
     Reply reply;
     for (int hop = 0; hop <= http.max_redirects; ++hop) {
+        url = apply_url_rewrites(url);
         auto parsed = parse_url(url);
         if (!parsed.ok) return fail<Reply>(parsed.error.code, parsed.error.message);
         const Url &u = parsed.value;
