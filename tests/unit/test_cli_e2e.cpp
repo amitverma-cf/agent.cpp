@@ -200,4 +200,99 @@ TEST_CASE("cli e2e: init creates the project folders", "[cli_e2e]") {
     CHECK(h.run("init " + quote(proj.string())).code == 0); // running it again is harmless
 }
 
+TEST_CASE("cli e2e: runtime, skill and secret commands report usage errors and missing things", "[cli_e2e]") {
+    Home h;
+    CHECK(h.run("runtime").code == 2); // a subcommand is required
+    CHECK(has(h.run("runtime ls"), "uv"));
+    CHECK(h.run("runtime install").code == 2);
+    CHECK(h.run("runtime install nonsense").code == 2);
+    CHECK(h.run("runtime use ruby").code == 2);
+    auto path = h.run("runtime path uv");
+    CHECK(path.code == 1);
+    CHECK(has(path, "not installed"));
+    CHECK(h.run("skill rm ../escape").code == 2);
+    CHECK(h.run("skill rm no-such-skill").code == 1);
+    CHECK(h.run("skill").code == 2);
+    CHECK(h.run("mcp rm nothing").code == 1);
+    CHECK(h.run("mcp").code == 2);
+    CHECK(h.run("secret").code == 2);
+    CHECK(h.run("secret set").code != 0);
+    CHECK(h.run("secret bind ONLYNAME").code != 0);
+}
+
+TEST_CASE("cli e2e: setup writes the home, doctor reads it, clean has nothing to do", "[cli_e2e]") {
+    Home h;
+    auto setup = h.run("setup --yes --no-models --caps llama --home " + quote((h.root / "home2").string()));
+    INFO(setup.out);
+    CHECK(setup.code == 0);
+    CHECK(fs::exists(h.root / "home2" / "config.json"));
+    auto doctor = h.run("doctor --home " + quote((h.root / "home2").string()));
+    CHECK(doctor.code == 0);
+    CHECK(has(doctor, "home:"));
+    CHECK(has(doctor, "engines:"));
+    for (const char *what : {"--downloads", "--cache", "--logs"}) {
+        auto clean = h.run(std::string("clean ") + what + " --yes");
+        INFO(what << ": " << clean.out);
+        CHECK(clean.code == 0);
+    }
+    CHECK(h.run("clean").code != 0); // says what to clean
+}
+
+TEST_CASE("cli e2e: model commands that need no network", "[cli_e2e]") {
+    Home h;
+    auto search = h.run("model search qwen");
+    CHECK(search.code == 0);
+    CHECK(has(search, "qwen"));
+    CHECK(h.run("model search zzzz-no-such-model").code == 0); // an empty table
+    CHECK(h.run("model rm nope").code != 0);
+    CHECK(h.run("model pull").code != 0);
+    CHECK(h.run("model info").code != 0);
+}
+
+TEST_CASE("cli e2e: task and chat error paths and chat slash commands", "[cli_e2e]") {
+    Home h;
+    // The mock engine has no embedding or OCR capability.
+    auto embed = h.run("task embed " + h.engine_args() + " --text hello");
+    CHECK(embed.code != 0);
+    CHECK_FALSE(embed.out.empty());
+
+    auto chat = h.run("chat " + h.engine_args(), "/help\n/stats\n/clear\nafter clear\n/model\n/open\n/image\n/nonsense\n/exit\n");
+    INFO(chat.out);
+    CHECK(chat.code == 0);
+    CHECK(has(chat, "echo: after clear"));
+    CHECK(has(chat, "saved as chat-"));
+    auto bad_ctx = h.run("chat " + h.engine_args() + " --ctx notanumber", "/exit\n");
+    CHECK(bad_ctx.code != 0);
+    auto opts = h.run("chat " + h.engine_args() + " --max-tokens 16 --ctx 2048 --engine-options \"{}\"", "hello\n/exit\n");
+    CHECK(has(opts, "echo: hello"));
+    auto bad_json = h.run("chat " + h.engine_args() + " --engine-options \"{bad\"", "/exit\n");
+    CHECK(bad_json.code != 0);
+}
+
+TEST_CASE("cli e2e: run with a thread id, --json, --input and a resume", "[cli_e2e]") {
+    Home h;
+    auto first = h.run("run " + quote(h.graph.string()) + " " + h.engine_args() + " --thread t1 --set request=one --json");
+    INFO(first.out);
+    CHECK(first.code == 0);
+    CHECK(has(first, "echo: one"));
+    CHECK(has(first, "{"));
+    auto input = h.run("run " + quote(h.graph.string()) + " " + h.engine_args() + " --thread t3 --input typed-input"); // --input answers an interrupted run: nothing to answer here
+    CHECK(input.code == 0);
+    auto resume = h.run("run " + quote(h.graph.string()) + " " + h.engine_args() + " --resume t1");
+    CHECK_FALSE(resume.out.empty());
+    std::ofstream(h.root / "broken.json") << "{not json";
+    CHECK(h.run("run " + quote((h.root / "broken.json").string()) + " " + h.engine_args()).code != 0);
+    CHECK(h.run("run").code != 0);
+}
+
+TEST_CASE("cli e2e: global options choose the home", "[cli_e2e]") {
+    Home h;
+    const std::string home = quote((h.root / "chosen").string());
+    CHECK(h.run("engine ls --home " + home).code == 0);
+    CHECK(h.run("engine ls --config-dir " + quote((h.root / "oldlayout").string())).code == 0);
+    auto help = h.run("--help");
+    CHECK(has(help, "usage: agent"));
+    CHECK(h.run("-h").code == 0);
+}
+
 #endif
