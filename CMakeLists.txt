@@ -141,6 +141,9 @@ set_source_files_properties(
 
 find_package(Threads REQUIRED)
 target_link_libraries(agent PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+if(WIN32)
+    target_link_libraries(agent PRIVATE advapi32) # token / ACL calls of the Windows sandbox
+endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # shm_open / shm_unlink (engine IPC shared memory); part of libc since glibc 2.34.
     target_link_libraries(agent PRIVATE rt)
@@ -331,7 +334,7 @@ if(AGENT_BUILD_HUB)
     target_link_libraries(test_agent PRIVATE agent_hub)
 endif()
 if(AGENT_BUILD_CLI)
-    target_sources(test_agent PRIVATE tests/unit/test_cli.cpp tests/unit/test_cli_status.cpp tests/unit/test_voice.cpp tests/unit/test_home.cpp tests/unit/test_secrets.cpp tests/unit/test_doctor.cpp tests/unit/test_mcp_config.cpp tests/unit/test_archive.cpp tests/unit/test_runtimes.cpp tests/unit/test_registries.cpp tests/unit/test_engine_release.cpp)
+    target_sources(test_agent PRIVATE tests/unit/test_cli.cpp tests/unit/test_cli_status.cpp tests/unit/test_voice.cpp tests/unit/test_home.cpp tests/unit/test_secrets.cpp tests/unit/test_doctor.cpp tests/unit/test_mcp_config.cpp tests/unit/test_archive.cpp tests/unit/test_runtimes.cpp tests/unit/test_registries.cpp tests/unit/test_engine_release.cpp tests/unit/test_sandbox_windows.cpp)
     target_link_libraries(test_agent PRIVATE agent_cli_core)
     # The agent voice end-to-end test runs the real binary.
     target_compile_definitions(test_agent PRIVATE AGENT_TEST_CLI_PATH="$<TARGET_FILE:agent_cli_bin>")

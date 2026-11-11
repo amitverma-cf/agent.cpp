@@ -145,7 +145,7 @@ Known gaps, from review only:
   default)` leaves open anyway. Mach lookups, IPC and `process-exec` are not restricted at all.
 - `RLIMIT_AS` is not enforced by the macOS kernel for most allocations.
 
-## Windows (written, untested)
+## Windows
 
 The child is created suspended, assigned to a **Job Object** and resumed: kill-on-job-close (the
 whole tree dies with the `ChildProcess` / when run_command returns), no breakaway for descendants,
@@ -153,8 +153,16 @@ whole tree dies with the `ChildProcess` / when run_command returns), no breakawa
 `max_processes`, and UI restrictions (no clipboard, desktop switching, global atoms, system
 parameter changes).
 
-**Not enforced on Windows:** the filesystem allow-list and network denial. Spawns report a warning
-saying so. This code has never been compiled.
+**Filesystem writes (MCP servers and `run_command`, tested on Windows 11).** With `SandboxPolicy::windows_low_integrity`
+the child is started with a copy of the user's token lowered to the **Low integrity level**, and only the folders in
+`read_write_paths` get the Low label (`S:(ML;OICI;NW;;;LW)`, inherited by what is created below). A Low process cannot write
+to anything labelled Medium or higher, which is everything else the user owns, so it can write only in its allowed folders
+(`test_sandbox_windows.cpp` runs a child that writes inside its folder and is refused outside it). If the token or a label cannot
+be set up, the process is **not started**. Engine hosts leave the flag off: they need more of the system than a Low process may
+touch, so they get the Job Object only.
+
+**Not enforced on Windows:** reading (a Low process can still read what the user can), and network denial. Spawns report a
+warning saying so.
 
 AppContainer is the planned way to enforce both, and why it is not done yet:
 

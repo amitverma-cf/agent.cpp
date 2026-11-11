@@ -264,6 +264,17 @@ of a sequence (recurrent or hybrid state) or that keep only a sliding window of 
 Prompts with images or audio and DECIDE requests never use it. `AGENT_LLAMA_TRACE=1` prints how many prompt tokens each
 request found in the cache.
 
+**Memory options.** `batch` and `ubatch` (tokens per decode call and per micro-batch; llama.cpp defaults 2048 / 512) bound the compute
+buffer, which is the part of a model's footprint that does not shrink with quantization. Weights are memory-mapped, so unused
+pages stay on disk; engine host processes run with `MALLOC_ARENA_MAX=2` and early trimming so freed memory goes back to the system.
+
+**Speculative decoding (`speculative`, default `true`).** Prompt-lookup drafting: when the last three tokens occurred earlier in
+the prompt or the reply, the tokens that followed them are proposed (up to 8), checked in one batched decode, and the longest
+prefix that the model itself would have produced is kept; the rest is cut from the KV cache. It is used only for greedy
+(`temperature` 0) requests without tools, on attention models that can drop the end of a sequence (not hybrid/recurrent ones such
+as LFM, and not sliding-window ones). It pays off when the output repeats the input (quoting, rewriting, code edits); otherwise it
+costs nothing but a little compute for rejected drafts. `AGENT_LLAMA_TRACE=1` reports rounds and accepted tokens.
+
 **LoRA adapters (`lora`).** `"lora": [{"path": "adapter.gguf", "scale": 1.0}]` applies GGUF LoRA adapters to the
 base model for every request of the instance. An adapter made for another base model is refused when the instance
 is created. Tested with `ggml-org/LoRA-Qwen2.5-3B-Instruct-abliterated-F16-GGUF` on Qwen2.5-3B-Instruct.

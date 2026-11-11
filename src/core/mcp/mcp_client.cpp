@@ -390,6 +390,7 @@ Result<void> McpServer::start() {
     opts.env = config.env;
     opts.working_directory = config.working_directory;
     opts.sandbox = sandbox::mcp_policy(config.sandbox, config.command, config.working_directory);
+    opts.sandbox.windows_low_integrity = true; // third-party code: writes only in its own folders (Windows)
     auto spawned = hal::spawn_child(opts);
     if (!spawned.ok) return fail(ErrorCode::ProviderInitFailed, prefix() + ": " + spawned.error.message);
     process_ = std::move(spawned.value);

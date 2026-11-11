@@ -55,6 +55,8 @@ class PreparedSandbox {
     uint64_t memory_limit_bytes = 0;
     int max_processes = 0;
     std::string macos_profile;         // macOS: SBPL text for sandbox_init(), empty = none
+    bool low_integrity = false;        // Windows: run the child at Low integrity; only low_write_paths accept its writes
+    std::vector<std::string> low_write_paths;
     std::vector<std::string> warnings; // what could not be enforced; callers log these
 };
 
@@ -81,6 +83,12 @@ std::vector<std::string> sandbox_system_read_write_paths(bool gpu);
 // breakaway) and assigns process (a HANDLE, ideally created suspended) to it. Returns the job HANDLE
 // (close it to kill the tree) or nullptr with a warning appended to prepared.warnings.
 void *attach_job_object(PreparedSandbox &prepared, void *process);
+// Windows filesystem confinement. A process at Low integrity cannot write to anything labelled Medium or higher, which is
+// everything an ordinary user owns. label_low_integrity() gives one folder (and what is created in it) the Low label, so
+// that is the only place the child can write. Reads are not restricted by this. Returns false with `error` set.
+bool label_low_integrity(const std::string &path, std::string &error);
+// A primary token of this process lowered to Low integrity, for CreateProcessAsUser. nullptr with `error` set on failure.
+void *create_low_integrity_token(std::string &error);
 #endif
 
 } // namespace agent::hal

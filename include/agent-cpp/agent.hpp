@@ -231,6 +231,10 @@ struct SandboxPolicy {
     bool enabled = false;
     // false: leave the filesystem alone (network, rlimits and process-group parts still apply).
     bool filesystem = true;
+    // Windows only: run the program at Low integrity level, so that its writes land only in read_write_paths (they are
+    // labelled Low for it). Reads are not restricted. Meant for third-party code (MCP servers, run_command); engine hosts
+    // leave it off because they need more of the system than that. Ignored elsewhere, where Landlock does the job.
+    bool windows_low_integrity = false;
     // Extra paths, on top of what each use adds (engine: plugin, model, workspace ro, artifacts rw;
     // run_command: workspace rw; MCP: the server's program dir ro, working_directory rw).
     std::vector<std::string> read_only_paths;

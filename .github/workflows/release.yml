@@ -84,6 +84,7 @@ jobs:
           cp "build/agent-engine-host${{ matrix.exe_ext }}" "dist/${name}/" 2>/dev/null || true
           for f in build/engines/*/agent-engine-*.${{ matrix.lib_ext }} build/agent-engine-*.${{ matrix.lib_ext }}; do
             [ -f "$f" ] || continue
+            case "$f" in *mock*) continue ;; esac # test engines are not released
             cp "$f" "dist/${name}/engines/"
             base="$(basename "$f" .${{ matrix.lib_ext }})"
             cp "$f" "assets/${base}-${{ matrix.os_name }}-${{ matrix.arch }}.${{ matrix.lib_ext }}"

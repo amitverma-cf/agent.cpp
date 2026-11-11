@@ -17,6 +17,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <aclapi.h>
+#include <sddl.h>
 #else
 #include <fcntl.h>
 #include <sys/resource.h>
@@ -57,6 +59,8 @@ PreparedSandbox::PreparedSandbox(PreparedSandbox &&other) noexcept
       memory_limit_bytes(other.memory_limit_bytes),
       max_processes(other.max_processes),
       macos_profile(std::move(other.macos_profile)),
+      low_integrity(other.low_integrity),
+      low_write_paths(std::move(other.low_write_paths)),
       warnings(std::move(other.warnings)) {}
 
 PreparedSandbox &PreparedSandbox::operator=(PreparedSandbox &&other) noexcept {
@@ -71,6 +75,8 @@ PreparedSandbox &PreparedSandbox::operator=(PreparedSandbox &&other) noexcept {
         memory_limit_bytes = other.memory_limit_bytes;
         max_processes = other.max_processes;
         macos_profile = std::move(other.macos_profile);
+        low_integrity = other.low_integrity;
+        low_write_paths = std::move(other.low_write_paths);
         warnings = std::move(other.warnings);
     }
     return *this;
@@ -486,13 +492,72 @@ Result<PreparedSandbox> prepare_sandbox(const SandboxPolicy &policy) {
     out.active = true;
     out.memory_limit_bytes = policy.memory_limit_bytes;
     out.max_processes = policy.max_processes > 0 ? policy.max_processes : 0;
-    if (policy.filesystem)
-        out.warnings.push_back("sandbox: the filesystem allow-list is not enforced on Windows (Job Object limits only).");
+    if (policy.filesystem && policy.windows_low_integrity) {
+        // Writes are confined to the read-write folders by the Low integrity level. Reads are not restricted on Windows.
+        out.low_integrity = true;
+        out.low_write_paths = policy.read_write_paths;
+        out.warnings.push_back("sandbox: on Windows only writes are confined to the allowed folders (Low integrity level); reads are not restricted.");
+    }
     if (policy.network == SandboxNetwork::Deny) out.warnings.push_back("sandbox: network denial is not enforced on Windows.");
     return ok(std::move(out));
 }
 
 int apply_prepared_sandbox(const PreparedSandbox &) noexcept { return 0; }
+
+bool label_low_integrity(const std::string &path, std::string &error) {
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    // S: = a system ACL; ML = mandatory label; OICI = inherited by files and folders created below; NW = no write up;
+    // LW = Low integrity.
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"S:(ML;OICI;NW;;;LW)", SDDL_REVISION_1, &sd, nullptr)) {
+        error = "cannot build the integrity label (error " + std::to_string(GetLastError()) + ")";
+        return false;
+    }
+    BOOL present = FALSE, defaulted = FALSE;
+    PACL sacl = nullptr;
+    bool ok_label = GetSecurityDescriptorSacl(sd, &present, &sacl, &defaulted) && present;
+    DWORD rc = ok_label ? ERROR_SUCCESS : GetLastError();
+    if (ok_label) {
+        std::wstring wide(path.begin(), path.end());
+        int n = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
+        if (n > 0) {
+            wide.assign(static_cast<size_t>(n - 1), L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wide.data(), n);
+        }
+        rc = SetNamedSecurityInfoW(wide.data(), SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, sacl);
+    }
+    LocalFree(sd);
+    if (rc != ERROR_SUCCESS) {
+        error = "cannot label " + path + " for the sandbox (error " + std::to_string(rc) + ")";
+        return false;
+    }
+    return true;
+}
+
+void *create_low_integrity_token(std::string &error) {
+    HANDLE self = nullptr, primary = nullptr;
+    PSID low = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT, &self)) {
+        error = "OpenProcessToken failed (error " + std::to_string(GetLastError()) + ")";
+        return nullptr;
+    }
+    bool ok_token = DuplicateTokenEx(self, MAXIMUM_ALLOWED, nullptr, SecurityImpersonation, TokenPrimary, &primary) &&
+                    ConvertStringSidToSidW(L"S-1-16-4096", &low);
+    if (ok_token) {
+        TOKEN_MANDATORY_LABEL tml{};
+        tml.Label.Attributes = SE_GROUP_INTEGRITY;
+        tml.Label.Sid = low;
+        ok_token = SetTokenInformation(primary, TokenIntegrityLevel, &tml, sizeof(tml) + GetLengthSid(low)) != 0;
+    }
+    const DWORD last = GetLastError();
+    if (low) LocalFree(low);
+    CloseHandle(self);
+    if (!ok_token) {
+        if (primary) CloseHandle(primary);
+        error = "cannot create a Low integrity token (error " + std::to_string(last) + ")";
+        return nullptr;
+    }
+    return primary;
+}
 
 void *attach_job_object(PreparedSandbox &p, void *process) {
     if (!p.active) return nullptr;

@@ -26,6 +26,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <deque>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -56,6 +57,19 @@ llama_token sample_token(common_sampler *sampler, llama_context *ctx, int32_t id
     return token;
 }
 
+// The tokens that followed the most recent earlier occurrence of the last `n` tokens of `history`, at most `max_draft`.
+std::vector<llama_token> ngram_draft(const std::vector<llama_token> &history, size_t n, size_t max_draft) {
+    std::vector<llama_token> draft;
+    if (history.size() <= n || max_draft == 0) return draft;
+    const size_t end = history.size();
+    for (size_t start = end - n; start-- > 0;) { // candidate starts, newest first, never the suffix itself
+        if (!std::equal(history.begin() + static_cast<std::ptrdiff_t>(start), history.begin() + static_cast<std::ptrdiff_t>(start + n), history.end() - static_cast<std::ptrdiff_t>(n))) continue;
+        for (size_t j = start + n; j < end && draft.size() < max_draft; ++j) draft.push_back(history[j]);
+        break;
+    }
+    return draft;
+}
+
 // ------------------------------------------------------------------ batching engine
 
 class Batcher {
@@ -82,7 +96,8 @@ class Batcher {
     // state is saved (a few MiB); the next request restores it, drops the attention keys after it and decodes the
     // rest. Off for models that keep only a sliding window of keys (SWA); those recompute the whole prompt.
     bool prefix_cache = true;
-    bool use_checkpoints = false; // recurrent or hybrid model: reuse through checkpoints
+    bool use_checkpoints = false;
+    bool spec_enabled = false; // prompt-lookup speculation allowed (see speculate) // recurrent or hybrid model: reuse through checkpoints
     uint64_t checkpoint_restores = 0;
     uint64_t reused_tokens = 0, prompt_tokens = 0; // totals over all text requests, for stats and tests
     int kv_type_id = AGENT_KV_F16;                 // agent_kv_type of the K/V cache
@@ -224,6 +239,54 @@ class Batcher {
             return false;
         next_pos_[seq] = n_past;
         out = sample_token(sampler, ctx, -1);
+        return true;
+    }
+
+    // Prompt-lookup speculation. Decodes `last` followed by the drafted tokens in ONE call, with logits at every position, and
+    // samples after each. The draft tokens that the model itself would have produced are accepted, the rest are dropped from
+    // the KV cache again, and `next` is the token after the last accepted one (the model's correction, or a free extra token
+    // when the whole draft was right). The tokens are exactly those greedy decoding would give, up to the usual float
+    // differences between batch shapes. Only for attention models that can drop the end of a sequence.
+    bool speculate(llama_seq_id seq, llama_token last, const std::vector<llama_token> &draft, common_sampler *sampler, std::vector<llama_token> &accepted, llama_token &next) {
+        std::lock_guard<std::mutex> lock(mu_);
+        const llama_pos base = next_pos_[seq];
+        const int32_t n = static_cast<int32_t>(draft.size()) + 1;
+        llama_batch batch = llama_batch_init(n, 0, 1);
+        for (int32_t i = 0; i < n; ++i) {
+            batch.token[i] = i == 0 ? last : draft[static_cast<size_t>(i - 1)];
+            batch.pos[i] = base + i;
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = seq;
+            batch.logits[i] = true;
+        }
+        batch.n_tokens = n;
+        const int rc = llama_decode(ctx, batch);
+        llama_batch_free(batch);
+        if (rc != 0) {
+            reusable_[seq] = false;
+            cached_[seq].clear();
+            return false;
+        }
+        accepted.clear();
+        size_t i = 0;
+        llama_token t = sample_token(sampler, ctx, 0);
+        while (i < draft.size() && t == draft[i]) {
+            accepted.push_back(t);
+            ++i;
+            t = sample_token(sampler, ctx, static_cast<int32_t>(i));
+        }
+        next = t;
+        const llama_pos keep = base + 1 + static_cast<llama_pos>(i); // last + the accepted drafts stay in the cache
+        if (i < draft.size() && !llama_memory_seq_rm(llama_get_memory(ctx), seq, keep, -1)) {
+            reusable_[seq] = false; // cannot happen for the models this is enabled for; stop trusting this slot
+            cached_[seq].clear();
+            return false;
+        }
+        next_pos_[seq] = keep;
+        if (reusable_[seq]) {
+            cached_[seq].push_back(last);
+            cached_[seq].insert(cached_[seq].end(), accepted.begin(), accepted.end());
+        }
         return true;
     }
 
@@ -1377,6 +1440,12 @@ int32_t generate(Instance &inst, const agent_request *req, const std::vector<lla
     }
     int32_t status = AGENT_OK;
     llama_token tok = 0;
+    // Prompt-lookup speculation: greedy, no tools (no grammar), text only, and a model whose cache can be cut back.
+    const bool can_speculate = b.spec_enabled && temperature <= 0.0f && !chunks && !req->tools_json.size;
+    std::vector<llama_token> history;
+    if (can_speculate) history = tokens;
+    std::deque<llama_token> ahead; // tokens already sampled (accepted drafts and the one after them), to be processed in order
+    uint64_t spec_rounds = 0, spec_accepted = 0;
     const auto t_prefill = std::chrono::steady_clock::now();
     const bool prefilled = chunks ? b.prefill_media(seq, inst.mtmd.get(), chunks, sampler, tok) : b.prefill(seq, tokens, reused, sampler, tok);
     const auto t_first_token = std::chrono::steady_clock::now(); // the prompt is decoded and the first token sampled
@@ -1401,12 +1470,38 @@ int32_t generate(Instance &inst, const agent_request *req, const std::vector<lla
                 generated.truncate(cut);
                 break;
             }
+            if (can_speculate) history.push_back(tok);
+            if (!ahead.empty()) { // sampled earlier by a speculative round: no decode needed
+                tok = ahead.front();
+                ahead.pop_front();
+                continue;
+            }
+            if (can_speculate) {
+                const size_t room = static_cast<size_t>(max_tokens - i - 1);
+                std::vector<llama_token> draft = ngram_draft(history, 3, std::min<size_t>(8, room));
+                if (!draft.empty()) {
+                    std::vector<llama_token> accepted;
+                    llama_token next = 0;
+                    if (!b.speculate(seq, tok, draft, sampler, accepted, next)) {
+                        status = inst.fail(AGENT_ERR_DECODE_FAILED, "llama: decode failed");
+                        break;
+                    }
+                    ++spec_rounds;
+                    spec_accepted += accepted.size();
+                    for (llama_token t : accepted) ahead.push_back(t);
+                    ahead.push_back(next);
+                    tok = ahead.front();
+                    ahead.pop_front();
+                    continue;
+                }
+            }
             if (!b.next_token(seq, tok, sampler, tok)) {
                 status = inst.fail(AGENT_ERR_DECODE_FAILED, "llama: decode failed");
                 break;
             }
         }
     }
+    if (spec_rounds && trace_prefix_cache()) std::fprintf(stderr, "llama: speculation %llu rounds, %llu draft tokens accepted\n", static_cast<unsigned long long>(spec_rounds), static_cast<unsigned long long>(spec_accepted));
     if (stats) {
         const auto t_done = std::chrono::steady_clock::now();
         auto ms = [](auto a, auto b2) { return static_cast<float>(std::chrono::duration<double, std::milli>(b2 - a).count()); };
@@ -1581,6 +1676,7 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     bool kv_auto = true;
     std::string chat_template, mmproj, ocr_prompt;
     std::vector<std::pair<std::string, float>> loras; // options.lora: adapter file and scale
+    bool speculative = true;                          // options.speculative: prompt-lookup speculation (greedy requests only)
     int n_batch_opt = 0, n_ubatch_opt = 0;           // options.batch / options.ubatch (0 = llama.cpp default)
     Mode mode = Mode::Generate;
     enum llama_pooling_type pooling = LLAMA_POOLING_TYPE_UNSPECIFIED;
@@ -1617,6 +1713,7 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
             }
         }
         if (bool flag = true; !options["prefix_cache"].get_bool().get(flag)) prefix_cache = flag;
+        if (bool flag = true; !options["speculative"].get_bool().get(flag)) speculative = flag;
         n_batch_opt = json_number<int>(options, "batch", 0);   // tokens decoded per call; smaller = smaller compute buffer
         n_ubatch_opt = json_number<int>(options, "ubatch", 0); // tokens per micro-batch (the compute buffer scales with it)
         if (!options["mode"].get_string().get(t)) {
@@ -1778,7 +1875,9 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         }
     }
     inst->batcher.use_checkpoints = llama_model_is_hybrid(model) || llama_model_is_recurrent(model);
-    if (llama_model_n_swa(model) > 0 && !inst->batcher.use_checkpoints) inst->batcher.disable_prefix_reuse(); // sliding-window keys are not all kept
+    if (llama_model_n_swa(model) > 0 && !inst->batcher.use_checkpoints) inst->batcher.disable_prefix_reuse();
+    inst->batcher.spec_enabled = speculative && mode == Mode::Generate && !inst->batcher.use_checkpoints && llama_model_n_swa(model) == 0;
+    if (trace_prefix_cache()) std::fprintf(stderr, "llama: speculation %s (n_swa=%d, hybrid=%d)\n", inst->batcher.spec_enabled ? "on" : "off", llama_model_n_swa(model), inst->batcher.use_checkpoints ? 1 : 0);
     inst->mode = mode;
     if (mode != Mode::Generate) { // no chat template or sequence slots needed
         *out_instance = inst;

@@ -46,6 +46,15 @@ ancestor of the working directory that contains a `.agents/` folder.
 An explicit `--config-dir` or `$AGENT_CONFIG_DIR` keeps the previous layout: `config.json` and `engines.json` in that
 folder, models and the workspace in the platform data folders.
 
+## SQLite files
+
+Every database (conversations in `memory/db.sqlite3`, graph checkpoints, RAG chunks) is opened the same way: WAL journal (writes
+append to `<db>-wal`, the `<db>-shm` index is memory-mapped, readers never block the writer), `synchronous=NORMAL` (a commit
+survives a crash of the program; a power cut can lose the last few commits but never corrupts the file), a 2 MiB page cache per
+connection, a 64 MiB read-only memory map (the operating system's reclaimable file cache, not heap), temporary tables on disk and
+a WAL that is truncated at 16 MiB. Every row carries a time: `created_at` / `updated_at` (unix ms) on conversations and RAG
+chunks, `created_ms` on checkpoints, `ts` on graph events (`datetime(updated_at/1000, 'unixepoch')` reads them).
+
 ## Runtimes
 
 Many MCP servers are published as npm or Python packages. Instead of asking you to install Node or Python, agent.cpp

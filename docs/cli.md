@@ -138,8 +138,21 @@ manifest was not found.
 
 ## agent runtime
 
+`agent setup` asks which JavaScript tooling to use, and `agent runtime use bun|node|nub` changes it later:
+
+| Choice | `npx` / `bunx` | `npm` | `node` |
+|---|---|---|---|
+| `bun` (default) | `bun x` | `bun install` / `bun run` | `bun` |
+| `node` (a private Node.js with pnpm; npm is never used) | `pnpm dlx` | `pnpm install` / `pnpm run` | the private `node` |
+| `nub` ([nub](https://github.com/nubjs/nub), a pnpm-compatible CLI over Node.js) | `nub dlx` | `nub install` / `nub run` | left alone |
+
+The choice is stored as `js_runtime` in `config.json`. Every MCP server start goes through it (`Config::mcp_launcher`): servers
+from `mcp.json`, from `agent.json` graphs and from library code alike. `uvx` always maps to `uv tool run`.
+
 ```sh
-agent runtime ls                    # bun and uv: installed or not
+agent runtime ls                    # what is installed, and which choice is selected
+agent runtime use node              # choose node + pnpm (downloads what is missing)
+agent runtime install js            # install what the current choice needs
 agent runtime install bun           # --version 1.2.3 for a specific release
 agent runtime install uv
 agent runtime rm bun

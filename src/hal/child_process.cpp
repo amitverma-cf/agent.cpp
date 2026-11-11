@@ -14,6 +14,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <filesystem>
 #else
 #include <cerrno>
 #include <csignal>
@@ -178,10 +179,31 @@ Result<std::unique_ptr<ChildProcess>> spawn_child(const SpawnOptions &options) {
         return R{.ok = false, .value = {}, .error = prepared.error};
     }
 
+    // Filesystem confinement: the child runs at Low integrity and only the allowed folders accept its writes. If that cannot be
+    // set up the process is not started (a sandbox that silently does nothing is worse than none).
+    HANDLE low_token = nullptr;
+    if (prepared.value.low_integrity) {
+        std::string why;
+        for (const std::string &dir : prepared.value.low_write_paths) {
+            std::error_code mk;
+            std::filesystem::create_directories(dir, mk);
+            if (!agent::hal::label_low_integrity(dir, why)) break;
+        }
+        if (why.empty()) low_token = static_cast<HANDLE>(agent::hal::create_low_integrity_token(why));
+        if (why.empty() && !low_token) why = "no token";
+        if (!why.empty()) {
+            cleanup();
+            return R{.ok = false, .value = {}, .error = make_error(ErrorCode::SandboxViolation, "cannot confine '" + options.program + "' to its folders: " + why)};
+        }
+    }
+
     PROCESS_INFORMATION pi{};
     DWORD flags = CREATE_NO_WINDOW | (env_block.empty() ? 0 : CREATE_UNICODE_ENVIRONMENT) | (prepared.value.active ? CREATE_SUSPENDED : 0);
-    BOOL created = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, flags, env_block.empty() ? nullptr : env_block.data(),
-                                  wdir.empty() ? nullptr : wdir.c_str(), &si, &pi);
+    BOOL created = low_token ? CreateProcessAsUserW(low_token, nullptr, cmd.data(), nullptr, nullptr, TRUE, flags, env_block.empty() ? nullptr : env_block.data(),
+                                                    wdir.empty() ? nullptr : wdir.c_str(), &si, &pi)
+                             : CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, flags, env_block.empty() ? nullptr : env_block.data(),
+                                              wdir.empty() ? nullptr : wdir.c_str(), &si, &pi);
+    if (low_token) CloseHandle(low_token);
     DWORD last_error = GetLastError();
     close_handle(in_r);
     close_handle(out_w);

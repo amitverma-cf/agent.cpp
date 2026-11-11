@@ -74,6 +74,7 @@ Result<std::string> run_command_sandboxed_cb(std::string_view args, void *ud) {
     if (!ctx.command_sandbox.enabled) return run_command(ws, args, nullptr, ctx.cancel);
     SandboxPolicy policy = ctx.command_sandbox;
     policy.filesystem = policy.filesystem && ctx.sandbox;
+    policy.windows_low_integrity = true; // Windows: the command writes only in the workspace
     if (!ws.empty()) {
         std::error_code ec;
         auto abs = std::filesystem::absolute(ws, ec);
