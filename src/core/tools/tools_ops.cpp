@@ -33,6 +33,9 @@ Result<void> default_init(Session &session) {
         fs_ctx->sandbox = session.config.sandbox_filesystem;
         fs_ctx->command_sandbox = session.config.tool_sandbox;
         fs_ctx->cancel = session.cancel_flag.get(); // shared_ptr: the address survives Session moves
+        fs_ctx->grants = std::make_shared<std::vector<PathGrant>>(session.config.path_grants);
+        fs_ctx->gate = session.config.path_gate;
+        fs_ctx->gate_user_data = session.config.path_gate_user_data;
         session.tool_context = fs_ctx;
 
         auto fs_tools = get_filesystem_tools(fs_ctx);

@@ -238,3 +238,22 @@ What a user may still have to add, all outside what the policy can derive:
   pointing elsewhere is not followed.
 - **`memory_limit_bytes`** is off by default; when set it must exceed the mapped model size plus
   compute buffers (llama `mmap`s the whole GGUF).
+
+## Permission gate: paths outside the workspace
+
+The sandbox is not an all-or-nothing wall. A sandboxed tool (the file tools, `run_command`, MCP servers) can use a path outside
+the workspace when the host allows it, per path and per kind of access (read or write):
+
+- **Grants** (`Config::path_grants`): `{path, write, consumer}` where consumer is `*`, `files`, `run_command` or `mcp:<server>`. A
+  grant covers the path and everything below it (symlinks are resolved first), and a read grant never allows a write.
+- **The gate** (`Config::path_gate`): asked for any other path outside the workspace. It answers Deny, AllowOnce (asked again next
+  time) or AllowAlways (remembered for the session; the host can also save it). `run_command` asks about each absolute path its
+  command line names (writes are guessed from `>`, `cp`, `mv`, `rm`, `mkdir`, ...); the file tools ask when a path resolves outside.
+  MCP servers get grants only, because their paths are not known when they start.
+- **The CLI** keeps grants in `<home>/sandbox-grants.json` (and `<project>/.agents/sandbox.json`) and asks on the terminal:
+  `[o] allow once  [a] allow always  [n] no`. Without a terminal the answer is no and the message names the command that grants it:
+  `agent sandbox grant PATH [--write] [--for run_command|files|mcp:NAME]`, `agent sandbox ls`, `agent sandbox revoke PATH`.
+
+On Windows a granted folder gets the Low integrity label, so the same grants work there. If this user may not relabel a folder
+(it is owned by an administrator, for example under `C:\`), the program starts without the write confinement and the tool result
+carries a `sandbox_warning` saying so.

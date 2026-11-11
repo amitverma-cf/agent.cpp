@@ -59,6 +59,9 @@ constexpr SubSpec kMcpSubs[] = {{"ls", 0, 0}, {"search", 1, 1}, {"add", 1, 1}, {
 constexpr std::string_view kMcpBool[] = {"project", "yes"};
 constexpr SubSpec kSkillSubs[] = {{"ls", 0, 0}, {"search", 1, 1}, {"add", 1, 1}, {"rm", 1, 1}};
 constexpr std::string_view kSkillBool[] = {"project", "yes"};
+constexpr SubSpec kSandboxSubs[] = {{"ls", 0, 0}, {"grant", 1, 1}, {"revoke", 1, 1}};
+constexpr std::string_view kSandboxValue[] = {"for"};
+constexpr std::string_view kSandboxBool[] = {"write", "project"};
 constexpr SubSpec kRuntimeSubs[] = {{"ls", 0, 0}, {"install", 1, 1}, {"rm", 1, 1}, {"path", 1, 1}, {"use", 1, 1}};
 constexpr std::string_view kRuntimeValue[] = {"version"};
 constexpr std::string_view kCleanBool[] = {"downloads", "cache", "logs", "yes"};
@@ -89,6 +92,7 @@ constexpr CommandSpec kCommands[] = {
     {"doctor", {}, 0, 0, {}, {}},
     {"mcp", kMcpSubs, 0, 0, {}, kMcpBool},
     {"skill", kSkillSubs, 0, 0, {}, kSkillBool},
+    {"sandbox", kSandboxSubs, 0, 0, kSandboxValue, kSandboxBool},
     {"runtime", kRuntimeSubs, 0, 0, kRuntimeValue, {}},
     {"clean", {}, 0, 0, {}, kCleanBool},
     {"engine", kEngineSubs, 0, 0, kEngineValue, {}},

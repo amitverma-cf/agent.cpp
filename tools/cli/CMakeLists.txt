@@ -65,9 +65,11 @@ add_executable(agent_cli_bin
     src/mcp_cmd.cpp
     src/runtime_cmd.cpp
     src/skill_cmd.cpp
+    src/sandbox_cmd.cpp
 )
 set_target_properties(agent_cli_bin PROPERTIES OUTPUT_NAME agent RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 target_link_libraries(agent_cli_bin PRIVATE agent_cli_core agent_hub agent_store_sqlite)
+target_include_directories(agent_cli_bin PRIVATE ${AGENT_SIMDJSON_INCLUDE_DIR})
 target_compile_options(agent_cli_bin PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 target_link_options(agent_cli_bin PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 # The engine host runs engines out of process (the default for `agent chat` / `agent run`).

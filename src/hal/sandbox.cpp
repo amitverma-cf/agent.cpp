@@ -533,6 +533,23 @@ bool label_low_integrity(const std::string &path, std::string &error) {
     return true;
 }
 
+void *low_integrity_token_for(PreparedSandbox &prepared, std::string &error) {
+    error.clear();
+    if (!prepared.low_integrity) return nullptr;
+    for (const std::string &dir : prepared.low_write_paths) {
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        std::string why;
+        if (!label_low_integrity(dir, why)) {
+            prepared.warnings.push_back("sandbox: " + why + "; this program runs WITHOUT the write confinement (use a folder you own, e.g. under your user profile).");
+            return nullptr;
+        }
+    }
+    void *token = create_low_integrity_token(error);
+    if (!token && error.empty()) error = "no token";
+    return token;
+}
+
 void *create_low_integrity_token(std::string &error) {
     HANDLE self = nullptr, primary = nullptr;
     PSID low = nullptr;

@@ -1,3 +1,5 @@
+#include "path_gate.hpp"
+#include <simdjson.h>
 #include "../utils/utils.hpp"
 #include "hal/process.hpp"
 
@@ -79,6 +81,23 @@ Result<std::string> run_command_sandboxed_cb(std::string_view args, void *ud) {
         std::error_code ec;
         auto abs = std::filesystem::absolute(ws, ec);
         policy.read_write_paths.push_back(ec ? ws : abs.string());
+    }
+    // Paths outside the workspace: grants first, then the gate for each other absolute path the command line names.
+    apply_grants_to_policy(ctx, "run_command", policy);
+    {
+        simdjson::ondemand::parser parser;
+        simdjson::padded_string json(args.data(), args.size());
+        simdjson::ondemand::document doc;
+        std::string_view command;
+        if (!parser.iterate(json).get(doc) && !doc["command"].get_string().get(command) && !ws.empty()) {
+            const bool writes = command_looks_like_write(command);
+            for (const std::filesystem::path &p : external_paths_in_command(command, ws)) {
+#ifdef _WIN32
+                if (!writes) continue; // reads are not restricted on Windows, so there is nothing to ask
+#endif
+                if (path_access_allowed(ctx, "run_command", p, writes)) (writes ? policy.read_write_paths : policy.read_only_paths).push_back(p.string());
+            }
+        }
     }
     return run_command(ws, args, &policy, ctx.cancel);
 }

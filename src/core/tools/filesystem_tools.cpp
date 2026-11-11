@@ -1,3 +1,4 @@
+#include "path_gate.hpp"
 #include "../utils/utils.hpp"
 #include "hal/path.hpp"
 
@@ -24,9 +25,18 @@ bool parse_obj(std::string_view args, simdjson::ondemand::parser &parser, simdjs
     return true;
 }
 
-Result<std::filesystem::path> resolve_path(const WorkspaceContext &ctx, std::string_view rel) {
+Result<std::filesystem::path> resolve_path(const WorkspaceContext &ctx, std::string_view rel, bool write = false) {
     if (!ctx.workspace_dir) return fail<std::filesystem::path>(ErrorCode::InvalidConfig, "workspace_dir is null.");
-    return hal::resolve_under_workspace(*ctx.workspace_dir, rel, ctx.sandbox);
+    auto resolved = hal::resolve_under_workspace(*ctx.workspace_dir, rel, ctx.sandbox);
+    if (resolved.ok || resolved.error.code != ErrorCode::SandboxViolation || !ctx.sandbox) return resolved;
+    // Outside the workspace: allowed only by a grant or by the host's gate.
+    std::filesystem::path wanted{std::string(rel)};
+    if (!wanted.is_absolute()) wanted = std::filesystem::path(*ctx.workspace_dir) / wanted;
+    std::error_code ec;
+    wanted = std::filesystem::weakly_canonical(wanted, ec);
+    if (!ec && path_access_allowed(ctx, "files", wanted, write)) return ok(std::move(wanted));
+    resolved.error.message += " Grant access with `agent sandbox grant` or approve it when asked.";
+    return resolved;
 }
 
 } // namespace
@@ -173,7 +183,7 @@ static Result<std::string> write_file_cb(std::string_view args, void *ud) {
     // A model that forgets "content" (or sends a non-string) must not silently truncate the file.
     if (!has_content) return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'content' (a string)");
 
-    auto full_res = resolve_path(ctx, path_sv);
+    auto full_res = resolve_path(ctx, path_sv, true);
     if (!full_res.ok) return fail<std::string>(full_res.error.code, full_res.error.message);
     auto full = std::move(full_res.value);
 
@@ -205,7 +215,7 @@ static Result<std::string> append_file_cb(std::string_view args, void *ud) {
     }
     if (path_sv.empty()) return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'path'");
 
-    auto full_res = resolve_path(ctx, path_sv);
+    auto full_res = resolve_path(ctx, path_sv, true);
     if (!full_res.ok) return fail<std::string>(full_res.error.code, full_res.error.message);
     auto full = std::move(full_res.value);
 
@@ -311,7 +321,7 @@ static Result<std::string> create_dir_cb(std::string_view args, void *ud) {
     }
     if (path_sv.empty()) return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'path'");
 
-    auto full_res = resolve_path(ctx, path_sv);
+    auto full_res = resolve_path(ctx, path_sv, true);
     if (!full_res.ok) return fail<std::string>(full_res.error.code, full_res.error.message);
     auto full = std::move(full_res.value);
 
@@ -336,7 +346,7 @@ static Result<std::string> delete_path_cb(std::string_view args, void *ud) {
     }
     if (path_sv.empty()) return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'path'");
 
-    auto full_res = resolve_path(ctx, path_sv);
+    auto full_res = resolve_path(ctx, path_sv, true);
     if (!full_res.ok) return fail<std::string>(full_res.error.code, full_res.error.message);
     auto full = std::move(full_res.value);
 
@@ -366,9 +376,9 @@ static Result<std::string> move_path_cb(std::string_view args, void *ud) {
     }
     if (from_sv.empty() || to_sv.empty()) return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'from' or 'to'");
 
-    auto src_res = resolve_path(ctx, from_sv);
+    auto src_res = resolve_path(ctx, from_sv, true);
     if (!src_res.ok) return fail<std::string>(src_res.error.code, src_res.error.message);
-    auto dst_res = resolve_path(ctx, to_sv);
+    auto dst_res = resolve_path(ctx, to_sv, true);
     if (!dst_res.ok) return fail<std::string>(dst_res.error.code, dst_res.error.message);
     if (ctx.workspace_dir && hal::is_workspace_root(*ctx.workspace_dir, src_res.value))
         return fail<std::string>(ErrorCode::SandboxViolation, "Cannot move the workspace root directory.");

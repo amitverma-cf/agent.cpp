@@ -669,6 +669,11 @@ Result<std::vector<Tool>> connect_mcp_server(Session &session, const McpServerCo
         entry.second = std::move(expanded.value);
     }
 
+    if (resolved.sandbox.enabled) {
+        const std::string consumer = "mcp:" + config.name;
+        for (const PathGrant &g : session.config.path_grants)
+            if (g.consumer == "*" || g.consumer == consumer) (g.write ? resolved.sandbox.read_write_paths : resolved.sandbox.read_only_paths).push_back(g.path);
+    }
     if (session.config.mcp_launcher) session.config.mcp_launcher(resolved, session.config.mcp_launcher_user_data);
     LogSink sink{
         .fn = session.config.logger, .user_data = session.config.logger_user_data, .file = session.log_file, .mutex = session.log_mutex};

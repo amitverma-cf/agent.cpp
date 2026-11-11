@@ -89,6 +89,12 @@ void *attach_job_object(PreparedSandbox &prepared, void *process);
 bool label_low_integrity(const std::string &path, std::string &error);
 // A primary token of this process lowered to Low integrity, for CreateProcessAsUser. nullptr with `error` set on failure.
 void *create_low_integrity_token(std::string &error);
+// For a spawn: when the prepared sandbox uses Low integrity, creates the allowed folders, labels them and returns the Low
+// token for CreateProcessAsUser. Returns nullptr with `error` empty when the sandbox does not use one, and nullptr with `error`
+// set when it should but cannot (the caller must then not start the program). A folder that this user may not relabel (not
+// owned by them, for example one made by an administrator under C:\) cannot be confined: the program then starts WITHOUT the write
+// confinement and a warning says so (prepared.warnings), rather than being unable to run at all.
+void *low_integrity_token_for(PreparedSandbox &prepared, std::string &error);
 #endif
 
 } // namespace agent::hal

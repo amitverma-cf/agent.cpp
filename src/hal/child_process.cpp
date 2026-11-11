@@ -181,20 +181,11 @@ Result<std::unique_ptr<ChildProcess>> spawn_child(const SpawnOptions &options) {
 
     // Filesystem confinement: the child runs at Low integrity and only the allowed folders accept its writes. If that cannot be
     // set up the process is not started (a sandbox that silently does nothing is worse than none).
-    HANDLE low_token = nullptr;
-    if (prepared.value.low_integrity) {
-        std::string why;
-        for (const std::string &dir : prepared.value.low_write_paths) {
-            std::error_code mk;
-            std::filesystem::create_directories(dir, mk);
-            if (!agent::hal::label_low_integrity(dir, why)) break;
-        }
-        if (why.empty()) low_token = static_cast<HANDLE>(agent::hal::create_low_integrity_token(why));
-        if (why.empty() && !low_token) why = "no token";
-        if (!why.empty()) {
-            cleanup();
-            return R{.ok = false, .value = {}, .error = make_error(ErrorCode::SandboxViolation, "cannot confine '" + options.program + "' to its folders: " + why)};
-        }
+    std::string why;
+    HANDLE low_token = static_cast<HANDLE>(agent::hal::low_integrity_token_for(prepared.value, why));
+    if (!why.empty()) {
+        cleanup();
+        return R{.ok = false, .value = {}, .error = make_error(ErrorCode::SandboxViolation, "cannot confine '" + options.program + "' to its folders: " + why)};
     }
 
     PROCESS_INFORMATION pi{};

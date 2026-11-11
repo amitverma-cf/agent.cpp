@@ -254,6 +254,23 @@ struct SandboxPolicy {
     bool gpu = false;
 };
 
+// ---- Permission gate for paths outside the workspace --------------------------------------------------------------------
+// A sandboxed tool cannot touch a path outside the workspace and the system locations. A grant lets it; without one, the
+// gate (if the host set one) is asked. The sandbox is never simply switched off: the host decides, per path and per kind
+// of access, and can remember the answer.
+struct PathGrant {
+    std::string path;               // a file or a folder (covers everything below it)
+    bool write = false;             // false = read only; true = read and write
+    std::string consumer = "*";     // "*", "files" (the file tools), "run_command" or "mcp:<server name>"
+};
+struct PathAccessRequest {
+    std::string_view consumer;
+    std::string_view path;          // absolute
+    bool write;
+};
+enum class PathGateDecision { Deny, AllowOnce, AllowAlways };
+using PathGateFn = PathGateDecision (*)(const PathAccessRequest &request, void *user_data);
+
 namespace tools {
 
 struct WorkspaceContext {
@@ -264,6 +281,10 @@ struct WorkspaceContext {
     // Polled by run_command while it waits; non-zero stops the command and its child processes and
     // the result reports "cancelled":true. The default tool set points it at the Session's cancel flag.
     const volatile int32_t *cancel = nullptr;
+    // Paths outside the workspace (see Config::path_grants). `grants` is the session's own, growing list.
+    std::shared_ptr<std::vector<PathGrant>> grants;
+    PathGateFn gate = nullptr;
+    void *gate_user_data = nullptr;
 };
 
 std::vector<Tool> get_filesystem_tools(std::shared_ptr<WorkspaceContext> ctx);
@@ -449,6 +470,9 @@ using SecretResolverFn = Result<std::string> (*)(std::string_view text, const Se
 
 struct McpServerConfig; // defined with the MCP client API below
 
+
+
+
 struct Config {
     AiProvider provider = AiProvider::Mock;
     // AiProvider::Engine only: a registered engine name, or a path to an engine shared library.
@@ -486,6 +510,12 @@ struct Config {
     using McpLauncherFn = void (*)(McpServerConfig &server, void *user_data);
     McpLauncherFn mcp_launcher = nullptr;
     void *mcp_launcher_user_data = nullptr;
+    // Paths outside the workspace that sandboxed tools may use (file tools, run_command, MCP servers), and the gate that is
+    // asked for any other path. AllowAlways answers are added to the session's copy of the grants; persisting them is up to
+    // the host. Without a gate, only the grants apply.
+    std::vector<PathGrant> path_grants;
+    PathGateFn path_gate = nullptr;
+    void *path_gate_user_data = nullptr;
     bool enable_file_logging = false;
 
     // Concurrent engines only: worker arenas (one per thread) for the branches of a graph Parallel

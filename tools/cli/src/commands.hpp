@@ -62,6 +62,11 @@ int cmd_secret(const CommandLine &cl, Context &ctx);  // secret_cmd.cpp
 int cmd_mcp(const CommandLine &cl, Context &ctx);     // mcp_cmd.cpp
 Result<void> pull_and_register_engine(Context &ctx, std::vector<EngineEntry> &engines, const std::string &name, std::string_view repo, std::string_view tag);
 int cmd_runtime(const CommandLine &cl, Context &ctx); // runtime_cmd.cpp
+int cmd_sandbox(const CommandLine &cl, Context &ctx);  // sandbox_cmd.cpp
+std::vector<PathGrant> load_grants(const std::string &file);
+Result<void> save_grants(const std::string &file, const std::vector<PathGrant> &grants);
+std::vector<PathGrant> load_all_grants(const Context &ctx);                      // global + project
+PathGateDecision cli_path_gate(const PathAccessRequest &request, void *context); // asks on the terminal, `context` is the Context
 // Sets the hooks every CLI session shares: MCP servers started by npx / npm / node / uvx run on the private runtimes of the
 // chosen js_runtime (Config::mcp_launcher). `ctx` must outlive the session.
 void install_cli_hooks(Config &cfg, Context &ctx);

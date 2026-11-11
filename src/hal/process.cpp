@@ -85,9 +85,20 @@ Result<ProcessResult> run_shell_windows(std::string_view working_directory, std:
         si.hStdInput = nul;
     }
 
+    std::string why;
+    HANDLE low_token = static_cast<HANDLE>(low_integrity_token_for(sandbox, why));
+    if (!why.empty()) {
+        CloseHandle(read_pipe);
+        CloseHandle(write_pipe);
+        if (nul && nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
+        return fail<ProcessResult>(ErrorCode::SandboxViolation, "cannot confine the command to its folders: " + why);
+    }
     PROCESS_INFORMATION pi{};
-    BOOL created = CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED,
-                                  nullptr, wdir.empty() ? nullptr : wdir.c_str(), &si, &pi);
+    BOOL created = low_token ? CreateProcessAsUserW(low_token, nullptr, wcmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr,
+                                                    wdir.empty() ? nullptr : wdir.c_str(), &si, &pi)
+                             : CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED,
+                                              nullptr, wdir.empty() ? nullptr : wdir.c_str(), &si, &pi);
+    if (low_token) CloseHandle(low_token);
     CloseHandle(write_pipe);
     if (nul && nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
     if (!created) {
