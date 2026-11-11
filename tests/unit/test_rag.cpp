@@ -628,7 +628,9 @@ TEST_CASE("llama embeddings round trip through the sqlite-vec store", "[rag][lla
     REQUIRE(hits.ok);
     REQUIRE(hits.value.size() == 1);
     REQUIRE(hits.value[0].text.find("Rust") != std::string::npos);
-    REQUIRE(hits.value[0].similarity > 0.3f);
+    // The sqlite store answers with a hybrid (full-text + vector) query, so similarity is the fused rank score (about 1/60 per list),
+    // not a cosine: only its being positive is meaningful here.
+    REQUIRE(hits.value[0].similarity > 0.0f);
     std::filesystem::remove(db_path, ec);
 }
 
