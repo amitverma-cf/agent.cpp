@@ -116,3 +116,38 @@ is what limits how many models run together; the disk costs less than a third of
 
 **No effect:** `batch` / `ubatch` (LFM3, peak RSS 1987 MiB at 4096 context for 512/256/128/64; the footprint is the mapped weights
 plus the KV cache) and a q8 instead of the automatic KV type.
+
+## Qwen3.5-4B (MTP build), speculation, MTP, tool calling, LoRA, sandbox (4 vCPU, 8 GB, CPU only)
+
+**Graph suite:** Qwen3.5-4B Q5_K_M passes all 7 checks (pipeline 100 s, loop 23 s). TwIL-8B Q3 needed 186 s for the pipeline.
+
+**Speculation in our engine.** Hybrid models (Qwen3.5, LFM) cannot cut their recurrent state back, so the engine snapshots it before
+verifying a draft and restores it (then decodes the accepted prefix again) when part of the draft is rejected. Qwen3.5-4B on a
+request that repeats its input: 10.6 s to 5.5 s (15 rounds, 113 drafted tokens accepted), identical text.
+
+**MTP, measured with upstream `llama-cli --spec-type draft-mtp` (our engine does not drive the MTP head).** Generation speed in
+tokens/s on the same model: output that repeats the input 12.3 plain, 15.6 n-gram, 18.6 MTP (n=3, +51%); an open question 15.3 plain,
+14.4 n-gram, 12.3 MTP (-20%). On four CPU cores the draft passes cost about as much as they save, so MTP pays only for predictable
+output. It is not a default here; prompt-lookup speculation costs nothing when there is nothing to look up.
+
+**Function calling, BFCL v3 (`scripts/sandbox/bfcl_eval.py`, 25 cases per category, tool-call grammar on):** simple 80%, multiple 92%,
+parallel 84%, irrelevance (call nothing) 96%. The first run scored 0/25 on parallel calls: the engine had not enabled
+`parallel_tool_calls`, so the grammar allowed one call per reply. Fixed.
+
+**LoRA** (`ggml-org/LoRA-Qwen2.5-3B-Instruct-abliterated` on Qwen2.5-3B-Instruct Q4_K_M, greedy): our output at scale 1.0 is
+identical to upstream `llama-completion` ("mutex works in two sentences, the first sentence is the first, ..."): the degraded text is
+that adapter on that base, not the engine. At scale 0.5 both give a normal answer.
+
+**Sandbox red team on Linux (`scripts/sandbox/redteam.sh`), 14 of 14 as expected:** reading `/etc/shadow`, another folder, the models
+folder; writing `/tmp`, next to the workspace, the home folder, `../`; deleting outside; a symlink out of the workspace are all
+refused. Writing inside the workspace and the internet work. A write grant opens exactly that folder, and a read-only grant does not
+allow writing.
+
+**Every engine, one real model each:** image generation (sdxs, 4 s), OCR (GLM-OCR reads "Lighthouse" from the generated image), image
+description (SmolVLM and Qwen3.5-4B both describe the lighthouse), text embedding (bge, Qwen3-VL-Embedding-2B), reranking, ONNX
+embedding (MiniLM), TTS (sherpa Kokoro) and a round trip through Whisper, Parakeet and sherpa Whisper (all transcribe "The quick
+brown fox jumps over the lazy dog." exactly), VAD (Whisper/Silero, sherpa), 3D (TRELLIS: 22 423 vertices, 369 s, 3.5 GB), audio into
+an LLM (Voxtral answers "a fox" about the clip; asked to "transcribe" it refuses, a property of that model's instruction following).
+
+**Not supported:** video input (the llama engine has no video capability; frames can be sent as images), and images or audio into an
+embedding model (embed mode rejects `mmproj`). Julia (a native decision model) needs llama-server's `/v1/systemone`, not DECIDE.

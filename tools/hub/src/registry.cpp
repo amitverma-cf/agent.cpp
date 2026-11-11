@@ -12,6 +12,7 @@ namespace agent::hub {
 namespace {
 
 constexpr RegistryPart kQwen05[] = {{"Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M", ""}};
+constexpr RegistryPart kQwen35_4[] = {{"unsloth/Qwen3.5-4B-MTP-GGUF:Q5_K_M", ""}};
 constexpr RegistryPart kQwen3_17[] = {{"Qwen/Qwen3-1.7B-GGUF:Q8_0", ""}};
 constexpr RegistryPart kQwen3_4[] = {{"Qwen/Qwen3-4B-GGUF:Q4_K_M", ""}};
 constexpr RegistryPart kLlama1[] = {{"bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M", ""}};
@@ -43,6 +44,7 @@ constexpr RegistryPart kJulia[] = {{"ggml-org/Julia-1-GGUF:Q8_0", ""}};
 
 constexpr RegistryEntry kRegistry[] = {
     // alias, task, engine, parts, size MiB, engine options, notes, tested
+    {"qwen3.5-4b", "text_gen", "llama", kQwen35_4, 3704, "", "recommended all-round model for 8 GB: graph suite 7/7, function calling 88% on BFCL, image input (projector pulled automatically), prompt-lookup speculation 1.9x; has an MTP head", true},
     {"qwen2.5-0.5b", "text_gen", "llama", kQwen05, 469, "", "chat, tool calls, decide; the default test model", true},
     {"qwen3-1.7b", "text_gen", "llama", kQwen3_17, 1749, "", "thinking model; Q8_0", false},
     {"qwen3-4b", "text_gen", "llama", kQwen3_4, 2382, "", "best small tool-calling model that fits 8 GB", false},

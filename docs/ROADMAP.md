@@ -261,8 +261,8 @@ Watch list: audio.cpp as a meta-engine; llama.cpp native TTS / image gen when th
 - [x] Private `bun` / `uv` runtimes (`agent runtime`), `npx` / `uvx` mapped onto them, caches kept in the home; skills.sh and MCP registry clients (`agent skill`, `agent mcp search|add`)
 - [x] llama engine: LoRA adapters (`options.lora`), quantize (`options.mode: "tools"`), tool-call grammar from the chat template
 - [x] Hybrid retrieval: FTS5 + vectors with reciprocal rank fusion (`RagIndex::hybrid`)
-- [ ] Speculative decoding (n-gram, draft model) and MTP in the llama engine: not started
-- [ ] Windows sandbox beyond a Job Object (restricted token / low integrity / AppContainer): not started
+- [x] Prompt-lookup speculation in the llama engine, attention and hybrid models (1.8-1.9x on repeating output). MTP measured with upstream (+51% on predictable output, -20% on open output on 4 CPU cores); the engine does not drive the MTP head
+- [x] Windows write confinement for MCP servers and run_command (Low integrity level); reads and network are not restricted
 - [x] `agent engine add|rm|ls`, `agent model pull|rm|ls` (HF download with resume + checksum, licence prompt)
   - [x] model hub library `agent_hub` (`tools/hub/`, see [docs/api/hub.md](api/hub.md)): HF spec/quant resolution, download with redirects + Range resume + sha256, proxy/CA support, `models.json` catalogue, restricted-licence refusal; `agent_pull` example
   - [x] wire it into the `agent` binary as `agent model pull|rm|ls` with an interactive licence prompt (progress bar, Ctrl-C cancel + resume)
