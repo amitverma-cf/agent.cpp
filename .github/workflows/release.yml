@@ -53,14 +53,20 @@ jobs:
       - name: Dependencies (Windows)
         if: matrix.os_name == 'windows'
         shell: bash
-        run: choco install ninja -y --no-progress
+        run: |
+          choco install ninja -y --no-progress
+          "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install openssl:x64-windows
+
+      - name: Compiler environment (Windows)
+        if: matrix.os_name == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Configure
         shell: bash
         run: |
           extra=""
           if [ "${{ matrix.os_name }}" = "macos" ]; then extra="-DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)"; fi
-          if [ "${{ matrix.os_name }}" = "windows" ]; then extra="-DOPENSSL_ROOT_DIR=C:/Program Files/OpenSSL"; fi
+          if [ "${{ matrix.os_name }}" = "windows" ]; then extra="-DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows"; fi
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DAGENT_BUILD_CLI=ON -DAGENT_ENGINE_LLAMA=ON -DAGENT_BUILD_EXAMPLES=OFF \
             ${{ matrix.ggml }} $extra
@@ -89,6 +95,7 @@ jobs:
             base="$(basename "$f" .${{ matrix.lib_ext }})"
             cp "$f" "assets/${base}-${{ matrix.os_name }}-${{ matrix.arch }}.${{ matrix.lib_ext }}"
           done
+          if [ "${{ matrix.os_name }}" = "windows" ]; then cp "$VCPKG_INSTALLATION_ROOT"/installed/x64-windows/bin/{libssl-3-x64,libcrypto-3-x64}.dll "dist/${name}/"; fi
           cp LICENSE README.md "dist/${name}/"
           if [ "${{ matrix.os_name }}" = "windows" ]; then
             (cd dist && 7z a -tzip "../assets/${name}.zip" "${name}")

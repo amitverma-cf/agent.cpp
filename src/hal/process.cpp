@@ -28,7 +28,7 @@ namespace {
 bool cancel_requested(const volatile int32_t *cancel) {
     // Written with std::atomic_ref by request_cancel() (executor/turn_executor.cpp).
     return cancel != nullptr &&
-           std::atomic_ref<const int32_t>(*const_cast<const int32_t *>(cancel)).load(std::memory_order_relaxed) != 0;
+           std::atomic_ref<int32_t>(*const_cast<int32_t *>(cancel)).load(std::memory_order_relaxed) != 0;
 }
 
 #if defined(AGENT_HAL_WINDOWS)
