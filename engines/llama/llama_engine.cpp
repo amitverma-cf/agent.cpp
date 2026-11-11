@@ -404,6 +404,13 @@ class Batcher {
         for (const auto &opt : options) longest = std::max(longest, opt.size());
         llama_batch batch = llama_batch_init(static_cast<int32_t>(longest), 0, 1);
         bool ok = true;
+        // A recurrent / hybrid model cannot drop the tail of a sequence: the state after the prompt is saved and put back instead.
+        const bool snapshot = llama_model_is_recurrent(model) || llama_model_is_hybrid(model);
+        std::vector<uint8_t> snap;
+        if (snapshot) {
+            snap.resize(llama_state_seq_get_size(ctx, seq));
+            ok = llama_state_seq_get_data(ctx, snap.data(), snap.size(), seq) == snap.size();
+        }
         for (size_t o = 0; ok && o < options.size(); ++o) {
             const std::vector<llama_token> &opt = options[o];
             if (opt.size() < 2) continue;
@@ -421,7 +428,12 @@ class Batcher {
                 ok = logits != nullptr;
                 if (ok) logprobs[o] += token_logprob(logits, n_vocab, opt[i + 1]);
             }
-            llama_memory_seq_rm(llama_get_memory(ctx), seq, base, -1);
+            if (snapshot) {
+                llama_memory_seq_rm(llama_get_memory(ctx), seq, -1, -1);
+                ok = ok && llama_state_seq_set_data(ctx, snap.data(), snap.size(), seq) != 0;
+            } else {
+                llama_memory_seq_rm(llama_get_memory(ctx), seq, base, -1);
+            }
         }
         llama_batch_free(batch);
         return ok;
