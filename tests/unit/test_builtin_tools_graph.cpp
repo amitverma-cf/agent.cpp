@@ -341,6 +341,36 @@ TEST_CASE("automatic compression in run_turn under a graph uses the session's en
     CHECK(agent::get_stats(session).total_compressions >= 1);
 }
 
+TEST_CASE("history is compressed inside a tool loop, before the request that follows a large tool result", "[builtin_tools][graph][context_compressor]") {
+    std::filesystem::remove_all(kWorkspace);
+    std::filesystem::create_directories(kWorkspace);
+    { std::ofstream(ws_path("big.txt")) << std::string(3000, 'y'); }
+    auto cfg = base_config();
+    cfg.context_window = 1000;
+    cfg.max_tokens = 32;
+    auto session = open(cfg);
+
+    // Short turns first: the history stays below 70% of the window, so the start-of-turn check does nothing.
+    std::vector<agent::Graph> steps;
+    for (int i = 0; i < 3; ++i) {
+        auto n = agent_node("t" + std::to_string(i), "hello " + std::to_string(i));
+        n.history_key = "chat";
+        n.system_prompt = "You are X.";
+        steps.push_back(agent::make_graph(n));
+    }
+    // This turn calls a tool whose result is large: only the check inside the loop can see it.
+    auto reader = agent_node("reader", R"(call:read_file {"path":"big.txt"})", {"read_file"});
+    reader.history_key = "chat";
+    reader.system_prompt = "You are X.";
+    steps.push_back(agent::make_graph(reader));
+
+    agent::GraphRun run;
+    run.thread_id = "loop-compress";
+    auto res = agent::run_graph(session, agent::make_sequential("pipeline", std::move(steps)), run);
+    INFO(res.error.message);
+    REQUIRE(res.ok);
+    CHECK(run.state.histories.at("chat").stats.compressions >= 1);
+}
 TEST_CASE("compress_context with a process-isolated engine and a non-chat default task",
           "[builtin_tools][context_compressor][engine_host]") {
     auto cfg = base_config();

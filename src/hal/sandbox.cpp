@@ -565,6 +565,7 @@ struct AppContainerLaunch::Impl {
     SID_AND_ATTRIBUTES cap_attrs[2]{};
     SECURITY_CAPABILITIES sc{};
     std::vector<char> list;
+    std::vector<HANDLE> handles; // what the child may inherit
     bool list_ready = false;
     ~Impl() {
         if (list_ready) DeleteProcThreadAttributeList(reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(list.data()));
@@ -624,7 +625,8 @@ bool grant_container(PSID sid, const std::string &path, bool write, std::string 
 
 } // namespace
 
-std::unique_ptr<AppContainerLaunch> appcontainer_launch_for(PreparedSandbox &prepared, const std::vector<std::string> &extra_read, std::string &error) {
+std::unique_ptr<AppContainerLaunch> appcontainer_launch_for(PreparedSandbox &prepared, const std::vector<std::string> &extra_read, const std::vector<void *> &inherit_handles,
+                                                            std::string &error) {
     error.clear();
     if (!prepared.low_integrity) return nullptr;
     auto launch = std::make_unique<AppContainerLaunch>();
@@ -670,14 +672,20 @@ std::unique_ptr<AppContainerLaunch> appcontainer_launch_for(PreparedSandbox &pre
     im.sc.Capabilities = n_caps ? im.cap_attrs : nullptr;
     im.sc.CapabilityCount = n_caps;
 
+    for (void *h : inherit_handles)
+        if (h && h != INVALID_HANDLE_VALUE) im.handles.push_back(static_cast<HANDLE>(h));
+    const DWORD n_attrs = im.handles.empty() ? 1 : 2;
     SIZE_T size = 0;
-    InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+    InitializeProcThreadAttributeList(nullptr, n_attrs, 0, &size);
     im.list.assign(size, 0);
     auto *attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(im.list.data());
-    if (!InitializeProcThreadAttributeList(attrs, 1, 0, &size)) return fall_back("attribute list error " + std::to_string(GetLastError()));
+    if (!InitializeProcThreadAttributeList(attrs, n_attrs, 0, &size)) return fall_back("attribute list error " + std::to_string(GetLastError()));
     im.list_ready = true;
     if (!UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, &im.sc, sizeof(im.sc), nullptr, nullptr))
         return fall_back("attribute error " + std::to_string(GetLastError()));
+    if (!im.handles.empty() &&
+        !UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, im.handles.data(), im.handles.size() * sizeof(HANDLE), nullptr, nullptr))
+        return fall_back("handle list error " + std::to_string(GetLastError()));
     return launch;
 }
 

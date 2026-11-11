@@ -89,7 +89,7 @@ Result<ProcessResult> run_shell_windows(std::string_view working_directory, std:
 
     std::string why;
     // cmd.exe and the system folders are readable by every AppContainer; the working directory is the folder it works in.
-    auto container = appcontainer_launch_for(sandbox, {std::string(working_directory)}, why);
+    auto container = appcontainer_launch_for(sandbox, {std::string(working_directory)}, {write_pipe, nul}, why);
     HANDLE low_token = container || !why.empty() ? nullptr : static_cast<HANDLE>(low_integrity_token_for(sandbox, why));
     if (container) sie.lpAttributeList = static_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(container->attributes());
     if (!why.empty()) {

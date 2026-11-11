@@ -190,7 +190,7 @@ Result<std::unique_ptr<ChildProcess>> spawn_child(const SpawnOptions &options) {
         const auto exe = std::filesystem::path(options.program).parent_path();
         if (!exe.empty() && std::filesystem::exists(exe, ec)) readable.push_back(exe.string());
     }
-    auto container = agent::hal::appcontainer_launch_for(prepared.value, readable, why);
+    auto container = agent::hal::appcontainer_launch_for(prepared.value, readable, {in_r, out_w, err_w}, why);
     HANDLE low_token = container || !why.empty() ? nullptr : static_cast<HANDLE>(agent::hal::low_integrity_token_for(prepared.value, why));
     if (container) sie.lpAttributeList = static_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(container->attributes());
     if (!why.empty()) {

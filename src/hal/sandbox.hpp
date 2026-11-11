@@ -114,7 +114,10 @@ class AppContainerLaunch {
 // EXTENDED_STARTUPINFO_PRESENT. Returns nullptr with `error` empty when the sandbox does not use one or it cannot be set up
 // (a warning in prepared.warnings says why; the caller then falls back to low_integrity_token_for), and nullptr with `error` set
 // only for invalid input. extra_read: more folders to make readable (e.g. the folder of the program being started).
-std::unique_ptr<AppContainerLaunch> appcontainer_launch_for(PreparedSandbox &prepared, const std::vector<std::string> &extra_read, std::string &error);
+// inherit_handles: the only handles the child inherits (PROC_THREAD_ATTRIBUTE_HANDLE_LIST): its standard streams, nothing else the
+// parent holds. They must be inheritable and the process must be created with bInheritHandles = TRUE.
+std::unique_ptr<AppContainerLaunch> appcontainer_launch_for(PreparedSandbox &prepared, const std::vector<std::string> &extra_read, const std::vector<void *> &inherit_handles,
+                                                            std::string &error);
 #endif
 
 } // namespace agent::hal

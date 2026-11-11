@@ -115,6 +115,16 @@ static int count_text_tokens(Session &session, std::string_view text) {
     return static_cast<int>((text.size() + 3) / 4);
 }
 
+// Compresses the older history when the prompt would take more than 70% of the context window. The tools text goes into every
+// prompt next to the history, so it counts; so does the chat template's per-message overhead. `last_prompt_tokens` is what the
+// engine reported for the previous request of this turn (0 at the start): the engine's own count wins when it is higher.
+static void maybe_compress(Session &session, FlowMemory &state, int last_prompt_tokens = 0) {
+    int total = count_text_tokens(session, providers::injected_system_text(session));
+    for (const auto &msg : state.history) total += count_message_tokens(session, msg) + 8;
+    total = std::max(total, last_prompt_tokens);
+    if (total > session.config.context_window * 7 / 10 && state.history.size() > 6) compress_context(session, state);
+}
+
 static Result<void> prune_history_state(Session &session, FlowMemory &state) {
     // Engines get providers::injected_system_text() as an extra prompt segment (see
     // run_turn's need_tools_prefix/combined_system logic) that isn't part of state.history, so
@@ -311,17 +321,18 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
     }
 
     {
-        // The tools text goes into every prompt next to the history, so it counts toward the limit.
-        int total = count_text_tokens(session, providers::injected_system_text(session));
-        for (const auto &msg : state.history) total += count_message_tokens(session, msg) + 8; // + the chat template's role markers
-        if (total > session.config.context_window * 7 / 10 && state.history.size() > 6) compress_context(session, state);
+        maybe_compress(session, state);
     }
 
     std::string final_text;
     int tool_rounds = 0;
     bool loop = true;
 
+    bool first_pass = true;
     while (loop) {
+        // Inside a long tool loop the history grows with every call and result: compress it here too, not only at the start.
+        if (!first_pass) maybe_compress(session, state, state.stats.last.prompt_tokens + state.stats.last.completion_tokens);
+        first_pass = false;
         auto prune_res = prune_history_state(session, state);
         if (!prune_res.ok) return fail<std::string>(prune_res.error.code, prune_res.error.message);
 
