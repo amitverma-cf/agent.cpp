@@ -87,6 +87,12 @@ Engine::~Engine() {
 
 bool Engine::mtp_active() const { return impl_->mtp; }
 
+int Engine::count_tokens(const std::string &text) const {
+    const llama_model *model = llama_get_model(impl_->ctx->get_llama_context());
+    const int n = llama_tokenize(llama_model_get_vocab(model), text.data(), static_cast<int32_t>(text.size()), nullptr, 0, false, false);
+    return n < 0 ? -n : n;
+}
+
 std::unique_ptr<Engine> Engine::create(const Settings &s, std::string &error) {
     std::unique_ptr<Engine> engine(new Engine());
     Impl &im = *engine->impl_;
@@ -327,6 +333,7 @@ std::unique_ptr<Engine> Engine::create(const Settings &, std::string &error) {
 Engine::Engine() {}
 Engine::~Engine() {}
 bool Engine::mtp_active() const { return false; }
+int Engine::count_tokens(const std::string &text) const { return static_cast<int>(text.size() / 4 + 1); }
 bool Engine::chat(const std::string &, const volatile int32_t *, const std::function<void(const std::string &)> &, Result &, std::string &error) {
     error = "llama.cpp's own engine is not built into this plugin";
     return false;

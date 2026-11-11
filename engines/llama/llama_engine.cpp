@@ -2297,8 +2297,8 @@ const char *llama_last_error(void *instance) {
 
 int32_t llama_count_tokens(void *instance, agent_str text, int32_t *out_count) {
     auto *inst = static_cast<Instance *>(instance);
-    if (inst->up) { // the engine keeps its vocabulary to itself: a close estimate
-        *out_count = static_cast<int32_t>(text.size / 4 + 1);
+    if (inst->up) {
+        *out_count = inst->up->count_tokens(std::string(sv(text)));
         return AGENT_OK;
     }
     const llama_vocab *vocab = llama_model_get_vocab(inst->batcher.model);

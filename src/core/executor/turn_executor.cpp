@@ -311,8 +311,9 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &state, std
     }
 
     {
-        int total = 0;
-        for (const auto &msg : state.history) total += count_message_tokens(session, msg);
+        // The tools text goes into every prompt next to the history, so it counts toward the limit.
+        int total = count_text_tokens(session, providers::injected_system_text(session));
+        for (const auto &msg : state.history) total += count_message_tokens(session, msg) + 8; // + the chat template's role markers
         if (total > session.config.context_window * 7 / 10 && state.history.size() > 6) compress_context(session, state);
     }
 

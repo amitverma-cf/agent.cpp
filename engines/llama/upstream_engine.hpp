@@ -59,6 +59,7 @@ class Engine {
               std::string &error);
 
     bool mtp_active() const;
+    int count_tokens(const std::string &text) const; // with the model's own tokenizer
 
   private:
     Engine();

@@ -88,8 +88,10 @@ Result<void> compress_context(Session &session, FlowMemory &state, size_t keep_r
         return ok();
     }
 
-    std::string prompt = "Summarize the following conversation concisely. "
-                         "Preserve all key facts, decisions, code snippets, and tool outputs:\n\n";
+    std::string prompt =
+        "Summarize the following conversation so it can replace it. Start with a list of everything the user told or asked to remember "
+        "(names, codes, numbers, preferences, instructions, constraints), copied exactly, one per line. Then add a short account of "
+        "the rest: decisions, code snippets and tool outputs that still matter. Drop small talk and repeated answers.\n\n";
     for (size_t i = start; i < compress_end; ++i) {
         const auto &msg = state.history[i];
         prompt += msg.role;
