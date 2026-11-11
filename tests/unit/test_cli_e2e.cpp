@@ -295,4 +295,41 @@ TEST_CASE("cli e2e: global options choose the home", "[cli_e2e]") {
     CHECK(h.run("-h").code == 0);
 }
 
+#if defined(AGENT_TEST_MOCK_ALL_ENGINE_PATH)
+TEST_CASE("cli e2e: task drives every capability of the mock-all engine", "[cli_e2e][mock_all]") {
+    Home h;
+    const std::string audio = (h.root / "in.wav").string(), image = (h.root / "in.png").string();
+    std::ofstream(audio, std::ios::binary) << "RIFFxxxx";
+    std::ofstream(image, std::ios::binary) << "\x89PNG";
+    const std::string eng = std::string(" -e ") + quote(AGENT_TEST_MOCK_ALL_ENGINE_PATH) + " -m " + quote(h.model.string()) + " --inprocess --workspace " + quote(h.workspace.string());
+    auto task = [&](const std::string &args) { return h.run("task " + args + eng); };
+    auto expect = [&](const std::string &args, const std::string &needle, int code = 0) {
+        auto r = task(args);
+        INFO(args << " -> " << r.out);
+        CHECK(r.code == code);
+        CHECK(has(r, needle));
+    };
+    expect("asr --file " + quote(audio), "mock transcript");
+    expect("asr", "needs an audio part", 1);
+    expect("ocr --file " + quote(image), "mock ocr text");
+    expect("tts --text hi", "audio/wav");
+    expect("vad --file " + quote(audio), "segments");
+    expect("diarize --file " + quote(audio), "speaker");
+    expect("image_gen --text cat", "image/png");
+    expect("video_gen --text cat", "video/mp4");
+    expect("mesh_gen --file " + quote(image), "model/gltf-binary");
+    expect("embed --text hello", "embedding");
+    expect("rerank --text \"red fox\" --doc \"a red fox\" --doc blue", "score[0]");
+    expect("decide --text q --params \"{\\\"mode\\\":\\\"yesno\\\"}\"", "\"yes\"");
+    expect("classify --text q --params \"{\\\"mode\\\":\\\"yesno\\\"}\"", "probs");
+    expect("generic --tensor x:f32:2=1,2", "tensor: x");
+    expect("ocr --text mock-error", "simulated engine failure", 1);
+    expect("ocr --text mock-empty", "task: ocr");
+    expect("ocr --text mock-slow", "slow task finished");
+    // Out of process, through the engine host.
+    auto isolated = h.run("task embed -e " + quote(AGENT_TEST_MOCK_ALL_ENGINE_PATH) + " -m " + quote(h.model.string()) + " --text hello --workspace " + quote(h.workspace.string()));
+    CHECK(has(isolated, "embedding"));
+}
+#endif
+
 #endif

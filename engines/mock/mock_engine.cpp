@@ -26,6 +26,8 @@
 //   - "barrier:<tag>:N" returns only once N runs with the same tag are inside run() at the same time
 //     (fails after 5 s): proof that requests overlap
 //
+// For non-chat tasks the texts "mock-error", "mock-empty" and "mock-slow" simulate a failing, an empty and a slow cancellable call.
+//
 // A third build, agent-engine-mock-all (name "mock_all", AGENT_MOCK_ALL), declares every capability and
 // answers each non-chat task with deterministic stand-in output (tiny WAV / PNG / GLB files, f32 embedding,
 // score and probs tensors, ASR/OCR text, VAD and diarization segments), so graphs, the CLI and the engine
@@ -299,14 +301,17 @@ std::vector<std::string> decide_options(std::string_view pj, std::string *mode) 
 }
 
 int32_t run_other_task(const agent_request *req, agent_response *resp, MockOutput *o) {
-    std::vector<std::string_view> texts;
+    std::vector<std::string_view> texts, all_texts; // texts: the last user message; all_texts: every user message (rerank: query, then documents)
     std::string first_file;
     for (size_t i = 0; i < req->n_messages; ++i) {
         if (sv(req->messages[i].role) != "user") continue;
         texts.clear();
         for (size_t p = 0; p < req->messages[i].n_parts; ++p) {
             const agent_part &part = req->messages[i].parts[p];
-            if (part.kind == AGENT_PART_TEXT) texts.push_back(sv(part.text));
+            if (part.kind == AGENT_PART_TEXT) {
+                texts.push_back(sv(part.text));
+                all_texts.push_back(sv(part.text));
+            }
             else if (part.kind == AGENT_PART_FILE && first_file.empty()) first_file = std::string(sv(part.path));
         }
     }
@@ -334,6 +339,27 @@ int32_t run_other_task(const agent_request *req, agent_response *resp, MockOutpu
         return AGENT_OK;
     };
 
+    // Failure scenarios for any non-chat task: a text part that is exactly "mock-error" fails the call (a decode error, like a model
+    // that cannot process its input), "mock-empty" succeeds with no output parts, "mock-slow" reports progress while honouring cancel.
+    for (std::string_view t : texts) {
+        if (t == "mock-error") {
+            o->error = "mock: simulated engine failure";
+            return AGENT_ERR_DECODE_FAILED;
+        }
+        if (t == "mock-empty") return done();
+        if (t == "mock-slow") {
+            for (uint64_t step = 1; step <= 100; ++step) {
+                if (req->cancel && *req->cancel) {
+                    o->error = "mock: cancelled";
+                    return AGENT_ERR_CANCELLED;
+                }
+                if (req->on_progress) req->on_progress(req->user_data, step, 100);
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            add_text(o, "slow task finished");
+            return done();
+        }
+    }
     switch (req->task) {
     case AGENT_CAP_ASR:
         if (first_file.empty()) {
@@ -390,9 +416,10 @@ int32_t run_other_task(const agent_request *req, agent_response *resp, MockOutpu
     }
     case AGENT_CAP_EMBED: {
         // One L2-normalised "embedding" tensor f32 [dim] per TEXT part, in order (llama: dim = n_embd).
-        for (size_t t = 0; t < std::max<size_t>(1, texts.size()); ++t) {
+        // Across every user message, like the llama engine (embed() sends one message per text).
+        for (size_t t = 0; t < std::max<size_t>(1, all_texts.size()); ++t) {
             std::vector<float> v(8, 0.0f);
-            const std::string_view s = t < texts.size() ? texts[t] : std::string_view();
+            const std::string_view s = t < all_texts.size() ? all_texts[t] : std::string_view();
             for (size_t i = 0; i < s.size(); ++i)
                 v[i % 8] += static_cast<float>(static_cast<unsigned char>(s[i])) / 255.0f;
             float norm = 0;
@@ -405,14 +432,14 @@ int32_t run_other_task(const agent_request *req, agent_response *resp, MockOutpu
     }
     case AGENT_CAP_RERANK: {
         // First TEXT = query, later TEXT parts = documents; one "scores" tensor f32 [n_docs].
-        if (texts.size() < 2) {
+        if (all_texts.size() < 2) {
             o->error = "mock: rerank needs a query and at least one document text part";
             return AGENT_ERR_INVALID_CONFIG;
         }
-        const auto q = split_words(texts[0]);
+        const auto q = split_words(all_texts[0]);
         std::vector<float> scores;
-        for (size_t d = 1; d < texts.size(); ++d) {
-            const auto dw = split_words(texts[d]);
+        for (size_t d = 1; d < all_texts.size(); ++d) {
+            const auto dw = split_words(all_texts[d]);
             size_t hit = 0;
             for (const auto &a : q)
                 for (const auto &b : dw)

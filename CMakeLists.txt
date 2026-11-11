@@ -309,6 +309,7 @@ add_executable(test_agent
     tests/unit/test_skills.cpp
     tests/unit/test_permissions.cpp
     tests/unit/test_engines.cpp
+    tests/unit/test_mock_all.cpp
     tests/unit/test_engine_host.cpp
     tests/unit/test_engine_sdcpp.cpp
     tests/unit/test_graph.cpp
@@ -352,9 +353,10 @@ if(AGENT_BUILD_CLI)
     add_dependencies(test_agent agent_cli_bin)
 endif()
 target_compile_definitions(test_agent PRIVATE AGENT_TEST_MOCK_ENGINE_PATH="$<TARGET_FILE:agent-engine-mock>"
+                                              AGENT_TEST_MOCK_ALL_ENGINE_PATH="$<TARGET_FILE:agent-engine-mock-all>"
                                               AGENT_TEST_MOCK_CONCURRENT_ENGINE_PATH="$<TARGET_FILE:agent-engine-mock-concurrent>"
                                               AGENT_TEST_ENGINE_HOST_PATH="$<TARGET_FILE:agent-engine-host>")
-add_dependencies(test_agent agent-engine-mock agent-engine-mock-concurrent agent-engine-host)
+add_dependencies(test_agent agent-engine-mock agent-engine-mock-concurrent agent-engine-mock-all agent-engine-host)
 
 # Tiny MCP stdio server the MCP client tests talk to.
 add_executable(fake_mcp_server tests/helpers/fake_mcp_server.cpp)
