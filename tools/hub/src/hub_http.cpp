@@ -118,7 +118,10 @@ Result<Reply> http_get(std::string url, const httplib::Headers &extra, const Htt
         if (!parsed.ok) return fail<Reply>(parsed.error.code, parsed.error.message);
         const Url &u = parsed.value;
 
-        httplib::Client cli(u.scheme + "://" + u.host + ":" + std::to_string(u.port));
+        // The default port stays out of the address: httplib then sends "Host: host", not "Host: host:443". Signed CDN URLs (GitHub release
+        // assets) are checked against the Host header and answer 400 to the second form.
+        const bool default_port = (u.scheme == "https" && u.port == 443) || (u.scheme == "http" && u.port == 80);
+        httplib::Client cli(u.scheme + "://" + u.host + (default_port ? std::string() : ":" + std::to_string(u.port)));
         if (!cli.is_valid()) return fail<Reply>(ErrorCode::NetworkError, "hub: cannot create HTTP client for " + u.host);
         cli.set_follow_location(false);
         cli.set_connection_timeout(http.connect_timeout_sec, 0);
@@ -351,15 +354,15 @@ Result<std::string> http_get_text(std::string_view url, const HttpOptions &http,
         return true;
     };
     httplib::Headers headers{{"User-Agent", "agent-cpp"}, {"Accept", "application/json, text/plain, */*"}};
-    // A release's CDN can answer 400 / 5xx for the first minutes after it was published, and any network can drop a request: try
+    // A release's CDN can answer 400 / 5xx for the first minutes after it was published, and any network can drop a request: 
     // up to four times, waiting 1, 3 and 8 seconds, before giving up.
-    static constexpr int kWaitSeconds[] = {1, 3, 8};
+    static constexpr int kWaitSeconds[] = {2, 5, 15, 30};
     Result<Reply> reply = fail<Reply>(ErrorCode::NetworkError, "no attempt");
     for (int attempt = 0;; ++attempt) {
         body.text.clear();
         reply = http_get(std::string(url), headers, http, sink);
         const bool transient = !reply.ok || reply.value.status == 400 || reply.value.status == 429 || reply.value.status >= 500;
-        if (!transient || attempt >= 3) break;
+        if (!transient || attempt >= 4) break;
         std::this_thread::sleep_for(std::chrono::seconds(kWaitSeconds[attempt]));
     }
     if (!reply.ok) return fail<std::string>(reply.error.code, reply.error.message);
@@ -415,7 +418,7 @@ Result<void> download_file(std::string_view url, const std::string &dest, const 
 namespace {
 
 // "owner/repo:*": every file of the repo (a speech or 3D model is a folder of files, not one GGUF), narrowed
-// by PullOptions::include (a file is kept when its path contains any of the strings). The catalogue entry
+// by PullOptions::include (a file is kept when its path contains any of the strings). The catalogue en
 // points at the folder.
 Result<CatalogEntry> pull_whole_repo(const ModelSpec &spec, const RepoInfo &ri, const PullOptions &opts) {
     std::string license = ri.license.empty() ? std::string("unknown") : ri.license;
