@@ -167,6 +167,7 @@ TEST_CASE("path gate: run_command writes outside the workspace only with a grant
 
     agent::Config cfg;
     cfg.tool_sandbox.enabled = true;
+    cfg.tool_sandbox.allow_tmp = false; // the fixture lives under the temp directory, which the sandbox otherwise leaves writable
     cfg.sandbox_filesystem = true;
     {
         agent::Session session = f.open(cfg);
