@@ -9,6 +9,7 @@
 #include "log.h"
 #include "server-context.h"
 #include "server-http.h"
+#include "gguf.h"
 #include "speculative.h"
 
 #include <algorithm>
@@ -63,6 +64,20 @@ bool gguf_has_mtp(const std::string &path) {
     } catch (...) {
     }
     return false;
+}
+
+bool gguf_is_decision(const std::string &path) {
+    gguf_init_params ip{true, nullptr};
+    gguf_context *g = gguf_init_from_file(path.c_str(), ip);
+    if (!g) return false;
+    bool found = false;
+    const int64_t arch = gguf_find_key(g, "general.architecture");
+    if (arch >= 0 && gguf_get_kv_type(g, arch) == GGUF_TYPE_STRING) {
+        const std::string prefix = std::string(gguf_get_val_str(g, arch)) + ".decision.";
+        for (int64_t i = 0, n = gguf_get_n_kv(g); i < n && !found; ++i) found = std::strncmp(gguf_get_key(g, i), prefix.c_str(), prefix.size()) == 0;
+    }
+    gguf_free(g);
+    return found;
 }
 
 struct Engine::Impl {
@@ -254,6 +269,34 @@ bool Engine::chat(const std::string &body, const volatile int32_t *cancel, const
     return false;
 }
 
+bool Engine::systemone(const std::string &body, std::string &out, std::string &error) {
+    try {
+        server_http_req req{{}, {}, "/v1/systemone", "", body, {}, std::function<bool()>([] { return false; })};
+        server_http_res_ptr res = impl_->routes->post_systemone(req);
+        if (!res) {
+            error = "llama.cpp's engine returned no answer";
+            return false;
+        }
+        out = res->data;
+        if (res->status != 200) {
+            try {
+                const njson j = njson::parse(out);
+                error = j.contains("error") ? j["error"].value("message", out) : out;
+            } catch (...) {
+                error = out;
+            }
+            return false;
+        }
+        res->on_complete();
+        return true;
+    } catch (const std::exception &e) {
+        error = std::string("llama.cpp's engine: ") + e.what();
+    } catch (...) {
+        error = "llama.cpp's engine failed";
+    }
+    return false;
+}
+
 std::string chat_body_from_request(const agent_request *req, int max_tokens, float temperature, bool stream, std::string &error) {
     njson body = njson::object();
     njson messages = njson::array();
@@ -326,6 +369,11 @@ std::string chat_body_from_request(const agent_request *req, int max_tokens, flo
 namespace upstream {
 
 bool gguf_has_mtp(const std::string &) { return false; }
+bool gguf_is_decision(const std::string &) { return false; }
+bool Engine::systemone(const std::string &, std::string &, std::string &error) {
+    error = "llama.cpp's own engine is not built into this plugin";
+    return false;
+}
 std::unique_ptr<Engine> Engine::create(const Settings &, std::string &error) {
     error = "this build of the llama plugin does not include llama.cpp's own engine (AGENT_LLAMA_UPSTREAM=OFF)";
     return nullptr;

@@ -1420,57 +1420,8 @@ common_chat_msg *last_user(common_chat_templates_inputs &in) {
     return nullptr;
 }
 
-// AGENT_CAP_DECIDE: the request's messages hold the question (and optional images, with an mmproj);
-// params_json picks the answers: {"mode":"choice","options":[...]}, {"mode":"score","scale":[1,5]} or
-// {"mode":"yesno"}. Each answer is scored as the reply to the rendered chat by the sum of its tokens'
-// log-probabilities (plus the end-of-turn token), and the scores are normalized with a softmax.
-// Returns a TEXT part with a JSON summary and a "probs" tensor (f32 [n_options]) in option order.
-int32_t run_decide(Instance &inst, const agent_request *req, agent_response *resp) {
-    Batcher &b = inst.batcher;
-    if (const std::string native = native_decision_type(b.model); !native.empty())
-        return inst.fail(AGENT_ERR_UNSUPPORTED, "llama: this is a native decision model (" + native +
-                                                    ", System One format); serve it with llama-server's /v1/systemone. DECIDE here "
-                                                    "scores options with an instruct model's LM head");
-    DecideParams p;
-    std::string error;
-    if (int32_t rc = parse_decide_params(req, p, error); rc != AGENT_OK) return inst.fail(rc, error);
-
-    common_chat_templates_inputs in = build_inputs(req, inst.mtmd ? mtmd_default_marker() : nullptr);
-    if (p.instructions) {
-        common_chat_msg *user = last_user(in);
-        if (!user) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: DECIDE needs a user message with the question");
-        user->content += decide_instruction(p);
-    }
-    TaskPrompt prompt;
-    common_chat_session session;
-    if (int32_t rc = render_task_prompt(inst, req, std::move(in), prompt, session, error); rc != AGENT_OK) return inst.fail(rc, error);
-
-    const llama_vocab *vocab = llama_model_get_vocab(b.model);
-    llama_token end = llama_vocab_eot(vocab);
-    if (end == LLAMA_TOKEN_NULL) end = llama_vocab_eos(vocab);
-    std::vector<std::vector<llama_token>> option_tokens;
-    size_t longest = 0;
-    for (const std::string &o : p.options) {
-        std::vector<llama_token> t = tokenize_text(vocab, o, false, false);
-        if (t.empty()) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: option \"" + o + "\" has no tokens");
-        if (p.end && end != LLAMA_TOKEN_NULL) t.push_back(end);
-        longest = std::max(longest, t.size());
-        option_tokens.push_back(std::move(t));
-    }
-    if (longest > llama_n_batch(b.ctx)) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: a DECIDE option is longer than n_batch tokens");
-    if (prompt.n_tokens + static_cast<int>(longest) >= b.seq_ctx)
-        return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: prompt is " + std::to_string(prompt.n_tokens) + " tokens (+" +
-                                                       std::to_string(longest) + " for the longest option) but context_window is " +
-                                                       std::to_string(b.seq_ctx));
-    if (req->cancel && *req->cancel) return inst.fail(AGENT_ERR_CANCELLED, "llama: cancelled");
-
-    llama_seq_id seq = 0;
-    if (!b.acquire_seq(seq)) return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: no free sequence slot (raise max_parallel_subagents)");
-    std::vector<double> logprobs;
-    const bool scored = b.score_options(seq, prompt.tokens, inst.mtmd.get(), prompt.chunks.ptr.get(), option_tokens, logprobs);
-    b.release_seq(seq);
-    if (!scored) return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: decode failed while scoring the options");
-
+// Shapes the answer of a DECIDE request from the options' log-probabilities (softmax-normalized here).
+int32_t decide_finish(Instance &inst, const DecideParams &p, const std::vector<double> &logprobs, int n_prompt, int completion, agent_response *resp) {
     // Softmax over the options' sequence log-probabilities.
     const double max = *std::max_element(logprobs.begin(), logprobs.end());
     std::vector<double> probs(logprobs.size());
@@ -1523,10 +1474,136 @@ int32_t run_decide(Instance &inst, const agent_request *req, agent_response *res
     out.parts.insert(out.parts.begin(), text);
     resp->message.parts = out.parts.data();
     resp->message.n_parts = out.parts.size();
+    resp->usage = agent_usage{n_prompt, completion};
+    return AGENT_OK;
+}
+
+// DECIDE on a native decision model (System One): the question goes to llama.cpp's /v1/systemone handler in process. The last
+// user message is the state; the options become a choice question (yes/no too) or a score question.
+int32_t run_decide_native(Instance &inst, const agent_request *req, agent_response *resp) {
+    DecideParams p;
+    std::string error;
+    if (int32_t rc = parse_decide_params(req, p, error); rc != AGENT_OK) return inst.fail(rc, error);
+    std::string state;
+    for (size_t i = req->n_messages; i-- > 0 && state.empty();)
+        if (sv(req->messages[i].role) == "user")
+            for (size_t k = 0; k < req->messages[i].n_parts; ++k)
+                if (req->messages[i].parts[k].kind == AGENT_PART_TEXT) state += std::string(sv(req->messages[i].parts[k].text));
+    if (state.empty()) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: DECIDE needs a user message with the question");
+    // params.instructions is the question the model answers about the state (the System One "instructions").
+    std::string instructions = p.mode == DecideMode::Score ? "Rate the state." : "Which option best describes the state?";
+    {
+        simdjson::ondemand::parser ip;
+        simdjson::padded_string ij(sv(req->params_json));
+        simdjson::ondemand::document idoc;
+        std::string_view text;
+        if (!ip.iterate(ij).get(idoc) && !idoc["instructions"].get_string().get(text) && !text.empty()) instructions = std::string(text);
+    }
+    std::string ins_json;
+    append_json_string(ins_json, instructions);
+    std::string q = "{\"state\":";
+    append_json_string(q, state);
+    q += ",\"questions\":{\"q\":{";
+    if (p.mode == DecideMode::Score) {
+        q += "\"type\":\"score\",\"instructions\":" + ins_json + ",\"criteria\":[";
+        for (size_t i = 0; i < p.options.size(); ++i) {
+            if (i) q += ',';
+            append_json_string(q, p.options[i]);
+        }
+        q += "]";
+    } else {
+        q += "\"type\":\"choice\",\"instructions\":" + ins_json + ",\"criteria\":{";
+        for (size_t i = 0; i < p.options.size(); ++i) {
+            if (i) q += ',';
+            append_json_string(q, p.options[i]);
+            q += ":null";
+        }
+        q += "}";
+    }
+    q += "}}}";
+    std::string out;
+    if (!inst.up->systemone(q, out, error)) return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: " + error);
+    simdjson::ondemand::parser parser;
+    simdjson::padded_string json(out);
+    simdjson::ondemand::document doc;
+    std::vector<double> logprobs;
+    int n_prompt = 0;
+    if (!parser.iterate(json).get(doc)) {
+        simdjson::ondemand::object probs;
+        if (!doc["answers"]["q"]["probabilities"].get_object().get(probs)) {
+            std::map<std::string, double> by_key;
+            for (auto field : probs) {
+                std::string_view key;
+                double v = 0;
+                if (!field.unescaped_key().get(key) && !field.value().get_double().get(v)) by_key[std::string(key)] = v;
+            }
+            for (size_t i = 0; i < p.options.size(); ++i) {
+                const std::string key = p.mode == DecideMode::Score ? std::to_string(i) : p.options[i];
+                auto it = by_key.find(key);
+                logprobs.push_back(std::log(std::max(it == by_key.end() ? 0.0 : it->second, 1e-12)));
+            }
+        }
+        int64_t t = 0;
+        if (!doc["usage"]["input_tokens"].get_int64().get(t)) n_prompt = static_cast<int>(t);
+    }
+    if (logprobs.size() != p.options.size()) return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: the decision model's answer has no probabilities: " + out.substr(0, 200));
+    return decide_finish(inst, p, logprobs, n_prompt, 0, resp);
+}
+
+// AGENT_CAP_DECIDE: the request's messages hold the question (and optional images, with an mmproj);
+// params_json picks the answers: {"mode":"choice","options":[...]}, {"mode":"score","scale":[1,5]} or
+// {"mode":"yesno"}. Each answer is scored as the reply to the rendered chat by the sum of its tokens'
+// log-probabilities (plus the end-of-turn token), and the scores are normalized with a softmax.
+// Returns a TEXT part with a JSON summary and a "probs" tensor (f32 [n_options]) in option order.
+int32_t run_decide(Instance &inst, const agent_request *req, agent_response *resp) {
+    Batcher &b = inst.batcher;
+    if (const std::string native = native_decision_type(b.model); !native.empty())
+        return inst.fail(AGENT_ERR_UNSUPPORTED, "llama: this is a native decision model (" + native +
+                                                    ", System One format); serve it with llama-server's /v1/systemone. DECIDE here "
+                                                    "scores options with an instruct model's LM head");
+    DecideParams p;
+    std::string error;
+    if (int32_t rc = parse_decide_params(req, p, error); rc != AGENT_OK) return inst.fail(rc, error);
+
+    common_chat_templates_inputs in = build_inputs(req, inst.mtmd ? mtmd_default_marker() : nullptr);
+    if (p.instructions) {
+        common_chat_msg *user = last_user(in);
+        if (!user) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: DECIDE needs a user message with the question");
+        user->content += decide_instruction(p);
+    }
+    TaskPrompt prompt;
+    common_chat_session session;
+    if (int32_t rc = render_task_prompt(inst, req, std::move(in), prompt, session, error); rc != AGENT_OK) return inst.fail(rc, error);
+
+    const llama_vocab *vocab = llama_model_get_vocab(b.model);
+    llama_token end = llama_vocab_eot(vocab);
+    if (end == LLAMA_TOKEN_NULL) end = llama_vocab_eos(vocab);
+    std::vector<std::vector<llama_token>> option_tokens;
+    size_t longest = 0;
+    for (const std::string &o : p.options) {
+        std::vector<llama_token> t = tokenize_text(vocab, o, false, false);
+        if (t.empty()) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: option \"" + o + "\" has no tokens");
+        if (p.end && end != LLAMA_TOKEN_NULL) t.push_back(end);
+        longest = std::max(longest, t.size());
+        option_tokens.push_back(std::move(t));
+    }
+    if (longest > llama_n_batch(b.ctx)) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: a DECIDE option is longer than n_batch tokens");
+    if (prompt.n_tokens + static_cast<int>(longest) >= b.seq_ctx)
+        return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: prompt is " + std::to_string(prompt.n_tokens) + " tokens (+" +
+                                                       std::to_string(longest) + " for the longest option) but context_window is " +
+                                                       std::to_string(b.seq_ctx));
+    if (req->cancel && *req->cancel) return inst.fail(AGENT_ERR_CANCELLED, "llama: cancelled");
+
+    llama_seq_id seq = 0;
+    if (!b.acquire_seq(seq)) return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: no free sequence slot (raise max_parallel_subagents)");
+    std::vector<double> logprobs;
+    const bool scored = b.score_options(seq, prompt.tokens, inst.mtmd.get(), prompt.chunks.ptr.get(), option_tokens, logprobs);
+    b.release_seq(seq);
+    if (!scored) return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: decode failed while scoring the options");
+
     int completion = 0;
     for (const auto &t : option_tokens) completion += static_cast<int>(t.size());
-    resp->usage = agent_usage{prompt.n_tokens, completion};
-    return AGENT_OK;
+    return decide_finish(inst, p, logprobs, prompt.n_tokens, completion, resp);
 }
 
 // AGENT_LLAMA_TRACE=1 prints how many prompt tokens each request found already in the KV cache.
@@ -1866,7 +1943,8 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
 
     // A model whose file carries a multi-token-prediction head runs on llama.cpp's own engine, which drives the head.
     // Nothing names a model: llama.cpp looks for the head's tensors in the file.
-    if (mode == Mode::Generate && use_mtp && upstream::gguf_has_mtp(model_str)) {
+    const bool native_decision = mode == Mode::Generate && upstream::gguf_is_decision(model_str); // System One model: only llama.cpp's engine runs it
+    if (mode == Mode::Generate && ((use_mtp && upstream::gguf_has_mtp(model_str)) || native_decision)) {
         upstream::Settings us;
         us.model = model_str;
         us.mmproj = mmproj;
@@ -2123,6 +2201,7 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
         if (req->task != AGENT_CAP_GENERIC) return inst->fail(AGENT_ERR_UNSUPPORTED, "llama: an instance created with mode \"tools\" only runs GENERIC requests");
         return run_tools(*inst, req, resp);
     }
+    if (inst->up && req->task == AGENT_CAP_DECIDE) return run_decide_native(*inst, req, resp);
     if (inst->up) {
         if (req->task != AGENT_CAP_TEXT_GEN)
             return inst->fail(AGENT_ERR_UNSUPPORTED, "llama: this model runs on llama.cpp's MTP engine, which does text generation only (set options.mtp=false for other tasks)");

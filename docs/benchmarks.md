@@ -150,4 +150,4 @@ brown fox jumps over the lazy dog." exactly), VAD (Whisper/Silero, sherpa), 3D (
 an LLM (Voxtral answers "a fox" about the clip; asked to "transcribe" it refuses, a property of that model's instruction following).
 
 **Not supported:** video input (the llama engine has no video capability; frames can be sent as images), and images or audio into an
-embedding model (embed mode rejects `mmproj`). Julia (a native decision model) needs llama-server's `/v1/systemone`, not DECIDE.
+embedding model (embed mode rejects `mmproj`). Julia (a native decision model) is answered through llama.cpp's `/v1/systemone` handler, called in process.

@@ -71,7 +71,7 @@ constexpr RegistryEntry kRegistry[] = {
     {"minilm-onnx", "generic", "onnx", kMiniLm, 22, "", "feed input_ids / attention_mask / token_type_ids tensors", true},
     {"sherpa-whisper-tiny.en", "asr", "sherpa", kSherpaWhisper, 99, "", "folder model; int8 encoder/decoder", true},
     {"trellis-coarse", "mesh_gen", "trellis", kTrellis, 3300, "", "image to 3D, coarse path; ~6 min and 3.5 GB RAM on 4 CPU cores", true},
-    {"julia-1", "decide", "llama", kJulia, 160, "", "native System One decision model; NOT runnable in-process yet", false},
+    {"julia-1", "decide", "llama", kJulia, 160, "", "native System One decision model; runs in process through llama.cpp's own handler", false},
 };
 
 } // namespace

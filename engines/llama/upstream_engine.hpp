@@ -47,6 +47,8 @@ struct Result {
 
 // True when the GGUF has a multi-token-prediction head (llama.cpp's own check).
 bool gguf_has_mtp(const std::string &path);
+// True when the GGUF is a native decision model (System One): its metadata has "<arch>.decision.*" keys, as llama.cpp reads them.
+bool gguf_is_decision(const std::string &path);
 
 class Engine {
   public:
@@ -58,6 +60,8 @@ class Engine {
     bool chat(const std::string &body, const volatile int32_t *cancel, const std::function<void(const std::string &)> &on_text, Result &out,
               std::string &error);
 
+    // POST /v1/systemone in process: `body` is a TypeSafe System One request; `out` gets the JSON answer.
+    bool systemone(const std::string &body, std::string &out, std::string &error);
     bool mtp_active() const;
     int count_tokens(const std::string &text) const; // with the model's own tokenizer
 
