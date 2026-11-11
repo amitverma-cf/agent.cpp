@@ -27,7 +27,7 @@ jobs:
         include:
           - { runner: ubuntu-22.04,     os_name: linux,   arch: x86_64,  lib_prefix: lib, lib_ext: so,    exe_ext: "",     ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON" }
           - { runner: ubuntu-22.04-arm, os_name: linux,   arch: aarch64, lib_prefix: lib, lib_ext: so,    exe_ext: "",     ggml: "-DGGML_NATIVE=OFF" }
-          - { runner: macos-14,         os_name: macos,   arch: aarch64, lib_prefix: lib, lib_ext: dylib, exe_ext: "",     ggml: "-DGGML_NATIVE=OFF" }
+          - { runner: macos-15,         os_name: macos,   arch: aarch64, lib_prefix: lib, lib_ext: dylib, exe_ext: "",     ggml: "-DGGML_NATIVE=OFF" }
           - { runner: macos-15-intel,   os_name: macos,   arch: x86_64,  lib_prefix: lib, lib_ext: dylib, exe_ext: "",     ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON" }
           - { runner: windows-2022,     os_name: windows, arch: x86_64,  lib_prefix: "",  lib_ext: dll,   exe_ext: ".exe", ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON" }
     steps:
