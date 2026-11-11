@@ -35,6 +35,7 @@ Before submitting your PR:
   - Build with `-DAGENT_ENABLE_SANITIZERS=ON` (AddressSanitizer + UBSan) and run `ctest`.
   - For changes touching concurrency (parallel graph branches, memory backend), also run under valgrind `--tool=helgrind`.
   - Check coverage on changes touching `src/`: build with `-DAGENT_ENABLE_COVERAGE=ON`, run `ctest`, then `gcovr -r . --object-directory build --exclude 'vendor/.*' --exclude 'tests/.*' --exclude 'examples/.*' --gcov-ignore-parse-errors=negative_hits.warn`. The `--gcov-ignore-parse-errors` flag works around a long-standing `gcov` bug ([GCC #68080](https://gcc.gnu.org/bugzilla/show_bug.cgi?id=68080)) that emits a bogus negative branch-hit count on some files; it's not something in this codebase.
+  - Engine plugins and the engine host run in their own process, and the engine sandbox hides the build folder from them, so their .gcda files are not written. Configure with `-DCMAKE_CXX_FLAGS="--coverage -O2 -DAGENT_COVERAGE_RW_DIR=\"<build dir>\""` (this define makes the sandbox leave the build folder writable, coverage builds only) and build in Release mode: unoptimized ggml with gcov counters is too slow for the model tests. Run the model-backed tests (`AGENT_TEST_*_MODEL` variables, see `tests/unit`) one test case per process, so a slow one cannot discard the others' data. Last measurement on Linux: 80% of lines, 369 test cases passing, 29 skipped (OCR / video / TRELLIS / GPU / OS keychain).
 - **Atomic Changes**: Create separate PRs for each feature or fix.
 
 After submitting your PR:

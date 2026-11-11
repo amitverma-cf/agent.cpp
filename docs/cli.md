@@ -406,6 +406,13 @@ tests run.
 **Graph form.** A graph file cannot express this loop today: a graph runs on one engine session, and
 `agent run` registers no function nodes for ASR / TTS.
 
+## Mirrors and tests: `AGENT_HTTP_REWRITE`
+
+`AGENT_HTTP_REWRITE="https://github.com=https://mirror.example/gh;https://skills.sh=http://127.0.0.1:8080"` sends every download whose URL starts
+with the text before an `=` to the text after it (first match wins, rules separated by `;`). It covers engine and runtime downloads, the
+skills.sh and MCP registries and GitHub's API. `HF_ENDPOINT` does the same for Hugging Face. The tests use both to run the real `agent`
+binary against a stand-in server on the loopback interface.
+
 ## Code layout
 
 `tools/cli/src/`:
