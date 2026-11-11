@@ -166,8 +166,9 @@ Result<std::unique_ptr<ChildProcess>> spawn_child(const SpawnOptions &options) {
     std::wstring env_block = options.env.empty() ? std::wstring() : build_environment(options.env);
     std::wstring wdir = widen(options.working_directory);
 
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
+    STARTUPINFOEXW sie{};
+    STARTUPINFOW &si = sie.StartupInfo;
+    si.cb = sizeof(sie);
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdInput = in_r;
     si.hStdOutput = out_w;
@@ -182,14 +183,23 @@ Result<std::unique_ptr<ChildProcess>> spawn_child(const SpawnOptions &options) {
     // Filesystem confinement: the child runs at Low integrity and only the allowed folders accept its writes. If that cannot be
     // set up the process is not started (a sandbox that silently does nothing is worse than none).
     std::string why;
-    HANDLE low_token = static_cast<HANDLE>(agent::hal::low_integrity_token_for(prepared.value, why));
+    // Read and network confinement (AppContainer); the program's own folder must stay readable. Falls back to Low integrity.
+    std::vector<std::string> readable{options.working_directory};
+    {
+        std::error_code ec;
+        const auto exe = std::filesystem::path(options.program).parent_path();
+        if (!exe.empty() && std::filesystem::exists(exe, ec)) readable.push_back(exe.string());
+    }
+    auto container = agent::hal::appcontainer_launch_for(prepared.value, readable, why);
+    HANDLE low_token = container || !why.empty() ? nullptr : static_cast<HANDLE>(agent::hal::low_integrity_token_for(prepared.value, why));
+    if (container) sie.lpAttributeList = static_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(container->attributes());
     if (!why.empty()) {
         cleanup();
         return R{.ok = false, .value = {}, .error = make_error(ErrorCode::SandboxViolation, "cannot confine '" + options.program + "' to its folders: " + why)};
     }
 
     PROCESS_INFORMATION pi{};
-    DWORD flags = CREATE_NO_WINDOW | (env_block.empty() ? 0 : CREATE_UNICODE_ENVIRONMENT) | (prepared.value.active ? CREATE_SUSPENDED : 0);
+    DWORD flags = CREATE_NO_WINDOW | (container ? EXTENDED_STARTUPINFO_PRESENT : 0) | (env_block.empty() ? 0 : CREATE_UNICODE_ENVIRONMENT) | (prepared.value.active ? CREATE_SUSPENDED : 0);
     BOOL created = low_token ? CreateProcessAsUserW(low_token, nullptr, cmd.data(), nullptr, nullptr, TRUE, flags, env_block.empty() ? nullptr : env_block.data(),
                                                     wdir.empty() ? nullptr : wdir.c_str(), &si, &pi)
                              : CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, flags, env_block.empty() ? nullptr : env_block.data(),

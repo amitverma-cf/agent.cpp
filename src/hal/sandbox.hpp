@@ -18,6 +18,7 @@
 
 #include <agent-cpp/agent.hpp>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -57,6 +58,8 @@ class PreparedSandbox {
     std::string macos_profile;         // macOS: SBPL text for sandbox_init(), empty = none
     bool low_integrity = false;        // Windows: run the child at Low integrity; only low_write_paths accept its writes
     std::vector<std::string> low_write_paths;
+    std::vector<std::string> read_paths; // Windows: folders the child may read (AppContainer)
+    bool windows_network_allowed = true; // Windows: the AppContainer gets the internet capabilities
     std::vector<std::string> warnings; // what could not be enforced; callers log these
 };
 
@@ -95,6 +98,23 @@ void *create_low_integrity_token(std::string &error);
 // owned by them, for example one made by an administrator under C:\) cannot be confined: the program then starts WITHOUT the write
 // confinement and a warning says so (prepared.warnings), rather than being unable to run at all.
 void *low_integrity_token_for(PreparedSandbox &prepared, std::string &error);
+
+// Windows read and network confinement: an AppContainer, the mechanism Windows itself uses for sandboxed apps. The child can only
+// read what the container's SID has been granted (the system folders everyone may read, plus the folders given here and the
+// policy's read-only and read-write folders) and can only write to the read-write folders; it keeps internet access when the
+// policy allows the network (the internetClient capability) and has none when it denies it.
+class AppContainerLaunch {
+  public:
+    ~AppContainerLaunch();
+    void *attributes() const; // LPPROC_THREAD_ATTRIBUTE_LIST for STARTUPINFOEXW, valid while this object lives
+    struct Impl;
+    std::unique_ptr<Impl> impl;
+};
+// Creates the container (once per machine), grants it the folders, and returns the process attributes for CreateProcessW with
+// EXTENDED_STARTUPINFO_PRESENT. Returns nullptr with `error` empty when the sandbox does not use one or it cannot be set up
+// (a warning in prepared.warnings says why; the caller then falls back to low_integrity_token_for), and nullptr with `error` set
+// only for invalid input. extra_read: more folders to make readable (e.g. the folder of the program being started).
+std::unique_ptr<AppContainerLaunch> appcontainer_launch_for(PreparedSandbox &prepared, const std::vector<std::string> &extra_read, std::string &error);
 #endif
 
 } // namespace agent::hal

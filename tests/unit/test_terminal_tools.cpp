@@ -110,11 +110,12 @@ TEST_CASE("run_command enforces a timeout", "[terminal_tools]") {
 
     const auto *run_tool = find_tool(session, "run_command");
 #ifdef _WIN32
-    auto res = run_tool->callback(R"({"command":"ping -n 10 127.0.0.1 > NUL","timeout_seconds":1})", run_tool->user_data);
+    auto res = run_tool->callback(R"({"command":"for /l %i in (1,1,2000000000) do @rem","timeout_seconds":1})", run_tool->user_data);
 #else
     auto res = run_tool->callback(R"({"command":"sleep 10","timeout_seconds":1})", run_tool->user_data);
 #endif
     REQUIRE(res.ok);
+    INFO(res.value);
     REQUIRE(res.value.find("\"timed_out\":true") != std::string::npos);
 }
 
@@ -139,7 +140,7 @@ TEST_CASE("run_command stops on request_cancel and returns the partial output", 
     REQUIRE(run_tool != nullptr);
 
 #ifdef _WIN32
-    const char *args = R"({"command":"echo partial & echo x > started.txt & ping -n 30 127.0.0.1 > NUL","timeout_seconds":0})";
+    const char *args = R"({"command":"echo partial & echo x > started.txt & for /l %i in (1,1,2000000000) do @rem","timeout_seconds":0})";
 #else
     const char *args = R"({"command":"echo partial; echo x > started.txt; sleep 30","timeout_seconds":0})";
 #endif

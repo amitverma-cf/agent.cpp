@@ -7,6 +7,8 @@
 #include <agent-cpp/agent.hpp>
 #include <catch_amalgamated.hpp>
 
+
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -22,11 +24,12 @@ std::string native(std::string p) {
 }
 
 // Runs cmd.exe /c <command> under `policy`; returns the exit code, or -1 when it could not be started.
-int run_cmd(const std::string &command, const agent::SandboxPolicy &policy, std::string *spawn_error = nullptr, std::string *output = nullptr) {
+int run_cmd(const std::string &command, const agent::SandboxPolicy &policy, std::string *spawn_error = nullptr, std::string *output = nullptr, const std::string &cwd = {}) {
     agent::hal::SpawnOptions opts;
     opts.program = "cmd.exe";
     opts.args = {"/c", command};
     opts.sandbox = policy;
+    opts.working_directory = cwd;
     auto child = agent::hal::spawn_child(opts);
     if (!child.ok) {
         if (spawn_error) *spawn_error = child.error.message;
@@ -64,14 +67,38 @@ TEST_CASE("Windows: a sandboxed child writes only in its allowed folder", "[sand
     CHECK(run_cmd("echo nope> " + native((dir / "outside" / "bad.txt").string()), policy) != 0);
     CHECK_FALSE(fs::exists(dir / "outside" / "bad.txt"));
 
-    // Reading is not restricted on Windows, and what the child wrote in its folder is readable from outside.
+    // The child reads its own folder, not other folders of the user (the AppContainer has no access to them).
     CHECK(run_cmd("type " + native((dir / "rw" / "ok.txt").string()) + " >nul", policy) == 0);
+    { std::ofstream(dir / "outside" / "secret.txt") << "secret"; }
+    CHECK(run_cmd("type " + native((dir / "outside" / "secret.txt").string()) + " >nul", policy) != 0);
+    agent::SandboxPolicy granted = policy;
+    granted.read_only_paths = {(dir / "outside").string()};
+    { std::string out; int rc = run_cmd("type " + native((dir / "outside" / "secret.txt").string()), granted, nullptr, &out); INFO(out); CHECK(rc == 0); }
 
     // Without the sandbox the same write works: the refusal above came from the confinement, not from the path.
     agent::SandboxPolicy off;
     CHECK(run_cmd("echo free> " + native((dir / "outside" / "free.txt").string()), off) == 0);
     CHECK(fs::exists(dir / "outside" / "free.txt"));
 
+    fs::remove_all(dir, ec);
+}
+
+// Needs the internet, so it runs only when AGENT_TEST_NETWORK is set.
+TEST_CASE("Windows: the sandbox keeps the network when allowed and cuts it when denied", "[sandbox][windows][network]") {
+    if (!std::getenv("AGENT_TEST_NETWORK")) SKIP("set AGENT_TEST_NETWORK=1 to run (needs the internet)");
+    const fs::path dir = fs::temp_directory_path() / "agent_test_win_sandbox_net";
+    std::error_code ec;
+    fs::create_directories(dir);
+    agent::SandboxPolicy policy;
+    policy.enabled = true;
+    policy.filesystem = true;
+    policy.windows_low_integrity = true;
+    policy.read_write_paths = {dir.string()};
+    const std::string fetch = "curl.exe -s -m 8 -o nul https://example.com";
+    policy.network = agent::SandboxNetwork::Allow;
+    { std::string out; int rc = run_cmd("curl.exe -sS -m 8 -o nul https://example.com 2>&1", policy, nullptr, &out, dir.string()); INFO(out); CHECK(rc == 0); }
+    policy.network = agent::SandboxNetwork::Deny;
+    CHECK(run_cmd(fetch, policy, nullptr, nullptr, dir.string()) != 0);
     fs::remove_all(dir, ec);
 }
 

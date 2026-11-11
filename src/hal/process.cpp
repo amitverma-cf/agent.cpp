@@ -73,20 +73,25 @@ Result<ProcessResult> run_shell_windows(std::string_view working_directory, std:
     std::wstring wcmd = utf8_to_wide(cmdline);
     std::wstring wdir = utf8_to_wide(working_directory);
 
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
+    STARTUPINFOEXW sie{};
+    STARTUPINFOW &si = sie.StartupInfo;
+    si.cb = sizeof(sie);
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdOutput = write_pipe;
     si.hStdError = write_pipe;
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
     HANDLE nul = nullptr;
     if (sandbox.active) {
-        nul = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, nullptr);
+        HANDLE in_w = nullptr; // an empty pipe: stdin that is at its end (a NUL handle is refused by an AppContainer)
+        if (CreatePipe(&nul, &in_w, &sa, 0)) CloseHandle(in_w); else nul = nullptr;
         si.hStdInput = nul;
     }
 
     std::string why;
-    HANDLE low_token = static_cast<HANDLE>(low_integrity_token_for(sandbox, why));
+    // cmd.exe and the system folders are readable by every AppContainer; the working directory is the folder it works in.
+    auto container = appcontainer_launch_for(sandbox, {std::string(working_directory)}, why);
+    HANDLE low_token = container || !why.empty() ? nullptr : static_cast<HANDLE>(low_integrity_token_for(sandbox, why));
+    if (container) sie.lpAttributeList = static_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(container->attributes());
     if (!why.empty()) {
         CloseHandle(read_pipe);
         CloseHandle(write_pipe);
@@ -96,8 +101,9 @@ Result<ProcessResult> run_shell_windows(std::string_view working_directory, std:
     PROCESS_INFORMATION pi{};
     BOOL created = low_token ? CreateProcessAsUserW(low_token, nullptr, wcmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr,
                                                     wdir.empty() ? nullptr : wdir.c_str(), &si, &pi)
-                             : CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED,
-                                              nullptr, wdir.empty() ? nullptr : wdir.c_str(), &si, &pi);
+                             : CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE,
+                                              CREATE_NO_WINDOW | CREATE_SUSPENDED | (container ? EXTENDED_STARTUPINFO_PRESENT : 0), nullptr,
+                                              wdir.empty() ? nullptr : wdir.c_str(), &si, &pi);
     if (low_token) CloseHandle(low_token);
     CloseHandle(write_pipe);
     if (nul && nul != INVALID_HANDLE_VALUE) CloseHandle(nul);

@@ -153,34 +153,30 @@ whole tree dies with the `ChildProcess` / when run_command returns), no breakawa
 `max_processes`, and UI restrictions (no clipboard, desktop switching, global atoms, system
 parameter changes).
 
-**Filesystem writes (MCP servers and `run_command`, tested on Windows 11).** With `SandboxPolicy::windows_low_integrity`
-the child is started with a copy of the user's token lowered to the **Low integrity level**, and only the folders in
-`read_write_paths` get the Low label (`S:(ML;OICI;NW;;;LW)`, inherited by what is created below). A Low process cannot write
-to anything labelled Medium or higher, which is everything else the user owns, so it can write only in its allowed folders
-(`test_sandbox_windows.cpp` runs a child that writes inside its folder and is refused outside it). If the token or a label cannot
-be set up, the process is **not started**. Engine hosts leave the flag off: they need more of the system than a Low process may
-touch, so they get the Job Object only.
+**Reads, writes and network (MCP servers and `run_command`, tested on Windows 11).** With `SandboxPolicy::windows_low_integrity`
+(the name is kept for compatibility; it means "confine the files of this child") the child runs in an **AppContainer**, the
+mechanism Windows uses for its own sandboxed apps (no third-party sandbox library does this better: the C++ ones are Linux-only).
+The container's SID is added to the DACL of each folder the policy names: the workspace and `read_write_paths` get read, write and
+delete, `read_only_paths` and the folder of the program being started get read and execute, both inherited by what is created
+below. Everything else the user owns, such as the rest of the profile, other drives, other projects and the SSH keys, refuses even a
+read, while `C:\Windows` and `Program Files` stay readable (they grant `ALL APPLICATION PACKAGES`). A command that needs a tool
+installed outside those places (Git's `cat`, a Node install under the profile) is refused until the folder is granted, which is
+what the permission gate asks the user about (`run_command` names its absolute paths; a grant is a folder added to
+`read_only_paths` or `read_write_paths`). The network follows `SandboxPolicy::network`: `Allow` adds the `internetClient` and
+`privateNetworkClientServer` capabilities, `Deny` adds none and every connection fails; loopback (127.0.0.1) is blocked by Windows
+for any AppContainer. `test_sandbox_windows.cpp` covers the write, read and grant cases; `AGENT_TEST_NETWORK=1` also runs the
+network pair (curl succeeds with `Allow`, fails with `Deny`).
 
-**Not enforced on Windows:** reading (a Low process can still read what the user can), and network denial. Spawns report a
-warning saying so.
+If the container or an ACL cannot be set up (a folder the user cannot change, such as one an administrator made under `C:\`),
+the child falls back to the **Low integrity level** (writes confined to the allowed folders; reads and network not restricted)
+and `sandbox_warnings` says so. Engine hosts leave the flag off: they need more of the system than a container allows, so they get
+the Job Object only.
 
-AppContainer is the planned way to enforce both, and why it is not done yet:
+The container grants are kept: the profile `agent-cpp.sandbox` and the ACEs stay on the folders after a run, so a later run is
+quick. Removing them is `icacls <folder> /remove "<container sid>"`, or deleting the folder.
 
-- An AppContainer process can open only objects whose DACL grants its SID (or `ALL APPLICATION
-  PACKAGES`). Every allowed directory (plugin, model, workspace, artifacts) needs an inheritable ACE
-  for the container SID: a persistent change to the user's files that must be added before the spawn
-  and removed afterwards (or kept, keyed by a stable container name from
-  `CreateAppContainerProfile`). Parallel sessions sharing a directory have to coordinate the ACEs.
-- `C:\Windows` and `Program Files` are already readable through `ALL APPLICATION PACKAGES`; the
-  user profile, other drives and temp directories are not, which is the point.
-- The network is denied unless the `internetClient` / `privateNetworkClientServer` capabilities are
-  added, so `network = Allow` maps to those; loopback needs a firewall exemption
-  (`NetworkIsolationSetAppContainerConfig`), so a local MCP server over TCP would not work without it.
-- The child is started with `STARTUPINFOEX` + `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`. The same
-  attribute list should carry `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`: today `CreateProcessW(...,
-  bInheritHandles = TRUE, ...)` lets the child inherit *every* inheritable handle of the parent, not
-  only its three pipe ends (the Linux path marks everything else close-on-exec).
-
+Still open on Windows: `bInheritHandles = TRUE` lets the child inherit every inheritable handle of the parent, not only its three
+pipe ends (add `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` to the same attribute list).
 Other review notes: a failed `AssignProcessToJobObject` (e.g. a parent job that forbids nesting on
 Windows 7) degrades to a warning and the child runs without limits; `SandboxPolicy::gpu` has no
 meaning (no device files).
@@ -254,6 +250,4 @@ the workspace when the host allows it, per path and per kind of access (read or 
   `[o] allow once  [a] allow always  [n] no`. Without a terminal the answer is no and the message names the command that grants it:
   `agent sandbox grant PATH [--write] [--for run_command|files|mcp:NAME]`, `agent sandbox ls`, `agent sandbox revoke PATH`.
 
-On Windows a granted folder gets the Low integrity label, so the same grants work there. If this user may not relabel a folder
-(it is owned by an administrator, for example under `C:\`), the program starts without the write confinement and the tool result
-carries a `sandbox_warning` saying so.
+On Windows a granted folder gets an access entry for the AppContainer, so the same grants work there (reads included). If this user may not change a folder's permissions (it is owned by an administrator, for example under `C:\`), the program falls back to Low integrity and the tool result carries a `sandbox_warning` saying so.

@@ -204,7 +204,12 @@ TEST_CASE("run_command under a graph node: approval interrupt, then sandboxed ex
     cfg.permission_check = agent::tools::default_permission_policy; // run_command -> Ask
     auto session = open(cfg);
 
-    auto node = agent_node("shell", R"(call:run_command {"command":"echo hi>out.txt && cat out.txt"})", {"run_command"});
+#ifdef _WIN32 // a Windows command is confined to the system folders and the workspace: no cat from a Git install
+    const char *shell_call = R"(call:run_command {"command":"echo hi>out.txt && type out.txt"})";
+#else
+    const char *shell_call = R"(call:run_command {"command":"echo hi>out.txt && cat out.txt"})";
+#endif
+    auto node = agent_node("shell", shell_call, {"run_command"});
     node.interrupt_before_tools = true;
     auto graph = agent::make_graph(node);
 

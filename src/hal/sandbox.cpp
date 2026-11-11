@@ -19,6 +19,7 @@
 #include <windows.h>
 #include <aclapi.h>
 #include <sddl.h>
+#include <userenv.h>
 #else
 #include <fcntl.h>
 #include <sys/resource.h>
@@ -61,6 +62,8 @@ PreparedSandbox::PreparedSandbox(PreparedSandbox &&other) noexcept
       macos_profile(std::move(other.macos_profile)),
       low_integrity(other.low_integrity),
       low_write_paths(std::move(other.low_write_paths)),
+      read_paths(std::move(other.read_paths)),
+      windows_network_allowed(other.windows_network_allowed),
       warnings(std::move(other.warnings)) {}
 
 PreparedSandbox &PreparedSandbox::operator=(PreparedSandbox &&other) noexcept {
@@ -77,6 +80,8 @@ PreparedSandbox &PreparedSandbox::operator=(PreparedSandbox &&other) noexcept {
         macos_profile = std::move(other.macos_profile);
         low_integrity = other.low_integrity;
         low_write_paths = std::move(other.low_write_paths);
+        read_paths = std::move(other.read_paths);
+        windows_network_allowed = other.windows_network_allowed;
         warnings = std::move(other.warnings);
     }
     return *this;
@@ -496,9 +501,11 @@ Result<PreparedSandbox> prepare_sandbox(const SandboxPolicy &policy) {
         // Writes are confined to the read-write folders by the Low integrity level. Reads are not restricted on Windows.
         out.low_integrity = true;
         out.low_write_paths = policy.read_write_paths;
-        out.warnings.push_back("sandbox: on Windows only writes are confined to the allowed folders (Low integrity level); reads are not restricted.");
+        out.read_paths = policy.read_only_paths;
+        out.windows_network_allowed = policy.network != SandboxNetwork::Deny;
+    } else if (policy.network == SandboxNetwork::Deny) {
+        out.warnings.push_back("sandbox: network denial is not enforced on Windows without filesystem confinement.");
     }
-    if (policy.network == SandboxNetwork::Deny) out.warnings.push_back("sandbox: network denial is not enforced on Windows.");
     return ok(std::move(out));
 }
 
@@ -548,6 +555,130 @@ void *low_integrity_token_for(PreparedSandbox &prepared, std::string &error) {
     void *token = create_low_integrity_token(error);
     if (!token && error.empty()) error = "no token";
     return token;
+}
+
+// ---- AppContainer
+
+struct AppContainerLaunch::Impl {
+    PSID sid = nullptr;
+    PSID caps[2] = {nullptr, nullptr};
+    SID_AND_ATTRIBUTES cap_attrs[2]{};
+    SECURITY_CAPABILITIES sc{};
+    std::vector<char> list;
+    bool list_ready = false;
+    ~Impl() {
+        if (list_ready) DeleteProcThreadAttributeList(reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(list.data()));
+        for (PSID c : caps)
+            if (c) LocalFree(c);
+        if (sid) FreeSid(sid);
+    }
+};
+
+AppContainerLaunch::~AppContainerLaunch() = default;
+void *AppContainerLaunch::attributes() const { return impl && impl->list_ready ? impl->list.data() : nullptr; }
+
+namespace {
+
+std::wstring widen_path(const std::string &path) {
+    const int n = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
+    if (n <= 0) return {};
+    std::wstring wide(static_cast<size_t>(n - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wide.data(), n);
+    return wide;
+}
+
+// Adds an allow entry for the container's SID to a folder's DACL (inherited by what is below it). Needs a folder this user owns.
+bool grant_container(PSID sid, const std::string &path, bool write, std::string &why) {
+    std::wstring wide = widen_path(path);
+    if (wide.empty()) {
+        why = "bad path " + path;
+        return false;
+    }
+    PACL old_dacl = nullptr;
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    DWORD rc = GetNamedSecurityInfoW(wide.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &old_dacl, nullptr, &sd);
+    if (rc != ERROR_SUCCESS) {
+        why = "cannot read the permissions of " + path + " (error " + std::to_string(rc) + ")";
+        return false;
+    }
+    EXPLICIT_ACCESSW ea{};
+    ea.grfAccessPermissions = write ? (FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE) : (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
+    ea.grfAccessMode = GRANT_ACCESS;
+    ea.grfInheritance = SUB_CONTAINERS_AND_OBJECTS_INHERIT;
+    ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    ea.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+    ea.Trustee.ptstrName = static_cast<LPWSTR>(sid);
+    PACL new_dacl = nullptr;
+    rc = SetEntriesInAclW(1, &ea, old_dacl, &new_dacl);
+    if (rc == ERROR_SUCCESS) {
+        rc = SetNamedSecurityInfoW(wide.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, new_dacl, nullptr);
+        LocalFree(new_dacl);
+    }
+    LocalFree(sd);
+    if (rc != ERROR_SUCCESS) {
+        why = "cannot give the sandbox access to " + path + " (error " + std::to_string(rc) + ")";
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+std::unique_ptr<AppContainerLaunch> appcontainer_launch_for(PreparedSandbox &prepared, const std::vector<std::string> &extra_read, std::string &error) {
+    error.clear();
+    if (!prepared.low_integrity) return nullptr;
+    auto launch = std::make_unique<AppContainerLaunch>();
+    launch->impl = std::make_unique<AppContainerLaunch::Impl>();
+    AppContainerLaunch::Impl &im = *launch->impl;
+    auto fall_back = [&](const std::string &why) {
+        prepared.warnings.push_back("sandbox: AppContainer unavailable (" + why + "); falling back to write-only confinement (Low integrity): reads and network are not restricted.");
+        return std::unique_ptr<AppContainerLaunch>();
+    };
+
+    HRESULT hr = CreateAppContainerProfile(L"agent-cpp.sandbox", L"agent.cpp sandbox", L"Sandboxed commands and tools started by agent.cpp", nullptr, 0, &im.sid);
+    if (hr == HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)) hr = DeriveAppContainerSidFromAppContainerName(L"agent-cpp.sandbox", &im.sid);
+    if (FAILED(hr) || !im.sid) return fall_back("profile error " + std::to_string(static_cast<long>(hr)));
+
+    for (const std::string &dir : prepared.low_write_paths) {
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        std::string why;
+        if (!grant_container(im.sid, dir, true, why)) return fall_back(why);
+    }
+    for (const std::vector<std::string> *list : {static_cast<const std::vector<std::string> *>(&prepared.read_paths), &extra_read})
+        for (const std::string &dir : *list) {
+            std::error_code ec;
+            if (!std::filesystem::exists(dir, ec)) continue;
+            std::string why;
+            if (!grant_container(im.sid, dir, false, why)) return fall_back(why);
+        }
+
+    DWORD n_caps = 0;
+    if (prepared.windows_network_allowed) {
+        // internetClient and privateNetworkClientServer: outbound to the internet and the local network, as for a normal app.
+        if (ConvertStringSidToSidW(L"S-1-15-3-1", &im.caps[0]) && ConvertStringSidToSidW(L"S-1-15-3-3", &im.caps[1])) {
+            for (DWORD i = 0; i < 2; ++i) {
+                im.cap_attrs[i].Sid = im.caps[i];
+                im.cap_attrs[i].Attributes = SE_GROUP_ENABLED;
+            }
+            n_caps = 2;
+        } else {
+            return fall_back("cannot build the network capabilities");
+        }
+    }
+    im.sc.AppContainerSid = im.sid;
+    im.sc.Capabilities = n_caps ? im.cap_attrs : nullptr;
+    im.sc.CapabilityCount = n_caps;
+
+    SIZE_T size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+    im.list.assign(size, 0);
+    auto *attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(im.list.data());
+    if (!InitializeProcThreadAttributeList(attrs, 1, 0, &size)) return fall_back("attribute list error " + std::to_string(GetLastError()));
+    im.list_ready = true;
+    if (!UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, &im.sc, sizeof(im.sc), nullptr, nullptr))
+        return fall_back("attribute error " + std::to_string(GetLastError()));
+    return launch;
 }
 
 void *create_low_integrity_token(std::string &error) {

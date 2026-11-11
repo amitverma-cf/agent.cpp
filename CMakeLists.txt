@@ -143,7 +143,7 @@ set_source_files_properties(
 find_package(Threads REQUIRED)
 target_link_libraries(agent PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
 if(WIN32)
-    target_link_libraries(agent PRIVATE advapi32) # token / ACL calls of the Windows sandbox
+    target_link_libraries(agent PRIVATE advapi32 userenv) # token / ACL calls of the Windows sandbox
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # shm_open / shm_unlink (engine IPC shared memory); part of libc since glibc 2.34.

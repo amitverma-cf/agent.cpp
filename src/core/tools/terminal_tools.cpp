@@ -92,9 +92,6 @@ Result<std::string> run_command_sandboxed_cb(std::string_view args, void *ud) {
         if (!parser.iterate(json).get(doc) && !doc["command"].get_string().get(command) && !ws.empty()) {
             const bool writes = command_looks_like_write(command);
             for (const std::filesystem::path &p : external_paths_in_command(command, ws)) {
-#ifdef _WIN32
-                if (!writes) continue; // reads are not restricted on Windows, so there is nothing to ask
-#endif
                 if (path_access_allowed(ctx, "run_command", p, writes)) (writes ? policy.read_write_paths : policy.read_only_paths).push_back(p.string());
             }
         }
