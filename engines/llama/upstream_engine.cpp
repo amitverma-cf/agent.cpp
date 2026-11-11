@@ -378,6 +378,7 @@ std::unique_ptr<Engine> Engine::create(const Settings &, std::string &error) {
     error = "this build of the llama plugin does not include llama.cpp's own engine (AGENT_LLAMA_UPSTREAM=OFF)";
     return nullptr;
 }
+struct Engine::Impl {};
 Engine::Engine() {}
 Engine::~Engine() {}
 bool Engine::mtp_active() const { return false; }
