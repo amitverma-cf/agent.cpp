@@ -683,6 +683,7 @@ common_chat_templates_inputs build_inputs(const agent_request *req, const char *
     common_chat_templates_inputs in;
     in.use_jinja = true;
     in.add_generation_prompt = true;
+    in.parallel_tool_calls = true; // a model may call several tools in one reply (templates that cannot simply ignore it)
     in.enable_thinking = false;
     in.messages.reserve(req->n_messages);
     for (size_t i = 0; i < req->n_messages; ++i) {
@@ -1621,6 +1622,7 @@ int32_t run_ocr(Instance &inst, const agent_request *req, agent_response *resp) 
     common_chat_templates_inputs in;
     in.use_jinja = true;
     in.add_generation_prompt = true;
+    in.parallel_tool_calls = true; // a model may call several tools in one reply (templates that cannot simply ignore it)
     in.enable_thinking = false;
     common_chat_msg msg;
     msg.role = "user";
