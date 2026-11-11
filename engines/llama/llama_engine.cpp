@@ -251,6 +251,13 @@ class Batcher {
         std::lock_guard<std::mutex> lock(mu_);
         const llama_pos base = next_pos_[seq];
         const int32_t n = static_cast<int32_t>(draft.size()) + 1;
+        // Hybrid / recurrent models cannot cut their state back to an earlier position, so the recurrent part is saved before the
+        // draft is decoded and restored if part of it is rejected (the accepted prefix is then decoded again).
+        std::vector<uint8_t> snapshot;
+        if (use_checkpoints) {
+            snapshot.resize(llama_state_seq_get_size_ext(ctx, seq, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY));
+            if (llama_state_seq_get_data_ext(ctx, snapshot.data(), snapshot.size(), seq, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) return false;
+        }
         llama_batch batch = llama_batch_init(n, 0, 1);
         for (int32_t i = 0; i < n; ++i) {
             batch.token[i] = i == 0 ? last : draft[static_cast<size_t>(i - 1)];
@@ -277,7 +284,29 @@ class Batcher {
         }
         next = t;
         const llama_pos keep = base + 1 + static_cast<llama_pos>(i); // last + the accepted drafts stay in the cache
-        if (i < draft.size() && !llama_memory_seq_rm(llama_get_memory(ctx), seq, keep, -1)) {
+        if (i < draft.size() && use_checkpoints) {
+            // back to the state before `last`, drop every key from base on, then decode `last` and the accepted drafts again
+            bool restored = llama_state_seq_set_data_ext(ctx, snapshot.data(), snapshot.size(), seq, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) > 0 &&
+                            llama_memory_seq_rm(llama_get_memory(ctx), seq, base, -1);
+            if (restored) {
+                llama_batch redo = llama_batch_init(static_cast<int32_t>(i) + 1, 0, 1);
+                for (int32_t j = 0; j <= static_cast<int32_t>(i); ++j) {
+                    redo.token[j] = j == 0 ? last : accepted[static_cast<size_t>(j - 1)];
+                    redo.pos[j] = base + j;
+                    redo.n_seq_id[j] = 1;
+                    redo.seq_id[j][0] = seq;
+                    redo.logits[j] = false;
+                }
+                redo.n_tokens = static_cast<int32_t>(i) + 1;
+                restored = llama_decode(ctx, redo) == 0;
+                llama_batch_free(redo);
+            }
+            if (!restored) {
+                reusable_[seq] = false;
+                cached_[seq].clear();
+                return false;
+            }
+        } else if (i < draft.size() && !llama_memory_seq_rm(llama_get_memory(ctx), seq, keep, -1)) {
             reusable_[seq] = false; // cannot happen for the models this is enabled for; stop trusting this slot
             cached_[seq].clear();
             return false;
@@ -1876,7 +1905,7 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     }
     inst->batcher.use_checkpoints = llama_model_is_hybrid(model) || llama_model_is_recurrent(model);
     if (llama_model_n_swa(model) > 0 && !inst->batcher.use_checkpoints) inst->batcher.disable_prefix_reuse();
-    inst->batcher.spec_enabled = speculative && mode == Mode::Generate && !inst->batcher.use_checkpoints && llama_model_n_swa(model) == 0;
+    inst->batcher.spec_enabled = speculative && mode == Mode::Generate && llama_model_n_swa(model) == 0; // hybrid models too (state snapshots)
     if (trace_prefix_cache()) std::fprintf(stderr, "llama: speculation %s (n_swa=%d, hybrid=%d)\n", inst->batcher.spec_enabled ? "on" : "off", llama_model_n_swa(model), inst->batcher.use_checkpoints ? 1 : 0);
     inst->mode = mode;
     if (mode != Mode::Generate) { // no chat template or sequence slots needed
