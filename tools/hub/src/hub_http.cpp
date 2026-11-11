@@ -1,5 +1,7 @@
 // Network half of the hub: HF API, streaming downloads with redirects, Range resume and verification.
 
+#include <chrono>
+#include <thread>
 #include <agent-cpp/hub.hpp>
 
 #ifndef CPPHTTPLIB_OPENSSL_SUPPORT
@@ -349,7 +351,17 @@ Result<std::string> http_get_text(std::string_view url, const HttpOptions &http,
         return true;
     };
     httplib::Headers headers{{"User-Agent", "agent-cpp"}, {"Accept", "application/json, text/plain, */*"}};
-    auto reply = http_get(std::string(url), headers, http, sink);
+    // A release's CDN can answer 400 / 5xx for the first minutes after it was published, and any network can drop a request: try
+    // up to four times, waiting 1, 3 and 8 seconds, before giving up.
+    static constexpr int kWaitSeconds[] = {1, 3, 8};
+    Result<Reply> reply = fail<Reply>(ErrorCode::NetworkError, "no attempt");
+    for (int attempt = 0;; ++attempt) {
+        body.text.clear();
+        reply = http_get(std::string(url), headers, http, sink);
+        const bool transient = !reply.ok || reply.value.status == 400 || reply.value.status == 429 || reply.value.status >= 500;
+        if (!transient || attempt >= 3) break;
+        std::this_thread::sleep_for(std::chrono::seconds(kWaitSeconds[attempt]));
+    }
     if (!reply.ok) return fail<std::string>(reply.error.code, reply.error.message);
     if (reply.value.aborted) return fail<std::string>(ErrorCode::HttpError, "hub: the response from " + std::string(url) + " is larger than " + std::to_string(max_bytes) + " bytes");
     if (reply.value.status != 200) return fail<std::string>(ErrorCode::HttpError, status_message(reply.value, std::string(url)));
