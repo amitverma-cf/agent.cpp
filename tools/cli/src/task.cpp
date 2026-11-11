@@ -11,9 +11,12 @@
 #include <cstring>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include <simdjson.h>
 
 namespace agent::cli {
 
@@ -173,6 +176,37 @@ int cmd_task(const CommandLine &cl, Context &ctx) {
     cfg.model = model_path;
     cfg.auto_default_tools = false;  // a task is not a chat turn: keep the tool instructions out of the prompt
     cfg.workspace_dir = workspace_dir(ctx, cl.get("workspace"));
+
+    // --tools FILE: a JSON array of {name, description, parameters}. They are offered to the model as tools; the call it makes is
+    // printed (tool_call: name {args}) and nothing runs. For checking a model's function calling.
+    static std::vector<std::string> tool_text; // Tool holds views: keep the strings alive
+    if (cl.has("tools")) {
+        std::ifstream in{std::string(cl.get("tools")), std::ios::binary};
+        std::string body((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        simdjson::dom::parser parser;
+        simdjson::dom::element doc;
+        simdjson::dom::array list;
+        if (!in || parser.parse(body).get(doc) || doc.get(list)) {
+            std::fprintf(stderr, "agent task: --tools expects a JSON array of tool definitions\n");
+            return 2;
+        }
+        tool_text.reserve(list.size() * 3);
+        for (simdjson::dom::element e : list) {
+            simdjson::dom::object o;
+            std::string_view name, description;
+            if (e.get(o) || o["name"].get(name)) continue;
+            if (o["description"].get(description)) description = "";
+            simdjson::dom::element params;
+            std::string schema = "{\"type\":\"object\",\"properties\":{}}";
+            if (!o["parameters"].get(params)) schema = simdjson::minify(params);
+            tool_text.emplace_back(name);
+            tool_text.emplace_back(description);
+            tool_text.emplace_back(schema);
+            const size_t at = tool_text.size() - 3;
+            cfg.tools.push_back(Tool{.name = tool_text[at], .description = tool_text[at + 1], .parameter_schema = tool_text[at + 2],
+                                     .callback = [](std::string_view, void *) -> Result<std::string> { return ok(std::string()); }});
+        }
+    }
     cfg.context_window = ctx.config.context_window;
     cfg.max_tokens = ctx.config.max_tokens;
     cfg.temperature = ctx.config.temperature;
