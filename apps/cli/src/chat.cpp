@@ -5,15 +5,16 @@
 #include "commands.hpp"
 #include "mcp_config.hpp"
 #include "secrets.hpp"
+#include "tui.hpp"
 
 #include <agent-cpp/store_sqlite.hpp>
-
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
-#include <ctime>
+#include <cstdarg>
 #include <cstdio>
+#include <ctime>
 #include <filesystem>
 
 #if !defined(_WIN32)
@@ -47,7 +48,7 @@ void install_sigint() {
 #if defined(_WIN32)
     std::signal(SIGINT, on_sigint);
 #else
-    struct sigaction sa {};
+    struct sigaction sa{};
     sa.sa_handler = on_sigint;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0; // no SA_RESTART: a blocked fgets returns EINTR
@@ -55,15 +56,50 @@ void install_sigint() {
 #endif
 }
 
+bool g_tui = false; // the full-screen interface is running: output goes to it, not to stdout
+
+TuiKind classify(std::string_view s) {
+    if (s.starts_with("[tool]") || s.starts_with("[result]")) return TuiKind::Tool;
+    if (s.starts_with("[error]") || s.starts_with("error")) return TuiKind::Error;
+    return TuiKind::Note;
+}
+
 void out(std::string_view s) {
     if (s.empty()) return;
+#if defined(AGENT_CLI_HAS_TUI)
+    if (g_tui) {
+        tui_emit(classify(s), s);
+        return;
+    }
+#endif
     std::fwrite(s.data(), 1, s.size(), stdout);
     g_at_line_start = s.back() == '\n';
     std::fflush(stdout);
 }
 
 void ensure_newline() {
-    if (!g_at_line_start) out("\n");
+    if (!g_tui && !g_at_line_start) out("\n");
+}
+
+// Streamed answer text: the transcript's assistant block in the full-screen interface, stdout otherwise.
+void emit_assistant(std::string_view s) {
+    if (s.empty()) return;
+#if defined(AGENT_CLI_HAS_TUI)
+    if (g_tui) {
+        tui_emit(TuiKind::Assistant, s);
+        return;
+    }
+#endif
+    out(s);
+}
+
+void outf(const char *format, ...) {
+    char buf[2048];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(buf, sizeof(buf), format, args);
+    va_end(args);
+    out(buf);
 }
 
 struct ChatState {
@@ -87,6 +123,7 @@ struct ChatState {
     bool auto_approve = false;
     bool inprocess = false; // --inprocess: load the engine into the CLI instead of agent-engine-host
     bool interactive = false;
+    bool use_tui = false; // the full-screen interface (a terminal, and not --plain)
 
     std::shared_ptr<SecretContext> secrets; // names and bindings; values are read only when an MCP server starts
     std::vector<std::string> always_allowed;
@@ -107,7 +144,7 @@ void log_fn(LogLevel level, std::string_view message, void *user_data) {
 void on_token(std::string_view token, void *user_data) {
     auto *st = static_cast<ChatState *>(user_data);
     st->streamed_bytes += token.size();
-    out(filter_stream(st->filter, token));
+    emit_assistant(filter_stream(st->filter, token));
 }
 
 PermissionDecision check_tool(std::string_view name, std::string_view arguments, void *user_data) {
@@ -120,13 +157,21 @@ PermissionDecision check_tool(std::string_view name, std::string_view arguments,
     return d;
 }
 
-bool prompt_tool(std::string_view name, std::string_view, void *user_data) {
+bool prompt_tool(std::string_view name, std::string_view arguments, void *user_data) {
     auto *st = static_cast<ChatState *>(user_data);
     const std::string n(name);
     if (st->auto_approve) {
         out("[permission] " + n + ": approved (--yes)\n");
         return true;
     }
+#if defined(AGENT_CLI_HAS_TUI)
+    if (g_tui) {
+        bool always = false;
+        const bool allowed = tui_ask(n + " " + one_line(arguments, 200), &always);
+        if (always) st->always_allowed.push_back(n);
+        return allowed;
+    }
+#endif
     if (!st->interactive) {
         out("[permission] " + n + ": denied (stdin is not a terminal; pass --yes to approve such calls)\n");
         return false;
@@ -255,37 +300,35 @@ std::string new_conversation_id() {
 void print_stats(const ChatState &st) {
     const SessionStats s = get_stats(*st.lease);
     const TurnStats &c = st.memory.stats;
-    std::printf("conversation %s: %zu messages, %d inference rounds, %d tool calls, %d prompt + %d completion tokens\n",
-                st.memory.id.c_str(), st.memory.history.size(), c.turns, c.tool_calls, c.prompt_tokens, c.completion_tokens);
-    std::printf("this session:  %d inference rounds, %d tool calls, %d prompt + %d completion tokens, %d compressions, %d prunes\n",
-                s.total_turns, s.total_tool_calls, s.total_prompt_tokens, s.total_completion_tokens, s.total_compressions,
-                s.total_prune_cycles);
+    outf("conversation %s: %zu messages, %d inference rounds, %d tool calls, %d prompt + %d completion tokens\n", st.memory.id.c_str(),
+         st.memory.history.size(), c.turns, c.tool_calls, c.prompt_tokens, c.completion_tokens);
+    outf("this session:  %d inference rounds, %d tool calls, %d prompt + %d completion tokens, %d compressions, %d prunes\n", s.total_turns,
+         s.total_tool_calls, s.total_prompt_tokens, s.total_completion_tokens, s.total_compressions, s.total_prune_cycles);
     if (c.cached_tokens > 0 && c.prompt_tokens > 0)
-        std::printf("prefix cache:  %d of %d prompt tokens served from the KV cache (%.0f%%)\n", c.cached_tokens, c.prompt_tokens,
-                    100.0 * c.cached_tokens / c.prompt_tokens);
-    if (const std::string footer = format_turn_footer(c.last); !footer.empty()) std::printf("last call:     %s\n", footer.c_str());
-    std::printf("model %s (%s), engine %s %s\n", st.model.name.c_str(), st.model.path.c_str(), st.engine.name.c_str(),
-                st.engine.version.c_str());
+        outf("prefix cache:  %d of %d prompt tokens served from the KV cache (%.0f%%)\n", c.cached_tokens, c.prompt_tokens,
+             100.0 * c.cached_tokens / c.prompt_tokens);
+    if (const std::string footer = format_turn_footer(c.last); !footer.empty()) outf("last call:     %s\n", footer.c_str());
+    outf("model %s (%s), engine %s %s\n", st.model.name.c_str(), st.model.path.c_str(), st.engine.name.c_str(), st.engine.version.c_str());
     const ModelBudget budget = get_budget(st.registry);
     const auto mb = [](uint64_t b) { return static_cast<double>(b) / (1024.0 * 1024.0); };
-    std::printf("loaded models (budget %s, CLI process RSS %.0f MiB; out-of-process engines are not included):\n",
-                budget.ram_bytes ? (std::to_string(budget.ram_bytes >> 20) + " MiB").c_str() : "unlimited", mb(process_rss_bytes()));
+    outf("loaded models (budget %s, CLI process RSS %.0f MiB; out-of-process engines are not included):\n",
+         budget.ram_bytes ? (std::to_string(budget.ram_bytes >> 20) + " MiB").c_str() : "unlimited", mb(process_rss_bytes()));
     const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     for (const LoadedModelInfo &m : loaded_models(st.registry))
-        std::printf("  %-24s ~%.0f MiB%s  %s, last used %llds ago, loaded in %.1fs\n", m.name.c_str(), mb(m.ram_bytes + m.vram_bytes),
-                    m.vram_bytes ? " (VRAM)" : "", m.leases ? "in use" : "idle", static_cast<long long>((now - m.last_used_ms) / 1000),
-                    static_cast<double>(m.load_time_ms) / 1000.0);
+        outf("  %-24s ~%.0f MiB%s  %s, last used %llds ago, loaded in %.1fs\n", m.name.c_str(), mb(m.ram_bytes + m.vram_bytes),
+             m.vram_bytes ? " (VRAM)" : "", m.leases ? "in use" : "idle", static_cast<long long>((now - m.last_used_ms) / 1000),
+             static_cast<double>(m.load_time_ms) / 1000.0);
 }
 
 void print_chat_help() {
-    std::printf("/exit                 quit (also Ctrl-D, or Ctrl-C at the prompt)\n"
-                "/clear                forget the conversation so far\n"
-                "/model [NAME|PATH]    show or switch the model (the conversation is kept)\n"
-                "/image <path> [text]  send an image (or audio) with an optional prompt\n"
-                "/open [n]             list generated artifacts, or open the n-th with the default app\n"
-                "/stats                token and tool-call counters\n"
-                "//text                send a message that starts with '/'\n"
-                "Ctrl-C while the model is answering cancels the answer.\n");
+    outf("/exit                 quit (also Ctrl-D, or Ctrl-C at the prompt)\n"
+         "/clear                forget the conversation so far\n"
+         "/model [NAME|PATH]    show or switch the model (the conversation is kept)\n"
+         "/image <path> [text]  send an image (or audio) with an optional prompt\n"
+         "/open [n]             list generated artifacts, or open the n-th with the default app\n"
+         "/stats                token and tool-call counters\n"
+         "//text                send a message that starts with '/'\n"
+         "Ctrl-C while the model is answering cancels the answer.\n");
 }
 
 void run_one_turn(ChatState &st, const std::string &text, std::span<const Media> media) {
@@ -306,9 +349,9 @@ void run_one_turn(ChatState &st, const std::string &text, std::span<const Media>
         else out("[error] " + r.error.message + "\n");
         clear_cancel(*st.lease);
     } else if (st.streamed_bytes == 0) {
-        out(r.value); // engine did not stream
+        emit_assistant(r.value); // engine did not stream
     }
-    out(flush_stream(st.filter));
+    emit_assistant(flush_stream(st.filter));
     ensure_newline();
     collect_artifacts(st, before);
     if (r.ok) {
@@ -339,7 +382,8 @@ int list_conversations(const std::string &workspace) {
 Result<int> parse_positive(std::string_view flag, std::string_view text) {
     int v = 0;
     for (char c : text) {
-        if (c < '0' || c > '9' || v > 10'000'000) return fail<int>(ErrorCode::InvalidConfig, "--" + std::string(flag) + " expects a positive number");
+        if (c < '0' || c > '9' || v > 10'000'000)
+            return fail<int>(ErrorCode::InvalidConfig, "--" + std::string(flag) + " expects a positive number");
         v = v * 10 + (c - '0');
     }
     if (v <= 0) return fail<int>(ErrorCode::InvalidConfig, "--" + std::string(flag) + " expects a positive number");
@@ -412,6 +456,9 @@ int cmd_chat(const CommandLine &cl, Context &ctx) {
     st.auto_approve = cl.has("yes");
     st.inprocess = cl.has("inprocess");
     st.interactive = stdin_is_tty();
+#if defined(AGENT_CLI_HAS_TUI)
+    st.use_tui = st.interactive && stream_is_tty(stdout) && !cl.has("plain") && !st.verbose;
+#endif
     {
         // Names and bindings of the secrets; a broken index only means that no server gets a key.
         const std::string home_root = ctx.has_home ? ctx.home.root : ctx.config_dir;
@@ -464,6 +511,82 @@ int cmd_chat(const CommandLine &cl, Context &ctx) {
 
 namespace {
 
+// One input line: a message or a slash command. Returns false when the user asked to exit.
+bool handle_line(ChatState &st, const std::string &line) {
+    const SlashCommand cmd = parse_slash_command(line);
+    if (cmd.kind == SlashKind::None) {
+        if (cmd.text.empty()) return true;
+        run_one_turn(st, cmd.text, {});
+        return true;
+    }
+    if (cmd.kind == SlashKind::Exit) return false;
+    if (!st.lease && (cmd.kind == SlashKind::Clear || cmd.kind == SlashKind::Stats)) {
+        out("[error] no model is loaded; switch with /model NAME\n");
+        return true;
+    }
+    switch (cmd.kind) {
+    case SlashKind::Clear: {
+        const bool has_system = !st.memory.history.empty() && st.memory.history.front().role == "system";
+        Message system = has_system ? st.memory.history.front() : Message{};
+        st.memory.history.clear();
+        if (has_system) st.memory.history.push_back(std::move(system));
+        st.memory.stats = {};
+        st.artifacts.clear();
+        if (auto r = save_conversation(*st.lease, st.memory); !r.ok) out("[error] " + r.error.message + "\n");
+        clear_provider_kv_cache(*st.lease);
+        out("conversation cleared\n");
+        break;
+    }
+    case SlashKind::Model:
+        if (cmd.arg.empty()) {
+            out("current model: " + st.model.name + " (" + st.model.path + ") on " + st.engine.name + "\n");
+            for (const auto &m : catalog_refs(*st.ctx)) out("  " + m.name + "  " + m.path + "\n");
+        } else {
+            switch_model(st, cmd.arg);
+        }
+        break;
+    case SlashKind::Image: {
+        if (cmd.arg.empty()) {
+            out("usage: /image <path> [prompt]\n");
+            break;
+        }
+        if (!file_exists(cmd.arg)) {
+            out("[error] no such file: " + cmd.arg + "\n");
+            break;
+        }
+        std::error_code ec;
+        const Media media[] = {{fs::absolute(cmd.arg, ec).string(), mime_for_path(cmd.arg)}};
+        const std::string prompt = cmd.rest.empty() ? "Describe this." : cmd.rest;
+        run_one_turn(st, prompt, media);
+        break;
+    }
+    case SlashKind::Open: {
+        if (cmd.arg.empty()) {
+            if (st.artifacts.empty()) out("no artifacts generated yet\n");
+            for (size_t i = 0; i < st.artifacts.size(); ++i)
+                out("  " + std::to_string(i + 1) + ". " + st.artifacts[i].path + " (" + st.artifacts[i].mime + ")\n");
+            break;
+        }
+        size_t n = 0;
+        for (char c : cmd.arg) n = (c >= '0' && c <= '9' && n < 1'000'000) ? n * 10 + static_cast<size_t>(c - '0') : SIZE_MAX;
+        if (n == 0 || n == SIZE_MAX || n > st.artifacts.size()) {
+            out("[error] no artifact " + cmd.arg + " (" + std::to_string(st.artifacts.size()) + " generated so far)\n");
+            break;
+        }
+        const std::string &path = st.artifacts[n - 1].path;
+        // No desktop opener (headless box, container): the path is still useful to copy.
+        if (auto r = open_with_os(path); !r.ok) out("[note] " + r.error.message + "; the file is at " + path + "\n");
+        else out("opened " + path + "\n");
+        break;
+    }
+    case SlashKind::Stats: print_stats(st); break;
+    case SlashKind::Help: print_chat_help(); break;
+    case SlashKind::Unknown: out("unknown command /" + cmd.arg + " (try /help)\n"); break;
+    default: break;
+    }
+    return true;
+}
+
 int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log) {
     Config store_cfg;
     store_cfg.provider = AiProvider::Mock;
@@ -492,6 +615,38 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
         st.memory.history.push_back(Message{.role = "system", .content = std::string(kSystemPrompt)});
     }
 
+#if defined(AGENT_CLI_HAS_TUI)
+    if (st.use_tui) {
+        if (cl.has("resume")) collect_artifacts(st, 0);
+        // Anything written to stderr (engine logs, warnings) would tear the screen: it goes to a file for the time being.
+        std::FILE *log = std::fopen((fs::path(st.workspace) / "logs" / "chat.log").string().c_str(), "a");
+        std::FILE *saved_err = g_err;
+        if (log) g_err = log;
+        TuiHost host;
+        host.user = &st;
+        host.header = [](void *u) {
+            auto *c = static_cast<ChatState *>(u);
+            return "agent  " + c->model.name + "  \xC2\xB7  " + c->engine.name + "  \xC2\xB7  " + c->memory.id;
+        };
+        host.footer = [](void *u) {
+            auto *c = static_cast<ChatState *>(u);
+            return format_turn_footer(c->memory.stats.last);
+        };
+        host.submit = [](void *u, const std::string &line) { return handle_line(*static_cast<ChatState *>(u), line); };
+        host.cancel = [](void *) {
+            if (!g_generating.load()) return;
+            if (int32_t *flag = g_cancel_flag.load()) std::atomic_ref<int32_t>(*flag).store(1, std::memory_order_relaxed);
+        };
+        g_tui = true;
+        const int rc = run_tui(host);
+        g_tui = false;
+        g_err = saved_err;
+        if (log) std::fclose(log);
+        if (st.saved || cl.has("resume"))
+            std::printf("saved as %s; resume with: agent chat --resume %s\n", st.memory.id.c_str(), st.memory.id.c_str());
+        return rc;
+    }
+#endif
     std::printf("agent chat  (%s)\n", st.memory.id.c_str());
     std::printf("  model:     %s  %s\n", st.model.name.c_str(), st.model.path.c_str());
     std::printf("  engine:    %s %s  %s  (%s)\n", st.engine.name.c_str(), st.engine.version.c_str(), st.engine.path.c_str(),
@@ -520,78 +675,7 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
         }
         if (!st.interactive) out("> " + line + "\n"); // echo piped input so transcripts read naturally
         g_at_line_start = true;
-
-        const SlashCommand cmd = parse_slash_command(line);
-        if (cmd.kind == SlashKind::None) {
-            if (cmd.text.empty()) continue;
-            run_one_turn(st, cmd.text, {});
-            continue;
-        }
-        if (cmd.kind == SlashKind::Exit) break;
-        if (!st.lease && (cmd.kind == SlashKind::Clear || cmd.kind == SlashKind::Stats)) {
-            out("[error] no model is loaded; switch with /model NAME\n");
-            continue;
-        }
-        switch (cmd.kind) {
-        case SlashKind::Clear: {
-            const bool has_system = !st.memory.history.empty() && st.memory.history.front().role == "system";
-            Message system = has_system ? st.memory.history.front() : Message{};
-            st.memory.history.clear();
-            if (has_system) st.memory.history.push_back(std::move(system));
-            st.memory.stats = {};
-            st.artifacts.clear();
-            if (auto r = save_conversation(*st.lease, st.memory); !r.ok) out("[error] " + r.error.message + "\n");
-            clear_provider_kv_cache(*st.lease);
-            out("conversation cleared\n");
-            break;
-        }
-        case SlashKind::Model:
-            if (cmd.arg.empty()) {
-                out("current model: " + st.model.name + " (" + st.model.path + ") on " + st.engine.name + "\n");
-                for (const auto &m : catalog_refs(*st.ctx)) out("  " + m.name + "  " + m.path + "\n");
-            } else {
-                switch_model(st, cmd.arg);
-            }
-            break;
-        case SlashKind::Image: {
-            if (cmd.arg.empty()) {
-                out("usage: /image <path> [prompt]\n");
-                break;
-            }
-            if (!file_exists(cmd.arg)) {
-                out("[error] no such file: " + cmd.arg + "\n");
-                break;
-            }
-            std::error_code ec;
-            const Media media[] = {{fs::absolute(cmd.arg, ec).string(), mime_for_path(cmd.arg)}};
-            const std::string prompt = cmd.rest.empty() ? "Describe this." : cmd.rest;
-            run_one_turn(st, prompt, media);
-            break;
-        }
-        case SlashKind::Open: {
-            if (cmd.arg.empty()) {
-                if (st.artifacts.empty()) out("no artifacts generated yet\n");
-                for (size_t i = 0; i < st.artifacts.size(); ++i)
-                    out("  " + std::to_string(i + 1) + ". " + st.artifacts[i].path + " (" + st.artifacts[i].mime + ")\n");
-                break;
-            }
-            size_t n = 0;
-            for (char c : cmd.arg) n = (c >= '0' && c <= '9' && n < 1'000'000) ? n * 10 + static_cast<size_t>(c - '0') : SIZE_MAX;
-            if (n == 0 || n == SIZE_MAX || n > st.artifacts.size()) {
-                out("[error] no artifact " + cmd.arg + " (" + std::to_string(st.artifacts.size()) + " generated so far)\n");
-                break;
-            }
-            const std::string &path = st.artifacts[n - 1].path;
-            // No desktop opener (headless box, container): the path is still useful to copy.
-            if (auto r = open_with_os(path); !r.ok) out("[note] " + r.error.message + "; the file is at " + path + "\n");
-            else out("opened " + path + "\n");
-            break;
-        }
-        case SlashKind::Stats: print_stats(st); break;
-        case SlashKind::Help: print_chat_help(); break;
-        case SlashKind::Unknown: out("unknown command /" + cmd.arg + " (try /help)\n"); break;
-        default: break;
-        }
+        if (!handle_line(st, line)) break;
     }
 
     std::signal(SIGINT, SIG_DFL);

@@ -2,9 +2,8 @@
 
 #include "runtimes.hpp" // host_os(), host_arch()
 
-#include <simdjson.h>
-
 #include <filesystem>
+#include <simdjson.h>
 
 namespace agent::cli {
 
@@ -38,20 +37,20 @@ std::string engine_asset_name(std::string_view engine, std::string_view os, std:
     return "agent-engine-" + std::string(engine) + "-" + std::string(os) + "-" + std::string(arch) + "." + ext;
 }
 
-std::string release_manifest_url(std::string_view repo, std::string_view tag) {
-    return release_asset_url(repo, tag, "manifest.json");
-}
+std::string release_manifest_url(std::string_view repo, std::string_view tag) { return release_asset_url(repo, tag, "manifest.json"); }
 
 std::string release_asset_url(std::string_view repo, std::string_view tag, std::string_view file) {
     if (tag.empty() || tag == "latest") return "https://github.com/" + std::string(repo) + "/releases/latest/download/" + std::string(file);
     return "https://github.com/" + std::string(repo) + "/releases/download/" + std::string(tag) + "/" + std::string(file);
 }
 
-Result<std::string> pull_engine(const std::string &engines_dir, std::string_view engine, std::string_view repo, std::string_view tag, const agent::hub::HttpOptions &http,
-                                bool (*on_progress)(uint64_t, uint64_t, void *), void *user) {
-    if (engine.empty() || engine.find_first_of("/\\.") != std::string_view::npos) return fail<std::string>(ErrorCode::InvalidConfig, "invalid engine name '" + std::string(engine) + "'");
+Result<std::string> pull_engine(const std::string &engines_dir, std::string_view engine, std::string_view repo, std::string_view tag,
+                                const agent::hub::HttpOptions &http, bool (*on_progress)(uint64_t, uint64_t, void *), void *user) {
+    if (engine.empty() || engine.find_first_of("/\\.") != std::string_view::npos)
+        return fail<std::string>(ErrorCode::InvalidConfig, "invalid engine name '" + std::string(engine) + "'");
     auto text = agent::hub::http_get_text(release_manifest_url(repo, tag), http);
-    if (!text.ok) return fail<std::string>(text.error.code, "cannot read the release manifest of " + std::string(repo) + ": " + text.error.message);
+    if (!text.ok)
+        return fail<std::string>(text.error.code, "cannot read the release manifest of " + std::string(repo) + ": " + text.error.message);
     auto manifest = parse_release_manifest(text.value);
     if (!manifest.ok) return fail<std::string>(manifest.error.code, manifest.error.message);
 
@@ -60,7 +59,9 @@ Result<std::string> pull_engine(const std::string &engines_dir, std::string_view
     const ReleaseFile *file = nullptr;
     for (const ReleaseFile &f : manifest.value.files)
         if (f.name == asset) file = &f;
-    if (!file) return fail<std::string>(ErrorCode::KeyNotFound, "release " + manifest.value.version + " has no " + asset + " (no prebuilt '" + std::string(engine) + "' engine for " + os + "-" + arch + ")");
+    if (!file)
+        return fail<std::string>(ErrorCode::KeyNotFound, "release " + manifest.value.version + " has no " + asset + " (no prebuilt '" +
+                                                             std::string(engine) + "' engine for " + os + "-" + arch + ")");
 
     const std::string version = manifest.value.version.empty() ? std::string(tag) : manifest.value.version;
     const char *ext = os == "windows" ? "dll" : os == "macos" ? "dylib" : "so";
@@ -75,7 +76,8 @@ Result<std::string> pull_engine(const std::string &engines_dir, std::string_view
     opts.on_progress = on_progress;
     opts.progress_user_data = user;
     const std::string repo_name = manifest.value.repository.empty() ? std::string(repo) : manifest.value.repository;
-    if (auto d = agent::hub::download_file(release_asset_url(repo_name, version, asset), target.string(), http, opts); !d.ok) return fail<std::string>(d.error.code, d.error.message);
+    if (auto d = agent::hub::download_file(release_asset_url(repo_name, version, asset), target.string(), http, opts); !d.ok)
+        return fail<std::string>(d.error.code, d.error.message);
     fs::permissions(target, fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec, fs::perm_options::add, ec);
     return ok(target.string());
 }

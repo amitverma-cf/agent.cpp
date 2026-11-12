@@ -18,7 +18,10 @@ Arena::Arena(size_t capacity) {
 
 Arena::~Arena() = default;
 Arena::Arena(Arena &&other) noexcept
-    : chunks_(std::move(other.chunks_)), offset_(other.offset_), full_(other.full_), high_water_(other.high_water_) {
+    : chunks_(std::move(other.chunks_)),
+      offset_(other.offset_),
+      full_(other.full_),
+      high_water_(other.high_water_) {
     other.chunks_.clear();
     other.offset_ = other.full_ = other.high_water_ = 0;
 }

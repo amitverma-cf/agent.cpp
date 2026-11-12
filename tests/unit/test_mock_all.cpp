@@ -5,9 +5,8 @@
 
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/engine_abi.h>
-#include <catch_amalgamated.hpp>
-
 #include <atomic>
+#include <catch_amalgamated.hpp>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -23,7 +22,8 @@ struct Ws {
     fs::path dir = fs::temp_directory_path() / "agent_test_mock_all";
     fs::path audio = dir / "in.wav";
     fs::path image = dir / "in.png";
-    std::string audio_s = (dir / "in.wav").string(), image_s = (dir / "in.png").string(); // MediaView keeps string_views: these outlive the calls
+    std::string audio_s = (dir / "in.wav").string(),
+                image_s = (dir / "in.png").string(); // MediaView keeps string_views: these outlive the calls
     Ws() {
         std::error_code ec;
         fs::remove_all(dir, ec);
@@ -94,8 +94,10 @@ TEST_CASE("mock-all: every capability answers, in process and through the engine
         CHECK(std::string(tts.value.message.media[0].mime) == "audio/wav");
         CHECK(fs::exists(std::string(tts.value.message.media[0].path)));
 
-        for (auto [task, mime] : {std::pair<uint32_t, const char *>{AGENT_CAP_IMAGE_GEN, "image/png"}, std::pair<uint32_t, const char *>{AGENT_CAP_IMAGE_EDIT, "image/png"},
-                                  std::pair<uint32_t, const char *>{AGENT_CAP_VIDEO_GEN, "video/mp4"}, std::pair<uint32_t, const char *>{AGENT_CAP_MESH_GEN, "model/gltf-binary"}}) {
+        for (auto [task, mime] : {std::pair<uint32_t, const char *>{AGENT_CAP_IMAGE_GEN, "image/png"},
+                                  std::pair<uint32_t, const char *>{AGENT_CAP_IMAGE_EDIT, "image/png"},
+                                  std::pair<uint32_t, const char *>{AGENT_CAP_VIDEO_GEN, "video/mp4"},
+                                  std::pair<uint32_t, const char *>{AGENT_CAP_MESH_GEN, "model/gltf-binary"}}) {
             auto r = run(s, {.text = "a cat", .media = {image}, .task = task});
             INFO("task " << task);
             REQUIRE(r.ok);
@@ -207,7 +209,11 @@ TEST_CASE("embed: inputs with media give one embedding each, text-only still wor
 }
 
 TEST_CASE("engine_config: models by role, nested sections and merged options", "[engine_config]") {
-    const std::vector<agent::ModelSlot> slots = {{"model", "/m/chat.gguf"}, {"diffusion_model", "/m/flux.gguf"}, {"tts.model", "/m/k.gguf"}, {"tts.voice", "alba"}, {"asr.model", "/m/p.gguf"}};
+    const std::vector<agent::ModelSlot> slots = {{"model", "/m/chat.gguf"},
+                                                 {"diffusion_model", "/m/flux.gguf"},
+                                                 {"tts.model", "/m/k.gguf"},
+                                                 {"tts.voice", "alba"},
+                                                 {"asr.model", "/m/p.gguf"}};
     auto cfg = agent::engine_config("sdcpp", slots, R"({"threads": 4})");
     REQUIRE(cfg.ok);
     CHECK(cfg.value.provider == agent::AiProvider::Engine);

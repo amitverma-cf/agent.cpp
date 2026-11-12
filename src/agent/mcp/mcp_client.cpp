@@ -654,7 +654,10 @@ Result<std::vector<Tool>> connect_mcp_server(Session &session, const McpServerCo
     std::vector<std::string> secret_values;
     for (const std::string &a : config.args)
         if (a.find("${secret:") != std::string::npos)
-            return fail<std::vector<Tool>>(ErrorCode::InvalidConfig, "MCP server '" + config.name + "': secrets are only allowed in env, not in args (command lines are visible to other processes)");
+            return fail<std::vector<Tool>>(
+                ErrorCode::InvalidConfig,
+                "MCP server '" + config.name +
+                    "': secrets are only allowed in env, not in args (command lines are visible to other processes)");
     for (auto &entry : resolved.env) {
         if (entry.second.find("${secret:") == std::string::npos) continue;
         if (!session.config.secret_resolver)
@@ -665,14 +668,16 @@ Result<std::vector<Tool>> connect_mcp_server(Session &session, const McpServerCo
         const std::string consumer = "mcp:" + config.name;
         const SecretRequest who{.consumer = consumer, .identity_parts = identity};
         auto expanded = session.config.secret_resolver(entry.second, who, secret_values, session.config.secret_user_data);
-        if (!expanded.ok) return fail<std::vector<Tool>>(expanded.error.code, "MCP server '" + config.name + "': " + expanded.error.message);
+        if (!expanded.ok)
+            return fail<std::vector<Tool>>(expanded.error.code, "MCP server '" + config.name + "': " + expanded.error.message);
         entry.second = std::move(expanded.value);
     }
 
     if (resolved.sandbox.enabled) {
         const std::string consumer = "mcp:" + config.name;
         for (const PathGrant &g : session.config.path_grants)
-            if (g.consumer == "*" || g.consumer == consumer) (g.write ? resolved.sandbox.read_write_paths : resolved.sandbox.read_only_paths).push_back(g.path);
+            if (g.consumer == "*" || g.consumer == consumer)
+                (g.write ? resolved.sandbox.read_write_paths : resolved.sandbox.read_only_paths).push_back(g.path);
     }
     if (session.config.mcp_launcher) session.config.mcp_launcher(resolved, session.config.mcp_launcher_user_data);
     LogSink sink{

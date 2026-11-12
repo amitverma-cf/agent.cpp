@@ -2,8 +2,6 @@
 
 #include "cli_core.hpp"
 
-#include <simdjson.h>
-
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -11,6 +9,7 @@
 #include <fstream>
 #include <map>
 #include <set>
+#include <simdjson.h>
 
 namespace agent::cli {
 
@@ -83,7 +82,8 @@ Result<std::vector<SkillHit>> parse_skill_search(std::string_view json) {
     simdjson::dom::element doc;
     if (parser.parse(json).get(doc)) return fail<std::vector<SkillHit>>(ErrorCode::ParseError, "skills.sh: the answer is not valid JSON");
     simdjson::dom::array skills;
-    if (doc["skills"].get(skills)) return fail<std::vector<SkillHit>>(ErrorCode::ParseError, "skills.sh: the answer has no \"skills\" list");
+    if (doc["skills"].get(skills))
+        return fail<std::vector<SkillHit>>(ErrorCode::ParseError, "skills.sh: the answer has no \"skills\" list");
     std::vector<SkillHit> out;
     for (simdjson::dom::element e : skills) {
         simdjson::dom::object o;
@@ -112,18 +112,21 @@ Result<SkillHit> parse_skill_id(std::string_view id) {
     h.source = std::string(id.substr(0, b));
     h.skill_id = std::string(id.substr(b + 1));
     h.name = h.skill_id;
-    if (!safe_relative(h.source) || !safe_relative(h.skill_id)) return fail<SkillHit>(ErrorCode::InvalidConfig, "invalid skill id '" + std::string(id) + "'");
+    if (!safe_relative(h.source) || !safe_relative(h.skill_id))
+        return fail<SkillHit>(ErrorCode::InvalidConfig, "invalid skill id '" + std::string(id) + "'");
     return ok(std::move(h));
 }
 
 Result<SkillFiles> find_skill_in_tree(std::string_view tree_json, std::string_view skill_id) {
     simdjson::dom::parser parser;
     simdjson::dom::element doc;
-    if (parser.parse(tree_json).get(doc)) return fail<SkillFiles>(ErrorCode::ParseError, "GitHub: the repository listing is not valid JSON");
+    if (parser.parse(tree_json).get(doc))
+        return fail<SkillFiles>(ErrorCode::ParseError, "GitHub: the repository listing is not valid JSON");
     simdjson::dom::array tree;
     if (doc["tree"].get(tree)) return fail<SkillFiles>(ErrorCode::ParseError, "GitHub: the repository listing has no \"tree\"");
     bool truncated = false;
-    if (!doc["truncated"].get(truncated) && truncated) return fail<SkillFiles>(ErrorCode::HttpError, "GitHub: the repository is too large to list");
+    if (!doc["truncated"].get(truncated) && truncated)
+        return fail<SkillFiles>(ErrorCode::HttpError, "GitHub: the repository is too large to list");
 
     struct Blob {
         std::string path;
@@ -173,12 +176,15 @@ Result<SkillFiles> plan_skill(const SkillHit &hit, const agent::hub::HttpOptions
     if (!found.ok) return found;
     constexpr size_t kMaxFiles = 200;
     constexpr uint64_t kMaxBytes = 20u << 20;
-    if (found.value.files.size() > kMaxFiles) return fail<SkillFiles>(ErrorCode::InvalidConfig, "the skill has " + std::to_string(found.value.files.size()) + " files (limit " + std::to_string(kMaxFiles) + ")");
+    if (found.value.files.size() > kMaxFiles)
+        return fail<SkillFiles>(ErrorCode::InvalidConfig, "the skill has " + std::to_string(found.value.files.size()) + " files (limit " +
+                                                              std::to_string(kMaxFiles) + ")");
     if (found.value.bytes > kMaxBytes) return fail<SkillFiles>(ErrorCode::InvalidConfig, "the skill is larger than 20 MiB");
     return found;
 }
 
-Result<SkillInstall> install_skill(const SkillHit &hit, const SkillFiles &planned, const std::string &skills_dir, const agent::hub::HttpOptions &http) {
+Result<SkillInstall> install_skill(const SkillHit &hit, const SkillFiles &planned, const std::string &skills_dir,
+                                   const agent::hub::HttpOptions &http) {
     const auto found = ok(planned);
 
     const std::string leaf = safe_name(fs::path(hit.skill_id).filename().string());
@@ -197,7 +203,8 @@ Result<SkillInstall> install_skill(const SkillHit &hit, const SkillFiles &planne
             fs::remove_all(staging, ec);
             return fail<SkillInstall>(ErrorCode::PermissionDenied, "refusing the file '" + path + "'");
         }
-        auto body = agent::hub::http_get_text("https://raw.githubusercontent.com/" + hit.source + "/HEAD/" + percent_encode(path, true), http, 8u << 20);
+        auto body = agent::hub::http_get_text("https://raw.githubusercontent.com/" + hit.source + "/HEAD/" + percent_encode(path, true),
+                                              http, 8u << 20);
         if (!body.ok) {
             fs::remove_all(staging, ec);
             return fail<SkillInstall>(body.error.code, "cannot download " + path + ": " + body.error.message);
@@ -212,16 +219,20 @@ Result<SkillInstall> install_skill(const SkillHit &hit, const SkillFiles &planne
                 return fail<SkillInstall>(ErrorCode::FilesystemError, "cannot write " + out.string());
             }
         }
-        manifest += std::string(manifest.empty() ? "" : ",") + "{\"path\":" + quote(rel) + ",\"sha256\":\"" + agent::hub::sha256_hex(body.value) + "\"}";
+        manifest += std::string(manifest.empty() ? "" : ",") + "{\"path\":" + quote(rel) + ",\"sha256\":\"" +
+                    agent::hub::sha256_hex(body.value) + "\"}";
         result.files.push_back(rel);
         const std::string ext = lower(fs::path(rel).extension().string());
-        static const std::set<std::string> docs = {".md", ".txt", ".json", ".yaml", ".yml", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".csv", ".toml", ""};
+        static const std::set<std::string> docs = {".md",   ".txt", ".json", ".yaml", ".yml",  ".png", ".jpg",
+                                                   ".jpeg", ".gif", ".svg",  ".csv",  ".toml", ""};
         if (!docs.count(ext) && rel != "LICENSE") result.scripts.push_back(rel);
     }
     {
         std::ofstream meta(staging / ".source.json");
-        meta << "{\"id\":" << quote(hit.id) << ",\"repository\":\"https://github.com/" << hit.source << "\",\"directory\":" << quote(found.value.dir)
-             << ",\"installed_at\":" << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count() << ",\"files\":[" << manifest << "]}\n";
+        meta << "{\"id\":" << quote(hit.id) << ",\"repository\":\"https://github.com/" << hit.source
+             << "\",\"directory\":" << quote(found.value.dir) << ",\"installed_at\":"
+             << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count()
+             << ",\"files\":[" << manifest << "]}\n";
     }
     fs::remove_all(target, ec);
     fs::rename(staging, target, ec);
@@ -244,7 +255,8 @@ Result<std::vector<McpHit>> parse_mcp_search(std::string_view json) {
     simdjson::dom::element doc;
     if (parser.parse(json).get(doc)) return fail<std::vector<McpHit>>(ErrorCode::ParseError, "MCP registry: the answer is not valid JSON");
     simdjson::dom::array servers;
-    if (doc["servers"].get(servers)) return fail<std::vector<McpHit>>(ErrorCode::ParseError, "MCP registry: the answer has no \"servers\" list");
+    if (doc["servers"].get(servers))
+        return fail<std::vector<McpHit>>(ErrorCode::ParseError, "MCP registry: the answer has no \"servers\" list");
     std::vector<McpHit> out;
     std::map<std::string, size_t> index;
     for (simdjson::dom::element e : servers) {
@@ -361,13 +373,15 @@ Result<McpEntry> mcp_entry_for(const McpHit &hit) {
         }
         std::string args_json;
         for (size_t i = 0; i < args.size(); ++i) args_json += std::string(i ? ", " : "") + quote(args[i]);
-        entry.json = "{\n  \"mcpServers\": {\n    " + quote(entry.server_name) + ": {\n      \"command\": " + quote(command) + ",\n      \"args\": [" + args_json + "]";
+        entry.json = "{\n  \"mcpServers\": {\n    " + quote(entry.server_name) + ": {\n      \"command\": " + quote(command) +
+                     ",\n      \"args\": [" + args_json + "]";
         if (!env.empty()) entry.json += ",\n      \"env\": {\n        " + env + "\n      }";
         entry.json += "\n    }\n  }\n}\n";
         return ok(std::move(entry));
     }
     std::string why = "no package of '" + hit.name + "' can be started by agent.cpp (it needs an npm or pypi package that speaks stdio)";
-    if (!hit.remotes.empty()) why += "; it is also offered as a hosted server at " + hit.remotes[0] + ", which agent.cpp does not connect to yet";
+    if (!hit.remotes.empty())
+        why += "; it is also offered as a hosted server at " + hit.remotes[0] + ", which agent.cpp does not connect to yet";
     return fail<McpEntry>(ErrorCode::InvalidConfig, why);
 }
 

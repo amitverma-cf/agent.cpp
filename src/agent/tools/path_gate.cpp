@@ -78,13 +78,17 @@ std::vector<fs::path> external_paths_in_command(std::string_view command, const 
     while (i < command.size()) {
         // a token starts after whitespace, a quote, '=', '<', '>' or ';' and looks like an absolute path or ~/...
         const char c = command[i];
-        const bool boundary = i == 0 || std::isspace(static_cast<unsigned char>(command[i - 1])) || std::string_view("\"'=<>;|&(").find(command[i - 1]) != std::string_view::npos;
+        const bool boundary = i == 0 || std::isspace(static_cast<unsigned char>(command[i - 1])) ||
+                              std::string_view("\"'=<>;|&(").find(command[i - 1]) != std::string_view::npos;
         const bool unix_abs = c == '/' && i + 1 < command.size() && command[i + 1] != '/' && command[i + 1] != ' ';
         const bool home = c == '~' && i + 1 < command.size() && command[i + 1] == '/';
-        const bool drive = std::isalpha(static_cast<unsigned char>(c)) && i + 2 < command.size() && command[i + 1] == ':' && (command[i + 2] == '\\' || command[i + 2] == '/');
+        const bool drive = std::isalpha(static_cast<unsigned char>(c)) && i + 2 < command.size() && command[i + 1] == ':' &&
+                           (command[i + 2] == '\\' || command[i + 2] == '/');
         if (boundary && (unix_abs || home || drive)) {
             size_t j = i;
-            while (j < command.size() && !std::isspace(static_cast<unsigned char>(command[j])) && std::string_view("\"'<>;|&)").find(command[j]) == std::string_view::npos) ++j;
+            while (j < command.size() && !std::isspace(static_cast<unsigned char>(command[j])) &&
+                   std::string_view("\"'<>;|&)").find(command[j]) == std::string_view::npos)
+                ++j;
             std::string token(command.substr(i, j - i));
             if (home) {
                 const char *h = std::getenv("HOME");
@@ -113,7 +117,9 @@ std::vector<fs::path> external_paths_in_command(std::string_view command, const 
 
 bool command_looks_like_write(std::string_view command) {
     if (command.find('>') != std::string_view::npos) return true;
-    static constexpr std::string_view verbs[] = {"cp ", "mv ", "rm ", "mkdir", "touch ", "tee ", "sed -i", "chmod ", "chown ", "ln ", "rmdir", "install ", "dd ", "truncate", "git clone", "git checkout", "curl -o", "wget "};
+    static constexpr std::string_view verbs[] = {"cp ",    "mv ",      "rm ",       "mkdir",        "touch ",  "tee ",
+                                                 "sed -i", "chmod ",   "chown ",    "ln ",          "rmdir",   "install ",
+                                                 "dd ",    "truncate", "git clone", "git checkout", "curl -o", "wget "};
     for (std::string_view v : verbs)
         if (command.find(v) != std::string_view::npos) return true;
     return false;

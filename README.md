@@ -17,11 +17,12 @@ Status: under active development. APIs, CLI flags and file formats change withou
   diarization) with audio.cpp, images and video with stable-diffusion.cpp, 3D meshes with TRELLIS.2, and generic ONNX models.
   See the [engine matrix](#engines).
 - **Engines run in their own process.** A crashing engine fails one turn, not the CLI. On Linux the engine host
-  and `run_command` run under Landlock and seccomp. On Windows 11 the sandbox uses an AppContainer, tested.
+  and `run_command` run under Landlock and seccomp. On Windows 11 the sandbox uses an AppContainer. Where the OS cannot provide a
+  sandbox, or with `--no-sandbox`, things run unsandboxed and a warning says so: no weaker fallbacks.
 - **MCP servers and skills.** Connect stdio MCP servers and load `SKILL.md` skills. Private copies of `bun` and
   `uv` run the servers that are published as npm or Python packages.
-- **A zero-hot-path-allocation SDK.** Per-turn memory comes from a bump-pointer `Arena`. Errors are `Result<T>`,
-  with no exceptions. Providers and tools are dispatched through `constexpr` function-pointer tables.
+- **A small, explicit C++ SDK.** You name the engine and each model file (`engine_config`), and responses own their memory. Errors are `Result<T>`,
+  with no exceptions, and engines, stores and tools are plain function tables (no virtual calls).
 
 ---
 
@@ -69,7 +70,7 @@ Full CLI reference: [docs/cli.md](docs/cli.md). Setup, layout and runtimes: [doc
 
 | Engine | Capabilities | Build option (default) |
 |---|---|---|
-| `llama` (llama.cpp b12020) | text and tool calls, image and audio input (with `mmproj`), OCR, embeddings, rerank, decision models (choice, score, yes/no) | `AGENT_ENGINE_LLAMA` (ON) |
+| `llama` (llama.cpp) | text and tool calls, image and audio input (with `mmproj`), OCR, embeddings, rerank, decision models (choice, score, yes/no) | `AGENT_ENGINE_LLAMA` (ON) |
 | `audiocpp` (audio.cpp) | text to speech (pocket-tts, supertonic-3), speech recognition (Parakeet TDT, Moonshine, CrisperWhisper), VAD, speaker diarization. GGUF models | `AGENT_ENGINE_AUDIOCPP` (OFF, needs the `vendor/audio.cpp` submodule) |
 | `sdcpp` (stable-diffusion.cpp) | image generation, image editing, video generation (Wan 2.1 tested) | `AGENT_ENGINE_SDCPP` (OFF) |
 | `trellis` (TRELLIS.2) | image to 3D mesh (GLB) | `AGENT_ENGINE_TRELLIS` (OFF) |
@@ -127,6 +128,8 @@ find_package(agent-cpp REQUIRED)
 target_link_libraries(my_app PRIVATE agent-cpp::agent)
 ```
 
+You choose the engine and each model file yourself. `engine_config` fills a `Config` from them; a different engine takes
+different roles (an image engine takes `diffusion_model`, `llm`, `vae`; the speech engine takes `tts.model`, `asr.model`).
 A minimal chat loop:
 
 ```cpp
@@ -136,16 +139,18 @@ A minimal chat loop:
 int main() {
     agent::AgentRuntime runtime;
 
-    auto sess = agent::init({
-        .provider       = agent::AiProvider::Engine,
-        .engine         = "build/src/engines/llama/agent-engine-llama.so",
-        .model          = ".workspace/models/my.gguf",
-        .workspace_dir  = ".workspace",
-        .context_window = 4096,
-        .max_tokens     = 512,
-        .enable_file_logging = true,
-    });
-    if (!sess.ok) { fprintf(stderr, "%s\n", sess.error.message.c_str()); return 1; }
+    agent::Config base;
+    base.workspace_dir = ".workspace";
+    base.context_window = 4096;
+    base.max_tokens = 512;
+    const agent::ModelSlot models[] = {{"model", ".workspace/models/my.gguf"}};
+    auto cfg = agent::engine_config("build/src/engines/llama/agent-engine-llama.so", models, {}, base);
+    if (!cfg.ok) { fprintf(stderr, "%s
+", cfg.error.message.c_str()); return 1; }
+
+    auto sess = agent::init(cfg.value);
+    if (!sess.ok) { fprintf(stderr, "%s
+", sess.error.message.c_str()); return 1; }
     agent::Session session = std::move(sess.value);
 
     agent::Conversation conv;
@@ -158,11 +163,13 @@ int main() {
 
         auto r = agent::run_turn(session, conv, buf,
             true, [](std::string_view tok, void *){ fwrite(tok.data(), 1, tok.size(), stdout); });
-        if (r.ok) printf("\n");
+        if (r.ok) printf("
+");
     }
 
     auto st = agent::get_stats(session);
-    printf("turns=%d  tokens=%d\n", st.total_turns,
+    printf("turns=%d  tokens=%d
+", st.total_turns,
            st.total_prompt_tokens + st.total_completion_tokens);
     return 0;
 }
@@ -207,10 +214,10 @@ Details: [docs/workspace.md](docs/workspace.md).
 - [Packaging and install](docs/packaging.md): `cmake --install`, `find_package(agent-cpp)`, the Linux tarball script
 - [Architecture](docs/architecture.md) and [API reference](docs/api.md)
 - Guides: [embedding the library](docs/guides/getting-started-library.md) ·
-  [writing an engine plugin](docs/guides/writing-an-engine.md) ([template](templates/engine-plugin)) ·
+  [writing an engine plugin](docs/guides/writing-an-engine.md) ([template](examples/08-engine-plugin-template)) ·
   [writing a tool](docs/guides/writing-a-tool.md) · [writing a graph](docs/guides/writing-a-graph.md) ·
   [a local voice assistant](docs/guides/voice-assistant.md)
-- Examples (image critique loop, RAG over docs, graph JSON): [`examples/`](examples/README.md)
+- Examples, one folder per use case: [`examples/`](examples/README.md)
 - Security: [OS sandbox](docs/security-sandbox.md) and [SECURITY.md](SECURITY.md)
 - Status: [benchmarks](docs/benchmarks.md)
 
@@ -231,8 +238,8 @@ apps/
   hub/                    agent_hub: Hugging Face and GitHub downloads, models.json
   store-sqlite/           agent_store_sqlite: SQLite store, checkpointer, sqlite-vec
 cmake/                    package config, engine helpers, ggml AMX switch
-templates/engine-plugin/  standalone template for an out-of-tree engine plugin
-examples/                 guide code, image critique, RAG over docs, graph JSON
+
+examples/                 numbered examples (01-hello-agent ... 08-engine-plugin-template)
 bench/                    agent_bench benchmark harness
 tests/
   unit/                   Catch2 unit tests
@@ -240,10 +247,10 @@ tests/
   consumer/               an out-of-tree project that uses the installed package
   helpers/                fake MCP server and test helpers
 schemas/                  JSON schemas for engines.json, models.json and agent.json
-scripts/                  package.sh (Linux tarball)
+scripts/                  update-deps.sh, test.sh, package.sh, format.sh, setup-hooks.sh (all run by hand)
 docs/                     documentation
 vendor/                   llama.cpp, audio.cpp, stable-diffusion.cpp, trellis2cpp,
-                          onnxruntime, simdjson, cpp-httplib, sqlite, sqlite-vec, miniaudio, catch2
+                          simdjson, cpp-httplib, sqlite, sqlite-vec, miniaudio, catch2 (ONNX Runtime is downloaded at configure time)
 ```
 
 ---

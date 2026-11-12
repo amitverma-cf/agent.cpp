@@ -191,7 +191,9 @@ TEST_CASE("read_file of an image attaches it for the engine", "[builtin_tools][g
         auto out = run_node(session, "call:read_file {\"path\":\"" + outside + "\"}", {"read_file"});
         REQUIRE(out.tool.media.size() == 1);
         const std::string artifacts = std::filesystem::absolute(ws_path("artifacts")).string();
-        CHECK(std::filesystem::path(out.tool.media[0].path).generic_string().starts_with(std::filesystem::path(artifacts).generic_string() + "/read-"));
+        CHECK(std::filesystem::path(out.tool.media[0].path)
+                  .generic_string()
+                  .starts_with(std::filesystem::path(artifacts).generic_string() + "/read-"));
         CHECK(out.tool.media[0].path.ends_with("dog.jpg"));
         CHECK(slurp(out.tool.media[0].path) == "jpeg");
         std::filesystem::remove_all("/tmp/agent_test_builtin_graph_outside");
@@ -341,7 +343,8 @@ TEST_CASE("automatic compression in run_turn under a graph uses the session's en
     CHECK(agent::get_stats(session).total_compressions >= 1);
 }
 
-TEST_CASE("history is compressed inside a tool loop, before the request that follows a large tool result", "[builtin_tools][graph][context_compressor]") {
+TEST_CASE("history is compressed inside a tool loop, before the request that follows a large tool result",
+          "[builtin_tools][graph][context_compressor]") {
     std::filesystem::remove_all(kWorkspace);
     std::filesystem::create_directories(kWorkspace);
     { std::ofstream(ws_path("big.txt")) << std::string(3000, 'y'); }

@@ -2,15 +2,13 @@
 // The network half lives in hub_http.cpp so that this file stays cheap to compile and test.
 
 #include <agent-cpp/hub.hpp>
-
-#include <openssl/evp.h>
-
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <openssl/evp.h>
 #include <simdjson.h>
 #include <system_error>
 
@@ -187,7 +185,8 @@ Result<ModelSpec> parse_spec(std::string_view spec) {
     const size_t slash = repo.find('/');
     if (slash == std::string_view::npos || repo.find('/', slash + 1) != std::string_view::npos || !valid_repo_part(repo.substr(0, slash)) ||
         !valid_repo_part(repo.substr(slash + 1)))
-        return fail<ModelSpec>(ErrorCode::InvalidConfig, "model spec must look like owner/repo[:file-or-quant], got '" + std::string(spec) + "'");
+        return fail<ModelSpec>(ErrorCode::InvalidConfig,
+                               "model spec must look like owner/repo[:file-or-quant], got '" + std::string(spec) + "'");
     out.repo = std::string(repo);
 
     if (selector == "*") {
@@ -229,8 +228,8 @@ std::string with_mmproj_option(std::string_view engine_options, std::string_view
 
 namespace {
 
-constexpr std::string_view kQuantTags[] = {"IQ4_XS", "Q8_0", "Q6_K", "Q5_K_M", "Q5_K_S", "Q5_0", "Q4_K_M", "Q4_K_S", "Q4_0",
-                                           "Q3_K_M", "Q3_K_S", "Q2_K", "BF16", "F16", "F32"};
+constexpr std::string_view kQuantTags[] = {"IQ4_XS", "Q8_0",   "Q6_K",   "Q5_K_M", "Q5_K_S", "Q5_0", "Q4_K_M", "Q4_K_S",
+                                           "Q4_0",   "Q3_K_M", "Q3_K_S", "Q2_K",   "BF16",   "F16",  "F32"};
 
 // The quant tag a GGUF file name carries ("qwen-Q4_K_M.gguf" -> "Q4_K_M"), longest match; empty if none.
 std::string_view quant_tag_of(std::string_view filename) {
@@ -265,7 +264,9 @@ Result<std::optional<RemoteFile>> select_mmproj(const RepoInfo &info, std::strin
         const RemoteFile *pick = first_with(quant_tag_of(model_file));
         for (std::string_view tag : {"Q8_0", "F16", "BF16"})
             if (!pick) pick = first_with(tag);
-        if (!pick) pick = *std::min_element(cands.begin(), cands.end(), [](const RemoteFile *a, const RemoteFile *b) { return a->size < b->size; });
+        if (!pick)
+            pick =
+                *std::min_element(cands.begin(), cands.end(), [](const RemoteFile *a, const RemoteFile *b) { return a->size < b->size; });
         return ok(R{*pick});
     }
     for (const RemoteFile *f : cands)
@@ -294,7 +295,10 @@ Result<RepoInfo> parse_repo_info(std::string_view json) {
         if (!card["license"].get(lic)) info.license = std::string(lic);
         else if (!card["license"].get(lic_arr))
             for (simdjson::dom::element e : lic_arr)
-                if (!e.get(lic)) { info.license = std::string(lic); break; }
+                if (!e.get(lic)) {
+                    info.license = std::string(lic);
+                    break;
+                }
         info.license_name = get_string_field(card, "license_name");
     }
     if (info.license.empty()) {
@@ -302,7 +306,10 @@ Result<RepoInfo> parse_repo_info(std::string_view json) {
         if (!doc["tags"].get(tags))
             for (simdjson::dom::element t : tags) {
                 std::string_view tag;
-                if (!t.get(tag) && tag.substr(0, 8) == "license:") { info.license = std::string(tag.substr(8)); break; }
+                if (!t.get(tag) && tag.substr(0, 8) == "license:") {
+                    info.license = std::string(tag.substr(8));
+                    break;
+                }
             }
     }
 
@@ -336,7 +343,8 @@ Result<RemoteFile> select_file(const RepoInfo &info, const ModelSpec &spec) {
         }
         if (by_base.size() == 1) return ok(*by_base.front());
         if (by_base.size() > 1)
-            return fail<RemoteFile>(ErrorCode::InvalidConfig, "hub: '" + spec.file + "' is ambiguous in " + spec.repo + ": " + join_paths(by_base));
+            return fail<RemoteFile>(ErrorCode::InvalidConfig,
+                                    "hub: '" + spec.file + "' is ambiguous in " + spec.repo + ": " + join_paths(by_base));
         return fail<RemoteFile>(ErrorCode::KeyNotFound, "hub: file '" + spec.file + "' not found in " + spec.repo);
     }
 
@@ -373,10 +381,12 @@ Result<RemoteFile> select_file(const RepoInfo &info, const ModelSpec &spec) {
         if (first_shards.empty())
             return fail<RemoteFile>(ErrorCode::InvalidConfig, "hub: '" + spec.quant + "' in " + spec.repo +
                                                                   " has shards but no first shard (-00001-of-N): " + join_paths(pool));
-        return fail<RemoteFile>(ErrorCode::InvalidConfig, "hub: '" + spec.quant + "' is ambiguous in " + spec.repo + ": " + join_paths(first_shards));
+        return fail<RemoteFile>(ErrorCode::InvalidConfig,
+                                "hub: '" + spec.quant + "' is ambiguous in " + spec.repo + ": " + join_paths(first_shards));
     }
     if (whole.size() > 1)
-        return fail<RemoteFile>(ErrorCode::InvalidConfig, "hub: '" + spec.quant + "' is ambiguous in " + spec.repo + ": " + join_paths(whole));
+        return fail<RemoteFile>(ErrorCode::InvalidConfig,
+                                "hub: '" + spec.quant + "' is ambiguous in " + spec.repo + ": " + join_paths(whole));
     return ok(*whole.front());
 }
 
@@ -472,7 +482,8 @@ Result<std::string> sha256_file(const std::string &path) {
     std::fclose(f);
     unsigned char digest[EVP_MAX_MD_SIZE];
     unsigned int len = 0;
-    if (!good || EVP_DigestFinal_ex(c.ctx, digest, &len) != 1) return fail<std::string>(ErrorCode::FilesystemError, "hub: failed to hash " + path);
+    if (!good || EVP_DigestFinal_ex(c.ctx, digest, &len) != 1)
+        return fail<std::string>(ErrorCode::FilesystemError, "hub: failed to hash " + path);
     return ok(to_hex(digest, len));
 }
 

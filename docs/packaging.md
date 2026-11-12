@@ -82,7 +82,7 @@ The package also serves engine authors. `find_package(agent-cpp)` provides the h
 library without the `lib` prefix and with hidden visibility), `agent_install_engine(<target> [libs...])`
 (installs into `<prefix>/lib/agent/engines/`, like the in-tree function of the same name) and
 `agent-cpp_ENGINE_HOST` (the installed `agent-engine-host`, for process-isolation tests).
-[`templates/engine-plugin/`](../templates/engine-plugin) is a standalone project using them: a C echo
+[`examples/08-engine-plugin-template/`](../examples/08-engine-plugin-template) is a standalone project using them: a C echo
 engine plus a test harness that loads it in process and through the host. Checked by installing to a
 temporary prefix, building a copy of the template outside the source tree, running its test and
 registering the result with `agent engine add`. See [guides/writing-an-engine.md](guides/writing-an-engine.md).

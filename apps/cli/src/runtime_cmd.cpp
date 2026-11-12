@@ -5,7 +5,6 @@
 #include "runtimes.hpp"
 
 #include <agent-cpp/hub.hpp>
-
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
@@ -55,10 +54,16 @@ int cmd_runtime(const CommandLine &cl, Context &ctx) {
         for (const char *name : {"bun", "node", "pnpm", "nub", "uv"}) {
             const std::string path = runtime_binary_path(ctx.home, name);
             const bool selected = std::find(chosen.begin(), chosen.end(), name) != chosen.end();
-            if (path.empty()) std::printf("%-5s not installed   (agent runtime install %s)%s\n", name, name, selected ? "   <- needed for your JavaScript choice" : "");
-            else std::printf("%-5s %-10s %s%s\n", name, installed_version(ctx.home, name).c_str(), path.c_str(), selected ? "   <- selected" : "");
+            if (path.empty())
+                std::printf("%-5s not installed   (agent runtime install %s)%s\n", name, name,
+                            selected ? "   <- needed for your JavaScript choice" : "");
+            else
+                std::printf("%-5s %-10s %s%s\n", name, installed_version(ctx.home, name).c_str(), path.c_str(),
+                            selected ? "   <- selected" : "");
         }
-        std::printf("\nJavaScript tooling: %s (agent runtime use bun|node|nub). npx / bunx / npm / node run on it, uvx on uv, once installed.\nEvery server keeps its caches, HOME and temp files in its own data folder.\n", ctx.config.js_runtime.c_str());
+        std::printf("\nJavaScript tooling: %s (agent runtime use bun|node|nub). npx / bunx / npm / node run on it, uvx on uv, once "
+                    "installed.\nEvery server keeps its caches, HOME and temp files in its own data folder.\n",
+                    ctx.config.js_runtime.c_str());
         return 0;
     }
     if (cl.positionals.empty()) {

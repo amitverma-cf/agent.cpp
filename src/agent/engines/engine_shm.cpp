@@ -140,7 +140,7 @@ bool Segment::open(std::string_view name, size_t size) {
 #else
     const int fd = ::shm_open(os, O_RDONLY, 0);
     if (fd < 0) return false;
-    struct stat st {};
+    struct stat st{};
     if (::fstat(fd, &st) != 0 || st.st_size < 0 || static_cast<size_t>(st.st_size) < size) {
         ::close(fd);
         return false;

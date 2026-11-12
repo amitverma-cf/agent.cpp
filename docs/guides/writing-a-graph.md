@@ -6,9 +6,9 @@ workflow nodes Sequential, Parallel and Loop. The runtime adds scoped state, che
 node, human-in-the-loop interrupts and time travel. You can build graphs in C++ or write them as
 `agent.json`; both produce the same `agent::Graph`.
 
-All code below is from [`examples/guides/writing_a_graph.cpp`](../../examples/guides/writing_a_graph.cpp),
+All code below is from [`examples/03-graph-workflow/graph.cpp`](../../examples/03-graph-workflow/graph.cpp),
 which runs on the mock engine (every Agent node answers `echo: <input>`) as the `example.guide_graph`
-test, including the two JSON graphs in [`examples/graphs/`](../../examples/graphs).
+test, including the two JSON graphs in [`examples/03-graph-workflow/graphs/`](../../examples/03-graph-workflow/graphs).
 
 ## 1. Nodes and builders (C++)
 
@@ -277,15 +277,15 @@ Keep the `LoadedGraph` alive while its `graph` runs (it owns the route tables). 
 examples run unchanged with `agent run` (the CLI picks the engine and model from the `engine` /
 `model` hints, or `--model`):
 
-- [`examples/graphs/router.json`](../../examples/graphs/router.json): a classifier agent, then a `route` on
+- [`examples/03-graph-workflow/graphs/router.json`](../../examples/03-graph-workflow/graphs/router.json): a classifier agent, then a `route` on
   its answer to a coder, a mathematician or a general assistant.
-- [`examples/graphs/review_loop.json`](../../examples/graphs/review_loop.json): a writer drafts, then a
+- [`examples/03-graph-workflow/graphs/review_loop.json`](../../examples/03-graph-workflow/graphs/review_loop.json): a writer drafts, then a
   `loop` runs a reviewer whose `route` either ends the iteration on `APPROVED` or sends the feedback to
   a reviser that shares the writer's conversation (`history_key`).
 
 ```sh
-agent run examples/graphs/review_loop.json --set task="Explain what a KV cache is."
-agent run examples/graphs/router.json --set request="What is 17 * 23?"
+agent run examples/03-graph-workflow/graphs/review_loop.json --set task="Explain what a KV cache is."
+agent run examples/03-graph-workflow/graphs/router.json --set request="What is 17 * 23?"
 ```
 
 `hooks` and `context_provider` are C++-only; everything else maps one to one. Schema and validation

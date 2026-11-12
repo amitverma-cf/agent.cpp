@@ -89,8 +89,7 @@ Result<std::vector<std::vector<float>>> embed(Session &session, std::span<const 
             msgs[i] = MessageView{.role = "user", .content = in.text, .media = views};
         }
 
-        auto res =
-            providers::infer_task(session, AGENT_CAP_EMBED, task_request(session, std::span<const MessageView>(msgs, n)), arena);
+        auto res = providers::infer_task(session, AGENT_CAP_EMBED, task_request(session, std::span<const MessageView>(msgs, n)), arena);
         if (!res.ok) return fail<R>(res.error.code, res.error.message);
 
         size_t got = 0;

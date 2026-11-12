@@ -5,7 +5,6 @@
 //   agent_pull --rm NAME [--dir DIR] [--keep-file]
 
 #include <agent-cpp/hub.hpp>
-
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -60,10 +59,13 @@ int main(int argc, char **argv) {
             out = argv[++i];
             return true;
         };
-        if (a == "--dir") { if (!next(dir)) return usage(); }
-        else if (a == "--name") { if (!next(name)) return usage(); }
-        else if (a == "--rm") { if (!next(rm_name)) return usage(); }
-        else if (a == "--list" || a == "-l") list = true;
+        if (a == "--dir") {
+            if (!next(dir)) return usage();
+        } else if (a == "--name") {
+            if (!next(name)) return usage();
+        } else if (a == "--rm") {
+            if (!next(rm_name)) return usage();
+        } else if (a == "--list" || a == "-l") list = true;
         else if (a == "--allow-restricted") allow_restricted = true;
         else if (a == "--keep-file") keep_file = true;
         else if (a == "-h" || a == "--help") return usage();
@@ -80,8 +82,8 @@ int main(int argc, char **argv) {
         if (!models.ok) return report(models.error);
         if (models.value.empty()) std::printf("no models in %s\n", catalog.c_str());
         for (const auto &m : models.value)
-            std::printf("%-32s %8.1f MiB  %-14s %s:%s\n    %s\n", m.name.c_str(), static_cast<double>(m.size) / (1024.0 * 1024.0), m.license.c_str(),
-                        m.repo.c_str(), m.file.c_str(), m.path.c_str());
+            std::printf("%-32s %8.1f MiB  %-14s %s:%s\n    %s\n", m.name.c_str(), static_cast<double>(m.size) / (1024.0 * 1024.0),
+                        m.license.c_str(), m.repo.c_str(), m.file.c_str(), m.path.c_str());
         return 0;
     }
     if (!rm_name.empty()) {
@@ -105,8 +107,9 @@ int main(int argc, char **argv) {
     auto r = agent::hub::pull_model(spec, opts);
     if (!r.ok) return report(r.error);
     std::fprintf(stderr, "\n");
-    std::printf("%s\n  repo:    %s\n  file:    %s\n  path:    %s\n  size:    %llu bytes\n  sha256:  %s\n  license: %s\n", r.value.name.c_str(),
-                r.value.repo.c_str(), r.value.file.c_str(), r.value.path.c_str(), static_cast<unsigned long long>(r.value.size),
-                r.value.sha256.empty() ? "(not published)" : r.value.sha256.c_str(), r.value.license.c_str());
+    std::printf("%s\n  repo:    %s\n  file:    %s\n  path:    %s\n  size:    %llu bytes\n  sha256:  %s\n  license: %s\n",
+                r.value.name.c_str(), r.value.repo.c_str(), r.value.file.c_str(), r.value.path.c_str(),
+                static_cast<unsigned long long>(r.value.size), r.value.sha256.empty() ? "(not published)" : r.value.sha256.c_str(),
+                r.value.license.c_str());
     return 0;
 }

@@ -1,5 +1,5 @@
 # Helpers for engine plugins built against an installed agent-cpp package (included by
-# agent-cppConfig.cmake). See templates/engine-plugin/ and docs/guides/writing-an-engine.md.
+# agent-cppConfig.cmake). See examples/08-engine-plugin-template/ and docs/guides/writing-an-engine.md.
 #
 #   agent_add_engine(<target> <sources>...)
 #       A shared library <target>.so/.dll/.dylib (no "lib" prefix; name it agent-engine-<name>) that

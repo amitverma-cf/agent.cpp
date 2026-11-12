@@ -91,7 +91,8 @@ void on_tool_event(const agent::Event &event, void *user_data) {
     ++*static_cast<int *>(user_data);
 }
 
-void audit(agent::Session &, agent::Conversation &, std::string_view tool, std::string_view args, std::string_view result, void *user_data) {
+void audit(agent::Session &, agent::Conversation &, std::string_view tool, std::string_view args, std::string_view result,
+           void *user_data) {
     std::printf("   post-hook %.*s(%.*s) -> %.*s\n", static_cast<int>(tool.size()), tool.data(), static_cast<int>(args.size()), args.data(),
                 static_cast<int>(result.size()), result.data());
     ++*static_cast<int *>(user_data);

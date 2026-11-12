@@ -13,8 +13,6 @@
 // backend is created, so create()/run() hold g_t2_mu while they temporarily set it.
 
 #include <agent-cpp/engine_abi.h>
-#include <trellis2_capi.h>
-
 #include <chrono>
 #include <climits>
 #include <cstdio>
@@ -25,6 +23,7 @@
 #include <simdjson.h>
 #include <string>
 #include <string_view>
+#include <trellis2_capi.h>
 
 namespace {
 
@@ -36,10 +35,10 @@ agent_str to_c(const std::string &s) { return agent_str{s.data(), s.size()}; }
 // Defaults come from Config::engine_options at create(); agent_request::params_json overrides them
 // per call.
 struct GenSettings {
-    int64_t seed = -1;        // -1 = random
-    int steps = 0;            // flow sampler steps; 0 = pipeline default (12)
-    float guidance = -1.0f;   // CFG strength; < 0 = pipeline default (7.5)
-    int texture_steps = 0;    // texture flow steps; 0 = pipeline default (12)
+    int64_t seed = -1;      // -1 = random
+    int steps = 0;          // flow sampler steps; 0 = pipeline default (12)
+    float guidance = -1.0f; // CFG strength; < 0 = pipeline default (7.5)
+    int texture_steps = 0;  // texture flow steps; 0 = pipeline default (12)
     int pipeline = T2_PIPE_AUTO;
     int background = T2_BACKGROUND_AUTO;
     int texture_size = 0;     // GLB atlas size (only with T2GLB_XATLAS); 0 = default (2048)
@@ -245,8 +244,7 @@ int32_t t2_engine_create(agent_str config_json, void **out_instance, char *err, 
     }
     for (size_t i = 0; i < kNumSlots; ++i) {
         if (explicit_slot[i]) {
-            if (!paths[i].empty() && std::filesystem::path(paths[i]).is_relative() && !model.empty())
-                paths[i] = (dir / paths[i]).string();
+            if (!paths[i].empty() && std::filesystem::path(paths[i]).is_relative() && !model.empty()) paths[i] = (dir / paths[i]).string();
         } else if (!model.empty()) {
             paths[i] = discover(dir, kSlots[i].base);
         }
@@ -257,7 +255,9 @@ int32_t t2_engine_create(agent_str config_json, void **out_instance, char *err, 
                 return AGENT_ERR_INVALID_CONFIG;
             }
             if (model.empty()) std::snprintf(err, err_cap, "trellis: options.%s is empty", kSlots[i].option);
-            else std::snprintf(err, err_cap, "trellis: model file not found: %s", (dir / (std::string(kSlots[i].base) + "_f16.gguf")).string().c_str());
+            else
+                std::snprintf(err, err_cap, "trellis: model file not found: %s",
+                              (dir / (std::string(kSlots[i].base) + "_f16.gguf")).string().c_str());
             return AGENT_ERR_MODEL_LOAD_FAILED;
         }
         if (!paths[i].empty() && !is_file(paths[i])) {
@@ -272,9 +272,9 @@ int32_t t2_engine_create(agent_str config_json, void **out_instance, char *err, 
     {
         std::lock_guard<std::mutex> lock(g_t2_mu);
         ThreadsEnv env(threads);
-        pipeline = t2_pipeline_load(c_or_null(paths[0]), c_or_null(paths[1]), c_or_null(paths[2]), c_or_null(paths[3]),
-                                    c_or_null(paths[4]), c_or_null(paths[5]), c_or_null(paths[6]), c_or_null(paths[7]),
-                                    c_or_null(paths[8]), c_or_null(paths[9]), 0, load_err, static_cast<int>(sizeof(load_err)));
+        pipeline = t2_pipeline_load(c_or_null(paths[0]), c_or_null(paths[1]), c_or_null(paths[2]), c_or_null(paths[3]), c_or_null(paths[4]),
+                                    c_or_null(paths[5]), c_or_null(paths[6]), c_or_null(paths[7]), c_or_null(paths[8]), c_or_null(paths[9]),
+                                    0, load_err, static_cast<int>(sizeof(load_err)));
     }
     if (!pipeline) {
         std::snprintf(err, err_cap, "trellis: failed to load the pipeline%s%s", load_err[0] ? ": " : "", load_err);
@@ -446,8 +446,8 @@ int32_t t2_engine_run(void *instance, const agent_request *req, agent_response *
     if (req->on_progress) req->on_progress(req->user_data, 1, 1);
 
     inst->path = std::move(path);
-    inst->text = "generated 3D model: " + inst->path + " (" + std::to_string(n_verts) + " vertices, " + std::to_string(n_tris) +
-                 " triangles)";
+    inst->text =
+        "generated 3D model: " + inst->path + " (" + std::to_string(n_verts) + " vertices, " + std::to_string(n_tris) + " triangles)";
     inst->parts[0] = agent_part{};
     inst->parts[0].kind = AGENT_PART_FILE;
     inst->parts[0].path = to_c(inst->path);

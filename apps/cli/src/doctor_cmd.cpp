@@ -4,7 +4,6 @@
 #include "doctor.hpp"
 
 #include <agent-cpp/hub.hpp>
-
 #include <cstdio>
 #include <filesystem>
 
@@ -20,7 +19,8 @@ int cmd_doctor(const CommandLine &, Context &ctx) {
     } else {
         std::error_code ec;
         const auto space = fs::space(ctx.home.root, ec);
-        std::printf("home:      %s%s%s\n", ctx.home.root.c_str(), ec ? "" : "   free on this volume: ", ec ? "" : format_bytes(space.available).c_str());
+        std::printf("home:      %s%s%s\n", ctx.home.root.c_str(),
+                    ec ? "" : "   free on this volume: ", ec ? "" : format_bytes(space.available).c_str());
     }
     const uint64_t ram = total_ram_bytes();
     std::printf("RAM:       %s installed, %d CPU cores\n", ram ? format_bytes(ram).c_str() : "unknown", detect_hardware().cpu_cores);
@@ -30,7 +30,8 @@ int cmd_doctor(const CommandLine &, Context &ctx) {
     auto engines = load_engines(ctx.engines_path);
     if (!engines.ok || engines.value.empty()) std::printf("  none registered: run `agent setup`\n");
     else
-        for (const EngineEntry &e : engines.value) std::printf("  %-10s %s  %s\n", e.name.c_str(), file_exists(e.path) ? "ok     " : "MISSING", e.path.c_str());
+        for (const EngineEntry &e : engines.value)
+            std::printf("  %-10s %s  %s\n", e.name.c_str(), file_exists(e.path) ? "ok     " : "MISSING", e.path.c_str());
 
     auto models = agent::hub::list_models(catalog_path(ctx));
     uint64_t model_bytes = 0;
@@ -45,7 +46,9 @@ int cmd_doctor(const CommandLine &, Context &ctx) {
 
     if (ctx.has_home) {
         std::printf("\ndisk use in the home:\n");
-        for (const UsageEntry &u : measure_home(ctx.home)) std::printf("  %-12s %10s  %6llu files\n", u.label.c_str(), format_bytes(u.bytes).c_str(), static_cast<unsigned long long>(u.files));
+        for (const UsageEntry &u : measure_home(ctx.home))
+            std::printf("  %-12s %10s  %6llu files\n", u.label.c_str(), format_bytes(u.bytes).c_str(),
+                        static_cast<unsigned long long>(u.files));
 
         const CleanPlan downloads = plan_clean(ctx.home, {CleanTarget::Downloads});
         const CleanPlan cache = plan_clean(ctx.home, {CleanTarget::Cache});
@@ -65,7 +68,8 @@ int cmd_clean(const CommandLine &cl, Context &ctx) {
     if (cl.has("downloads")) targets.push_back(CleanTarget::Downloads);
     if (cl.has("cache")) targets.push_back(CleanTarget::Cache);
     if (cl.has("logs")) targets.push_back(CleanTarget::Logs);
-    if (targets.empty()) return report_error(Error{ErrorCode::InvalidConfig, "say what to clean: --downloads, --cache and/or --logs (see `agent doctor`)"});
+    if (targets.empty())
+        return report_error(Error{ErrorCode::InvalidConfig, "say what to clean: --downloads, --cache and/or --logs (see `agent doctor`)"});
 
     const CleanPlan plan = plan_clean(ctx.home, targets);
     if (plan.paths.empty()) {

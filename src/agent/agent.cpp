@@ -20,7 +20,8 @@ void free_backend() { providers::free_global_backends(); }
 AgentRuntime::AgentRuntime() { init_backend(); }
 AgentRuntime::~AgentRuntime() { free_backend(); }
 
-Result<Config> engine_config(std::string_view engine, std::span<const ModelSlot> models, std::string_view extra_options_json, const Config &base) {
+Result<Config> engine_config(std::string_view engine, std::span<const ModelSlot> models, std::string_view extra_options_json,
+                             const Config &base) {
     if (engine.empty()) return fail<Config>(ErrorCode::InvalidConfig, "engine_config: the engine name or plugin path is required.");
     Config cfg = base;
     cfg.provider = AiProvider::Engine;
@@ -78,7 +79,8 @@ Result<Config> engine_config(std::string_view engine, std::span<const ModelSlot>
     }
     cfg.engine_options = top.empty() && base.engine_options.empty() ? std::string() : "{" + top + "}";
     if (!top.empty() && !base.engine_options.empty())
-        return fail<Config>(ErrorCode::InvalidConfig, "engine_config: base.engine_options is already set; pass the options through engine_config instead.");
+        return fail<Config>(ErrorCode::InvalidConfig,
+                            "engine_config: base.engine_options is already set; pass the options through engine_config instead.");
     if (top.empty()) cfg.engine_options = base.engine_options;
     return ok(std::move(cfg));
 }
@@ -157,8 +159,9 @@ InferResponse make_owning(const InferResponse &src) {
     out.message.tool_call_id = arena->allocate_string(src.message.tool_call_id);
     auto calls = arena->allocate_span<ToolCallView>(src.message.tool_calls.size());
     for (size_t i = 0; i < calls.size(); ++i)
-        calls[i] = ToolCallView{arena->allocate_string(src.message.tool_calls[i].id), arena->allocate_string(src.message.tool_calls[i].name),
-                                arena->allocate_string(src.message.tool_calls[i].arguments)};
+        calls[i] =
+            ToolCallView{arena->allocate_string(src.message.tool_calls[i].id), arena->allocate_string(src.message.tool_calls[i].name),
+                         arena->allocate_string(src.message.tool_calls[i].arguments)};
     out.message.tool_calls = calls;
     auto media = arena->allocate_span<MediaView>(src.message.media.size());
     for (size_t i = 0; i < media.size(); ++i)
@@ -255,8 +258,8 @@ void rebuild_tool_index(Session &session) {
 
     if (!session.skills.empty()) {
         session.skills_system_prompt += "You have access to the following skills. Call the "
-                                       "use_skill tool with a skill's name to load its full "
-                                       "instructions when relevant:\n";
+                                        "use_skill tool with a skill's name to load its full "
+                                        "instructions when relevant:\n";
 
         // session.skills is an unordered_map (for O(1) lookup in read_skill_body); iterate in a
         // sorted, deterministic order here so the system prompt text -- and therefore any

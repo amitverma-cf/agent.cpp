@@ -2,12 +2,11 @@
 
 #include "commands.hpp"
 
-#include <simdjson.h>
-
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <simdjson.h>
 
 namespace agent::cli {
 
@@ -50,7 +49,8 @@ Result<void> save_grants(const std::string &file, const std::vector<PathGrant> &
     fs::create_directories(fs::path(file).parent_path(), ec);
     std::string out = "{\n  \"grants\": [";
     for (size_t i = 0; i < grants.size(); ++i)
-        out += std::string(i ? "," : "") + "\n    {\"path\": " + quote(grants[i].path) + ", \"write\": " + (grants[i].write ? "true" : "false") + ", \"for\": " + quote(grants[i].consumer) + "}";
+        out += std::string(i ? "," : "") + "\n    {\"path\": " + quote(grants[i].path) +
+               ", \"write\": " + (grants[i].write ? "true" : "false") + ", \"for\": " + quote(grants[i].consumer) + "}";
     out += grants.empty() ? "]\n}\n" : "\n  ]\n}\n";
     std::ofstream f(file, std::ios::binary | std::ios::trunc);
     f << out;
@@ -73,12 +73,14 @@ PathGateDecision cli_path_gate(const PathAccessRequest &request, void *user) {
     auto *ctx = static_cast<Context *>(user);
     const std::string path(request.path), consumer(request.consumer);
     if (!stdin_is_tty()) {
-        std::fprintf(stderr, "[sandbox] %s wants to %s %s: not allowed. Grant it with: agent sandbox grant \"%s\"%s --for %s\n", consumer.c_str(),
-                     request.write ? "write" : "read", path.c_str(), path.c_str(), request.write ? " --write" : "", consumer.c_str());
+        std::fprintf(stderr, "[sandbox] %s wants to %s %s: not allowed. Grant it with: agent sandbox grant \"%s\"%s --for %s\n",
+                     consumer.c_str(), request.write ? "write" : "read", path.c_str(), path.c_str(), request.write ? " --write" : "",
+                     consumer.c_str());
         return PathGateDecision::Deny;
     }
-    std::fprintf(stderr, "\n[sandbox] %s wants to %s %s, which is outside the workspace.\n  [o] allow once   [a] allow always   [n] no (default): ", consumer.c_str(),
-                 request.write ? "WRITE" : "read", path.c_str());
+    std::fprintf(stderr,
+                 "\n[sandbox] %s wants to %s %s, which is outside the workspace.\n  [o] allow once   [a] allow always   [n] no (default): ",
+                 consumer.c_str(), request.write ? "WRITE" : "read", path.c_str());
     std::fflush(stderr);
     char line[64] = {0};
     if (!std::fgets(line, sizeof(line), stdin)) return PathGateDecision::Deny;
@@ -87,7 +89,8 @@ PathGateDecision cli_path_gate(const PathAccessRequest &request, void *user) {
         const std::string file = grants_file(*ctx, false);
         std::vector<PathGrant> grants = load_grants(file);
         grants.push_back(PathGrant{.path = path, .write = request.write, .consumer = consumer});
-        if (auto r = save_grants(file, grants); !r.ok) std::fprintf(stderr, "[sandbox] could not save the grant: %s\n", r.error.message.c_str());
+        if (auto r = save_grants(file, grants); !r.ok)
+            std::fprintf(stderr, "[sandbox] could not save the grant: %s\n", r.error.message.c_str());
         else std::fprintf(stderr, "[sandbox] saved in %s\n", file.c_str());
         return PathGateDecision::AllowAlways;
     }
@@ -108,11 +111,14 @@ int cmd_sandbox(const CommandLine &cl, Context &ctx) {
         for (bool p : {false, true}) {
             if (p && ctx.project_root.empty()) continue;
             for (const PathGrant &g : load_grants(grants_file(ctx, p))) {
-                std::printf("  %-5s %-12s %s   (%s)\n", g.write ? "write" : "read", g.consumer.c_str(), g.path.c_str(), p ? "this project" : "global");
+                std::printf("  %-5s %-12s %s   (%s)\n", g.write ? "write" : "read", g.consumer.c_str(), g.path.c_str(),
+                            p ? "this project" : "global");
                 any = true;
             }
         }
-        if (!any) std::printf("  nothing granted. A tool that needs a path outside the workspace asks first; or `agent sandbox grant PATH [--write] [--for run_command|files|mcp:NAME]`\n");
+        if (!any)
+            std::printf("  nothing granted. A tool that needs a path outside the workspace asks first; or `agent sandbox grant PATH "
+                        "[--write] [--for run_command|files|mcp:NAME]`\n");
         return 0;
     }
     if (cl.positionals.empty()) {

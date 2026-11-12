@@ -4,12 +4,11 @@
 
 #include "arg.h"
 #include "common.h"
-#include <nlohmann/json.hpp>
+#include "gguf.h"
 #include "llama.h"
 #include "log.h"
 #include "server-context.h"
 #include "server-http.h"
-#include "gguf.h"
 #include "speculative.h"
 
 #include <algorithm>
@@ -18,6 +17,7 @@
 #include <fstream>
 #include <iterator>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include <thread>
 
 namespace upstream {
@@ -61,8 +61,7 @@ bool gguf_has_mtp(const std::string &path) {
     try {
         for (auto type : common_speculative_types_from_gguf(path))
             if (type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP) return true;
-    } catch (...) {
-    }
+    } catch (...) {}
     return false;
 }
 
@@ -74,7 +73,8 @@ bool gguf_is_decision(const std::string &path) {
     const int64_t arch = gguf_find_key(g, "general.architecture");
     if (arch >= 0 && gguf_get_kv_type(g, arch) == GGUF_TYPE_STRING) {
         const std::string prefix = std::string(gguf_get_val_str(g, arch)) + ".decision.";
-        for (int64_t i = 0, n = gguf_get_n_kv(g); i < n && !found; ++i) found = std::strncmp(gguf_get_key(g, i), prefix.c_str(), prefix.size()) == 0;
+        for (int64_t i = 0, n = gguf_get_n_kv(g); i < n && !found; ++i)
+            found = std::strncmp(gguf_get_key(g, i), prefix.c_str(), prefix.size()) == 0;
     }
     gguf_free(g);
     return found;
@@ -94,8 +94,7 @@ Engine::~Engine() {
     if (impl_ && impl_->ctx) {
         try {
             impl_->ctx->terminate();
-        } catch (...) {
-        }
+        } catch (...) {}
         if (impl_->loop.joinable()) impl_->loop.join();
     }
 }
@@ -112,8 +111,15 @@ std::unique_ptr<Engine> Engine::create(const Settings &s, std::string &error) {
     std::unique_ptr<Engine> engine(new Engine());
     Impl &im = *engine->impl_;
     try {
-        std::vector<std::string> args = {"agent-engine-llama", "-m", s.model, "-c", std::to_string(std::max(1, s.context) * std::max(1, s.parallel)), "-np",
-                                         std::to_string(std::max(1, s.parallel)), "--no-webui", "--no-warmup"};
+        std::vector<std::string> args = {"agent-engine-llama",
+                                         "-m",
+                                         s.model,
+                                         "-c",
+                                         std::to_string(std::max(1, s.context) * std::max(1, s.parallel)),
+                                         "-np",
+                                         std::to_string(std::max(1, s.parallel)),
+                                         "--no-webui",
+                                         "--no-warmup"};
         if (s.threads > 0) args.insert(args.end(), {"-t", std::to_string(s.threads)});
         if (s.gpu_layers >= 0) args.insert(args.end(), {"-ngl", std::to_string(s.gpu_layers)});
         if (!s.mmproj.empty()) args.insert(args.end(), {"--mmproj", s.mmproj});
@@ -140,8 +146,7 @@ std::unique_ptr<Engine> Engine::create(const Settings &s, std::string &error) {
         im.loop = std::thread([ctx] {
             try {
                 ctx->start_loop();
-            } catch (...) {
-            }
+            } catch (...) {}
         });
     } catch (const std::exception &e) {
         error = std::string("llama.cpp's engine failed to start: ") + e.what();
@@ -195,13 +200,14 @@ void apply_choice(const njson &choice, bool delta, Result &out, const std::funct
             }
         }
     }
-    if (choice.contains("finish_reason") && choice["finish_reason"].is_string()) out.finish_reason = choice["finish_reason"].get<std::string>();
+    if (choice.contains("finish_reason") && choice["finish_reason"].is_string())
+        out.finish_reason = choice["finish_reason"].get<std::string>();
 }
 
 } // namespace
 
-bool Engine::chat(const std::string &body, const volatile int32_t *cancel, const std::function<void(const std::string &)> &on_text, Result &out,
-                  std::string &error) {
+bool Engine::chat(const std::string &body, const volatile int32_t *cancel, const std::function<void(const std::string &)> &on_text,
+                  Result &out, std::string &error) {
     out = Result{};
     try {
         const std::function<bool()> stop = [cancel] { return cancel && *cancel != 0; };
@@ -215,15 +221,14 @@ bool Engine::chat(const std::string &body, const volatile int32_t *cancel, const
             try {
                 const njson j = njson::parse(raw);
                 error = j.contains("error") ? j["error"].value("message", raw) : raw;
-            } catch (...) {
-                error = raw;
-            }
+            } catch (...) { error = raw; }
             return false;
         };
         if (!res->is_stream()) {
             if (res->status != 200) return fail_with(res->data);
             const njson j = njson::parse(res->data);
-            if (j.contains("choices") && j["choices"].is_array() && !j["choices"].empty()) apply_choice(j["choices"][0], false, out, on_text);
+            if (j.contains("choices") && j["choices"].is_array() && !j["choices"].empty())
+                apply_choice(j["choices"][0], false, out, on_text);
             read_usage(j, out);
             if (on_text && !out.content.empty()) on_text(out.content);
             res->on_complete();
@@ -254,16 +259,15 @@ bool Engine::chat(const std::string &body, const volatile int32_t *cancel, const
                         res->on_complete();
                         return false;
                     }
-                    if (j.contains("choices") && j["choices"].is_array() && !j["choices"].empty()) apply_choice(j["choices"][0], true, out, on_text);
+                    if (j.contains("choices") && j["choices"].is_array() && !j["choices"].empty())
+                        apply_choice(j["choices"][0], true, out, on_text);
                     read_usage(j, out);
                 }
             }
         }
         res->on_complete();
         return true;
-    } catch (const std::exception &e) {
-        error = std::string("llama.cpp's engine: ") + e.what();
-    } catch (...) {
+    } catch (const std::exception &e) { error = std::string("llama.cpp's engine: ") + e.what(); } catch (...) {
         error = "llama.cpp's engine failed";
     }
     return false;
@@ -282,16 +286,12 @@ bool Engine::systemone(const std::string &body, std::string &out, std::string &e
             try {
                 const njson j = njson::parse(out);
                 error = j.contains("error") ? j["error"].value("message", out) : out;
-            } catch (...) {
-                error = out;
-            }
+            } catch (...) { error = out; }
             return false;
         }
         res->on_complete();
         return true;
-    } catch (const std::exception &e) {
-        error = std::string("llama.cpp's engine: ") + e.what();
-    } catch (...) {
+    } catch (const std::exception &e) { error = std::string("llama.cpp's engine: ") + e.what(); } catch (...) {
         error = "llama.cpp's engine failed";
     }
     return false;
@@ -325,8 +325,12 @@ std::string chat_body_from_request(const agent_request *req, int max_tokens, flo
                 const std::string mime(sv(part.mime));
                 const std::string encoded = base64(reinterpret_cast<const unsigned char *>(bytes.data()), bytes.size());
                 media = true;
-                if (mime.rfind("audio/", 0) == 0) parts.push_back({{"type", "input_audio"}, {"input_audio", {{"data", encoded}, {"format", audio_format(mime)}}}});
-                else parts.push_back({{"type", "image_url"}, {"image_url", {{"url", "data:" + (mime.empty() ? std::string("image/png") : mime) + ";base64," + encoded}}}});
+                if (mime.rfind("audio/", 0) == 0)
+                    parts.push_back({{"type", "input_audio"}, {"input_audio", {{"data", encoded}, {"format", audio_format(mime)}}}});
+                else
+                    parts.push_back(
+                        {{"type", "image_url"},
+                         {"image_url", {{"url", "data:" + (mime.empty() ? std::string("image/png") : mime) + ";base64," + encoded}}}});
             }
         }
         if (media) msg["content"] = parts;
@@ -383,7 +387,8 @@ Engine::Engine() {}
 Engine::~Engine() {}
 bool Engine::mtp_active() const { return false; }
 int Engine::count_tokens(const std::string &text) const { return static_cast<int>(text.size() / 4 + 1); }
-bool Engine::chat(const std::string &, const volatile int32_t *, const std::function<void(const std::string &)> &, Result &, std::string &error) {
+bool Engine::chat(const std::string &, const volatile int32_t *, const std::function<void(const std::string &)> &, Result &,
+                  std::string &error) {
     error = "llama.cpp's own engine is not built into this plugin";
     return false;
 }

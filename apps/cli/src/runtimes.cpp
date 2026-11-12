@@ -2,14 +2,12 @@
 
 #include "archive.hpp"
 
-#include <openssl/evp.h>
-
-#include <simdjson.h>
-
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <openssl/evp.h>
+#include <simdjson.h>
 
 namespace agent::cli {
 
@@ -74,8 +72,10 @@ std::vector<std::string> runtimes_for_js(std::string_view js_runtime) {
 }
 
 Result<RuntimeAsset> runtime_asset(std::string_view name, std::string_view version, std::string_view os, std::string_view arch) {
-    if (os != "linux" && os != "macos" && os != "windows") return fail<RuntimeAsset>(ErrorCode::InvalidConfig, "unsupported operating system: " + std::string(os));
-    if (arch != "x86_64" && arch != "aarch64") return fail<RuntimeAsset>(ErrorCode::InvalidConfig, "unsupported CPU architecture: " + std::string(arch));
+    if (os != "linux" && os != "macos" && os != "windows")
+        return fail<RuntimeAsset>(ErrorCode::InvalidConfig, "unsupported operating system: " + std::string(os));
+    if (arch != "x86_64" && arch != "aarch64")
+        return fail<RuntimeAsset>(ErrorCode::InvalidConfig, "unsupported CPU architecture: " + std::string(arch));
     const bool latest = version.empty() || version == "latest";
     RuntimeAsset a;
     if (name == "bun") {
@@ -103,7 +103,10 @@ Result<RuntimeAsset> runtime_asset(std::string_view name, std::string_view versi
         return ok(std::move(a));
     }
     if (name == "nub") {
-        const std::string target = std::string(os == "macos" ? "darwin" : os == "windows" ? "win32" : "linux") + "-" + (arch == "x86_64" ? "x64" : "arm64");
+        const std::string target = std::string(os == "macos"     ? "darwin"
+                                               : os == "windows" ? "win32"
+                                                                 : "linux") +
+                                   "-" + (arch == "x86_64" ? "x64" : "arm64");
         a.archive_name = "nub-" + target + (os == "windows" ? ".zip" : ".tar.gz");
         const std::string base = latest ? "https://github.com/nubjs/nub/releases/latest/download/"
                                         : "https://github.com/nubjs/nub/releases/download/v" + std::string(version) + "/";
@@ -149,8 +152,11 @@ std::string find_sha256(std::string_view text, std::string_view file_name) {
 }
 
 std::string find_node_archive(std::string_view shasums, std::string_view os, std::string_view arch) {
-    const std::string suffix = std::string("-") + (os == "macos" ? "darwin" : os == "windows" ? "win" : "linux") + "-" + (arch == "x86_64" ? "x64" : "arm64") +
-                               (os == "windows" ? ".zip" : ".tar.gz");
+    const std::string suffix = std::string("-") +
+                               (os == "macos"     ? "darwin"
+                                : os == "windows" ? "win"
+                                                  : "linux") +
+                               "-" + (arch == "x86_64" ? "x64" : "arm64") + (os == "windows" ? ".zip" : ".tar.gz");
     size_t at = 0;
     while (at < shasums.size()) {
         size_t end = shasums.find('\n', at);
@@ -192,7 +198,8 @@ std::string npm_integrity(const std::string &path) {
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
     if (!ctx || EVP_DigestInit_ex(ctx, EVP_sha512(), nullptr) != 1) return {};
     std::vector<char> buf(1 << 16);
-    while (in.read(buf.data(), static_cast<std::streamsize>(buf.size())) || in.gcount() > 0) EVP_DigestUpdate(ctx, buf.data(), static_cast<size_t>(in.gcount()));
+    while (in.read(buf.data(), static_cast<std::streamsize>(buf.size())) || in.gcount() > 0)
+        EVP_DigestUpdate(ctx, buf.data(), static_cast<size_t>(in.gcount()));
     unsigned char md[EVP_MAX_MD_SIZE];
     unsigned len = 0;
     EVP_DigestFinal_ex(ctx, md, &len);
@@ -210,22 +217,25 @@ std::string npm_integrity(const std::string &path) {
     return "sha512-" + out;
 }
 
-Result<void> place(const HomeLayout &home, const std::string &name, const fs::path &bin_dir, const fs::path &staging, const std::string &entry) {
+Result<void> place(const HomeLayout &home, const std::string &name, const fs::path &bin_dir, const fs::path &staging,
+                   const std::string &entry) {
     std::error_code ec;
     const fs::path target = fs::path(home.runtimes) / name;
     fs::remove_all(target, ec);
     fs::rename(bin_dir, target, ec);
     fs::remove_all(staging, ec);
     if (ec) return fail(ErrorCode::FilesystemError, "cannot move the runtime into " + target.string() + ": " + ec.message());
-    if (name != "pnpm") fs::permissions(target / entry, fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec, fs::perm_options::add, ec);
+    if (name != "pnpm")
+        fs::permissions(target / entry, fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec, fs::perm_options::add, ec);
     return ok();
 }
 
 } // namespace
 
-Result<std::string> install_runtime(const HomeLayout &home, std::string_view name, std::string_view version, const agent::hub::HttpOptions &http,
-                                    const InstallProgress &progress) {
-    if (!is_runtime_name(name)) return fail<std::string>(ErrorCode::InvalidConfig, "unknown runtime '" + std::string(name) + "' (bun, uv, node, pnpm or nub)");
+Result<std::string> install_runtime(const HomeLayout &home, std::string_view name, std::string_view version,
+                                    const agent::hub::HttpOptions &http, const InstallProgress &progress) {
+    if (!is_runtime_name(name))
+        return fail<std::string>(ErrorCode::InvalidConfig, "unknown runtime '" + std::string(name) + "' (bun, uv, node, pnpm or nub)");
     std::error_code ec;
     const fs::path downloads = fs::path(home.cache) / "downloads";
     fs::create_directories(downloads, ec);
@@ -249,14 +259,16 @@ Result<std::string> install_runtime(const HomeLayout &home, std::string_view nam
         if (parser.parse(meta.value).get(doc) || doc["dist"].get(dist) || dist["tarball"].get(tarball) || dist["integrity"].get(integrity))
             return fail<std::string>(ErrorCode::ParseError, "pnpm's registry entry has no tarball / integrity");
         const fs::path archive = downloads / "pnpm.tgz";
-        if (auto d = agent::hub::download_file(tarball, archive.string(), http, opts); !d.ok) return fail<std::string>(d.error.code, d.error.message);
+        if (auto d = agent::hub::download_file(tarball, archive.string(), http, opts); !d.ok)
+            return fail<std::string>(d.error.code, d.error.message);
         if (npm_integrity(archive.string()) != integrity) {
             fs::remove(archive, ec);
             return fail<std::string>(ErrorCode::SandboxViolation, "the pnpm package does not match the registry's SHA-512; not installed");
         }
         // Registry tarballs hold everything under "package/".
         if (auto x = extract_archive(archive.string(), staging.string(), 1); !x.ok) return fail<std::string>(x.error.code, x.error.message);
-        if (!fs::is_regular_file(staging / "bin" / "pnpm.cjs", ec)) return fail<std::string>(ErrorCode::ParseError, "the pnpm package has no bin/pnpm.cjs");
+        if (!fs::is_regular_file(staging / "bin" / "pnpm.cjs", ec))
+            return fail<std::string>(ErrorCode::ParseError, "the pnpm package has no bin/pnpm.cjs");
         if (auto p = place(home, runtime, staging, staging, "bin/pnpm.cjs"); !p.ok) return fail<std::string>(p.error.code, p.error.message);
         fs::remove(archive, ec);
         return ok((fs::path(home.runtimes) / "pnpm" / "bin" / "pnpm.cjs").string());
@@ -268,14 +280,18 @@ Result<std::string> install_runtime(const HomeLayout &home, std::string_view nam
     if (!sums.ok) return fail<std::string>(sums.error.code, "cannot fetch the checksums for " + runtime + ": " + sums.error.message);
     if (name == "node") {
         asset.value.archive_name = find_node_archive(sums.value, host_os(), host_arch());
-        if (asset.value.archive_name.empty()) return fail<std::string>(ErrorCode::KeyNotFound, "no Node.js build for " + host_os() + "-" + host_arch() + " in " + asset.value.checksum_url);
+        if (asset.value.archive_name.empty())
+            return fail<std::string>(ErrorCode::KeyNotFound,
+                                     "no Node.js build for " + host_os() + "-" + host_arch() + " in " + asset.value.checksum_url);
         asset.value.url += asset.value.archive_name;
     }
     const std::string expected = find_sha256(sums.value, asset.value.archive_name);
-    if (expected.empty()) return fail<std::string>(ErrorCode::ParseError, "no SHA-256 for " + asset.value.archive_name + " in " + asset.value.checksum_url);
+    if (expected.empty())
+        return fail<std::string>(ErrorCode::ParseError, "no SHA-256 for " + asset.value.archive_name + " in " + asset.value.checksum_url);
     const fs::path archive = downloads / asset.value.archive_name;
     opts.expected_sha256 = expected;
-    if (auto d = agent::hub::download_file(asset.value.url, archive.string(), http, opts); !d.ok) return fail<std::string>(d.error.code, d.error.message);
+    if (auto d = agent::hub::download_file(asset.value.url, archive.string(), http, opts); !d.ok)
+        return fail<std::string>(d.error.code, d.error.message);
     if (auto x = extract_archive(archive.string(), staging.string(), 0); !x.ok) {
         fs::remove_all(staging, ec);
         return fail<std::string>(x.error.code, x.error.message);
@@ -287,13 +303,15 @@ Result<std::string> install_runtime(const HomeLayout &home, std::string_view nam
     }
     if (auto p = place(home, runtime, bin_dir, staging, asset.value.binary); !p.ok) return fail<std::string>(p.error.code, p.error.message);
     std::ofstream meta(fs::path(home.runtimes) / runtime / "runtime.json");
-    meta << "{\"name\":\"" << name << "\",\"version\":\"" << (version.empty() ? "latest" : version) << "\",\"url\":\"" << asset.value.url << "\",\"sha256\":\"" << expected << "\"}\n";
+    meta << "{\"name\":\"" << name << "\",\"version\":\"" << (version.empty() ? "latest" : version) << "\",\"url\":\"" << asset.value.url
+         << "\",\"sha256\":\"" << expected << "\"}\n";
     fs::remove(archive, ec);
     return ok((fs::path(home.runtimes) / runtime / asset.value.binary).string());
 }
 
 Result<void> remove_runtime(const HomeLayout &home, std::string_view name) {
-    if (!is_runtime_name(name)) return fail(ErrorCode::InvalidConfig, "unknown runtime '" + std::string(name) + "' (bun, uv, node, pnpm or nub)");
+    if (!is_runtime_name(name))
+        return fail(ErrorCode::InvalidConfig, "unknown runtime '" + std::string(name) + "' (bun, uv, node, pnpm or nub)");
     std::error_code ec;
     const fs::path target = fs::path(home.runtimes) / std::string(name);
     if (!fs::exists(target, ec)) return fail(ErrorCode::KeyNotFound, std::string(name) + " is not installed");
@@ -343,13 +361,15 @@ std::map<std::string, std::string> runtime_env_in(const std::string &cache_root)
 LauncherRewrite rewrite_launcher(McpServerConfig &server, const HomeLayout &home, const std::string &js_runtime) {
     LauncherRewrite result;
     const std::string stem = command_stem(server.command);
-    const bool js_command = stem == "npx" || stem == "bunx" || stem == "npm" || stem == "node" || stem == "bun" || stem == "nub" || stem == "pnpm";
+    const bool js_command =
+        stem == "npx" || stem == "bunx" || stem == "npm" || stem == "node" || stem == "bun" || stem == "nub" || stem == "pnpm";
     const bool py_command = stem == "uvx" || stem == "uv";
     if (!js_command && !py_command) return result;
     if (fs::path(server.command).is_absolute() && server.command.starts_with(home.runtimes)) return result; // already rewritten
 
     auto missing = [&](const std::string &what) {
-        result.note = "'" + server.name + "' runs " + server.command + ", but the private " + what + " is not installed; using the system command. Run `agent runtime install " + what + "`.";
+        result.note = "'" + server.name + "' runs " + server.command + ", but the private " + what +
+                      " is not installed; using the system command. Run `agent runtime install " + what + "`.";
         return result;
     };
     std::vector<std::string> args;
@@ -397,15 +417,14 @@ LauncherRewrite rewrite_launcher(McpServerConfig &server, const HomeLayout &home
             else if (stem == "npm" || stem == "pnpm") args = pnpm_style({});
             else if (stem == "nub") args = server.args;
             else return result; // node / bun written explicitly: left alone
-        } else { // bun
+        } else {                // bun
             command = runtime_binary_path(home, "bun");
             if (command.empty()) return missing("bun");
             if (stem == "npx" || stem == "bunx") args = dlx_args({"x"});
             else if (stem == "npm" || stem == "pnpm") {
                 args = pnpm_style({});
                 if (!args.empty() && args[0] == "dlx") args[0] = "x"; // bun's name for dlx
-            }
-            else args = server.args; // node, bun
+            } else args = server.args;                                // node, bun
         }
     }
     const std::string cache_root = server.working_directory.empty() ? home.cache : (fs::path(server.working_directory) / "cache").string();
@@ -413,7 +432,8 @@ LauncherRewrite rewrite_launcher(McpServerConfig &server, const HomeLayout &home
     server.args = std::move(args);
     for (const auto &[key, value] : runtime_env_in(cache_root)) server.env.emplace(key, value); // an explicit value in the file wins
     std::error_code ec;
-    for (const char *dir : {"home", "tmp", "xdg", "bun", "uv", "pnpm-home", "npm-cache"}) fs::create_directories(fs::path(cache_root) / dir, ec);
+    for (const char *dir : {"home", "tmp", "xdg", "bun", "uv", "pnpm-home", "npm-cache"})
+        fs::create_directories(fs::path(cache_root) / dir, ec);
     result.rewritten = true;
     return result;
 }

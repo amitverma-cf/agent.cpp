@@ -116,7 +116,7 @@ add_library(agent
 )
 add_library(agent-cpp::agent ALIAS agent)
 # Header-only plugin ABI for engine plugins built against the installed package
-# (find_package(agent-cpp) -> agent-cpp::engine_abi, agent_add_engine(); see templates/engine-plugin/).
+# (find_package(agent-cpp) -> agent-cpp::engine_abi, agent_add_engine(); see examples/08-engine-plugin-template/).
 add_library(agent_engine_abi INTERFACE)
 add_library(agent-cpp::engine_abi ALIAS agent_engine_abi)
 target_include_directories(agent_engine_abi INTERFACE
@@ -231,13 +231,13 @@ option(AGENT_ENGINE_AUDIOCPP "Build the audio.cpp speech engine plugin (src/engi
 # cmake/ggml_no_amx.cmake. Only matters for GGML_NATIVE builds on AMX CPUs.
 option(AGENT_GGML_AMX "Keep Intel AMX in the engines' ggml (safe only with process-isolated engines)" OFF)
 
-add_executable(basic examples/basic/basic.cpp)
+add_executable(basic examples/01-hello-agent/basic.cpp)
 target_link_libraries(basic PRIVATE agent)
 target_compile_options(basic PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 target_link_options(basic PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 
 if(AGENT_BUILD_HUB)
-    add_executable(agent_pull examples/agent_pull/agent_pull.cpp)
+    add_executable(agent_pull examples/07-model-pull/agent_pull.cpp)
     target_link_libraries(agent_pull PRIVATE agent_hub)
     target_compile_options(agent_pull PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
     target_link_options(agent_pull PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
@@ -357,7 +357,7 @@ target_include_directories(fake_mcp_server PRIVATE ${AGENT_SIMDJSON_INCLUDE_DIR}
 target_compile_options(fake_mcp_server PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS})
 target_link_options(fake_mcp_server PRIVATE ${SANITIZER_FLAGS})
 target_compile_definitions(test_agent PRIVATE AGENT_TEST_FAKE_MCP_SERVER_PATH="$<TARGET_FILE:fake_mcp_server>"
-                                              AGENT_TEST_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples/graphs")
+                                              AGENT_TEST_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples/03-graph-workflow/graphs")
 add_dependencies(test_agent fake_mcp_server)
 if(AGENT_ENGINE_LLAMA)
     target_compile_definitions(test_agent PRIVATE AGENT_TEST_LLAMA_ENGINE_PATH="$<TARGET_FILE:agent-engine-llama>")

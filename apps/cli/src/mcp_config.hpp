@@ -13,7 +13,6 @@
 #include "commands.hpp"
 
 #include <agent-cpp/agent.hpp>
-
 #include <string>
 #include <string_view>
 #include <vector>
@@ -33,7 +32,8 @@ Result<McpFile> parse_mcp_config(std::string_view json, const std::string &sourc
 // (<home>/plugins/<name>/data, or <project>/.agents/local/mcp/<name>), read the private runtimes, and use <home>/cache for
 // package caches; the network stays on because most servers talk to a service. An explicit "sandbox" object in the file
 // replaces the defaults (so does "sandbox": {"enabled": false}).
-void apply_mcp_defaults(McpServerConfig &server, const std::string &data_dir, const std::string &runtimes_dir, const std::string &cache_dir, bool had_sandbox_object);
+void apply_mcp_defaults(McpServerConfig &server, const std::string &data_dir, const std::string &runtimes_dir, const std::string &cache_dir,
+                        bool had_sandbox_object);
 
 // The servers of the global home and the project, project entries replacing global ones of the same name. Reads the
 // files and applies the defaults; unreadable or invalid entries become warnings.

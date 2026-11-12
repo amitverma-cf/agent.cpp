@@ -5,7 +5,6 @@
 #include "registries.hpp"
 
 #include <agent-cpp/hub.hpp>
-
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
@@ -26,11 +25,13 @@ void list_dir(const char *label, const std::string &dir) {
     if (dir.empty() || !fs::is_directory(dir, ec)) return;
     std::vector<std::string> names;
     for (const auto &e : fs::directory_iterator(dir, ec))
-        if (e.is_directory(ec) && !e.path().filename().string().starts_with(".") && fs::exists(e.path() / "SKILL.md", ec)) names.push_back(e.path().filename().string());
+        if (e.is_directory(ec) && !e.path().filename().string().starts_with(".") && fs::exists(e.path() / "SKILL.md", ec))
+            names.push_back(e.path().filename().string());
     std::sort(names.begin(), names.end());
     if (names.empty()) return;
     std::printf("%s (%s)\n", label, dir.c_str());
-    for (const std::string &n : names) std::printf("  %s%s\n", n.c_str(), fs::exists(fs::path(dir) / n / ".source.json", ec) ? "   (from skills.sh)" : "");
+    for (const std::string &n : names)
+        std::printf("  %s%s\n", n.c_str(), fs::exists(fs::path(dir) / n / ".source.json", ec) ? "   (from skills.sh)" : "");
 }
 
 } // namespace
@@ -60,7 +61,9 @@ int cmd_skill(const CommandLine &cl, Context &ctx) {
     if (sub == "add") {
         const std::string dir = skills_dir_for(cl, ctx);
         if (dir.empty()) {
-            std::fprintf(stderr, "agent skill add: %s\n", cl.has("project") ? "this folder has no .agents project (run `agent init`)" : "no home is set (run `agent setup`)");
+            std::fprintf(stderr, "agent skill add: %s\n",
+                         cl.has("project") ? "this folder has no .agents project (run `agent init`)"
+                                           : "no home is set (run `agent setup`)");
             return 1;
         }
         auto hit = parse_skill_id(cl.positionals[0]);
@@ -71,11 +74,13 @@ int cmd_skill(const CommandLine &cl, Context &ctx) {
         std::vector<std::string> scripts;
         for (const std::string &f : plan.value.files) {
             const std::string ext = fs::path(f).extension().string();
-            if (ext != ".md" && ext != ".txt" && ext != ".json" && ext != ".yaml" && ext != ".yml" && ext != ".png" && ext != ".jpg" && ext != ".svg" && !ext.empty()) scripts.push_back(f);
+            if (ext != ".md" && ext != ".txt" && ext != ".json" && ext != ".yaml" && ext != ".yml" && ext != ".png" && ext != ".jpg" &&
+                ext != ".svg" && !ext.empty())
+                scripts.push_back(f);
         }
         std::printf("%s\n  from  https://github.com/%s%s%s\n  into  %s\n  files %zu, %s\n", hit.value.id.c_str(), hit.value.source.c_str(),
-                    plan.value.dir.empty() ? "" : "/tree/HEAD/", plan.value.dir.c_str(), (fs::path(dir) / hit.value.skill_id).string().c_str(), plan.value.files.size(),
-                    format_bytes(plan.value.bytes).c_str());
+                    plan.value.dir.empty() ? "" : "/tree/HEAD/", plan.value.dir.c_str(),
+                    (fs::path(dir) / hit.value.skill_id).string().c_str(), plan.value.files.size(), format_bytes(plan.value.bytes).c_str());
         if (!scripts.empty()) {
             std::printf("  it includes scripts. They can only run through run_command, in the sandbox, after you approve each command:\n");
             for (const std::string &s : scripts) std::printf("    %s\n", s.c_str());

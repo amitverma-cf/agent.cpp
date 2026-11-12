@@ -18,20 +18,21 @@
 // model's log-probabilities after one prompt prefill, without generating, and AGENT_CAP_OCR
 // transcribes image parts with the OCR prompt of the model's family (PaddleOCR-VL, GLM-OCR, ...).
 
-#include <agent-cpp/engine_abi.h>
 #include "upstream_engine.hpp"
+
+#include <agent-cpp/engine_abi.h>
 #include <algorithm>
-#include <filesystem>
 #include <cctype>
 #include <chat.h>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
-#include <deque>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <exception>
+#include <filesystem>
 #include <llama.h>
 #include <memory>
 #include <mtmd-helper.h>
@@ -64,7 +65,9 @@ std::vector<llama_token> ngram_draft(const std::vector<llama_token> &history, si
     if (history.size() <= n || max_draft == 0) return draft;
     const size_t end = history.size();
     for (size_t start = end - n; start-- > 0;) { // candidate starts, newest first, never the suffix itself
-        if (!std::equal(history.begin() + static_cast<std::ptrdiff_t>(start), history.begin() + static_cast<std::ptrdiff_t>(start + n), history.end() - static_cast<std::ptrdiff_t>(n))) continue;
+        if (!std::equal(history.begin() + static_cast<std::ptrdiff_t>(start), history.begin() + static_cast<std::ptrdiff_t>(start + n),
+                        history.end() - static_cast<std::ptrdiff_t>(n)))
+            continue;
         for (size_t j = start + n; j < end && draft.size() < max_draft; ++j) draft.push_back(history[j]);
         break;
     }
@@ -141,8 +144,8 @@ class Batcher {
                 size_t k = 0;
                 while (k < n && c[k] == tokens[k]) ++k;
                 if (std::getenv("AGENT_LLAMA_TRACE"))
-                    std::fprintf(stderr, "llama: select slot %d lcp=%zu cached=%zu prompt=%zu ckpt_pos=%zu\n", static_cast<int>(id), k, c.size(), tokens.size(),
-                                 ckpt_.count(id) ? ckpt_[id].pos : static_cast<size_t>(0));
+                    std::fprintf(stderr, "llama: select slot %d lcp=%zu cached=%zu prompt=%zu ckpt_pos=%zu\n", static_cast<int>(id), k,
+                                 c.size(), tokens.size(), ckpt_.count(id) ? ckpt_[id].pos : static_cast<size_t>(0));
                 if (use_checkpoints) { // only the position of the saved checkpoint can be resumed from
                     const auto ck = ckpt_.find(id);
                     k = (ck != ckpt_.end() && ck->second.pos <= k) ? ck->second.pos : 0;
@@ -166,16 +169,19 @@ class Batcher {
                 const auto ck = ckpt_.find(seq);
                 bool set_ok = false;
                 if (ck != ckpt_.end() && ck->second.pos == reused) {
-                    set_ok = llama_state_seq_set_data_ext(ctx, ck->second.data.data(), ck->second.data.size(), seq, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) > 0;
+                    set_ok = llama_state_seq_set_data_ext(ctx, ck->second.data.data(), ck->second.data.size(), seq,
+                                                          LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) > 0;
                     restored = set_ok && llama_memory_seq_rm(mem, seq, static_cast<llama_pos>(reused), -1);
                 }
                 if (std::getenv("AGENT_LLAMA_TRACE"))
-                    std::fprintf(stderr, "llama: checkpoint slot %d saved_pos=%zu want=%zu state_set=%d trimmed=%d\n", static_cast<int>(seq),
-                                 ck == ckpt_.end() ? size_t{0} : ck->second.pos, reused, set_ok ? 1 : 0, restored ? 1 : 0);
+                    std::fprintf(stderr, "llama: checkpoint slot %d saved_pos=%zu want=%zu state_set=%d trimmed=%d\n",
+                                 static_cast<int>(seq), ck == ckpt_.end() ? size_t{0} : ck->second.pos, reused, set_ok ? 1 : 0,
+                                 restored ? 1 : 0);
             } else if (std::getenv("AGENT_LLAMA_TRACE")) {
                 const auto ck = ckpt_.find(seq);
-                std::fprintf(stderr, "llama: no resumable prefix: slot %d has_checkpoint=%d checkpoint_pos=%zu cached_tokens=%zu\n", static_cast<int>(seq),
-                             ck == ckpt_.end() ? 0 : 1, ck == ckpt_.end() ? size_t{0} : ck->second.pos, cached_[seq].size());
+                std::fprintf(stderr, "llama: no resumable prefix: slot %d has_checkpoint=%d checkpoint_pos=%zu cached_tokens=%zu\n",
+                             static_cast<int>(seq), ck == ckpt_.end() ? 0 : 1, ck == ckpt_.end() ? size_t{0} : ck->second.pos,
+                             cached_[seq].size());
             }
             if (restored) ++checkpoint_restores;
             else reused = 0;
@@ -232,8 +238,7 @@ class Batcher {
     // Prefill for prompts with media. mtmd encodes images/audio with the projector and decodes text
     // and embedding chunks in turn; positions come back from the helper because M-RoPE models
     // advance fewer positions than tokens for an image. Runs under the batching mutex like prefill().
-    bool prefill_media(llama_seq_id seq, mtmd_context *mctx, const mtmd_input_chunks *chunks, common_sampler *sampler,
-                       llama_token &out) {
+    bool prefill_media(llama_seq_id seq, mtmd_context *mctx, const mtmd_input_chunks *chunks, common_sampler *sampler, llama_token &out) {
         std::lock_guard<std::mutex> lock(mu_);
         llama_pos n_past = next_pos_[seq];
         if (mtmd_helper_eval_chunks(mctx, ctx, chunks, n_past, seq, static_cast<int32_t>(llama_n_batch(ctx)), true, &n_past) != 0)
@@ -248,7 +253,8 @@ class Batcher {
     // the KV cache again, and `next` is the token after the last accepted one (the model's correction, or a free extra token
     // when the whole draft was right). The tokens are exactly those greedy decoding would give, up to the usual float
     // differences between batch shapes. Only for attention models that can drop the end of a sequence.
-    bool speculate(llama_seq_id seq, llama_token last, const std::vector<llama_token> &draft, common_sampler *sampler, std::vector<llama_token> &accepted, llama_token &next) {
+    bool speculate(llama_seq_id seq, llama_token last, const std::vector<llama_token> &draft, common_sampler *sampler,
+                   std::vector<llama_token> &accepted, llama_token &next) {
         std::lock_guard<std::mutex> lock(mu_);
         const llama_pos base = next_pos_[seq];
         const int32_t n = static_cast<int32_t>(draft.size()) + 1;
@@ -257,7 +263,8 @@ class Batcher {
         std::vector<uint8_t> snapshot;
         if (use_checkpoints) {
             snapshot.resize(llama_state_seq_get_size_ext(ctx, seq, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY));
-            if (llama_state_seq_get_data_ext(ctx, snapshot.data(), snapshot.size(), seq, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) return false;
+            if (llama_state_seq_get_data_ext(ctx, snapshot.data(), snapshot.size(), seq, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0)
+                return false;
         }
         llama_batch batch = llama_batch_init(n, 0, 1);
         for (int32_t i = 0; i < n; ++i) {
@@ -287,8 +294,9 @@ class Batcher {
         const llama_pos keep = base + 1 + static_cast<llama_pos>(i); // last + the accepted drafts stay in the cache
         if (i < draft.size() && use_checkpoints) {
             // back to the state before `last`, drop every key from base on, then decode `last` and the accepted drafts again
-            bool restored = llama_state_seq_set_data_ext(ctx, snapshot.data(), snapshot.size(), seq, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) > 0 &&
-                            llama_memory_seq_rm(llama_get_memory(ctx), seq, base, -1);
+            bool restored =
+                llama_state_seq_set_data_ext(ctx, snapshot.data(), snapshot.size(), seq, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) > 0 &&
+                llama_memory_seq_rm(llama_get_memory(ctx), seq, base, -1);
             if (restored) {
                 llama_batch redo = llama_batch_init(static_cast<int32_t>(i) + 1, 0, 1);
                 for (int32_t j = 0; j <= static_cast<int32_t>(i); ++j) {
@@ -481,7 +489,9 @@ class Batcher {
         llama_batch_free(batch);
         if (ok) {
             next_pos_[seq] = pos;
-            if (reusable_[seq]) cached_[seq].insert(cached_[seq].end(), tokens.begin() + static_cast<std::ptrdiff_t>(first), tokens.begin() + static_cast<std::ptrdiff_t>(end));
+            if (reusable_[seq])
+                cached_[seq].insert(cached_[seq].end(), tokens.begin() + static_cast<std::ptrdiff_t>(first),
+                                    tokens.begin() + static_cast<std::ptrdiff_t>(end));
         } else {
             reusable_[seq] = false;
             cached_[seq].clear();
@@ -572,7 +582,7 @@ struct Instance {
     mtmd::context_ptr mtmd; // projector for image/audio input; null without options.mmproj. Freed before the model.
     common_chat_templates_ptr templates;
     std::string tools_input; // Mode::Tools: the model file the operations work on
-    std::string ocr_prompt; // AGENT_CAP_OCR instruction: options.ocr_prompt or the family's
+    std::string ocr_prompt;  // AGENT_CAP_OCR instruction: options.ocr_prompt or the family's
     std::mutex out_mu;
     std::unordered_map<std::thread::id, CallOutput> outputs;
     std::unordered_map<std::thread::id, std::string> errors;
@@ -620,7 +630,10 @@ common_sampler *build_sampler(const llama_model *model, float temperature, const
         params.top_k = 1;
     }
     if (chat) chat->apply_sampling(params);
-    if (trace_grammar()) std::fprintf(stderr, "llama: tool-call grammar %s (%zu bytes, lazy=%d, %zu triggers)\n", params.grammar.grammar.empty() ? "off" : "on", params.grammar.grammar.size(), params.grammar_lazy ? 1 : 0, params.grammar_triggers.size());
+    if (trace_grammar())
+        std::fprintf(stderr, "llama: tool-call grammar %s (%zu bytes, lazy=%d, %zu triggers)\n",
+                     params.grammar.grammar.empty() ? "off" : "on", params.grammar.grammar.size(), params.grammar_lazy ? 1 : 0,
+                     params.grammar_triggers.size());
     common_sampler *s = common_sampler_init(model, params);
     if (!s && !params.grammar.grammar.empty()) { // a grammar this build cannot use: sample without it
         params.grammar = {};
@@ -677,12 +690,17 @@ bool is_json_object(std::string_view text) {
 std::string json_quote(std::string_view s) {
     std::string out = "\"";
     for (unsigned char c : s) {
-        if (c == '"' || c == '\\') { out += '\\'; out += static_cast<char>(c); }
-        else if (c == '\n') out += "\\n";
+        if (c == '"' || c == '\\') {
+            out += '\\';
+            out += static_cast<char>(c);
+        } else if (c == '\n') out += "\\n";
         else if (c == '\r') out += "\\r";
         else if (c == '\t') out += "\\t";
-        else if (c < 0x20) { char b[8]; std::snprintf(b, sizeof(b), "\\u%04x", c); out += b; }
-        else out += static_cast<char>(c);
+        else if (c < 0x20) {
+            char b[8];
+            std::snprintf(b, sizeof(b), "\\u%04x", c);
+            out += b;
+        } else out += static_cast<char>(c);
     }
     return out + "\"";
 }
@@ -721,7 +739,8 @@ common_chat_templates_inputs build_inputs(const agent_request *req, const char *
         for (size_t c = 0; c < m.n_tool_calls; ++c) {
             std::string arguments(sv(m.tool_calls[c].arguments));
             if (!is_json_object(arguments)) arguments = "{\"unparsed\":" + json_quote(arguments) + "}"; // history from an older turn
-            msg.tool_calls.push_back(common_chat_tool_call{std::string(sv(m.tool_calls[c].name)), std::move(arguments), std::string(sv(m.tool_calls[c].id))});
+            msg.tool_calls.push_back(
+                common_chat_tool_call{std::string(sv(m.tool_calls[c].name)), std::move(arguments), std::string(sv(m.tool_calls[c].id))});
         }
         msg.tool_call_id = std::string(sv(m.tool_call_id));
         in.messages.push_back(std::move(msg));
@@ -764,9 +783,9 @@ bool start_session(const Instance &inst, const llama_vocab *vocab, const common_
     try {
         out = common_chat_session(inst.templates.get(), vocab, in);
         return true;
-    } catch (const std::exception &e) {
-        error = std::string("llama: chat template failed: ") + e.what();
-    } catch (...) { error = "llama: chat template failed"; }
+    } catch (const std::exception &e) { error = std::string("llama: chat template failed: ") + e.what(); } catch (...) {
+        error = "llama: chat template failed";
+    }
     return false;
 }
 
@@ -774,9 +793,9 @@ bool finish_session(common_chat_session &session, const common_chat_input &gener
     try {
         out = session.finish(generated);
         return true;
-    } catch (const std::exception &e) {
-        error = std::string("llama: could not parse model output: ") + e.what();
-    } catch (...) { error = "llama: could not parse model output"; }
+    } catch (const std::exception &e) { error = std::string("llama: could not parse model output: ") + e.what(); } catch (...) {
+        error = "llama: could not parse model output";
+    }
     return false;
 }
 
@@ -1092,7 +1111,9 @@ int32_t reject_media(Instance &inst, const agent_request *req) {
 // that go through the model like prompt tokens; the vector is the model's pooled output after the last of them. Whether the
 // model can make sense of the media is for the model to say: nothing here rejects it ahead of time.
 int32_t run_embed_media(Instance &inst, const agent_request *req, agent_response *resp) {
-    if (!inst.mtmd) return inst.fail(AGENT_ERR_UNSUPPORTED, "llama: the request has images or audio, but this instance has no projector (set options.mmproj)");
+    if (!inst.mtmd)
+        return inst.fail(AGENT_ERR_UNSUPPORTED,
+                         "llama: the request has images or audio, but this instance has no projector (set options.mmproj)");
     llama_context *ctx = inst.batcher.ctx;
     const auto n_embd = static_cast<size_t>(llama_model_n_embd_out(inst.batcher.model));
     std::vector<float> floats;
@@ -1138,8 +1159,10 @@ int32_t run_embed_media(Instance &inst, const agent_request *req, agent_response
         std::lock_guard<std::mutex> lock(inst.pool_mu);
         llama_memory_clear(llama_get_memory(ctx), true);
         llama_pos n_past = 0;
-        if (mtmd_helper_eval_chunks(inst.mtmd.get(), ctx, chunks.ptr.get(), 0, 0, static_cast<int32_t>(llama_n_batch(ctx)), true, &n_past) != 0)
-            return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: the model could not process the media (does this embedding model take images or audio?)");
+        if (mtmd_helper_eval_chunks(inst.mtmd.get(), ctx, chunks.ptr.get(), 0, 0, static_cast<int32_t>(llama_n_batch(ctx)), true,
+                                    &n_past) != 0)
+            return inst.fail(AGENT_ERR_DECODE_FAILED,
+                             "llama: the model could not process the media (does this embedding model take images or audio?)");
         const float *e = llama_get_embeddings_seq(ctx, 0);
         if (!e) e = llama_get_embeddings_ith(ctx, -1);
         if (!e) return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: the context produced no pooled output for the media");
@@ -1433,7 +1456,8 @@ common_chat_msg *last_user(common_chat_templates_inputs &in) {
 }
 
 // Shapes the answer of a DECIDE request from the options' log-probabilities (softmax-normalized here).
-int32_t decide_finish(Instance &inst, const DecideParams &p, const std::vector<double> &logprobs, int n_prompt, int completion, agent_response *resp) {
+int32_t decide_finish(Instance &inst, const DecideParams &p, const std::vector<double> &logprobs, int n_prompt, int completion,
+                      agent_response *resp) {
     // Softmax over the options' sequence log-probabilities.
     const double max = *std::max_element(logprobs.begin(), logprobs.end());
     std::vector<double> probs(logprobs.size());
@@ -1558,7 +1582,8 @@ int32_t run_decide_native(Instance &inst, const agent_request *req, agent_respon
         int64_t t = 0;
         if (!doc["usage"]["input_tokens"].get_int64().get(t)) n_prompt = static_cast<int>(t);
     }
-    if (logprobs.size() != p.options.size()) return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: the decision model's answer has no probabilities: " + out.substr(0, 200));
+    if (logprobs.size() != p.options.size())
+        return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: the decision model's answer has no probabilities: " + out.substr(0, 200));
     return decide_finish(inst, p, logprobs, n_prompt, 0, resp);
 }
 
@@ -1639,7 +1664,9 @@ int32_t generate(Instance &inst, const agent_request *req, const std::vector<lla
     size_t reused = 0;
     const bool acquired = chunks ? b.acquire_seq(seq) : b.acquire_seq_for(tokens, seq, reused);
     if (!acquired) return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: no free sequence slot (raise max_parallel_subagents)");
-    if (trace_prefix_cache()) std::fprintf(stderr, "llama: prefix cache reused %zu of %zu prompt tokens (slot %d%s)\n", reused, tokens.size(), static_cast<int>(seq), b.use_checkpoints ? ", checkpoint" : "");
+    if (trace_prefix_cache())
+        std::fprintf(stderr, "llama: prefix cache reused %zu of %zu prompt tokens (slot %d%s)\n", reused, tokens.size(),
+                     static_cast<int>(seq), b.use_checkpoints ? ", checkpoint" : "");
     common_sampler *sampler = build_sampler(b.model, temperature, chat);
     if (!sampler) {
         b.release_seq(seq, false);
@@ -1654,7 +1681,8 @@ int32_t generate(Instance &inst, const agent_request *req, const std::vector<lla
     std::deque<llama_token> ahead; // tokens already sampled (accepted drafts and the one after them), to be processed in order
     uint64_t spec_rounds = 0, spec_accepted = 0;
     const auto t_prefill = std::chrono::steady_clock::now();
-    const bool prefilled = chunks ? b.prefill_media(seq, inst.mtmd.get(), chunks, sampler, tok) : b.prefill(seq, tokens, reused, sampler, tok);
+    const bool prefilled =
+        chunks ? b.prefill_media(seq, inst.mtmd.get(), chunks, sampler, tok) : b.prefill(seq, tokens, reused, sampler, tok);
     const auto t_first_token = std::chrono::steady_clock::now(); // the prompt is decoded and the first token sampled
     if (!prefilled) {
         status = inst.fail(AGENT_ERR_DECODE_FAILED, "llama: prompt decode failed");
@@ -1708,7 +1736,9 @@ int32_t generate(Instance &inst, const agent_request *req, const std::vector<lla
             }
         }
     }
-    if (spec_rounds && trace_prefix_cache()) std::fprintf(stderr, "llama: speculation %llu rounds, %llu draft tokens accepted\n", static_cast<unsigned long long>(spec_rounds), static_cast<unsigned long long>(spec_accepted));
+    if (spec_rounds && trace_prefix_cache())
+        std::fprintf(stderr, "llama: speculation %llu rounds, %llu draft tokens accepted\n", static_cast<unsigned long long>(spec_rounds),
+                     static_cast<unsigned long long>(spec_accepted));
     if (stats) {
         const auto t_done = std::chrono::steady_clock::now();
         auto ms = [](auto a, auto b2) { return static_cast<float>(std::chrono::duration<double, std::milli>(b2 - a).count()); };
@@ -1886,7 +1916,7 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     std::vector<std::pair<std::string, float>> loras; // options.lora: adapter file and scale
     bool use_mtp = true;                              // options.mtp: drive the GGUF's MTP head when it has one
     bool speculative = true;                          // options.speculative: prompt-lookup speculation (greedy requests only)
-    int n_batch_opt = 0, n_ubatch_opt = 0;           // options.batch / options.ubatch (0 = llama.cpp default)
+    int n_batch_opt = 0, n_ubatch_opt = 0;            // options.batch / options.ubatch (0 = llama.cpp default)
     Mode mode = Mode::Generate;
     enum llama_pooling_type pooling = LLAMA_POOLING_TYPE_UNSPECIFIED;
     simdjson::ondemand::object options;
@@ -1912,8 +1942,8 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         // KV cache precision, using llama.cpp's own quantized cache types (needs flash attention).
         if (!options["kv_cache"].get_string().get(t)) {
             kv_auto = (t == "auto");
-            if (t == "auto") {}
-            else if (t == "f16") kv_type = GGML_TYPE_F16;
+            if (t == "auto") {
+            } else if (t == "f16") kv_type = GGML_TYPE_F16;
             else if (t == "q8_0") kv_type = GGML_TYPE_Q8_0;
             else if (t == "q4_0") kv_type = GGML_TYPE_Q4_0;
             else {
@@ -1955,7 +1985,8 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
 
     // A model whose file carries a multi-token-prediction head runs on llama.cpp's own engine, which drives the head.
     // Nothing names a model: llama.cpp looks for the head's tensors in the file.
-    const bool native_decision = mode == Mode::Generate && upstream::gguf_is_decision(model_str); // System One model: only llama.cpp's engine runs it
+    const bool native_decision =
+        mode == Mode::Generate && upstream::gguf_is_decision(model_str); // System One model: only llama.cpp's engine runs it
     if (mode == Mode::Generate && ((use_mtp && upstream::gguf_has_mtp(model_str)) || native_decision)) {
         upstream::Settings us;
         us.model = model_str;
@@ -2012,11 +2043,11 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         const double width = n_head > 0 ? static_cast<double>(n_head_kv) * llama_model_n_embd(model) / n_head : 0.0;
         kv_type = width >= 512.0 ? GGML_TYPE_Q4_0 : GGML_TYPE_Q8_0;
     }
-    if (mode != Mode::Generate) kv_type = GGML_TYPE_F16;  // pooled outputs keep no useful cache
+    if (mode != Mode::Generate) kv_type = GGML_TYPE_F16; // pooled outputs keep no useful cache
     if (kv_type != GGML_TYPE_F16) {
         cparams.type_k = kv_type;
         cparams.type_v = kv_type;
-        cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;  // a quantized V cache requires it
+        cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED; // a quantized V cache requires it
     }
     if (threads > 0) {
         cparams.n_threads = threads;
@@ -2078,8 +2109,14 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         // The KV cache type actually in use (the f16 fallback may have replaced a quantized one) and its size:
         // layers x 2 (K and V) x kv heads x head size x tokens x bytes per element. An estimate for hybrid models.
         const ggml_type used = cparams.type_k;
-        inst->batcher.kv_type_id = used == GGML_TYPE_Q4_0 ? AGENT_KV_Q4_0 : used == GGML_TYPE_Q8_0 ? AGENT_KV_Q8_0 : used == GGML_TYPE_F32 ? AGENT_KV_F32 : AGENT_KV_F16;
-        const double bytes_per_elem = used == GGML_TYPE_Q4_0 ? 18.0 / 32.0 : used == GGML_TYPE_Q8_0 ? 34.0 / 32.0 : used == GGML_TYPE_F32 ? 4.0 : 2.0;
+        inst->batcher.kv_type_id = used == GGML_TYPE_Q4_0   ? AGENT_KV_Q4_0
+                                   : used == GGML_TYPE_Q8_0 ? AGENT_KV_Q8_0
+                                   : used == GGML_TYPE_F32  ? AGENT_KV_F32
+                                                            : AGENT_KV_F16;
+        const double bytes_per_elem = used == GGML_TYPE_Q4_0   ? 18.0 / 32.0
+                                      : used == GGML_TYPE_Q8_0 ? 34.0 / 32.0
+                                      : used == GGML_TYPE_F32  ? 4.0
+                                                               : 2.0;
         const int n_head = llama_model_n_head(model), n_head_kv = llama_model_n_head_kv(model);
         if (n_head > 0 && n_head_kv > 0)
             inst->batcher.kv_bytes = static_cast<uint64_t>(static_cast<double>(llama_model_n_layer(model)) * 2.0 * n_head_kv *
@@ -2093,7 +2130,8 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         for (const auto &[path, scale] : loras) {
             llama_adapter_lora *adapter = llama_adapter_lora_init(model, path.c_str());
             if (!adapter) {
-                std::snprintf(err, err_cap, "llama: cannot load the LoRA adapter %s (a GGUF adapter made for this base model is needed)", path.c_str());
+                std::snprintf(err, err_cap, "llama: cannot load the LoRA adapter %s (a GGUF adapter made for this base model is needed)",
+                              path.c_str());
                 delete inst;
                 return AGENT_ERR_MODEL_LOAD_FAILED;
             }
@@ -2108,13 +2146,15 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     }
     inst->batcher.use_checkpoints = llama_model_is_hybrid(model) || llama_model_is_recurrent(model);
     if (llama_model_n_swa(model) > 0 && !inst->batcher.use_checkpoints) inst->batcher.disable_prefix_reuse();
-    inst->batcher.spec_enabled = speculative && mode == Mode::Generate && llama_model_n_swa(model) == 0; // hybrid models too (state snapshots)
+    inst->batcher.spec_enabled =
+        speculative && mode == Mode::Generate && llama_model_n_swa(model) == 0; // hybrid models too (state snapshots)
     // What the file itself says: layers of a multi-token-prediction head. They are read from the GGUF, not assumed from a model name.
     if (trace_prefix_cache())
-        std::fprintf(stderr, "llama: speculation %s (n_swa=%d, hybrid=%d, mtp_layers=%d%s)\n", inst->batcher.spec_enabled ? "on" : "off", llama_model_n_swa(model),
-                     inst->batcher.use_checkpoints ? 1 : 0, llama_model_n_layer_nextn(model), llama_model_n_layer_nextn(model) > 0 ? ": the file has an MTP head, drafting uses prompt lookup" : "");
+        std::fprintf(stderr, "llama: speculation %s (n_swa=%d, hybrid=%d, mtp_layers=%d%s)\n", inst->batcher.spec_enabled ? "on" : "off",
+                     llama_model_n_swa(model), inst->batcher.use_checkpoints ? 1 : 0, llama_model_n_layer_nextn(model),
+                     llama_model_n_layer_nextn(model) > 0 ? ": the file has an MTP head, drafting uses prompt lookup" : "");
     inst->mode = mode;
-    if (mode != Mode::Generate) { // no chat template or sequence slots needed
+    if (mode != Mode::Generate) {     // no chat template or sequence slots needed
         inst->mtmd = std::move(mctx); // an embedding model with a projector takes images / audio too
         *out_instance = inst;
         return AGENT_OK;
@@ -2126,9 +2166,9 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     // Exception firewall (see start_session): template loading parses Jinja and may throw.
     try {
         inst->templates = common_chat_templates_init(model, chat_template);
-    } catch (const std::exception &e) {
-        std::snprintf(err, err_cap, "llama: invalid chat template: %s", e.what());
-    } catch (...) { std::snprintf(err, err_cap, "llama: invalid chat template"); }
+    } catch (const std::exception &e) { std::snprintf(err, err_cap, "llama: invalid chat template: %s", e.what()); } catch (...) {
+        std::snprintf(err, err_cap, "llama: invalid chat template");
+    }
     if (!inst->templates) {
         delete inst;
         return AGENT_ERR_MODEL_LOAD_FAILED;
@@ -2146,11 +2186,12 @@ struct QuantType {
     llama_ftype type;
 };
 constexpr QuantType kQuantTypes[] = {
-    {"F16", LLAMA_FTYPE_MOSTLY_F16},     {"BF16", LLAMA_FTYPE_MOSTLY_BF16},   {"Q8_0", LLAMA_FTYPE_MOSTLY_Q8_0},     {"Q6_K", LLAMA_FTYPE_MOSTLY_Q6_K},
-    {"Q5_K_M", LLAMA_FTYPE_MOSTLY_Q5_K_M}, {"Q5_K_S", LLAMA_FTYPE_MOSTLY_Q5_K_S}, {"Q5_0", LLAMA_FTYPE_MOSTLY_Q5_0},   {"Q5_1", LLAMA_FTYPE_MOSTLY_Q5_1},
-    {"Q4_K_M", LLAMA_FTYPE_MOSTLY_Q4_K_M}, {"Q4_K_S", LLAMA_FTYPE_MOSTLY_Q4_K_S}, {"Q4_0", LLAMA_FTYPE_MOSTLY_Q4_0},   {"Q4_1", LLAMA_FTYPE_MOSTLY_Q4_1},
-    {"Q3_K_L", LLAMA_FTYPE_MOSTLY_Q3_K_L}, {"Q3_K_M", LLAMA_FTYPE_MOSTLY_Q3_K_M}, {"Q3_K_S", LLAMA_FTYPE_MOSTLY_Q3_K_S}, {"Q2_K", LLAMA_FTYPE_MOSTLY_Q2_K},
-    {"IQ4_NL", LLAMA_FTYPE_MOSTLY_IQ4_NL}, {"IQ4_XS", LLAMA_FTYPE_MOSTLY_IQ4_XS},
+    {"F16", LLAMA_FTYPE_MOSTLY_F16},       {"BF16", LLAMA_FTYPE_MOSTLY_BF16},     {"Q8_0", LLAMA_FTYPE_MOSTLY_Q8_0},
+    {"Q6_K", LLAMA_FTYPE_MOSTLY_Q6_K},     {"Q5_K_M", LLAMA_FTYPE_MOSTLY_Q5_K_M}, {"Q5_K_S", LLAMA_FTYPE_MOSTLY_Q5_K_S},
+    {"Q5_0", LLAMA_FTYPE_MOSTLY_Q5_0},     {"Q5_1", LLAMA_FTYPE_MOSTLY_Q5_1},     {"Q4_K_M", LLAMA_FTYPE_MOSTLY_Q4_K_M},
+    {"Q4_K_S", LLAMA_FTYPE_MOSTLY_Q4_K_S}, {"Q4_0", LLAMA_FTYPE_MOSTLY_Q4_0},     {"Q4_1", LLAMA_FTYPE_MOSTLY_Q4_1},
+    {"Q3_K_L", LLAMA_FTYPE_MOSTLY_Q3_K_L}, {"Q3_K_M", LLAMA_FTYPE_MOSTLY_Q3_K_M}, {"Q3_K_S", LLAMA_FTYPE_MOSTLY_Q3_K_S},
+    {"Q2_K", LLAMA_FTYPE_MOSTLY_Q2_K},     {"IQ4_NL", LLAMA_FTYPE_MOSTLY_IQ4_NL}, {"IQ4_XS", LLAMA_FTYPE_MOSTLY_IQ4_XS},
 };
 
 // AGENT_CAP_GENERIC with params {"op":"quantize","output":"out.gguf","type":"Q4_K_M"}: rewrites the GGUF named by the
@@ -2162,16 +2203,22 @@ int32_t run_tools(Instance &inst, const agent_request *req, agent_response *resp
     simdjson::ondemand::document doc;
     simdjson::ondemand::object params;
     if (!req->params_json.size || parser.iterate(json).get(doc) || doc.get_object().get(params))
-        return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: tools mode needs params like {\"op\":\"quantize\",\"output\":\"out.gguf\",\"type\":\"Q4_K_M\"}");
+        return inst.fail(AGENT_ERR_INVALID_CONFIG,
+                         "llama: tools mode needs params like {\"op\":\"quantize\",\"output\":\"out.gguf\",\"type\":\"Q4_K_M\"}");
     std::string_view op, output, type;
-    if (params["op"].get_string().get(op) || op != "quantize") return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: tools mode supports op \"quantize\"");
-    if (params["output"].get_string().get(output) || output.empty()) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: quantize needs params.output (the new GGUF path)");
+    if (params["op"].get_string().get(op) || op != "quantize")
+        return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: tools mode supports op \"quantize\"");
+    if (params["output"].get_string().get(output) || output.empty())
+        return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: quantize needs params.output (the new GGUF path)");
     if (params["type"].get_string().get(type)) type = "Q4_K_M";
 
     llama_ftype ftype = LLAMA_FTYPE_MOSTLY_Q4_K_M;
     bool known = false;
     for (const QuantType &q : kQuantTypes)
-        if (type == q.name) { ftype = q.type; known = true; }
+        if (type == q.name) {
+            ftype = q.type;
+            known = true;
+        }
     if (!known) {
         std::string list;
         for (const QuantType &q : kQuantTypes) list += std::string(list.empty() ? "" : ", ") + q.name;
@@ -2181,8 +2228,10 @@ int32_t run_tools(Instance &inst, const agent_request *req, agent_response *resp
     const std::string out_path(output);
     bool overwrite = false;
     if (params["overwrite"].get_bool().get(overwrite)) overwrite = false;
-    if (std::filesystem::equivalent(out_path, inst.tools_input, ec)) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: params.output is the input file");
-    if (!overwrite && std::filesystem::exists(out_path, ec)) return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: " + out_path + " exists (set params.overwrite)");
+    if (std::filesystem::equivalent(out_path, inst.tools_input, ec))
+        return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: params.output is the input file");
+    if (!overwrite && std::filesystem::exists(out_path, ec))
+        return inst.fail(AGENT_ERR_INVALID_CONFIG, "llama: " + out_path + " exists (set params.overwrite)");
 
     llama_model_quantize_params qp = llama_model_quantize_default_params();
     qp.ftype = ftype;
@@ -2191,12 +2240,15 @@ int32_t run_tools(Instance &inst, const agent_request *req, agent_response *resp
     if (!params["allow_requantize"].get_bool().get(requantize)) qp.allow_requantize = requantize;
     const uint64_t in_bytes = std::filesystem::file_size(inst.tools_input, ec);
     if (llama_model_quantize(inst.tools_input.c_str(), out_path.c_str(), &qp) != 0)
-        return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: quantization failed. Possible causes: the output folder is not writable by the sandboxed engine (use <workspace>/artifacts/), the disk is full, or the input is already quantized (set params.allow_requantize, or start from an F16/BF16 file)");
+        return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: quantization failed. Possible causes: the output folder is not writable by the "
+                                                  "sandboxed engine (use <workspace>/artifacts/), the disk is full, or the input is "
+                                                  "already quantized (set params.allow_requantize, or start from an F16/BF16 file)");
     const uint64_t out_bytes = std::filesystem::file_size(out_path, ec);
 
     CallOutput &out = inst.output();
     out = CallOutput{};
-    out.content = "quantized " + inst.tools_input + " to " + std::string(type) + ": " + out_path + " (" + std::to_string(in_bytes) + " -> " + std::to_string(out_bytes) + " bytes)";
+    out.content = "quantized " + inst.tools_input + " to " + std::string(type) + ": " + out_path + " (" + std::to_string(in_bytes) +
+                  " -> " + std::to_string(out_bytes) + " bytes)";
     agent_response_reset(resp);
     resp->message.role = agent_str{"assistant", 9};
     out.part = agent_part{};
@@ -2210,13 +2262,15 @@ int32_t run_tools(Instance &inst, const agent_request *req, agent_response *resp
 int32_t llama_run(void *instance, const agent_request *req, agent_response *resp) {
     auto *inst = static_cast<Instance *>(instance);
     if (inst->mode == Mode::Tools) {
-        if (req->task != AGENT_CAP_GENERIC) return inst->fail(AGENT_ERR_UNSUPPORTED, "llama: an instance created with mode \"tools\" only runs GENERIC requests");
+        if (req->task != AGENT_CAP_GENERIC)
+            return inst->fail(AGENT_ERR_UNSUPPORTED, "llama: an instance created with mode \"tools\" only runs GENERIC requests");
         return run_tools(*inst, req, resp);
     }
     if (inst->up && req->task == AGENT_CAP_DECIDE) return run_decide_native(*inst, req, resp);
     if (inst->up) {
         if (req->task != AGENT_CAP_TEXT_GEN)
-            return inst->fail(AGENT_ERR_UNSUPPORTED, "llama: this model runs on llama.cpp's MTP engine, which does text generation only (set options.mtp=false for other tasks)");
+            return inst->fail(AGENT_ERR_UNSUPPORTED, "llama: this model runs on llama.cpp's MTP engine, which does text generation only "
+                                                     "(set options.mtp=false for other tasks)");
         int max_tokens = 512;
         float temperature = 0.7f;
         if (req->params_json.size) {
@@ -2318,8 +2372,8 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
         n_prompt = static_cast<int>(tokens.size());
     }
     if (n_prompt >= b.seq_ctx)
-        return inst->fail(AGENT_ERR_INVALID_CONFIG, "llama: prompt is " + std::to_string(n_prompt) + " tokens but context_window is " +
-                                                        std::to_string(b.seq_ctx));
+        return inst->fail(AGENT_ERR_INVALID_CONFIG,
+                          "llama: prompt is " + std::to_string(n_prompt) + " tokens but context_window is " + std::to_string(b.seq_ctx));
     max_tokens = std::min(max_tokens, b.seq_ctx - n_prompt);
 
     common_chat_input generated;
@@ -2346,7 +2400,9 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
     {
         auto &calls = out.parsed.tool_calls;
         const size_t before = calls.size();
-        calls.erase(std::remove_if(calls.begin(), calls.end(), [](const common_chat_tool_call &c) { return !c.arguments.empty() && !is_json_object(c.arguments); }), calls.end());
+        calls.erase(std::remove_if(calls.begin(), calls.end(),
+                                   [](const common_chat_tool_call &c) { return !c.arguments.empty() && !is_json_object(c.arguments); }),
+                    calls.end());
         if (calls.size() < before && calls.empty() && out.content.empty()) out.content = generated.text;
     }
     out.calls.reserve(out.parsed.tool_calls.size());

@@ -47,7 +47,7 @@ void install_sigint() {
 #if defined(_WIN32)
     std::signal(SIGINT, on_sigint);
 #else
-    struct sigaction sa {};
+    struct sigaction sa{};
     sa.sa_handler = on_sigint;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0; // no SA_RESTART: a blocked permission prompt returns

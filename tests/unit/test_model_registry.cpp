@@ -1,5 +1,5 @@
-#include <algorithm>
 #include <agent-cpp/agent.hpp>
+#include <algorithm>
 #include <atomic>
 #include <catch_amalgamated.hpp>
 #include <chrono>

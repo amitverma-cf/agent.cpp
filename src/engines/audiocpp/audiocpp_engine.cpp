@@ -19,8 +19,8 @@
 // samples at 16 kHz. It is mixed to mono and resampled to the rate the task needs.
 
 #include <agent-cpp/engine_abi.h>
-
 #include <atomic>
+#include <audiocpp.h>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -34,8 +34,6 @@
 #include <string_view>
 #include <sys/stat.h>
 #include <vector>
-
-#include <audiocpp.h>
 
 #if defined(_WIN32)
 #include <stdlib.h>
@@ -81,9 +79,9 @@ struct Component {
 struct Instance {
     audiocpp_registry *registry = nullptr;
     Component tts, asr, vad, diar;
-    bool vad_streaming = false;   // options.vad.streaming: keep the audio since the last reset and report finished segments once
-    std::vector<float> vad_buf;   // 16 kHz mono, streaming only
-    size_t vad_reported = 0;      // segments already returned as finished
+    bool vad_streaming = false; // options.vad.streaming: keep the audio since the last reset and report finished segments once
+    std::vector<float> vad_buf; // 16 kHz mono, streaming only
+    size_t vad_reported = 0;    // segments already returned as finished
 
     // Response storage: valid until free_response() or the next run().
     std::string text, path, error;
@@ -285,7 +283,8 @@ int32_t load_audio(Instance &inst, const agent_part &part, Audio &out) {
             size = part.size;
         }
         std::string why;
-        if (!decode_wav(bytes, size, out, why)) return inst.fail(AGENT_ERR_UNSUPPORTED, "audiocpp: could not read audio " + where + ": " + why);
+        if (!decode_wav(bytes, size, out, why))
+            return inst.fail(AGENT_ERR_UNSUPPORTED, "audiocpp: could not read audio " + where + ": " + why);
     }
     if (out.samples.empty() || out.rate <= 0) return inst.fail(AGENT_ERR_DECODE_FAILED, "audiocpp: audio input is empty");
     return AGENT_OK;
@@ -347,8 +346,8 @@ void set_segments_response(Instance &inst, agent_response *resp, int64_t cols) {
 }
 
 // Runs an audio-in task on a component; the caller reads the result and frees it.
-int32_t run_audio_task(Instance &inst, Component &c, const agent_request *req, const agent_part &part, const char *what, audiocpp_result **out,
-                       const std::vector<float> *whole = nullptr) {
+int32_t run_audio_task(Instance &inst, Component &c, const agent_request *req, const agent_part &part, const char *what,
+                       audiocpp_result **out, const std::vector<float> *whole = nullptr) {
     Audio audio;
     if (whole) {
         audio.samples = *whole;
@@ -361,7 +360,8 @@ int32_t run_audio_task(Instance &inst, Component &c, const agent_request *req, c
     audiocpp_request *r = audiocpp_request_create();
     if (!r) return inst.fail(AGENT_ERR_INIT_FAILED, "audiocpp: out of memory");
     int32_t rc = AGENT_OK;
-    if (audiocpp_request_set_audio(r, audio.samples.data(), audio.samples.size(), audio.rate, 1) != AUDIOCPP_OK) rc = inst.fail_audiocpp("set_audio");
+    if (audiocpp_request_set_audio(r, audio.samples.data(), audio.samples.size(), audio.rate, 1) != AUDIOCPP_OK)
+        rc = inst.fail_audiocpp("set_audio");
     if (rc == AGENT_OK && !c.language.empty()) audiocpp_request_set_option(r, "language", c.language.c_str());
     if (rc == AGENT_OK && req->on_progress) req->on_progress(req->user_data, 0, 1);
     if (rc == AGENT_OK && audiocpp_session_run(c.session, r, out) != AUDIOCPP_OK) rc = inst.fail_audiocpp(what);
@@ -424,7 +424,8 @@ int32_t detect_speech(Instance &inst, const agent_request *req, const agent_part
         const double start = static_cast<double>(s) / kModelRate, end = static_cast<double>(e) / kModelRate;
         const bool open = streaming && command != "flush" && i + 1 == n && end > total - 0.25;
         if (streaming && i < inst.vad_reported) continue;
-        json += (count++ ? "," : "") + std::string("{\"start\":") + fmt_seconds(start) + ",\"end\":" + fmt_seconds(end) + (open ? ",\"open\":true" : "") + "}";
+        json += (count++ ? "," : "") + std::string("{\"start\":") + fmt_seconds(start) + ",\"end\":" + fmt_seconds(end) +
+                (open ? ",\"open\":true" : "") + "}";
         inst.tensor.push_back(static_cast<float>(start));
         inst.tensor.push_back(static_cast<float>(end));
         if (!open) reported = i + 1;
@@ -458,7 +459,8 @@ int32_t diarize(Instance &inst, const agent_request *req, const agent_part &part
         while (idx < ids.size() && ids[idx] != id) ++idx;
         if (idx == ids.size()) ids.push_back(id);
         const double start = static_cast<double>(s) / kModelRate, end = static_cast<double>(e) / kModelRate;
-        json += (i ? "," : "") + std::string("{\"start\":") + fmt_seconds(start) + ",\"end\":" + fmt_seconds(end) + ",\"speaker\":" + std::to_string(idx) + "}";
+        json += (i ? "," : "") + std::string("{\"start\":") + fmt_seconds(start) + ",\"end\":" + fmt_seconds(end) +
+                ",\"speaker\":" + std::to_string(idx) + "}";
         inst.tensor.push_back(static_cast<float>(start));
         inst.tensor.push_back(static_cast<float>(end));
         inst.tensor.push_back(static_cast<float>(idx));
@@ -516,8 +518,10 @@ int32_t synthesize(Instance &inst, const agent_request *req, std::string_view te
     const std::string input(text);
     Component &c = inst.tts;
     int32_t rc = AGENT_OK;
-    if (audiocpp_request_set_text(r, input.c_str(), c.language.empty() ? nullptr : c.language.c_str()) != AUDIOCPP_OK) rc = inst.fail_audiocpp("set_text");
-    if (rc == AGENT_OK && !c.voice.empty() && audiocpp_request_set_voice_id(r, c.voice.c_str()) != AUDIOCPP_OK) rc = inst.fail_audiocpp("set_voice");
+    if (audiocpp_request_set_text(r, input.c_str(), c.language.empty() ? nullptr : c.language.c_str()) != AUDIOCPP_OK)
+        rc = inst.fail_audiocpp("set_text");
+    if (rc == AGENT_OK && !c.voice.empty() && audiocpp_request_set_voice_id(r, c.voice.c_str()) != AUDIOCPP_OK)
+        rc = inst.fail_audiocpp("set_voice");
     if (rc == AGENT_OK && c.speed > 0) audiocpp_request_set_speaking_rate(r, static_cast<float>(c.speed));
     if (rc == AGENT_OK && req->on_progress) req->on_progress(req->user_data, 0, 1);
     audiocpp_result *res = nullptr;
@@ -635,11 +639,13 @@ int32_t audiocpp_engine_run(void *instance, const agent_request *req, agent_resp
     case AGENT_CAP_TTS: break;
     case AGENT_CAP_VAD:
     case AGENT_CAP_DIARIZE:
-        if (!in.audio) return inst->fail(AGENT_ERR_INVALID_CONFIG, "audiocpp: VAD / diarization needs an audio part in the last user message");
+        if (!in.audio)
+            return inst->fail(AGENT_ERR_INVALID_CONFIG, "audiocpp: VAD / diarization needs an audio part in the last user message");
         break;
     case AGENT_CAP_ASR:
         if (!auto_task) {
-            if (!in.audio) return inst->fail(AGENT_ERR_INVALID_CONFIG, "audiocpp: an ASR request needs an audio part on the last user message");
+            if (!in.audio)
+                return inst->fail(AGENT_ERR_INVALID_CONFIG, "audiocpp: an ASR request needs an audio part on the last user message");
             break;
         }
         [[fallthrough]];

@@ -866,7 +866,8 @@ struct HookLog {
     const agent::Conversation *memory = nullptr;
 };
 
-void record_hook(agent::Session &, agent::Conversation &memory, std::string_view tool, std::string_view, std::string_view result, void *ud) {
+void record_hook(agent::Session &, agent::Conversation &memory, std::string_view tool, std::string_view, std::string_view result,
+                 void *ud) {
     auto *log = static_cast<HookLog *>(ud);
     log->memory = &memory;
     log->calls.push_back(std::string(tool) + (result.empty() ? ":pre" : ":post=" + std::string(result)));

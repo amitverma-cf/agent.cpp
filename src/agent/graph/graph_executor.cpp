@@ -200,7 +200,7 @@ struct NodeResult {
     bool interrupted = false;
     std::string reason;
     std::vector<ToolCall> pending;
-    std::string forced_next; // Loop: jump into the body, bypassing edges
+    std::string forced_next;                // Loop: jump into the body, bypassing edges
     std::vector<GraphInterrupt> interrupts; // Parallel: one per paused branch
 };
 

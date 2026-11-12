@@ -25,8 +25,8 @@ struct RemoteOptions {
     std::string create_config; // create() config JSON, replayed on every restart
     int timeout_ms = 0;        // per-request watchdog, 0 = none
     int cancel_grace_ms = 2000;
-    int max_restarts = 3; // per rolling minute
-    SandboxPolicy sandbox; // applied to the host before exec; see core/sandbox/sandbox_policy.hpp
+    int max_restarts = 3;                   // per rolling minute
+    SandboxPolicy sandbox;                  // applied to the host before exec; see core/sandbox/sandbox_policy.hpp
     std::map<std::string, std::string> env; // added to the host's environment (GPU cache folders, ...)
     // Tensor / BYTES payloads of at least shm_threshold bytes go through shared memory when both sides
     // can map it ($AGENT_ENGINE_SHM=0 turns it off); otherwise they are copied through the pipe.

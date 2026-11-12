@@ -128,7 +128,7 @@ const NodeStatus *apply_event(std::vector<NodeStatus> &rows, const GraphEvent &e
     case GraphEventType::NodeFailed: {
         NodeStatus *row = find_row(rows, event.node);
         if (!row) return nullptr;
-        row->state = event.type == GraphEventType::NodeEnd ? NodeState::Done
+        row->state = event.type == GraphEventType::NodeEnd     ? NodeState::Done
                      : event.type == GraphEventType::Interrupt ? NodeState::Interrupted
                                                                : NodeState::Error;
         row->end_ms = std::max(event.timestamp_ms, row->start_ms);

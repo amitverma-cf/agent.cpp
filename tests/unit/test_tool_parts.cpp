@@ -12,7 +12,9 @@ namespace {
 
 const char *kWorkspace = "/tmp/agent_test_tool_parts_ws";
 
-std::string snap_path() { return std::filesystem::absolute(std::filesystem::path(std::string(kWorkspace) + "/snap.png")).make_preferred().string(); }
+std::string snap_path() {
+    return std::filesystem::absolute(std::filesystem::path(std::string(kWorkspace) + "/snap.png")).make_preferred().string();
+}
 
 // A tool that "takes a picture": returns text + an image file in the workspace.
 agent::Result<agent::ToolResult> snap_tool(std::string_view, void *) {
@@ -162,7 +164,8 @@ TEST_CASE("parts tools go through the permission gate and relative media paths b
     REQUIRE(res.ok);
     REQUIRE(res.value.media.size() == 1);
     CHECK(std::filesystem::path(res.value.media[0].path).is_absolute());
-    CHECK(std::filesystem::path(res.value.media[0].path).lexically_normal() == (std::filesystem::current_path() / "some/pic.jpg").lexically_normal());
+    CHECK(std::filesystem::path(res.value.media[0].path).lexically_normal() ==
+          (std::filesystem::current_path() / "some/pic.jpg").lexically_normal());
 }
 
 TEST_CASE("run_turn attaches tool media to the tool message and sends it to the engine", "[tools][tool_parts]") {

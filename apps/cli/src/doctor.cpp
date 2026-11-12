@@ -16,7 +16,8 @@ UsageEntry measure_folder(const std::string &label, const std::string &path) {
     e.path = path;
     std::error_code ec;
     if (!fs::is_directory(path, ec)) return e;
-    for (auto it = fs::recursive_directory_iterator(path, fs::directory_options::skip_permission_denied, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+    for (auto it = fs::recursive_directory_iterator(path, fs::directory_options::skip_permission_denied, ec);
+         !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
         std::error_code fe;
         if (!it->is_regular_file(fe) || fe) continue;
         const auto size = it->file_size(fe);
@@ -44,7 +45,9 @@ std::vector<UsageEntry> measure_home(const HomeLayout &home) {
 
 namespace {
 
-bool ends_with(const std::string &s, std::string_view suffix) { return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0; }
+bool ends_with(const std::string &s, std::string_view suffix) {
+    return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
 
 void add_path(CleanPlan &plan, const fs::path &p, uint64_t bytes) {
     plan.paths.push_back(p.string());
@@ -64,13 +67,15 @@ CleanPlan plan_clean(const HomeLayout &home, const std::vector<CleanTarget> &tar
             for (const auto &entry : fs::directory_iterator(home.cache, ec)) {
                 const UsageEntry u = measure_folder("", entry.path().string());
                 std::error_code fe;
-                const uint64_t size = entry.is_directory(fe) ? u.bytes : (entry.is_regular_file(fe) ? static_cast<uint64_t>(entry.file_size(fe)) : 0);
+                const uint64_t size =
+                    entry.is_directory(fe) ? u.bytes : (entry.is_regular_file(fe) ? static_cast<uint64_t>(entry.file_size(fe)) : 0);
                 add_path(plan, entry.path(), size);
             }
     } else if (wants(CleanTarget::Downloads)) {
         for (const std::string &root : {home.models, home.cache}) {
             if (!fs::is_directory(root, ec)) continue;
-            for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+            for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
+                 !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
                 std::error_code fe;
                 if (it->is_regular_file(fe) && ends_with(it->path().string(), ".part")) add_path(plan, it->path(), it->file_size(fe));
             }
@@ -79,7 +84,8 @@ CleanPlan plan_clean(const HomeLayout &home, const std::vector<CleanTarget> &tar
     if (wants(CleanTarget::Cache) && wants(CleanTarget::Downloads)) {
         // Partial downloads inside models/ are not under cache/: add them as well.
         if (fs::is_directory(home.models, ec))
-            for (auto it = fs::recursive_directory_iterator(home.models, fs::directory_options::skip_permission_denied, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+            for (auto it = fs::recursive_directory_iterator(home.models, fs::directory_options::skip_permission_denied, ec);
+                 !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
                 std::error_code fe;
                 if (it->is_regular_file(fe) && ends_with(it->path().string(), ".part")) add_path(plan, it->path(), it->file_size(fe));
             }
@@ -102,7 +108,8 @@ uint64_t run_clean(const CleanPlan &plan) {
     for (const std::string &p : plan.paths) {
         std::error_code ec;
         const UsageEntry u = measure_folder("", p);
-        const uint64_t size = fs::is_directory(p, ec) ? u.bytes : (fs::is_regular_file(p, ec) ? static_cast<uint64_t>(fs::file_size(p, ec)) : 0);
+        const uint64_t size =
+            fs::is_directory(p, ec) ? u.bytes : (fs::is_regular_file(p, ec) ? static_cast<uint64_t>(fs::file_size(p, ec)) : 0);
         const auto removed = fs::remove_all(p, ec);
         if (!ec && removed > 0) freed += size;
     }

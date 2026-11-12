@@ -5,7 +5,7 @@ each one through the permission gate, feeds the result back as a `tool` message 
 model answers in text (at most `Config::max_tool_call_rounds` rounds). This guide writes a tool, gates
 it, observes it with hooks and adds the tools of an MCP server.
 
-The code is [`examples/guides/writing_a_tool.cpp`](../../examples/guides/writing_a_tool.cpp). It runs on
+The code is [`examples/02-tools/tool.cpp`](../../examples/02-tools/tool.cpp). It runs on
 the mock engine plugin, where a user message `call:<tool>` makes the "model" request `<tool>` with `{}`,
 so the whole loop runs without a real model (test `example.guide_tool`).
 

@@ -1,7 +1,6 @@
 #include "cli_core.hpp"
 
 #include <agent-cpp/engine_abi.h>
-
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -73,7 +72,7 @@ constexpr std::string_view kModelValue[] = {"name", "quant", "mmproj", "include"
 constexpr std::string_view kModelBool[] = {"allow-restricted", "keep-file", "no-mmproj"};
 
 constexpr std::string_view kChatValue[] = {"model", "engine", "resume", "workspace", "ctx", "max-tokens", "engine-options"};
-constexpr std::string_view kChatBool[] = {"yes", "list", "verbose", "inprocess"};
+constexpr std::string_view kChatBool[] = {"yes", "list", "verbose", "inprocess", "plain"};
 
 constexpr std::string_view kRunValue[] = {"model", "engine", "workspace", "thread", "set", "resume", "input", "engine-options"};
 constexpr std::string_view kRunBool[] = {"yes", "inprocess", "json", "swap-models"};
@@ -82,7 +81,8 @@ constexpr std::string_view kVoiceValue[] = {"model",     "engine", "asr-model", 
                                             "workspace", "ctx",    "max-tokens", "engine-options", "resume",    "max-turns", "voice"};
 constexpr std::string_view kVoiceBool[] = {"yes", "verbose", "inprocess", "barge-in"};
 
-constexpr std::string_view kTaskValue[] = {"model", "engine", "engine-options", "text", "file", "params", "workspace", "max-tokens", "doc", "tensor", "tools"};
+constexpr std::string_view kTaskValue[] = {"model",      "engine", "engine-options", "text", "file", "params", "workspace",
+                                           "max-tokens", "doc",    "tensor",         "tools"};
 constexpr std::string_view kTaskBool[] = {"inprocess", "all-values"};
 
 constexpr CommandSpec kCommands[] = {
@@ -174,10 +174,12 @@ Result<CommandLine> parse_command_line(std::span<const std::string_view> args) {
             return fail<CommandLine>(ErrorCode::InvalidConfig, msg);
         }
         if (takes_value && !has_inline_value) {
-            if (i + 1 >= args.size()) return fail<CommandLine>(ErrorCode::InvalidConfig, "option '--" + std::string(name) + "' needs a value");
+            if (i + 1 >= args.size())
+                return fail<CommandLine>(ErrorCode::InvalidConfig, "option '--" + std::string(name) + "' needs a value");
             value = std::string(args[++i]);
         }
-        if (is_bool && has_inline_value) return fail<CommandLine>(ErrorCode::InvalidConfig, "option '--" + std::string(name) + "' takes no value");
+        if (is_bool && has_inline_value)
+            return fail<CommandLine>(ErrorCode::InvalidConfig, "option '--" + std::string(name) + "' takes no value");
         if (name == "help") cl.help = true;
         else cl.flags.push_back(Flag{std::string(name), std::move(value)});
     }
@@ -228,7 +230,8 @@ std::string format_turn_footer(const TokenUsage &u) {
     n = std::snprintf(buf, sizeof(buf), " | gen %d tok", u.completion_tokens);
     out.append(buf, static_cast<size_t>(n));
     if (u.decode_ms > 0.0f && u.completion_tokens > 1) {
-        n = std::snprintf(buf, sizeof(buf), " %.0f tok/s", static_cast<double>(u.completion_tokens - 1) / (static_cast<double>(u.decode_ms) / 1000.0));
+        n = std::snprintf(buf, sizeof(buf), " %.0f tok/s",
+                          static_cast<double>(u.completion_tokens - 1) / (static_cast<double>(u.decode_ms) / 1000.0));
         out.append(buf, static_cast<size_t>(n));
     }
     if (u.kv_max_tokens > 0) {
@@ -244,12 +247,13 @@ std::string format_turn_footer(const TokenUsage &u) {
 }
 
 std::string usage_text() {
-    return "usage: agent <command> [options]\n"
+    return "usage: agent <command> [options]   (agent alone, in a terminal, opens the chat screen)\n"
            "\n"
            "commands:\n"
            "  init [DIR]                 create .agents/ (skills, MCP config, private memory) in a project folder\n"
            "  doctor                     what is installed, how much disk each area of the home uses, what is safe to clean\n"
-           "  clean --downloads|--cache|--logs [--yes]   remove partial downloads, rebuildable caches, or old logs (never models or memory)\n"
+           "  clean --downloads|--cache|--logs [--yes]   remove partial downloads, rebuildable caches, or old logs (never models or "
+           "memory)\n"
            "  secret set NAME            store a key in the OS credential store (typed without echo, or --stdin); never shown again\n"
            "  secret bind NAME CONSUMER  allow mcp:NAME / tool:NAME / group:NAME to use it (see `secret ls`); unbind, rm, ls too\n"
            "  setup                      choose the global home, detect hardware, find engines, pick and smoke-test models\n"
@@ -259,9 +263,11 @@ std::string usage_text() {
            "        [--download-engines] [--install-runtimes]\n"
            "  runtime ls|use|install|path|rm   the private JavaScript and Python runtimes (bun, node, pnpm, nub, uv) kept in the home\n"
            "        runtime use bun|node|nub   choose the JavaScript tooling; runtime install NAME|js   download one\n"
-           "  skill search|add|ls|rm     skills from skills.sh (add owner/repo/skill [--yes] [--project]); a skill is text the model follows\n"
+           "  skill search|add|ls|rm     skills from skills.sh (add owner/repo/skill [--yes] [--project]); a skill is text the model "
+           "follows\n"
            "  mcp search|add|ls|rm       MCP servers from the official registry (add NAME [--yes] [--project]); they run in the sandbox\n"
-           "  sandbox ls|grant|revoke    folders outside the workspace that tools may use: grant PATH [--write] [--for run_command|files|mcp:NAME]\n"
+           "  sandbox ls|grant|revoke    folders outside the workspace that tools may use: grant PATH [--write] [--for "
+           "run_command|files|mcp:NAME]\n"
            "  engine ls                  list engines in engines.json\n"
            "  engine add <plugin>        validate an engine plugin and record it\n"
            "  engine pull <name>         download a prebuilt engine from the GitHub release (--tag, --repo)\n"
@@ -275,8 +281,8 @@ std::string usage_text() {
            "        (pick a file, then: model pull owner/repo:QUANT)\n"
            "  model ls                   list downloaded models (models.json)\n"
            "  model rm <name> [--keep-file]\n"
-           "  chat                       interactive chat with streaming and tools\n"
-           "        [-m|--model NAME|PATH] [-e|--engine NAME|PATH] [--resume ID] [--list]\n"
+           "  chat                       interactive chat with streaming and tools (full-screen in a terminal)\n"
+           "        [-m|--model NAME|PATH] [-e|--engine NAME|PATH] [--resume ID] [--list] [--plain]\n"
            "        [--workspace DIR] [--ctx N] [--max-tokens N] [--engine-options JSON] [-y|--yes] [--verbose]\n"
            "        [--inprocess]\n"
            "  run <graph.json>           run a declarative graph\n"
@@ -295,7 +301,8 @@ std::string usage_text() {
            "        generic / onnx: --tensor name:dtype:d1,d2=v1,v2,... (repeatable; dtype f32|i64|i32|u8)\n"
            "  version                    print the version\n"
            "\n"
-           "global options: -h|--help, --no-sandbox (run engines, tools and commands without the OS sandbox), --home DIR (the global workspace: default $AGENT_HOME or the folder chosen at setup),\n"
+           "global options: -h|--help, --no-sandbox (run engines, tools and commands without the OS sandbox), --home DIR (the global "
+           "workspace: default $AGENT_HOME or the folder chosen at setup),\n"
            "                 --config-dir DIR (old layout: default $AGENT_CONFIG_DIR or the platform config dir)\n"
            "engines run in a separate agent-engine-host process (a crash fails the turn, not the CLI);\n"
            "--inprocess, or \"isolation\": \"inprocess\" in engines.json, loads them into the CLI instead\n"
@@ -430,8 +437,8 @@ std::string config_to_json(const CliConfig &c) {
     out += "  \"backend\": " + json_str(c.backend) + ",\n";
     out += "  \"hardware\": {\"cpu_cores\": " + std::to_string(c.hardware.cpu_cores) +
            ", \"nvidia_smi\": " + (c.hardware.nvidia_smi ? "true" : "false") +
-           ", \"nvidia_device\": " + (c.hardware.nvidia_device ? "true" : "false") + ", \"dri_nodes\": " + string_array(c.hardware.dri_nodes) +
-           "},\n";
+           ", \"nvidia_device\": " + (c.hardware.nvidia_device ? "true" : "false") +
+           ", \"dri_nodes\": " + string_array(c.hardware.dri_nodes) + "},\n";
     out += "  \"context_window\": " + std::to_string(c.context_window) + ",\n";
     out += "  \"max_tokens\": " + std::to_string(c.max_tokens) + ",\n";
     out += "  \"temperature\": " + std::string(temp) + ",\n";
@@ -466,7 +473,8 @@ Result<CliConfig> config_from_json(std::string_view json) {
     c.memory_budget_mb = get_int(doc, "memory_budget_mb", 0);
     if (c.memory_budget_mb < 0) return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: memory_budget_mb must be >= 0");
     c.js_runtime = std::string(get_str(doc, "js_runtime", "bun"));
-    if (c.js_runtime != "bun" && c.js_runtime != "node" && c.js_runtime != "nub") return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: js_runtime must be \"bun\", \"node\" or \"nub\"");
+    if (c.js_runtime != "bun" && c.js_runtime != "node" && c.js_runtime != "nub")
+        return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: js_runtime must be \"bun\", \"node\" or \"nub\"");
     if (c.context_window <= 0 || c.max_tokens <= 0)
         return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: context_window and max_tokens must be positive");
     return ok(std::move(c));
@@ -591,12 +599,24 @@ std::vector<std::string> caps_to_names(uint64_t caps) {
         uint64_t bit;
         std::string_view name;
     } kNames[] = {
-        {AGENT_CAP_TEXT_GEN, "text_gen"},   {AGENT_CAP_TOOL_CALL, "tool_call"},   {AGENT_CAP_VISION_IN, "vision_in"},
-        {AGENT_CAP_AUDIO_IN, "audio_in"},   {AGENT_CAP_VIDEO_IN, "video_in"},     {AGENT_CAP_OCR, "ocr"},
-        {AGENT_CAP_ASR, "asr"},             {AGENT_CAP_TTS, "tts"},               {AGENT_CAP_VAD, "vad"},
-        {AGENT_CAP_DIARIZE, "diarize"},     {AGENT_CAP_IMAGE_GEN, "image_gen"},   {AGENT_CAP_IMAGE_EDIT, "image_edit"},
-        {AGENT_CAP_VIDEO_GEN, "video_gen"}, {AGENT_CAP_MESH_GEN, "mesh_gen"},     {AGENT_CAP_EMBED, "embed"},
-        {AGENT_CAP_RERANK, "rerank"},       {AGENT_CAP_DECIDE, "decide"},         {AGENT_CAP_CLASSIFY, "classify"},
+        {AGENT_CAP_TEXT_GEN, "text_gen"},
+        {AGENT_CAP_TOOL_CALL, "tool_call"},
+        {AGENT_CAP_VISION_IN, "vision_in"},
+        {AGENT_CAP_AUDIO_IN, "audio_in"},
+        {AGENT_CAP_VIDEO_IN, "video_in"},
+        {AGENT_CAP_OCR, "ocr"},
+        {AGENT_CAP_ASR, "asr"},
+        {AGENT_CAP_TTS, "tts"},
+        {AGENT_CAP_VAD, "vad"},
+        {AGENT_CAP_DIARIZE, "diarize"},
+        {AGENT_CAP_IMAGE_GEN, "image_gen"},
+        {AGENT_CAP_IMAGE_EDIT, "image_edit"},
+        {AGENT_CAP_VIDEO_GEN, "video_gen"},
+        {AGENT_CAP_MESH_GEN, "mesh_gen"},
+        {AGENT_CAP_EMBED, "embed"},
+        {AGENT_CAP_RERANK, "rerank"},
+        {AGENT_CAP_DECIDE, "decide"},
+        {AGENT_CAP_CLASSIFY, "classify"},
         {AGENT_CAP_GENERIC, "generic"},
     };
     std::vector<std::string> out;
@@ -689,10 +709,9 @@ std::string mime_for_path(std::string_view path) {
     static constexpr struct {
         std::string_view ext, mime;
     } kMimes[] = {
-        {".png", "image/png"},   {".jpg", "image/jpeg"},  {".jpeg", "image/jpeg"}, {".gif", "image/gif"},
-        {".bmp", "image/bmp"},   {".webp", "image/webp"}, {".wav", "audio/wav"},   {".mp3", "audio/mpeg"},
-        {".flac", "audio/flac"}, {".ogg", "audio/ogg"},   {".mp4", "video/mp4"},   {".webm", "video/webm"},
-        {".glb", "model/gltf-binary"},
+        {".png", "image/png"},   {".jpg", "image/jpeg"},  {".jpeg", "image/jpeg"},       {".gif", "image/gif"},   {".bmp", "image/bmp"},
+        {".webp", "image/webp"}, {".wav", "audio/wav"},   {".mp3", "audio/mpeg"},        {".flac", "audio/flac"}, {".ogg", "audio/ogg"},
+        {".mp4", "video/mp4"},   {".webm", "video/webm"}, {".glb", "model/gltf-binary"},
     };
     for (const auto &m : kMimes)
         if (m.ext == ext) return std::string(m.mime);

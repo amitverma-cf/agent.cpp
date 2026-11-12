@@ -47,8 +47,8 @@ agent_str to_c(std::string_view s) { return agent_str{s.data(), s.size()}; }
 std::string_view from_c(agent_str s) { return s.data ? std::string_view(s.data, s.size) : std::string_view(); }
 
 bool looks_like_path(std::string_view s) {
-    return s.find('/') != std::string_view::npos || s.find('\\') != std::string_view::npos || s.ends_with(".so") ||
-           s.ends_with(".dll") || s.ends_with(".dylib");
+    return s.find('/') != std::string_view::npos || s.find('\\') != std::string_view::npos || s.ends_with(".so") || s.ends_with(".dll") ||
+           s.ends_with(".dylib");
 }
 
 uint32_t to_c_dtype(DType d) {
@@ -140,9 +140,7 @@ Result<void> check_task(const EngineState &state, uint32_t task) {
     return ok();
 }
 
-Result<InferResponse> arena_full() {
-    return fail<InferResponse>(ErrorCode::DecodeFailed, "Out of memory (arena growth failed).");
-}
+Result<InferResponse> arena_full() { return fail<InferResponse>(ErrorCode::DecodeFailed, "Out of memory (arena growth failed)."); }
 
 } // namespace
 
@@ -211,9 +209,9 @@ Result<void> init_engine(Session &session) {
         // Coverage builds only: the host and its plugin write their .gcda files into the build tree when they exit.
         if (opts.sandbox.enabled) opts.sandbox.read_write_paths.push_back(AGENT_COVERAGE_RW_DIR);
 #endif
-        opts.env["MALLOC_ARENA_MAX"] = "2";                    // glibc: at most 2 heaps instead of 8 x cores
-        opts.env["MALLOC_TRIM_THRESHOLD_"] = "131072";         // give freed memory back to the OS at 128 KiB
-        opts.env["MALLOC_MMAP_THRESHOLD_"] = "262144";         // large blocks come straight from mmap and are returned on free
+        opts.env["MALLOC_ARENA_MAX"] = "2";            // glibc: at most 2 heaps instead of 8 x cores
+        opts.env["MALLOC_TRIM_THRESHOLD_"] = "131072"; // give freed memory back to the OS at 128 KiB
+        opts.env["MALLOC_MMAP_THRESHOLD_"] = "262144"; // large blocks come straight from mmap and are returned on free
         if (opts.sandbox.enabled && cfg.engine_sandbox.gpu) {
             // Driver caches (compiled kernels / shaders) live under $HOME by default, which the sandbox hides;
             // without a writable folder every start recompiles. Untested on real GPUs: see docs/gpu.md.
@@ -225,11 +223,11 @@ Result<void> init_engine(Session &session) {
             std::filesystem::create_directories(cache / "nv", gpu_ec);
             const std::string abs = std::filesystem::absolute(cache, gpu_ec).string();
             opts.sandbox.read_write_paths.push_back(abs);
-            opts.env["CUDA_CACHE_PATH"] = abs + "/cuda";                // CUDA JIT (PTX -> SASS) cache
-            opts.env["CUDA_CACHE_MAXSIZE"] = "1073741824";              // 1 GiB; the default is 256 MiB
-            opts.env["MESA_SHADER_CACHE_DIR"] = abs + "/mesa";          // Mesa: radv, anv, llvmpipe, ...
+            opts.env["CUDA_CACHE_PATH"] = abs + "/cuda";       // CUDA JIT (PTX -> SASS) cache
+            opts.env["CUDA_CACHE_MAXSIZE"] = "1073741824";     // 1 GiB; the default is 256 MiB
+            opts.env["MESA_SHADER_CACHE_DIR"] = abs + "/mesa"; // Mesa: radv, anv, llvmpipe, ...
             opts.env["MESA_SHADER_CACHE_MAX_SIZE"] = "1G";
-            opts.env["__GL_SHADER_DISK_CACHE_PATH"] = abs + "/nv";      // NVIDIA OpenGL / Vulkan shader cache
+            opts.env["__GL_SHADER_DISK_CACHE_PATH"] = abs + "/nv"; // NVIDIA OpenGL / Vulkan shader cache
             opts.env["__GL_SHADER_DISK_CACHE_SKIP_CLEANUP"] = "1";
         }
         auto remote = engines::start_remote_engine(std::move(opts));
@@ -265,11 +263,13 @@ Result<void> init_engine(Session &session) {
     char err[512] = {0};
     if (engine->create(to_c(config), &state->instance, err, sizeof(err)) != AGENT_OK || !state->instance) {
         state->instance = nullptr;
-        return fail(ErrorCode::ModelLoadFailed, std::string("Engine '") + engine->name + "' failed to load: " + (err[0] ? err : "unknown error"));
+        return fail(ErrorCode::ModelLoadFailed,
+                    std::string("Engine '") + engine->name + "' failed to load: " + (err[0] ? err : "unknown error"));
     }
 
     session.provider_state = state;
-    utils::log(session, LogLevel::Info, std::string("Engine '") + engine->name + "' " + (engine->version ? engine->version : "") + " loaded.");
+    utils::log(session, LogLevel::Info,
+               std::string("Engine '") + engine->name + "' " + (engine->version ? engine->version : "") + " loaded.");
     return ok();
 }
 

@@ -2,11 +2,10 @@
 
 #include "runtimes.hpp"
 
-#include <simdjson.h>
-
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <simdjson.h>
 
 namespace agent::cli {
 
@@ -88,7 +87,8 @@ Result<McpFile> parse_mcp_config(std::string_view json, const std::string &sourc
     return ok(std::move(file));
 }
 
-void apply_mcp_defaults(McpServerConfig &server, const std::string &data_dir, const std::string &runtimes_dir, const std::string & /*cache_dir*/, bool had_sandbox_object) {
+void apply_mcp_defaults(McpServerConfig &server, const std::string &data_dir, const std::string &runtimes_dir,
+                        const std::string & /*cache_dir*/, bool had_sandbox_object) {
     if (server.working_directory.empty()) server.working_directory = data_dir;
     if (had_sandbox_object) return;
     server.sandbox.enabled = true;
@@ -105,7 +105,8 @@ std::string slurp(const std::string &path) {
     return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 }
 
-void add_file(const std::string &path, const std::string &data_root, const Context &ctx, std::vector<McpServerConfig> &out, std::vector<std::string> &warnings) {
+void add_file(const std::string &path, const std::string &data_root, const Context &ctx, std::vector<McpServerConfig> &out,
+              std::vector<std::string> &warnings) {
     std::error_code ec;
     if (!fs::is_regular_file(path, ec)) return;
     auto parsed = parse_mcp_config(slurp(path), path);
@@ -123,7 +124,8 @@ void add_file(const std::string &path, const std::string &data_root, const Conte
         const bool had = std::find(own_sandbox.begin(), own_sandbox.end(), s.name) != own_sandbox.end();
         apply_mcp_defaults(s, data_dir, runtimes, cache, had);
         if (ctx.has_home) { // npx / uvx run on the private bun / uv when they are installed
-            const LauncherRewrite launcher = rewrite_launcher(s, ctx.home, ctx.config.js_runtime); // caches stay in the server's own folder (its working directory)
+            const LauncherRewrite launcher =
+                rewrite_launcher(s, ctx.home, ctx.config.js_runtime); // caches stay in the server's own folder (its working directory)
             if (!launcher.note.empty()) warnings.push_back(launcher.note);
         }
         // A project entry replaces a global one with the same name.
@@ -137,7 +139,8 @@ void add_file(const std::string &path, const std::string &data_root, const Conte
 namespace {
 
 // <dir>/mcp.d/*.json: servers added with `agent mcp add`, one file each (sorted by name).
-void add_dropins(const fs::path &dir, const std::string &data_root, const Context &ctx, std::vector<McpServerConfig> &out, std::vector<std::string> &warnings) {
+void add_dropins(const fs::path &dir, const std::string &data_root, const Context &ctx, std::vector<McpServerConfig> &out,
+                 std::vector<std::string> &warnings) {
     std::error_code ec;
     std::vector<std::string> files;
     for (const auto &entry : fs::directory_iterator(dir / "mcp.d", ec))

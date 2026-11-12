@@ -1,6 +1,6 @@
-#include "path_gate.hpp"
 #include "../utils/utils.hpp"
 #include "hal/path.hpp"
+#include "path_gate.hpp"
 
 #include <agent-cpp/agent.hpp>
 #include <algorithm>
@@ -171,7 +171,8 @@ static Result<std::string> write_file_cb(std::string_view args, void *ud) {
         auto k = field.unescaped_key();
         if (k.error()) continue;
         auto kv = k.value();
-        if (kv == "path") { if (field.value().get_string().get(path_sv)) path_sv = {};
+        if (kv == "path") {
+            if (field.value().get_string().get(path_sv)) path_sv = {};
         } else if (kv == "content") {
             has_content = !field.value().get_string().get(content_sv);
         } else if (kv == "create_dirs") {
@@ -210,8 +211,11 @@ static Result<std::string> append_file_cb(std::string_view args, void *ud) {
     for (auto field : obj) {
         auto k = field.unescaped_key();
         if (k.error()) continue;
-        if (k.value() == "path") { if (field.value().get_string().get(path_sv)) path_sv = {}; }
-        else if (k.value() == "content") { if (field.value().get_string().get(content_sv)) content_sv = {}; }
+        if (k.value() == "path") {
+            if (field.value().get_string().get(path_sv)) path_sv = {};
+        } else if (k.value() == "content") {
+            if (field.value().get_string().get(content_sv)) content_sv = {};
+        }
     }
     if (path_sv.empty()) return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'path'");
 
@@ -317,7 +321,9 @@ static Result<std::string> create_dir_cb(std::string_view args, void *ud) {
     std::string_view path_sv;
     for (auto field : obj) {
         auto k = field.unescaped_key();
-        if (!k.error() && k.value() == "path") { if (field.value().get_string().get(path_sv)) path_sv = {}; }
+        if (!k.error() && k.value() == "path") {
+            if (field.value().get_string().get(path_sv)) path_sv = {};
+        }
     }
     if (path_sv.empty()) return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'path'");
 
@@ -342,7 +348,9 @@ static Result<std::string> delete_path_cb(std::string_view args, void *ud) {
     std::string_view path_sv;
     for (auto field : obj) {
         auto k = field.unescaped_key();
-        if (!k.error() && k.value() == "path") { if (field.value().get_string().get(path_sv)) path_sv = {}; }
+        if (!k.error() && k.value() == "path") {
+            if (field.value().get_string().get(path_sv)) path_sv = {};
+        }
     }
     if (path_sv.empty()) return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'path'");
 
@@ -371,8 +379,11 @@ static Result<std::string> move_path_cb(std::string_view args, void *ud) {
     for (auto field : obj) {
         auto k = field.unescaped_key();
         if (k.error()) continue;
-        if (k.value() == "from") { if (field.value().get_string().get(from_sv)) from_sv = {}; }
-        else if (k.value() == "to") { if (field.value().get_string().get(to_sv)) to_sv = {}; }
+        if (k.value() == "from") {
+            if (field.value().get_string().get(from_sv)) from_sv = {};
+        } else if (k.value() == "to") {
+            if (field.value().get_string().get(to_sv)) to_sv = {};
+        }
     }
     if (from_sv.empty() || to_sv.empty()) return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'from' or 'to'");
 
@@ -401,7 +412,9 @@ static Result<std::string> file_info_cb(std::string_view args, void *ud) {
     std::string_view path_sv;
     for (auto field : obj) {
         auto k = field.unescaped_key();
-        if (!k.error() && k.value() == "path") { if (field.value().get_string().get(path_sv)) path_sv = {}; }
+        if (!k.error() && k.value() == "path") {
+            if (field.value().get_string().get(path_sv)) path_sv = {};
+        }
     }
     if (path_sv.empty()) return fail<std::string>(ErrorCode::InvalidConfig, "Missing 'path'");
 

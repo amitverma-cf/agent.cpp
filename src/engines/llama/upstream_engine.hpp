@@ -9,7 +9,6 @@
 // blk.<last>.nextn.eh_proj.weight, so no model name is involved.
 
 #include <agent-cpp/engine_abi.h>
-
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -27,9 +26,9 @@ struct Settings {
     int threads = 0;    // 0 = llama.cpp's choice
     int gpu_layers = -1;
     std::vector<std::pair<std::string, float>> loras;
-    std::string kv_type;  // "", "f16", "q8_0" or "q4_0"
-    bool mtp = true;      // use the MTP head when the file has one
-    int draft_max = 3;    // tokens drafted per step
+    std::string kv_type; // "", "f16", "q8_0" or "q4_0"
+    bool mtp = true;     // use the MTP head when the file has one
+    int draft_max = 3;   // tokens drafted per step
 };
 
 struct ToolCall {

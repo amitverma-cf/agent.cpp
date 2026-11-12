@@ -16,10 +16,12 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+// clang-format off
 #include <windows.h>
 #include <aclapi.h>
 #include <sddl.h>
 #include <userenv.h>
+// clang-format on
 #else
 #include <fcntl.h>
 #include <sys/resource.h>
@@ -292,7 +294,7 @@ void add_rule(int ruleset, const std::string &path, uint64_t access, uint64_t ha
             warnings.push_back("sandbox: allow-list path '" + path + "' is not accessible (" + std::strerror(errno) + "); skipped.");
         return;
     }
-    struct stat st {};
+    struct stat st{};
     if (::fstat(fd, &st) == 0 && !S_ISDIR(st.st_mode)) access &= kFsFileRights;
     access &= handled;
     if (access) {
@@ -548,7 +550,9 @@ void *low_integrity_token_for(PreparedSandbox &prepared, std::string &error) {
         std::filesystem::create_directories(dir, ec);
         std::string why;
         if (!label_low_integrity(dir, why)) {
-            prepared.warnings.push_back("sandbox: " + why + "; this program runs WITHOUT the write confinement (use a folder you own, e.g. under your user profile).");
+            prepared.warnings.push_back(
+                "sandbox: " + why +
+                "; this program runs WITHOUT the write confinement (use a folder you own, e.g. under your user profile).");
             return nullptr;
         }
     }
@@ -603,7 +607,8 @@ bool grant_container(PSID sid, const std::string &path, bool write, std::string 
         return false;
     }
     EXPLICIT_ACCESSW ea{};
-    ea.grfAccessPermissions = write ? (FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE) : (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
+    ea.grfAccessPermissions =
+        write ? (FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE) : (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
     ea.grfAccessMode = GRANT_ACCESS;
     ea.grfInheritance = SUB_CONTAINERS_AND_OBJECTS_INHERIT;
     ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
@@ -625,8 +630,8 @@ bool grant_container(PSID sid, const std::string &path, bool write, std::string 
 
 } // namespace
 
-std::unique_ptr<AppContainerLaunch> appcontainer_launch_for(PreparedSandbox &prepared, const std::vector<std::string> &extra_read, const std::vector<void *> &inherit_handles,
-                                                            std::string &error) {
+std::unique_ptr<AppContainerLaunch> appcontainer_launch_for(PreparedSandbox &prepared, const std::vector<std::string> &extra_read,
+                                                            const std::vector<void *> &inherit_handles, std::string &error) {
     error.clear();
     if (!prepared.low_integrity) return nullptr;
     auto launch = std::make_unique<AppContainerLaunch>();
@@ -635,11 +640,13 @@ std::unique_ptr<AppContainerLaunch> appcontainer_launch_for(PreparedSandbox &pre
     auto fall_back = [&](const std::string &why) {
         // No weaker substitute: a partial sandbox would promise more than it gives. The program runs unsandboxed, and says so.
         prepared.low_integrity = false;
-        prepared.warnings.push_back("sandbox: AppContainer is not available on this system (" + why + "); this program runs WITHOUT a sandbox.");
+        prepared.warnings.push_back("sandbox: AppContainer is not available on this system (" + why +
+                                    "); this program runs WITHOUT a sandbox.");
         return std::unique_ptr<AppContainerLaunch>();
     };
 
-    HRESULT hr = CreateAppContainerProfile(L"agent-cpp.sandbox", L"agent.cpp sandbox", L"Sandboxed commands and tools started by agent.cpp", nullptr, 0, &im.sid);
+    HRESULT hr = CreateAppContainerProfile(L"agent-cpp.sandbox", L"agent.cpp sandbox", L"Sandboxed commands and tools started by agent.cpp",
+                                           nullptr, 0, &im.sid);
     if (hr == HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)) hr = DeriveAppContainerSidFromAppContainerName(L"agent-cpp.sandbox", &im.sid);
     if (FAILED(hr) || !im.sid) return fall_back("profile error " + std::to_string(static_cast<long>(hr)));
 
@@ -681,12 +688,13 @@ std::unique_ptr<AppContainerLaunch> appcontainer_launch_for(PreparedSandbox &pre
     InitializeProcThreadAttributeList(nullptr, n_attrs, 0, &size);
     im.list.assign(size, 0);
     auto *attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(im.list.data());
-    if (!InitializeProcThreadAttributeList(attrs, n_attrs, 0, &size)) return fall_back("attribute list error " + std::to_string(GetLastError()));
+    if (!InitializeProcThreadAttributeList(attrs, n_attrs, 0, &size))
+        return fall_back("attribute list error " + std::to_string(GetLastError()));
     im.list_ready = true;
     if (!UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, &im.sc, sizeof(im.sc), nullptr, nullptr))
         return fall_back("attribute error " + std::to_string(GetLastError()));
-    if (!im.handles.empty() &&
-        !UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, im.handles.data(), im.handles.size() * sizeof(HANDLE), nullptr, nullptr))
+    if (!im.handles.empty() && !UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, im.handles.data(),
+                                                          im.handles.size() * sizeof(HANDLE), nullptr, nullptr))
         return fall_back("handle list error " + std::to_string(GetLastError()));
     return launch;
 }
@@ -704,7 +712,8 @@ std::unique_ptr<AppContainerLaunch> handle_list_only(const std::vector<void *> &
     auto *attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(im.list.data());
     if (!InitializeProcThreadAttributeList(attrs, 1, 0, &size)) return nullptr;
     im.list_ready = true;
-    if (!UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, im.handles.data(), im.handles.size() * sizeof(HANDLE), nullptr, nullptr))
+    if (!UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, im.handles.data(), im.handles.size() * sizeof(HANDLE),
+                                   nullptr, nullptr))
         return nullptr;
     return launch;
 }

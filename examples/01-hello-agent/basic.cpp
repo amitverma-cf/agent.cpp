@@ -7,18 +7,10 @@ namespace {
 void log_message(agent::LogLevel level, std::string_view message, void *) {
     const char *prefix = "info";
     switch (level) {
-    case agent::LogLevel::Debug:
-        prefix = "debug";
-        break;
-    case agent::LogLevel::Info:
-        prefix = "info";
-        break;
-    case agent::LogLevel::Warning:
-        prefix = "warning";
-        break;
-    case agent::LogLevel::Error:
-        prefix = "error";
-        break;
+    case agent::LogLevel::Debug: prefix = "debug"; break;
+    case agent::LogLevel::Info: prefix = "info"; break;
+    case agent::LogLevel::Warning: prefix = "warning"; break;
+    case agent::LogLevel::Error: prefix = "error"; break;
     }
     std::fprintf(stderr, "[%s] %s\n", prefix, std::string(message).c_str());
 }
@@ -28,11 +20,9 @@ void print_token(std::string_view token, void *) {
     std::cout.flush();
 }
 
-void print_error(const agent::Error &e) {
-    std::fprintf(stderr, "agent error [%d]: %s\n", static_cast<int>(e.code), e.message.c_str());
-}
+void print_error(const agent::Error &e) { std::fprintf(stderr, "agent error [%d]: %s\n", static_cast<int>(e.code), e.message.c_str()); }
 
-}
+} // namespace
 
 int main() {
     agent::AgentRuntime runtime;

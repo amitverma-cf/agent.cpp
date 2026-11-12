@@ -19,6 +19,14 @@ int main(int argc, char **argv) {
         std::fprintf(stderr, "agent: %s\n\n%s", parsed.error.message.c_str(), usage_text().c_str());
         return 2;
     }
+    // `agent` on its own in a terminal opens the chat screen (like other agent CLIs); piped or scripted it still prints the usage.
+    std::vector<std::string_view> chat_args;
+    if (parsed.value.command.empty() && !parsed.value.help && stdin_is_tty() && stream_is_tty(stdout)) {
+        chat_args.push_back("chat");
+        chat_args.insert(chat_args.end(), args.begin(), args.end());
+        auto as_chat = parse_command_line(chat_args);
+        if (as_chat.ok) parsed = std::move(as_chat);
+    }
     const CommandLine &cl = parsed.value;
     set_no_sandbox(cl.has("no-sandbox"));
     if (cl.command.empty() || cl.command == "help" || cl.help) {

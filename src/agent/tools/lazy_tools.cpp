@@ -3,9 +3,8 @@
 // adds a tool to the conversation's active set, so it is advertised from the next request on and stays loaded across
 // context compression. A conversation that never needs the file or shell tools never pays their prompt tokens.
 
-#include "tools_ops.hpp"
-
 #include "../executor/ambient_turn.hpp"
+#include "tools_ops.hpp"
 
 #include <agent-cpp/agent.hpp>
 #include <algorithm>
@@ -52,11 +51,14 @@ Result<std::string> tool_search_callback(std::string_view arguments, void *user_
     size_t shown = 0;
     for (const Tool &t : session->config.tools) {
         if (is_meta(t.name) || !tool_allowed(ambient::allowed_tools, t.name)) continue;
-        if (!query.empty() && lower(t.name).find(query) == std::string::npos && lower(t.description).find(query) == std::string::npos) continue;
+        if (!query.empty() && lower(t.name).find(query) == std::string::npos && lower(t.description).find(query) == std::string::npos)
+            continue;
         out += "- " + std::string(t.name) + ": " + first_line(t.description) + (is_loaded(t.name) ? " (loaded)" : "") + "\n";
         ++shown;
     }
-    if (shown == 0) return ok(std::string("No tools match") + (query.empty() ? "." : " '" + query + "'. Call tool_search with no query to list every tool."));
+    if (shown == 0)
+        return ok(std::string("No tools match") +
+                  (query.empty() ? "." : " '" + query + "'. Call tool_search with no query to list every tool."));
     out += "Call load_tool with a tool's name to use it.";
     return ok(std::move(out));
 }
@@ -93,8 +95,8 @@ Result<std::string> load_tool_callback(std::string_view arguments, void *user_da
         loaded_any = true;
         // The definition is also given here, in the tool result, so a model whose chat template shows tools only in the
         // system prompt still knows how to call it before the next request advertises it.
-        out += "Loaded " + name + ": " + std::string(tool->description) + "\nSchema: " +
-               (tool->parameter_schema.empty() ? std::string("{}") : std::string(tool->parameter_schema)) + "\n";
+        out += "Loaded " + name + ": " + std::string(tool->description) +
+               "\nSchema: " + (tool->parameter_schema.empty() ? std::string("{}") : std::string(tool->parameter_schema)) + "\n";
     }
     if (!loaded_any) return fail<std::string>(ErrorCode::KeyNotFound, out);
     return ok(std::move(out));
@@ -105,8 +107,10 @@ Result<std::string> load_tool_callback(std::string_view arguments, void *user_da
 Tool get_tool_search_tool(Session **session_cell) {
     Tool t;
     t.name = "tool_search";
-    t.description = "List the tools that exist, one line each, optionally only those matching a word. Tools are not loaded until load_tool is called.";
-    t.parameter_schema = R"({"type":"object","properties":{"query":{"type":"string","description":"a word to look for in tool names and descriptions; omit to list every tool"}}})";
+    t.description =
+        "List the tools that exist, one line each, optionally only those matching a word. Tools are not loaded until load_tool is called.";
+    t.parameter_schema =
+        R"({"type":"object","properties":{"query":{"type":"string","description":"a word to look for in tool names and descriptions; omit to list every tool"}}})";
     t.callback = tool_search_callback;
     t.user_data = session_cell;
     return t;
@@ -115,8 +119,10 @@ Tool get_tool_search_tool(Session **session_cell) {
 Tool get_load_tool_tool(Session **session_cell) {
     Tool t;
     t.name = "load_tool";
-    t.description = "Load a tool so you can call it. Use the name shown by tool_search. The tool stays available for the rest of the conversation.";
-    t.parameter_schema = R"({"type":"object","properties":{"name":{"type":"string","description":"the tool to load"},"names":{"type":"array","items":{"type":"string"},"description":"several tools to load at once"}}})";
+    t.description =
+        "Load a tool so you can call it. Use the name shown by tool_search. The tool stays available for the rest of the conversation.";
+    t.parameter_schema =
+        R"({"type":"object","properties":{"name":{"type":"string","description":"the tool to load"},"names":{"type":"array","items":{"type":"string"},"description":"several tools to load at once"}}})";
     t.callback = load_tool_callback;
     t.user_data = session_cell;
     return t;

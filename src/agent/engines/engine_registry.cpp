@@ -68,7 +68,8 @@ Result<void> validate(const agent_engine_v1 *engine) {
     if (!engine) return fail(ErrorCode::InvalidConfig, "Engine is null.");
     if (engine->abi_version != AGENT_ENGINE_ABI_VERSION)
         return fail(ErrorCode::UnsupportedProvider, "Engine ABI version " + std::to_string(engine->abi_version) +
-                                                        " does not match host ABI version " + std::to_string(AGENT_ENGINE_ABI_VERSION) + ".");
+                                                        " does not match host ABI version " + std::to_string(AGENT_ENGINE_ABI_VERSION) +
+                                                        ".");
     if (engine->struct_size < AGENT_ENGINE_V2_SIZE)
         return fail(ErrorCode::UnsupportedProvider, "Engine table is " + std::to_string(engine->struct_size) +
                                                         " bytes, smaller than the ABI 2 baseline (" + std::to_string(AGENT_ENGINE_V2_SIZE) +

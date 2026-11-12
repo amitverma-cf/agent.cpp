@@ -15,7 +15,6 @@
 
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/hub.hpp>
-
 #include <map>
 #include <string>
 #include <string_view>
@@ -56,8 +55,8 @@ struct InstallProgress {
 };
 
 // Downloads, verifies and unpacks the runtime, replacing an older install. Returns the executable's path.
-Result<std::string> install_runtime(const HomeLayout &home, std::string_view name, std::string_view version, const agent::hub::HttpOptions &http,
-                                    const InstallProgress &progress = {});
+Result<std::string> install_runtime(const HomeLayout &home, std::string_view name, std::string_view version,
+                                    const agent::hub::HttpOptions &http, const InstallProgress &progress = {});
 
 Result<void> remove_runtime(const HomeLayout &home, std::string_view name);
 

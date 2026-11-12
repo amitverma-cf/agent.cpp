@@ -2,7 +2,7 @@
 
 `#include <agent-cpp/agent.hpp>`
 
-An `agent.json` file describes a [graph](graph.md) declaratively. It lists the nodes, the edges (static, or routed on a state value), the workflow nodes (sequential / parallel / loop), the MCP servers to connect, and hints for the host about which engine and model to use. The loader turns it into an ordinary `agent::Graph`, which you run with `run_graph` / `resume_graph`. Examples are in [`examples/graphs/`](../../examples/graphs).
+An `agent.json` file describes a [graph](graph.md) declaratively. It lists the nodes, the edges (static, or routed on a state value), the workflow nodes (sequential / parallel / loop), the MCP servers to connect, and hints for the host about which engine and model to use. The loader turns it into an ordinary `agent::Graph`, which you run with `run_graph` / `resume_graph`. Examples are in [`examples/03-graph-workflow/graphs/`](../../examples/03-graph-workflow/graphs).
 
 ```cpp
 void register_graph_function(std::string_view name, GraphFunctionFn fn, void *user_data = nullptr);
@@ -194,6 +194,6 @@ edge         := { from: node name, to: node name | "__end__" }
 
 ## Examples
 
-- [`research_pipeline.json`](../../examples/graphs/research_pipeline.json): a sequential pipeline of research, then a review loop with `until`, then parallel publishing.
-- [`router.json`](../../examples/graphs/router.json): a classifier agent followed by a route to specialist agents.
-- [`mcp_filesystem.json`](../../examples/graphs/mcp_filesystem.json): an MCP filesystem server, a Tool node with static `args`, and an agent with `interrupt_before_tools`.
+- [`research_pipeline.json`](../../examples/03-graph-workflow/graphs/research_pipeline.json): a sequential pipeline of research, then a review loop with `until`, then parallel publishing.
+- [`router.json`](../../examples/03-graph-workflow/graphs/router.json): a classifier agent followed by a route to specialist agents.
+- [`mcp_filesystem.json`](../../examples/03-graph-workflow/graphs/mcp_filesystem.json): an MCP filesystem server, a Tool node with static `args`, and an agent with `interrupt_before_tools`.

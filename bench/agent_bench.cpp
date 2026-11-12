@@ -262,7 +262,6 @@ void bench_llm(const Options &o, std::vector<Table> &tables) {
     tables.push_back(std::move(t));
 }
 
-
 // ---- long conversation -------------------------------------------------------------------------
 // A scripted chat of N turns through run_turn (history, pruning and compression included), with two
 // facts planted early and asked about later. Shows how the time before the first token grows with the
@@ -277,9 +276,9 @@ struct ChatTurn {
 };
 
 void bench_longchat(const Options &o, std::vector<Table> &tables) {
-    static const char *kTopics[] = {"the moon", "bread",   "rivers",   "chess",   "volcanoes", "violins",  "tea",     "glaciers", "bridges",
-                                    "owls",     "coffee",  "deserts",  "clocks",  "bees",      "maps",     "thunder", "salt",     "mirrors",
-                                    "kites",    "forests", "rainbows", "marble",  "tides",     "lanterns", "honey",   "canyons"};
+    static const char *kTopics[] = {"the moon", "bread",   "rivers",   "chess",  "volcanoes", "violins",  "tea",     "glaciers", "bridges",
+                                    "owls",     "coffee",  "deserts",  "clocks", "bees",      "maps",     "thunder", "salt",     "mirrors",
+                                    "kites",    "forests", "rainbows", "marble", "tides",     "lanterns", "honey",   "canyons"};
     constexpr int kTopicCount = sizeof(kTopics) / sizeof(kTopics[0]);
     auto cfg = llama_config(o, agent::EngineIsolation::Process);
     cfg.max_tokens = o.gen_tokens;
@@ -342,8 +341,8 @@ void bench_longchat(const Options &o, std::vector<Table> &tables) {
             if (c == '\n' || c == ',') c = ' ';
         if (row.reply.size() > 60) row.reply.resize(60);
         turns.push_back(row);
-        std::fprintf(stderr, "[longchat] turn %3d  prompt %5d tok  ttft %7.0f ms  gen %3d tok  history %3d msgs  compress %d prune %d%s\n", t,
-                     row.prompt_tok, row.ttft_ms, row.gen_tok, row.history, row.compressions, row.prunes,
+        std::fprintf(stderr, "[longchat] turn %3d  prompt %5d tok  ttft %7.0f ms  gen %3d tok  history %3d msgs  compress %d prune %d%s\n",
+                     t, row.prompt_tok, row.ttft_ms, row.gen_tok, row.history, row.compressions, row.prunes,
                      row.recalled < 0 ? "" : (row.recalled ? "  recalled" : "  FORGOT"));
         if (!res.ok) break;
     }
@@ -353,7 +352,8 @@ void bench_longchat(const Options &o, std::vector<Table> &tables) {
         csv << "turn,kind,history_msgs,prompt_tokens,gen_tokens,ttft_ms,total_ms,compressions,prunes,host_peak_rss_mib,recalled,reply\n";
         for (const auto &r : turns)
             csv << r.turn << ',' << r.kind << ',' << r.history << ',' << r.prompt_tok << ',' << r.gen_tok << ',' << fmt(r.ttft_ms, 0) << ','
-                << fmt(r.total_ms, 0) << ',' << r.compressions << ',' << r.prunes << ',' << fmt(r.host_rss, 0) << ',' << r.recalled << ',' << r.reply << '\n';
+                << fmt(r.total_ms, 0) << ',' << r.compressions << ',' << r.prunes << ',' << fmt(r.host_rss, 0) << ',' << r.recalled << ','
+                << r.reply << '\n';
     }
 
     Table t{.title = "Long conversation (" + std::to_string(o.longchat) + " turns, context " + std::to_string(o.ctx) + ", KV " +
@@ -611,13 +611,21 @@ void bench_tts(const Options &o, std::vector<Table> &tables) {
 }
 
 bool parse(int argc, char **argv, Options &o) {
-    std::map<std::string, std::string *> strings = {{"--llama", &o.llama},   {"--model", &o.model},         {"--mock", &o.mock},
-                                                    {"--audiocpp", &o.audiocpp}, {"--tts-model", &o.tts_model}, {"--host", &o.host},
-                                                    {"--json", &o.json_out}, {"--md", &o.md_out},           {"--workspace", &o.workspace},
-                                                    {"--engine-options", &o.engine_options}, {"--kv", &o.kv}, {"--csv", &o.csv_out}};
-    std::map<std::string, int *> ints = {{"--reps", &o.reps},         {"--gen-tokens", &o.gen_tokens}, {"--prompt-words", &o.prompt_words},
-                                         {"--branches", &o.branches}, {"--threads", &o.threads},       {"--turns", &o.turns},
-                                         {"--longchat", &o.longchat}, {"--ctx", &o.ctx}};
+    std::map<std::string, std::string *> strings = {{"--llama", &o.llama},
+                                                    {"--model", &o.model},
+                                                    {"--mock", &o.mock},
+                                                    {"--audiocpp", &o.audiocpp},
+                                                    {"--tts-model", &o.tts_model},
+                                                    {"--host", &o.host},
+                                                    {"--json", &o.json_out},
+                                                    {"--md", &o.md_out},
+                                                    {"--workspace", &o.workspace},
+                                                    {"--engine-options", &o.engine_options},
+                                                    {"--kv", &o.kv},
+                                                    {"--csv", &o.csv_out}};
+    std::map<std::string, int *> ints = {
+        {"--reps", &o.reps},       {"--gen-tokens", &o.gen_tokens}, {"--prompt-words", &o.prompt_words}, {"--branches", &o.branches},
+        {"--threads", &o.threads}, {"--turns", &o.turns},           {"--longchat", &o.longchat},         {"--ctx", &o.ctx}};
     for (int i = 1; i < argc; i += 2) {
         if (i + 1 >= argc) return false;
         if (auto s = strings.find(argv[i]); s != strings.end()) *s->second = argv[i + 1];

@@ -486,8 +486,7 @@ Result<VoiceSettings> voice_settings_from(const CommandLine &cl) {
         int *out;
         int min;
     };
-    const IntFlag ints[] = {
-        {"ctx", &s.context_window, 1}, {"max-tokens", &s.max_tokens, 1}, {"max-turns", &s.max_turns, 1}};
+    const IntFlag ints[] = {{"ctx", &s.context_window, 1}, {"max-tokens", &s.max_tokens, 1}, {"max-turns", &s.max_turns, 1}};
     for (const auto &f : ints) {
         if (!cl.has(f.name)) continue;
         auto v = parse_count(cl, f.name, f.min);
@@ -498,7 +497,8 @@ Result<VoiceSettings> voice_settings_from(const CommandLine &cl) {
         return fail<VoiceSettings>(ErrorCode::InvalidConfig,
                                    "agent voice needs --asr-model FILE (an audio.cpp speech-recognition GGUF, e.g. parakeet_tdt)");
     if (s.tts_model.empty())
-        return fail<VoiceSettings>(ErrorCode::InvalidConfig, "agent voice needs --tts-model FILE (an audio.cpp text-to-speech GGUF, e.g. pocket_tts)");
+        return fail<VoiceSettings>(ErrorCode::InvalidConfig,
+                                   "agent voice needs --tts-model FILE (an audio.cpp text-to-speech GGUF, e.g. pocket_tts)");
     return ok(std::move(s));
 }
 
@@ -507,7 +507,8 @@ namespace {
 Result<std::string> gguf_component(std::string_view arg, const char *key, const char *flag, std::string_view extra = {}) {
     if (is_json_object(arg)) return ok("{\"" + std::string(key) + "\":" + std::string(arg) + "}");
     if (!fs::is_regular_file(fs::path(std::string(arg))))
-        return fail<std::string>(ErrorCode::FilesystemError, std::string(flag) + ": no such file: " + std::string(arg) + " (an audio.cpp GGUF model)");
+        return fail<std::string>(ErrorCode::FilesystemError,
+                                 std::string(flag) + ": no such file: " + std::string(arg) + " (an audio.cpp GGUF model)");
     return ok("{\"" + std::string(key) + "\":{\"model\":\"" + json_escape(std::string(arg)) + "\"" + std::string(extra) + "}}");
 }
 } // namespace

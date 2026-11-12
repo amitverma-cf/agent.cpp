@@ -13,9 +13,11 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <windows.h>
-#include <timeapi.h>
 #include <filesystem>
+// clang-format off
+#include <windows.h>
+#include <timeapi.h> // needs windows.h first
+// clang-format on
 #else
 #include <cerrno>
 #include <csignal>
@@ -200,15 +202,19 @@ Result<std::unique_ptr<ChildProcess>> spawn_child(const SpawnOptions &options) {
     else if (handle_list) sie.lpAttributeList = static_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(handle_list->attributes());
     if (!why.empty()) {
         cleanup();
-        return R{.ok = false, .value = {}, .error = make_error(ErrorCode::SandboxViolation, "cannot confine '" + options.program + "' to its folders: " + why)};
+        return R{.ok = false,
+                 .value = {},
+                 .error = make_error(ErrorCode::SandboxViolation, "cannot confine '" + options.program + "' to its folders: " + why)};
     }
 
     PROCESS_INFORMATION pi{};
-    DWORD flags = CREATE_NO_WINDOW | (sie.lpAttributeList ? EXTENDED_STARTUPINFO_PRESENT : 0) | (env_block.empty() ? 0 : CREATE_UNICODE_ENVIRONMENT) | (prepared.value.active ? CREATE_SUSPENDED : 0);
-    BOOL created = low_token ? CreateProcessAsUserW(low_token, nullptr, cmd.data(), nullptr, nullptr, TRUE, flags, env_block.empty() ? nullptr : env_block.data(),
-                                                    wdir.empty() ? nullptr : wdir.c_str(), &si, &pi)
-                             : CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, flags, env_block.empty() ? nullptr : env_block.data(),
-                                              wdir.empty() ? nullptr : wdir.c_str(), &si, &pi);
+    DWORD flags = CREATE_NO_WINDOW | (sie.lpAttributeList ? EXTENDED_STARTUPINFO_PRESENT : 0) |
+                  (env_block.empty() ? 0 : CREATE_UNICODE_ENVIRONMENT) | (prepared.value.active ? CREATE_SUSPENDED : 0);
+    BOOL created =
+        low_token ? CreateProcessAsUserW(low_token, nullptr, cmd.data(), nullptr, nullptr, TRUE, flags,
+                                         env_block.empty() ? nullptr : env_block.data(), wdir.empty() ? nullptr : wdir.c_str(), &si, &pi)
+                  : CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, flags, env_block.empty() ? nullptr : env_block.data(),
+                                   wdir.empty() ? nullptr : wdir.c_str(), &si, &pi);
     if (low_token) CloseHandle(low_token);
     DWORD last_error = GetLastError();
     close_handle(in_r);
@@ -316,9 +322,9 @@ int ChildProcess::terminate(int grace_ms) {
 
 struct ChildProcess::Impl {
     pid_t pid = -1;
-    int in = -1;  // write end of the child's stdin (non-blocking)
-    int out = -1; // read end of the child's stdout
-    int err = -1; // read end of the child's stderr
+    int in = -1;            // write end of the child's stdin (non-blocking)
+    int out = -1;           // read end of the child's stdout
+    int err = -1;           // read end of the child's stderr
     bool own_group = false; // the child leads its own session / process group (sandboxed)
     bool reaped = false;
 };
@@ -342,7 +348,7 @@ bool make_pipe(int fds[2]) {
 }
 
 bool is_executable_file(const std::string &path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode) && ::access(path.c_str(), X_OK) == 0;
 }
 

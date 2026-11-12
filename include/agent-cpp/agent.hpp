@@ -125,13 +125,13 @@ struct TokenUsage {
     int completion_tokens = 0;
     int total_tokens = 0;
     // Reported by engines that measure them (see agent_run_stats in engine_abi.h); 0 = not reported.
-    int cached_tokens = 0;     // prompt tokens already in the KV cache, not decoded again
-    int kv_tokens = 0;         // tokens in the request's KV sequence at the end
-    int kv_max_tokens = 0;     // capacity of one sequence
-    int kv_type = 0;           // AGENT_KV_*
-    uint64_t kv_bytes = 0;     // size of the engine's whole KV cache (an estimate for hybrid models)
-    float prefill_ms = 0;      // time decoding the prompt
-    float decode_ms = 0;       // time generating
+    int cached_tokens = 0; // prompt tokens already in the KV cache, not decoded again
+    int kv_tokens = 0;     // tokens in the request's KV sequence at the end
+    int kv_max_tokens = 0; // capacity of one sequence
+    int kv_type = 0;       // AGENT_KV_*
+    uint64_t kv_bytes = 0; // size of the engine's whole KV cache (an estimate for hybrid models)
+    float prefill_ms = 0;  // time decoding the prompt
+    float decode_ms = 0;   // time generating
 };
 
 enum class DType { Float32, Float16, Int8, Int32, Int64, UInt8 };
@@ -259,13 +259,13 @@ struct SandboxPolicy {
 // gate (if the host set one) is asked. The sandbox is never simply switched off: the host decides, per path and per kind
 // of access, and can remember the answer.
 struct PathGrant {
-    std::string path;               // a file or a folder (covers everything below it)
-    bool write = false;             // false = read only; true = read and write
-    std::string consumer = "*";     // "*", "files" (the file tools), "run_command" or "mcp:<server name>"
+    std::string path;           // a file or a folder (covers everything below it)
+    bool write = false;         // false = read only; true = read and write
+    std::string consumer = "*"; // "*", "files" (the file tools), "run_command" or "mcp:<server name>"
 };
 struct PathAccessRequest {
     std::string_view consumer;
-    std::string_view path;          // absolute
+    std::string_view path; // absolute
     bool write;
 };
 enum class PathGateDecision { Deny, AllowOnce, AllowAlways };
@@ -461,8 +461,8 @@ struct ToolHook {
 // Who is asking for a secret: an MCP server (or tool, plugin) and what it runs. The identity parts (program, arguments)
 // let the resolver notice that "the same" server now runs something else.
 struct SecretRequest {
-    std::string_view consumer;                     // "mcp:github"
-    std::span<const std::string> identity_parts;   // {command, arg0, arg1, ...}
+    std::string_view consumer;                   // "mcp:github"
+    std::span<const std::string> identity_parts; // {command, arg0, arg1, ...}
 };
 
 // Expands every ${secret:NAME} in text for the consumer, or fails when the secret does not exist or is not bound to it.
@@ -472,9 +472,6 @@ using SecretResolverFn = Result<std::string> (*)(std::string_view text, const Se
                                                  void *user_data);
 
 struct McpServerConfig; // defined with the MCP client API below
-
-
-
 
 struct Config {
     AiProvider provider = AiProvider::Mock;

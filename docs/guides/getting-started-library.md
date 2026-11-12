@@ -3,7 +3,7 @@
 This guide installs agent.cpp, links it into your own CMake project and runs a first chat turn on a
 local GGUF model through the llama engine plugin, with the engine in its own sandboxed process.
 
-The complete program is [`examples/guides/getting_started_library.cpp`](../../examples/guides/getting_started_library.cpp);
+The complete program is [`examples/01-hello-agent/getting_started.cpp`](../../examples/01-hello-agent/getting_started.cpp);
 it is built with the examples (`AGENT_BUILD_EXAMPLES`, on by default) and runs as a test on the mock
 engine (`ctest -L examples`).
 

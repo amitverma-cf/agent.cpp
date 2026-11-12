@@ -1,6 +1,7 @@
 // agent setup / engine / model / run, plus helpers shared with chat.cpp.
 
 #include "commands.hpp"
+
 #include "doctor.hpp"
 #include "engine_release.hpp"
 #include "runtimes.hpp"
@@ -9,10 +10,9 @@
 #include <agent-cpp/engine_abi.h>
 #include <agent-cpp/hub.hpp>
 #include <agent-cpp/store_sqlite.hpp>
-
 #include <algorithm>
-#include <cctype>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -189,7 +189,8 @@ std::vector<const agent::hub::RegistryEntry *> runnable_models(const Context &ct
     for (const auto &e : agent::hub::model_registry()) {
         if (e.notes.find("NOT runnable") != std::string_view::npos) continue;
         if (!engines.ok || !find_engine_entry(engines.value, std::string(e.engine))) continue;
-        if (budget_mib && e.size_mib && static_cast<uint64_t>(e.size_mib) * 13 / 10 > budget_mib) continue; // weights + ~30% for KV and buffers
+        if (budget_mib && e.size_mib && static_cast<uint64_t>(e.size_mib) * 13 / 10 > budget_mib)
+            continue; // weights + ~30% for KV and buffers
         out.push_back(&e);
     }
     std::stable_sort(out.begin(), out.end(), [](const auto *a, const auto *b) { return a->tested && !b->tested; });
@@ -234,16 +235,19 @@ void setup_models(const CommandLine &cl, Context &ctx, bool interactive) {
     const uint64_t ram = total_ram_bytes();
     if (chosen.empty() && interactive) {
         const auto options = runnable_models(ctx, ram);
-        std::printf("\nModels this machine can run (RAM %.1f GiB; nothing is downloaded until you choose):\n", static_cast<double>(ram) / (1024.0 * 1024.0 * 1024.0));
+        std::printf("\nModels this machine can run (RAM %.1f GiB; nothing is downloaded until you choose):\n",
+                    static_cast<double>(ram) / (1024.0 * 1024.0 * 1024.0));
         if (options.empty()) std::printf("  none of the registry models fit with an installed engine; you can still add your own below.\n");
         for (size_t i = 0; i < options.size(); ++i) {
             const auto &e = *options[i];
-            std::printf("  %2zu) %-24s %-9.*s %6u MiB  %s%.*s\n", i + 1, std::string(e.alias).c_str(), static_cast<int>(e.task.size()), e.task.data(), e.size_mib,
-                        e.tested ? "[tested] " : "", static_cast<int>(e.notes.size()), e.notes.data());
+            std::printf("  %2zu) %-24s %-9.*s %6u MiB  %s%.*s\n", i + 1, std::string(e.alias).c_str(), static_cast<int>(e.task.size()),
+                        e.task.data(), e.size_mib, e.tested ? "[tested] " : "", static_cast<int>(e.notes.size()), e.notes.data());
         }
-        const std::string answer = ask_value(true, "Choose numbers separated by commas, or type owner/repo[:quant] to add your own (Enter = none)", "");
+        const std::string answer =
+            ask_value(true, "Choose numbers separated by commas, or type owner/repo[:quant] to add your own (Enter = none)", "");
         for (const std::string &token : split_list(answer)) {
-            const bool number = !token.empty() && std::all_of(token.begin(), token.end(), [](unsigned char c) { return std::isdigit(c) != 0; });
+            const bool number =
+                !token.empty() && std::all_of(token.begin(), token.end(), [](unsigned char c) { return std::isdigit(c) != 0; });
             if (number) {
                 const size_t n = static_cast<size_t>(std::atoi(token.c_str()));
                 if (n >= 1 && n <= options.size()) chosen.push_back(std::string(options[n - 1]->alias));
@@ -278,7 +282,8 @@ void setup_models(const CommandLine &cl, Context &ctx, bool interactive) {
         if (model_ref.empty()) continue;
         std::printf("   smoke test (%s):\n", task.c_str());
         const bool passed = smoke_test(ctx, task, engine, model_ref, entry ? entry->engine_options : std::string_view());
-        std::printf("   %s\n", passed ? "smoke test passed" : "smoke test FAILED: the model downloaded but did not run; see the error above");
+        std::printf("   %s\n",
+                    passed ? "smoke test passed" : "smoke test FAILED: the model downloaded but did not run; see the error above");
     }
 }
 
@@ -292,7 +297,8 @@ int cmd_init(const CommandLine &cl, Context &ctx) {
     ctx.project_root = made.value.root;
     std::printf("project %s\n", made.value.root.c_str());
     std::printf("  %s  skills for this project (committed)\n", made.value.skills.c_str());
-    std::printf("  %s  MCP servers for this project (committed; keys are referenced by name, never stored)\n", made.value.mcp_config.c_str());
+    std::printf("  %s  MCP servers for this project (committed; keys are referenced by name, never stored)\n",
+                made.value.mcp_config.c_str());
     std::printf("  %s  conversations and memory (private, git-ignored)\n", made.value.memory.c_str());
     std::printf("  %s  private, git-ignored\n", made.value.cache.c_str());
     std::printf("  %s  private, git-ignored\n", made.value.local.c_str());
@@ -307,8 +313,10 @@ int cmd_setup(const CommandLine &cl, Context &ctx) {
     {
         const char *env_config = std::getenv("AGENT_CONFIG_DIR");
         if (!cl.has("config-dir") && !(env_config && *env_config)) {
-            const std::string suggestion = cl.has("home") ? std::string(cl.get("home")) : (ctx.has_home ? ctx.home.root : default_home_suggestion());
-            const std::string chosen = absolute_path(ask_value(interactive, "Where should agent.cpp keep its files (engines, models, skills, memory)?", suggestion));
+            const std::string suggestion =
+                cl.has("home") ? std::string(cl.get("home")) : (ctx.has_home ? ctx.home.root : default_home_suggestion());
+            const std::string chosen = absolute_path(
+                ask_value(interactive, "Where should agent.cpp keep its files (engines, models, skills, memory)?", suggestion));
             ctx.home = home_layout(chosen);
             ctx.has_home = true;
             ctx.config_dir = ctx.home.root;
@@ -409,7 +417,8 @@ int cmd_setup(const CommandLine &cl, Context &ctx) {
         for (const auto &name : cfg.capabilities) {
             if (!find_plugin(name, dirs).empty()) continue;
             if (const EngineEntry *e = find_engine_entry(engines, name); e && file_exists(e->path)) continue;
-            if (auto r = pull_and_register_engine(ctx, engines, name, kDefaultReleaseRepo, "latest"); !r.ok) std::printf("  %-8s %s\n", name.c_str(), r.error.message.c_str());
+            if (auto r = pull_and_register_engine(ctx, engines, name, kDefaultReleaseRepo, "latest"); !r.ok)
+                std::printf("  %-8s %s\n", name.c_str(), r.error.message.c_str());
             else --missing;
         }
     }
@@ -428,7 +437,8 @@ int cmd_setup(const CommandLine &cl, Context &ctx) {
     std::printf("\nwrote %s\nwrote %s (%zu engine%s)\n", ctx.config_path.c_str(), ctx.engines_path.c_str(), engines.size(),
                 engines.size() == 1 ? "" : "s");
     // The chosen runtimes (and uv for Python servers) are downloaded only on request: they are 20-60 MB each.
-    if (ctx.has_home && (cl.has("install-runtimes") || (interactive && ask_yes_no("Download the private runtimes now (" + cfg.js_runtime + ", uv)?")))) {
+    if (ctx.has_home &&
+        (cl.has("install-runtimes") || (interactive && ask_yes_no("Download the private runtimes now (" + cfg.js_runtime + ", uv)?")))) {
         std::vector<std::string> wanted = runtimes_for_js(cfg.js_runtime);
         wanted.push_back("uv");
         for (const std::string &n : wanted) {
@@ -456,16 +466,20 @@ bool print_engine_progress(uint64_t done, uint64_t total, void *) {
 } // namespace
 
 // Downloads the release build of `name` for this machine, checks it, and records it in `engines`.
-Result<void> pull_and_register_engine(Context &ctx, std::vector<EngineEntry> &engines, const std::string &name, std::string_view repo, std::string_view tag) {
+Result<void> pull_and_register_engine(Context &ctx, std::vector<EngineEntry> &engines, const std::string &name, std::string_view repo,
+                                      std::string_view tag) {
     const std::string dir = ctx.has_home ? ctx.home.engines : (fs::path(ctx.config_dir) / "engines").string();
-    std::fprintf(stderr, "downloading the %s engine (%s) from github.com/%.*s ...\n", name.c_str(), std::string(tag).c_str(), static_cast<int>(repo.size()), repo.data());
+    std::fprintf(stderr, "downloading the %s engine (%s) from github.com/%.*s ...\n", name.c_str(), std::string(tag).c_str(),
+                 static_cast<int>(repo.size()), repo.data());
     auto plugin_path = pull_engine(dir, name, repo, tag, agent::hub::http_options_from_env(), print_engine_progress, nullptr);
     std::fprintf(stderr, "\n");
     if (!plugin_path.ok) return fail(plugin_path.error.code, plugin_path.error.message);
     auto info = load_plugin_info(plugin_path.value);
-    if (!info.ok) return fail(info.error.code, "downloaded " + plugin_path.value + ", but it does not load on this machine: " + info.error.message);
+    if (!info.ok)
+        return fail(info.error.code, "downloaded " + plugin_path.value + ", but it does not load on this machine: " + info.error.message);
     EngineEntry entry{info.value.name, plugin_path.value, info.value.version, caps_to_names(info.value.caps), "local"};
-    std::printf("engine:  %s %s (%s)\npath:    %s\n", entry.name.c_str(), entry.version.c_str(), join(entry.caps, ", ").c_str(), entry.path.c_str());
+    std::printf("engine:  %s %s (%s)\npath:    %s\n", entry.name.c_str(), entry.version.c_str(), join(entry.caps, ", ").c_str(),
+                entry.path.c_str());
     upsert_engine(engines, std::move(entry));
     return ok();
 }
@@ -505,7 +519,9 @@ int cmd_engine(const CommandLine &cl, Context &ctx) {
 
     if (cl.subcommand == "pull") {
         const std::string name = cl.positionals[0];
-        if (auto r = pull_and_register_engine(ctx, engines.value, name, cl.get("repo", kDefaultReleaseRepo), cl.get("tag", "latest")); !r.ok) return report_error(r.error);
+        if (auto r = pull_and_register_engine(ctx, engines.value, name, cl.get("repo", kDefaultReleaseRepo), cl.get("tag", "latest"));
+            !r.ok)
+            return report_error(r.error);
         if (auto r = save_engines(ctx.engines_path, engines.value); !r.ok) return report_error(r.error);
         return 0;
     }
@@ -553,13 +569,15 @@ int cmd_model(const CommandLine &cl, Context &ctx) {
         size_t shown = 0;
         for (const auto &e : agent::hub::model_registry()) {
             if (!task.empty() && e.task != task) continue;
-            const std::string hay = lower(std::string(e.alias) + " " + std::string(e.task) + " " + std::string(e.engine) + " " + std::string(e.notes));
+            const std::string hay =
+                lower(std::string(e.alias) + " " + std::string(e.task) + " " + std::string(e.engine) + " " + std::string(e.notes));
             if (!needle.empty() && hay.find(needle) == std::string::npos) continue;
             char size[24];
             if (e.size_mib) std::snprintf(size, sizeof(size), "%u MiB", e.size_mib);
             else std::snprintf(size, sizeof(size), "-");
             std::printf("%-24s %-9.*s %-9.*s %9s  %s%.*s\n", std::string(e.alias).c_str(), static_cast<int>(e.task.size()), e.task.data(),
-                        static_cast<int>(e.engine.size()), e.engine.data(), size, e.tested ? "[tested] " : "", static_cast<int>(e.notes.size()), e.notes.data());
+                        static_cast<int>(e.engine.size()), e.engine.data(), size, e.tested ? "[tested] " : "",
+                        static_cast<int>(e.notes.size()), e.notes.data());
             ++shown;
         }
         if (!shown) std::printf("nothing matches; `agent model info owner/repo` lists any Hugging Face repo\n");
@@ -573,7 +591,8 @@ int cmd_model(const CommandLine &cl, Context &ctx) {
         if (!info.ok) return report_error(info.error);
         const auto &ri = info.value;
         std::printf("%s  licence: %s%s%s\n", ri.repo.c_str(), ri.license.empty() ? "unknown" : ri.license.c_str(),
-                    ri.license == "other" && !ri.license_name.empty() ? (" (" + ri.license_name + ")").c_str() : "", ri.gated ? "  GATED (needs HF_TOKEN)" : "");
+                    ri.license == "other" && !ri.license_name.empty() ? (" (" + ri.license_name + ")").c_str() : "",
+                    ri.gated ? "  GATED (needs HF_TOKEN)" : "");
         auto mib = [](uint64_t b) { return static_cast<double>(b) / (1024.0 * 1024.0); };
         for (const auto &f : ri.files) {
             std::string lower = f.path;
@@ -584,7 +603,8 @@ int cmd_model(const CommandLine &cl, Context &ctx) {
             const char *kind = lower.find("mmproj") != std::string::npos ? "projector" : (gguf ? "gguf" : "weights");
             std::printf("  %-10s %9.1f MiB  %s\n", kind, mib(f.size), f.path.c_str());
         }
-        std::printf("pull one with: agent model pull %s:<QUANT or file>   (a vision / audio / OCR repo also fetches its projector)\n", ri.repo.c_str());
+        std::printf("pull one with: agent model pull %s:<QUANT or file>   (a vision / audio / OCR repo also fetches its projector)\n",
+                    ri.repo.c_str());
         return 0;
     }
 
@@ -604,7 +624,8 @@ int cmd_model(const CommandLine &cl, Context &ctx) {
         // A registry name ("qwen3-4b"): pull every part (a talker and its codec, a 3D model's three files).
         const auto *entry = agent::hub::find_registry_entry(cl.positionals[0]);
         if (!entry)
-            return report_error(Error{ErrorCode::KeyNotFound, "'" + cl.positionals[0] + "' is not a registry name (see `agent model search`) and not owner/repo"});
+            return report_error(Error{ErrorCode::KeyNotFound,
+                                      "'" + cl.positionals[0] + "' is not a registry name (see `agent model search`) and not owner/repo"});
         for (size_t i = 0; i < entry->parts.size(); ++i) {
             CommandLine part = cl;
             part.positionals = {std::string(entry->parts[i].spec)};
@@ -615,15 +636,15 @@ int cmd_model(const CommandLine &cl, Context &ctx) {
         if (!entry->engine_options.empty())
             std::printf("engine options for %.*s: %.*s\n", static_cast<int>(entry->alias.size()), entry->alias.data(),
                         static_cast<int>(entry->engine_options.size()), entry->engine_options.data());
-        if (!entry->notes.empty())
-            std::printf("note: %.*s\n", static_cast<int>(entry->notes.size()), entry->notes.data());
+        if (!entry->notes.empty()) std::printf("note: %.*s\n", static_cast<int>(entry->notes.size()), entry->notes.data());
         return 0;
     }
 
     std::string spec = cl.positionals[0];
     if (cl.has("quant")) {
         // --quant Q4_K_M is the same as "owner/repo:Q4_K_M"; it can't also be given in the spec.
-        if (spec.find(':') != std::string::npos) return report_error(Error{ErrorCode::InvalidConfig, "give the quant either as --quant or after ':' in the spec, not both"});
+        if (spec.find(':') != std::string::npos)
+            return report_error(Error{ErrorCode::InvalidConfig, "give the quant either as --quant or after ':' in the spec, not both"});
         spec += ":" + std::string(cl.get("quant"));
     }
     g_pull_cancel.store(false);
@@ -636,7 +657,7 @@ int cmd_model(const CommandLine &cl, Context &ctx) {
     opts.allow_restricted_license = cl.has("allow-restricted");
     for (const Flag &f : cl.flags)
         if (f.name == "include") {
-            size_t from = 0;  // comma separated, and the flag may repeat
+            size_t from = 0; // comma separated, and the flag may repeat
             while (from <= f.value.size()) {
                 const size_t comma = f.value.find(',', from);
                 opts.include.push_back(f.value.substr(from, comma == std::string::npos ? std::string::npos : comma - from));
@@ -667,9 +688,10 @@ int cmd_model(const CommandLine &cl, Context &ctx) {
         }
         return report_error(r.error);
     }
-    std::printf("%s\n  repo:    %s\n  file:    %s\n  path:    %s\n  size:    %llu bytes\n  sha256:  %s\n  license: %s\n", r.value.name.c_str(),
-                r.value.repo.c_str(), r.value.file.c_str(), r.value.path.c_str(), static_cast<unsigned long long>(r.value.size),
-                r.value.sha256.empty() ? "(not published)" : r.value.sha256.c_str(), r.value.license.c_str());
+    std::printf("%s\n  repo:    %s\n  file:    %s\n  path:    %s\n  size:    %llu bytes\n  sha256:  %s\n  license: %s\n",
+                r.value.name.c_str(), r.value.repo.c_str(), r.value.file.c_str(), r.value.path.c_str(),
+                static_cast<unsigned long long>(r.value.size), r.value.sha256.empty() ? "(not published)" : r.value.sha256.c_str(),
+                r.value.license.c_str());
     if (!r.value.mmproj.empty()) std::printf("  projector: %s\n", r.value.mmproj.c_str());
     if (ctx.config.default_model.empty() && engine_for_model(r.value.path) == "llama") {
         ctx.config.default_model = r.value.name;
@@ -863,8 +885,9 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
     const std::string_view resume_id = cl.get("resume");
     // A new run gets its own thread: continuing a thread reuses its state and histories, so a fixed default would mix unrelated graphs.
     // Pass --thread to continue one on purpose.
-    const std::string fresh_thread = (graph.value.graph.name.empty() ? std::string("run") : graph.value.graph.name) + "-" +
-                                     std::to_string(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+    const std::string fresh_thread =
+        (graph.value.graph.name.empty() ? std::string("run") : graph.value.graph.name) + "-" +
+        std::to_string(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
     run.thread_id = std::string(resume_id.empty() ? cl.get("thread", fresh_thread) : resume_id);
     for (const Flag &f : cl.flags) {
         if (f.name != "set") continue;
@@ -882,8 +905,8 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
 
     // Node status: a table redrawn in place on a terminal, one line per event otherwise (see status_view.hpp).
     // It is drawn on stderr, like the progress lines above; stdout keeps the final status and state.
-    const StatusMode status_mode = choose_status_mode(cl.has("json"), stream_is_tty(stdout), stream_is_tty(stderr), std::getenv("TERM"),
-                                                      std::getenv("NO_COLOR"));
+    const StatusMode status_mode =
+        choose_status_mode(cl.has("json"), stream_is_tty(stdout), stream_is_tty(stderr), std::getenv("TERM"), std::getenv("NO_COLOR"));
     StatusMode mode = status_mode;
     if (mode == StatusMode::Live && !enable_ansi(stderr)) mode = StatusMode::Plain;
     StatusView status(stderr, mode, graph.value.graph, mode == StatusMode::Live ? terminal_width(stderr) : 0);
@@ -900,7 +923,8 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
         std::printf("interrupted at %s: %s\n", run.interrupt_node.c_str(), run.interrupt_reason.c_str());
         for (const GraphInterrupt &i : run.interrupts)
             if (!i.branch.empty()) std::printf("  branch %s paused at %s: %s\n", i.branch.c_str(), i.node.c_str(), i.reason.c_str());
-        for (const ToolCall &tc : run.pending_tool_calls) std::printf("  pending tool call: %s %s\n", tc.name.c_str(), tc.arguments.c_str());
+        for (const ToolCall &tc : run.pending_tool_calls)
+            std::printf("  pending tool call: %s %s\n", tc.name.c_str(), tc.arguments.c_str());
         std::printf("resume with: agent run %s --resume %s --input \"<reply or approve>\"\n", graph_path.c_str(), run.thread_id.c_str());
     }
     for (const auto &[key, value] : run.state.values) std::printf("%s = %s\n", key.c_str(), value.c_str());

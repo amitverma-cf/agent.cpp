@@ -6,7 +6,6 @@
 
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/hub.hpp>
-
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -40,6 +39,7 @@ std::string release_asset_url(std::string_view repo, std::string_view tag, std::
 // Downloads the engine for this machine into <engines_dir>/<engine>/<version>/agent-engine-<engine>.<ext> after
 // checking its SHA-256 against the manifest. Returns the plugin path.
 Result<std::string> pull_engine(const std::string &engines_dir, std::string_view engine, std::string_view repo, std::string_view tag,
-                                const agent::hub::HttpOptions &http, bool (*on_progress)(uint64_t, uint64_t, void *) = nullptr, void *user = nullptr);
+                                const agent::hub::HttpOptions &http, bool (*on_progress)(uint64_t, uint64_t, void *) = nullptr,
+                                void *user = nullptr);
 
 } // namespace agent::cli

@@ -55,7 +55,8 @@ int cmd_secret(const CommandLine &cl, Context &ctx) {
     }
 
     const std::string &name = cl.positionals[0];
-    if (!valid_secret_name(name)) return report_error(Error{ErrorCode::InvalidConfig, "secret name must be 1-64 characters from A-Z a-z 0-9 _ . -"});
+    if (!valid_secret_name(name))
+        return report_error(Error{ErrorCode::InvalidConfig, "secret name must be 1-64 characters from A-Z a-z 0-9 _ . -"});
 
     if (cl.subcommand == "set") {
         std::string value;
@@ -70,8 +71,9 @@ int cmd_secret(const CommandLine &cl, Context &ctx) {
         std::fill(value.begin(), value.end(), '\0');
         if (!find_entry(index, name)) index.push_back(SecretEntry{name, {}});
         if (auto r = save_secret_index(path, index); !r.ok) return report_error(r.error);
-        std::printf("stored '%s' in %s.\nIt is not usable yet: allow the server or tool that needs it, e.g. `agent secret bind %s mcp:%s`.\n", name.c_str(), backend.name, name.c_str(),
-                    name.c_str());
+        std::printf(
+            "stored '%s' in %s.\nIt is not usable yet: allow the server or tool that needs it, e.g. `agent secret bind %s mcp:%s`.\n",
+            name.c_str(), backend.name, name.c_str(), name.c_str());
         return 0;
     }
 
@@ -84,9 +86,11 @@ int cmd_secret(const CommandLine &cl, Context &ctx) {
     }
 
     const std::string &consumer = cl.positionals[1];
-    if (!valid_consumer(consumer)) return report_error(Error{ErrorCode::InvalidConfig, "consumer must look like mcp:NAME, tool:NAME, plugin:NAME or group:NAME"});
+    if (!valid_consumer(consumer))
+        return report_error(Error{ErrorCode::InvalidConfig, "consumer must look like mcp:NAME, tool:NAME, plugin:NAME or group:NAME"});
     SecretEntry *entry = find_entry(index, name);
-    if (!entry) return report_error(Error{ErrorCode::KeyNotFound, "no secret named '" + name + "': add it with `agent secret set " + name + "`"});
+    if (!entry)
+        return report_error(Error{ErrorCode::KeyNotFound, "no secret named '" + name + "': add it with `agent secret set " + name + "`"});
 
     if (cl.subcommand == "bind") {
         // The identity pins what the consumer runs. For an MCP server it is the hash of its command and arguments as
@@ -97,14 +101,19 @@ int cmd_secret(const CommandLine &cl, Context &ctx) {
             std::vector<std::string> warnings;
             const auto servers = collect_mcp_servers(ctx, warnings);
             const std::string server_name = consumer.substr(4);
-            const auto it = std::find_if(servers.begin(), servers.end(), [&](const agent::McpServerConfig &s) { return s.name == server_name; });
+            const auto it =
+                std::find_if(servers.begin(), servers.end(), [&](const agent::McpServerConfig &s) { return s.name == server_name; });
             if (it == servers.end())
-                return report_error(Error{ErrorCode::KeyNotFound, "no MCP server named '" + server_name + "' is configured: define it in the home's mcp/mcp.json or the project's .agents/mcp.json first"});
+                return report_error(
+                    Error{ErrorCode::KeyNotFound,
+                          "no MCP server named '" + server_name +
+                              "' is configured: define it in the home's mcp/mcp.json or the project's .agents/mcp.json first"});
             std::vector<std::string> parts{it->command};
             parts.insert(parts.end(), it->args.begin(), it->args.end());
             identity = consumer_identity(parts);
         }
-        auto existing = std::find_if(entry->bindings.begin(), entry->bindings.end(), [&](const SecretBinding &b) { return b.consumer == consumer; });
+        auto existing =
+            std::find_if(entry->bindings.begin(), entry->bindings.end(), [&](const SecretBinding &b) { return b.consumer == consumer; });
         if (existing != entry->bindings.end()) existing->identity = identity;
         else entry->bindings.push_back(SecretBinding{consumer, identity});
         if (auto r = save_secret_index(path, index); !r.ok) return report_error(r.error);
@@ -113,7 +122,9 @@ int cmd_secret(const CommandLine &cl, Context &ctx) {
     }
 
     // unbind
-    entry->bindings.erase(std::remove_if(entry->bindings.begin(), entry->bindings.end(), [&](const SecretBinding &b) { return b.consumer == consumer; }), entry->bindings.end());
+    entry->bindings.erase(
+        std::remove_if(entry->bindings.begin(), entry->bindings.end(), [&](const SecretBinding &b) { return b.consumer == consumer; }),
+        entry->bindings.end());
     if (auto r = save_secret_index(path, index); !r.ok) return report_error(r.error);
     std::printf("%s can no longer use '%s'\n", consumer.c_str(), name.c_str());
     return 0;

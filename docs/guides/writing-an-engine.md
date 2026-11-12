@@ -4,14 +4,14 @@ An engine plugin wraps an inference library (llama.cpp, audio.cpp, stable-diffus
 Runtime, your own) behind the C ABI in [`<agent-cpp/engine_abi.h>`](../../include/agent-cpp/engine_abi.h).
 The core loads it at runtime, in process or in a sandboxed `agent-engine-host`, and routes requests to
 it by capability. This guide walks through ABI 2 with a complete plugin,
-[`examples/guides/reverse_engine.cpp`](../../examples/guides/reverse_engine.cpp) (`agent-engine-reverse`):
+[`examples/04-custom-engine/reverse_engine.cpp`](../../examples/04-custom-engine/reverse_engine.cpp) (`agent-engine-reverse`):
 
 - `AGENT_CAP_TEXT_GEN`: reverses the user's text, streamed one character per chunk;
 - `AGENT_CAP_IMAGE_GEN`: writes a small PPM image to the artifacts directory, with progress and cancel.
 
-[`examples/guides/writing_an_engine_host.cpp`](../../examples/guides/writing_an_engine_host.cpp) drives it
+[`examples/04-custom-engine/host.cpp`](../../examples/04-custom-engine/host.cpp) drives it
 through libagent in process and under process isolation; both run as the `example.guide_engine` test.
-To start a new engine outside this tree, copy [`templates/engine-plugin/`](../../templates/engine-plugin)
+To start a new engine outside this tree, copy [`examples/08-engine-plugin-template/`](../../examples/08-engine-plugin-template)
 (a standalone CMake project against the installed package, see [Packaging](#7-building-and-packaging)).
 
 ## 1. The one exported symbol
@@ -264,7 +264,7 @@ target_compile_options(agent-engine-mine PRIVATE ${AGENT_WARNINGS})
 agent_install_engine(agent-engine-mine)   # + runtime libraries loaded through $ORIGIN, if any
 ```
 
-**Standalone, against an installed agent.cpp** ([`templates/engine-plugin/`](../../templates/engine-plugin)):
+**Standalone, against an installed agent.cpp** ([`examples/08-engine-plugin-template/`](../../examples/08-engine-plugin-template)):
 `find_package(agent-cpp)` provides the header-only target `agent-cpp::engine_abi` and the same two
 helpers, so a plugin repository needs nothing from this source tree:
 

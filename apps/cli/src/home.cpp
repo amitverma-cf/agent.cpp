@@ -2,11 +2,10 @@
 
 #include "cli_core.hpp"
 
-#include <simdjson.h>
-
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <simdjson.h>
 #include <system_error>
 
 namespace agent::cli {

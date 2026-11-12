@@ -4,7 +4,6 @@
 // approves a request, it can. Used by the file tools, run_command and (grants only) MCP servers.
 
 #include <agent-cpp/agent.hpp>
-
 #include <filesystem>
 #include <string>
 #include <string_view>

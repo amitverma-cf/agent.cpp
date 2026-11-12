@@ -296,7 +296,23 @@ agent chat --model /tmp/models/qwen2.5-0.5b-instruct-q4_k_m.gguf    # ... or a p
 agent chat --engine llama           # engine name from engines.json, or a plugin path
 agent chat --resume chat-20261031-142501
 agent chat --list                   # saved conversations in this workspace
+agent chat --plain                  # line-based mode instead of the full-screen interface
 ```
+
+**The chat screen.** In a terminal, `agent chat` opens a full-screen interface: a title bar with the model and engine,
+the conversation (answers are rendered as markdown: headings, bold, inline code, lists, code blocks), an input line, and a
+footer with the speed and token counts of the last answer. Tool calls and results appear as dim lines. When a tool needs
+permission a prompt replaces the input line: `y` to allow once, `n` to deny, `a` to allow it for the rest of the session.
+
+| Key | Action |
+|---|---|
+| Enter | send the message (or run the `/command`) |
+| Esc, or Ctrl-C while an answer is running | stop the answer |
+| Ctrl-C or Ctrl-D at the prompt | quit |
+| PgUp / PgDn, mouse wheel | scroll the conversation |
+
+The slash commands are the same as in line mode (`/help` lists them). With `--plain`, with `--verbose`, or when input or
+output is not a terminal, `agent chat` uses the line-based mode instead.
 
 Other options are `--workspace DIR`, `--ctx N`, `--max-tokens N`, `--engine-options JSON` (forwarded
 to the engine, for example `{"mmproj": "mmproj.gguf"}` for image input with llama), `--yes` and
@@ -361,11 +377,11 @@ printf 'List the files in the workspace.\n/stats\n' | agent chat --model qwen
 ## agent run
 
 `agent run <graph.json>` runs a declarative graph (see [api/agent-json.md](api/agent-json.md) and
-`examples/graphs/`). It uses the same model and engine resolution as `agent chat`, with the
+`examples/03-graph-workflow/graphs/`). It uses the same model and engine resolution as `agent chat`, with the
 graph's `"model"` / `"engine"` hints as defaults that `--model` / `--engine` override.
 
 ```bash
-agent run examples/graphs/research_pipeline.json --model qwen2.5-0.5b --set "topic=Why is the sky blue?"
+agent run examples/03-graph-workflow/graphs/research_pipeline.json --model qwen2.5-0.5b --set "topic=Why is the sky blue?"
 ```
 
 | Flag | |

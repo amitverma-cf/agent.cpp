@@ -1,12 +1,29 @@
 #!/bin/sh
-# Runs before every push: build, then the unit tests that need no model (the mock engines). Takes a few minutes.
+# Runs before every push, in this order: format check, build, tests that need no model. Takes a few minutes.
 # Set AGENT_PREPUSH_BUILD_DIR to the build directory (default: build). Skip: git push --no-verify
+# Formatting is checked here and nowhere else: clang-format reorders includes, so it must not run while you edit.
 dir=${AGENT_PREPUSH_BUILD_DIR:-build}
+if command -v clang-format >/dev/null 2>&1; then fmt="clang-format"
+elif command -v wsl >/dev/null 2>&1 && wsl -e clang-format --version >/dev/null 2>&1; then fmt="wsl -e clang-format"
+else fmt=""; fi
+if [ -n "$fmt" ]; then
+    bad=""
+    for f in $(git ls-files '*.cpp' '*.hpp' '*.h' | grep -v '^vendor/'); do
+        $fmt --dry-run --Werror "$f" >/dev/null 2>&1 || bad="$bad $f"
+    done
+    if [ -n "$bad" ]; then
+        echo "pre-push: not formatted:$bad" >&2
+        echo "run scripts/format.sh, rebuild, commit, push again" >&2
+        exit 1
+    fi
+else
+    echo "pre-push: clang-format not found; skipping the format check" >&2
+fi
 if [ ! -d "$dir" ]; then
-    echo "pre-push: no build directory '$dir' (set AGENT_PREPUSH_BUILD_DIR); skipping" >&2
+    echo "pre-push: no build directory '$dir' (set AGENT_PREPUSH_BUILD_DIR); skipping build and tests" >&2
     exit 0
 fi
 echo "pre-push: building in $dir ..."
 cmake --build "$dir" -j 8 >/dev/null || { echo "pre-push: build failed (run: cmake --build $dir)" >&2; exit 1; }
 echo "pre-push: running tests ..."
-ctest --test-dir "$dir" -C Release -LE 'model|slow' --output-on-failure -j 4 || { echo "pre-push: tests failed" >&2; exit 1; }
+ctest --test-dir "$dir" -C Release -LE 'model|network|keychain' --output-on-failure -j 4 || { echo "pre-push: tests failed" >&2; exit 1; }

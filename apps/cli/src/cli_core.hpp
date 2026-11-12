@@ -5,7 +5,6 @@
 // slash-command parsing -- plus a few thin OS helpers (cli_platform.cpp). Not a public API.
 
 #include <agent-cpp/agent.hpp>
-
 #include <cstdint>
 #include <cstdio>
 #include <span>

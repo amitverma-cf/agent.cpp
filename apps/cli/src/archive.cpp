@@ -1,11 +1,11 @@
 #include "archive.hpp"
 
 #include <algorithm>
-#include <mutex>
 #include <array>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 
 namespace agent::cli {
 
@@ -121,10 +121,13 @@ class Inflater {
     }
 
     int codes(const Huffman &lencode, const Huffman &distcode) {
-        static constexpr uint16_t lens[29] = {3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258};
+        static constexpr uint16_t lens[29] = {3,  4,  5,  6,  7,  8,  9,  10, 11,  13,  15,  17,  19,  23, 27,
+                                              31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258};
         static constexpr uint16_t lext[29] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0};
-        static constexpr uint16_t dists[30] = {1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577};
-        static constexpr uint16_t dext[30] = {0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
+        static constexpr uint16_t dists[30] = {1,   2,   3,   4,   5,   7,    9,    13,   17,   25,   33,   49,   65,    97,    129,
+                                               193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577};
+        static constexpr uint16_t dext[30] = {0, 0, 0, 0, 1, 1, 2, 2,  3,  3,  4,  4,  5,  5,  6,
+                                              6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
         for (;;) {
             int symbol = decode(lencode);
             if (symbol < 0) return symbol;
@@ -294,7 +297,8 @@ Result<std::string> inflate_raw(std::span<const uint8_t> in, size_t max_output) 
 }
 
 Result<std::string> gunzip(std::span<const uint8_t> in, size_t max_output) {
-    if (in.size() < 18 || in[0] != 0x1f || in[1] != 0x8b || in[2] != 8) return fail<std::string>(ErrorCode::ParseError, "gzip: not a gzip stream");
+    if (in.size() < 18 || in[0] != 0x1f || in[1] != 0x8b || in[2] != 8)
+        return fail<std::string>(ErrorCode::ParseError, "gzip: not a gzip stream");
     const uint8_t flags = in[3];
     size_t pos = 10;
     if (flags & 4) { // FEXTRA
@@ -326,7 +330,8 @@ Result<void> extract_zip_bytes(std::span<const uint8_t> zip, const std::string &
     const size_t entries = le16(zip.data() + eocd + 10);
     size_t pos = le32(zip.data() + eocd + 16);
     for (size_t n = 0; n < entries; ++n) {
-        if (pos + 46 > zip.size() || le32(zip.data() + pos) != 0x02014b50u) return fail(ErrorCode::ParseError, "zip: bad central directory");
+        if (pos + 46 > zip.size() || le32(zip.data() + pos) != 0x02014b50u)
+            return fail(ErrorCode::ParseError, "zip: bad central directory");
         const uint8_t *c = zip.data() + pos;
         const uint16_t made_by = le16(c + 4);
         const uint16_t method = le16(c + 10);
@@ -343,7 +348,8 @@ Result<void> extract_zip_bytes(std::span<const uint8_t> zip, const std::string &
         if (rel.empty() || name.back() == '/') continue;
         if (comp == 0xffffffffu || size == 0xffffffffu) return fail(ErrorCode::InvalidConfig, "zip: zip64 entries are not supported");
 
-        if (static_cast<size_t>(local) + 30 > zip.size() || le32(zip.data() + local) != 0x04034b50u) return fail(ErrorCode::ParseError, "zip: bad local header");
+        if (static_cast<size_t>(local) + 30 > zip.size() || le32(zip.data() + local) != 0x04034b50u)
+            return fail(ErrorCode::ParseError, "zip: bad local header");
         const uint8_t *l = zip.data() + local;
         const size_t data_at = static_cast<size_t>(local) + 30 + le16(l + 26) + le16(l + 28);
         if (data_at > zip.size() || comp > zip.size() - data_at) return fail(ErrorCode::ParseError, "zip: entry data is out of range");
@@ -443,7 +449,8 @@ Result<void> extract_archive(const std::string &archive_path, const std::string 
     if (lower.ends_with(".tar.gz") || lower.ends_with(".tgz")) {
         auto tar = gunzip(bytes);
         if (!tar.ok) return fail(tar.error.code, archive_path + ": " + tar.error.message);
-        return extract_tar_bytes(std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(tar.value.data()), tar.value.size()), dest_dir, strip_components);
+        return extract_tar_bytes(std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(tar.value.data()), tar.value.size()), dest_dir,
+                                 strip_components);
     }
     return fail(ErrorCode::InvalidConfig, "unsupported archive type: " + archive_path);
 }

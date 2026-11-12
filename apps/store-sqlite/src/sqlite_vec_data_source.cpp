@@ -1,5 +1,6 @@
 #include "agent/utils/utils.hpp"
 #include "hal/path.hpp"
+#include "sqlite_tuning.hpp"
 
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/store_sqlite.hpp>
@@ -11,7 +12,6 @@
 #include <simdjson.h>
 #include <sqlite-vec.h>
 #include <sqlite3.h>
-#include "sqlite_tuning.hpp"
 #include <string>
 
 namespace agent {
@@ -313,9 +313,10 @@ Result<std::shared_ptr<void>> vs_open(const VectorStoreConfig &config) {
     store::apply_sqlite_tuning(st->db.conn, true);
 
     const std::string &vec = st->db.vec_table, &chunks = st->db.meta_table;
-    const std::string schema = "CREATE VIRTUAL TABLE IF NOT EXISTS " + vec + " USING vec0(embedding float[" +
-                               std::to_string(config.dimensions) + "] distance_metric=cosine);" + "CREATE TABLE IF NOT EXISTS " + chunks +
-                               " (rowid INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, text TEXT, metadata TEXT, created_at INTEGER, updated_at INTEGER);";
+    const std::string schema =
+        "CREATE VIRTUAL TABLE IF NOT EXISTS " + vec + " USING vec0(embedding float[" + std::to_string(config.dimensions) +
+        "] distance_metric=cosine);" + "CREATE TABLE IF NOT EXISTS " + chunks +
+        " (rowid INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, text TEXT, metadata TEXT, created_at INTEGER, updated_at INTEGER);";
     if (auto r = exec_simple(st->db.conn, schema); !r.ok) return fail<R>(r.error.code, r.error.message);
     exec_simple(st->db.conn, "ALTER TABLE " + chunks + " ADD COLUMN created_at INTEGER;"); // older databases; an existing column is fine
     exec_simple(st->db.conn, "ALTER TABLE " + chunks + " ADD COLUMN updated_at INTEGER;");
@@ -333,12 +334,14 @@ Result<std::shared_ptr<void>> vs_open(const VectorStoreConfig &config) {
                 existed = sqlite3_step(probe.s) == SQLITE_ROW;
             }
         }
-        const std::string fts_schema =
-            "CREATE VIRTUAL TABLE IF NOT EXISTS " + fts + " USING fts5(text, content='" + chunks + "', content_rowid='rowid');" +
-            "CREATE TRIGGER IF NOT EXISTS " + fts + "_ai AFTER INSERT ON " + chunks + " BEGIN INSERT INTO " + fts + "(rowid, text) VALUES (new.rowid, new.text); END;" +
-            "CREATE TRIGGER IF NOT EXISTS " + fts + "_ad AFTER DELETE ON " + chunks + " BEGIN INSERT INTO " + fts + "(" + fts + ", rowid, text) VALUES ('delete', old.rowid, old.text); END;" +
-            "CREATE TRIGGER IF NOT EXISTS " + fts + "_au AFTER UPDATE ON " + chunks + " BEGIN INSERT INTO " + fts + "(" + fts + ", rowid, text) VALUES ('delete', old.rowid, old.text); INSERT INTO " +
-            fts + "(rowid, text) VALUES (new.rowid, new.text); END;";
+        const std::string fts_schema = "CREATE VIRTUAL TABLE IF NOT EXISTS " + fts + " USING fts5(text, content='" + chunks +
+                                       "', content_rowid='rowid');" + "CREATE TRIGGER IF NOT EXISTS " + fts + "_ai AFTER INSERT ON " +
+                                       chunks + " BEGIN INSERT INTO " + fts + "(rowid, text) VALUES (new.rowid, new.text); END;" +
+                                       "CREATE TRIGGER IF NOT EXISTS " + fts + "_ad AFTER DELETE ON " + chunks + " BEGIN INSERT INTO " +
+                                       fts + "(" + fts + ", rowid, text) VALUES ('delete', old.rowid, old.text); END;" +
+                                       "CREATE TRIGGER IF NOT EXISTS " + fts + "_au AFTER UPDATE ON " + chunks + " BEGIN INSERT INTO " +
+                                       fts + "(" + fts + ", rowid, text) VALUES ('delete', old.rowid, old.text); INSERT INTO " + fts +
+                                       "(rowid, text) VALUES (new.rowid, new.text); END;";
         st->has_fts = exec_simple(st->db.conn, fts_schema).ok;
         if (st->has_fts && !existed) st->has_fts = exec_simple(st->db.conn, "INSERT INTO " + fts + "(" + fts + ") VALUES ('rebuild');").ok;
         st->sql_fts_query = "SELECT c.id, c.text, c.metadata FROM " + fts + " f JOIN " + chunks + " c ON c.rowid = f.rowid WHERE " + fts +
@@ -346,8 +349,12 @@ Result<std::shared_ptr<void>> vs_open(const VectorStoreConfig &config) {
     }
 
     st->sql_find = "SELECT rowid FROM " + chunks + " WHERE id = ?1;";
-    st->sql_insert_chunk = "INSERT INTO " + chunks + "(id, text, metadata, created_at, updated_at) VALUES (?1, ?2, ?3, CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));";
-    st->sql_update_chunk = "UPDATE " + chunks + " SET text = ?2, metadata = ?3, updated_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) WHERE rowid = ?1;";
+    st->sql_insert_chunk = "INSERT INTO " + chunks +
+                           "(id, text, metadata, created_at, updated_at) VALUES (?1, ?2, ?3, CAST((julianday('now') - 2440587.5) * "
+                           "86400000 AS INTEGER), CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));";
+    st->sql_update_chunk =
+        "UPDATE " + chunks +
+        " SET text = ?2, metadata = ?3, updated_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) WHERE rowid = ?1;";
     st->sql_delete_chunk = "DELETE FROM " + chunks + " WHERE rowid = ?1;";
     st->sql_insert_vec = "INSERT INTO " + vec + "(rowid, embedding) VALUES (?1, ?2);";
     st->sql_delete_vec = "DELETE FROM " + vec + " WHERE rowid = ?1;";
@@ -426,7 +433,10 @@ std::string fts_match_expression(std::string_view text) {
     std::string out, word;
     int words = 0;
     auto flush = [&] {
-        if (word.empty() || words >= 24) { word.clear(); return; }
+        if (word.empty() || words >= 24) {
+            word.clear();
+            return;
+        }
         out += std::string(out.empty() ? "" : " OR ") + "\"" + word + "\"";
         ++words;
         word.clear();
@@ -458,7 +468,8 @@ Result<std::vector<VectorHit>> vs_query_hybrid(void *state, std::string_view tex
             bind_text(q.s, 1, match);
             sqlite3_bind_int(q.s, 2, pool);
             while (sqlite3_step(q.s) == SQLITE_ROW)
-                lexical.push_back(VectorHit{.id = column_text(q.s, 0), .text = column_text(q.s, 1), .metadata_json = column_text(q.s, 2), .score = 0.0f});
+                lexical.push_back(
+                    VectorHit{.id = column_text(q.s, 0), .text = column_text(q.s, 1), .metadata_json = column_text(q.s, 2), .score = 0.0f});
         }
     }
 

@@ -1,8 +1,8 @@
 // Network half of the hub: HF API, streaming downloads with redirects, Range resume and verification.
 
+#include <agent-cpp/hub.hpp>
 #include <chrono>
 #include <thread>
-#include <agent-cpp/hub.hpp>
 
 #ifndef CPPHTTPLIB_OPENSSL_SUPPORT
 #define CPPHTTPLIB_OPENSSL_SUPPORT
@@ -10,11 +10,10 @@
 #ifndef CPPHTTPLIB_NO_EXCEPTIONS
 #define CPPHTTPLIB_NO_EXCEPTIONS
 #endif
-#include <httplib.h>
-
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
+#include <httplib.h>
 #include <system_error>
 
 namespace agent::hub {
@@ -207,7 +206,8 @@ Result<Reply> http_get(std::string url, const httplib::Headers &extra, const Htt
             std::string msg = "hub: request to " + u.host + " failed: " + httplib::to_string(res.error());
             if (res.error() == httplib::Error::SSLServerVerification)
                 msg += " (set AGENT_CA_BUNDLE / SSL_CERT_FILE to a CA bundle that signs this host or proxy)";
-            if (res.error() == httplib::Error::ProxyConnection) msg += " (proxy " + http.proxy_host + ":" + std::to_string(http.proxy_port) + ")";
+            if (res.error() == httplib::Error::ProxyConnection)
+                msg += " (proxy " + http.proxy_host + ":" + std::to_string(http.proxy_port) + ")";
             return fail<Reply>(ErrorCode::NetworkError, msg);
         }
         if (is_redirect(status)) {
@@ -238,10 +238,10 @@ std::string status_message(const Reply &r, std::string_view what) {
 struct DownloadState {
     std::string part_path;
     std::FILE *file = nullptr;
-    uint64_t offset = 0;       // bytes already in the .part file when the request was sent
-    uint64_t written = 0;      // bytes written in this request
+    uint64_t offset = 0;  // bytes already in the .part file when the request was sent
+    uint64_t written = 0; // bytes written in this request
     uint64_t total = 0;
-    bool restarted = false;    // server ignored Range (200) and we truncated
+    bool restarted = false; // server ignored Range (200) and we truncated
     bool range_mismatch = false;
     bool write_failed = false;
     bool cancelled = false;
@@ -315,15 +315,16 @@ Result<void> finalize_download(const std::string &part, const std::string &dest,
     std::error_code ec;
     const uint64_t size = file_size_or_zero(part);
     if (opts.expected_size && size != opts.expected_size) {
-        return fail(ErrorCode::NetworkError,
-                    "hub: size mismatch for " + dest + ": got " + std::to_string(size) + ", expected " + std::to_string(opts.expected_size));
+        return fail(ErrorCode::NetworkError, "hub: size mismatch for " + dest + ": got " + std::to_string(size) + ", expected " +
+                                                 std::to_string(opts.expected_size));
     }
     if (!opts.expected_sha256.empty()) {
         auto digest = sha256_file(part);
         if (!digest.ok) return fail(digest.error.code, digest.error.message);
         if (digest.value != opts.expected_sha256) {
             std::filesystem::remove(part, ec);
-            return fail(ErrorCode::NetworkError, "hub: sha256 mismatch for " + dest + ": got " + digest.value + ", expected " + opts.expected_sha256);
+            return fail(ErrorCode::NetworkError,
+                        "hub: sha256 mismatch for " + dest + ": got " + digest.value + ", expected " + opts.expected_sha256);
         }
     }
     std::filesystem::rename(part, dest, ec);
@@ -354,7 +355,8 @@ Result<RepoInfo> fetch_repo_info(std::string_view repo, const HttpOptions &http,
     auto reply = http_get(url, {}, http, sink);
     if (!reply.ok) return fail<RepoInfo>(reply.error.code, reply.error.message);
     if (reply.value.aborted) return fail<RepoInfo>(ErrorCode::HttpError, "hub: model info for " + std::string(repo) + " is too large");
-    if (reply.value.status != 200) return fail<RepoInfo>(ErrorCode::HttpError, status_message(reply.value, "model info for " + std::string(repo)));
+    if (reply.value.status != 200)
+        return fail<RepoInfo>(ErrorCode::HttpError, status_message(reply.value, "model info for " + std::string(repo)));
     auto info = parse_repo_info(body.text);
     if (info.ok && info.value.repo.empty()) info.value.repo = std::string(repo);
     return info;
@@ -375,7 +377,7 @@ Result<std::string> http_get_text(std::string_view url, const HttpOptions &http,
         return true;
     };
     httplib::Headers headers{{"User-Agent", "agent-cpp"}, {"Accept", "application/json, text/plain, */*"}};
-    // A release's CDN can answer 400 / 5xx for the first minutes after it was published, and any network can drop a request: 
+    // A release's CDN can answer 400 / 5xx for the first minutes after it was published, and any network can drop a request:
     // up to four times, waiting 1, 3 and 8 seconds, before giving up.
     static constexpr int kWaitSeconds[] = {2, 5, 15, 30};
     Result<Reply> reply = fail<Reply>(ErrorCode::NetworkError, "no attempt");
@@ -387,7 +389,9 @@ Result<std::string> http_get_text(std::string_view url, const HttpOptions &http,
         std::this_thread::sleep_for(std::chrono::seconds(kWaitSeconds[attempt]));
     }
     if (!reply.ok) return fail<std::string>(reply.error.code, reply.error.message);
-    if (reply.value.aborted) return fail<std::string>(ErrorCode::HttpError, "hub: the response from " + std::string(url) + " is larger than " + std::to_string(max_bytes) + " bytes");
+    if (reply.value.aborted)
+        return fail<std::string>(ErrorCode::HttpError,
+                                 "hub: the response from " + std::string(url) + " is larger than " + std::to_string(max_bytes) + " bytes");
     if (reply.value.status != 200) return fail<std::string>(ErrorCode::HttpError, status_message(reply.value, std::string(url)));
     return ok(std::move(body.text));
 }
@@ -427,7 +431,8 @@ Result<void> download_file(std::string_view url, const std::string &dest, const 
             std::filesystem::remove(part, ec); // server disagrees about the partial file: restart from zero
             continue;
         }
-        if (reply.value.status != 200 && reply.value.status != 206) return fail(ErrorCode::HttpError, status_message(reply.value, "download"));
+        if (reply.value.status != 200 && reply.value.status != 206)
+            return fail(ErrorCode::HttpError, status_message(reply.value, "download"));
         if (st.total && st.offset + st.written < st.total)
             return fail(ErrorCode::NetworkError, "hub: connection closed early (" + std::to_string(st.offset + st.written) + " of " +
                                                      std::to_string(st.total) + " bytes); run again to resume");
@@ -445,8 +450,9 @@ Result<CatalogEntry> pull_whole_repo(const ModelSpec &spec, const RepoInfo &ri, 
     std::string license = ri.license.empty() ? std::string("unknown") : ri.license;
     if (ri.license == "other" && !ri.license_name.empty()) license += " (" + ri.license_name + ")";
     if (is_restricted_license(ri.license, ri.license_name) && !opts.allow_restricted_license)
-        return fail<CatalogEntry>(ErrorCode::PermissionDenied, "hub: " + spec.repo + " is under a restricted licence (" + license +
-                                                                   "); pass allow_restricted_license (--allow-restricted) if you are entitled to use it");
+        return fail<CatalogEntry>(ErrorCode::PermissionDenied,
+                                  "hub: " + spec.repo + " is under a restricted licence (" + license +
+                                      "); pass allow_restricted_license (--allow-restricted) if you are entitled to use it");
 
     std::vector<const RemoteFile *> chosen;
     for (const RemoteFile &f : ri.files) {
@@ -459,15 +465,18 @@ Result<CatalogEntry> pull_whole_repo(const ModelSpec &spec, const RepoInfo &ri, 
     if (chosen.empty()) return fail<CatalogEntry>(ErrorCode::KeyNotFound, "hub: no files in " + spec.repo + " match the include filter");
 
     const std::string models_dir = opts.models_dir.empty() ? default_models_dir() : opts.models_dir;
-    const std::string catalog_path = opts.catalog_path.empty() ? (std::filesystem::path(models_dir) / "models.json").string() : opts.catalog_path;
+    const std::string catalog_path =
+        opts.catalog_path.empty() ? (std::filesystem::path(models_dir) / "models.json").string() : opts.catalog_path;
     std::error_code ec;
-    const auto repo_dir = std::filesystem::absolute(std::filesystem::path(models_dir) / std::filesystem::path(spec.repo), ec).lexically_normal();
+    const auto repo_dir =
+        std::filesystem::absolute(std::filesystem::path(models_dir) / std::filesystem::path(spec.repo), ec).lexically_normal();
 
     uint64_t total = 0;
     for (const RemoteFile *f : chosen) {
         const std::string dest = std::filesystem::absolute(repo_dir / f->path, ec).lexically_normal().string();
         if (!(std::filesystem::is_regular_file(dest, ec) && (f->size == 0 || file_size_or_zero(dest) == f->size))) {
-            const std::string url = opts.http.endpoint + "/" + encode_path(spec.repo) + "/resolve/" + encode_path(spec.revision) + "/" + encode_path(f->path);
+            const std::string url =
+                opts.http.endpoint + "/" + encode_path(spec.repo) + "/resolve/" + encode_path(spec.revision) + "/" + encode_path(f->path);
             DownloadOptions dl{.expected_size = f->size,
                                .expected_sha256 = f->sha256,
                                .on_progress = opts.on_progress,
@@ -513,13 +522,16 @@ Result<CatalogEntry> pull_model(std::string_view spec_text, const PullOptions &o
     std::string license = ri.license.empty() ? std::string("unknown") : ri.license;
     if (ri.license == "other" && !ri.license_name.empty()) license += " (" + ri.license_name + ")";
     if (is_restricted_license(ri.license, ri.license_name) && !opts.allow_restricted_license)
-        return fail<CatalogEntry>(ErrorCode::PermissionDenied, "hub: " + spec.value.repo + " is under a restricted licence (" + license +
-                                                                   "); pass allow_restricted_license (--allow-restricted) if you are entitled to use it");
+        return fail<CatalogEntry>(ErrorCode::PermissionDenied,
+                                  "hub: " + spec.value.repo + " is under a restricted licence (" + license +
+                                      "); pass allow_restricted_license (--allow-restricted) if you are entitled to use it");
 
     const std::string models_dir = opts.models_dir.empty() ? default_models_dir() : opts.models_dir;
-    const std::string catalog_path = opts.catalog_path.empty() ? (std::filesystem::path(models_dir) / "models.json").string() : opts.catalog_path;
+    const std::string catalog_path =
+        opts.catalog_path.empty() ? (std::filesystem::path(models_dir) / "models.json").string() : opts.catalog_path;
     const std::string repo_dir_name = spec.value.repo; // "owner/name" -> <models_dir>/owner/name
-    std::filesystem::path dest = std::filesystem::path(models_dir) / std::filesystem::path(repo_dir_name) / std::filesystem::path(file.value.path);
+    std::filesystem::path dest =
+        std::filesystem::path(models_dir) / std::filesystem::path(repo_dir_name) / std::filesystem::path(file.value.path);
     std::error_code ec;
     dest = std::filesystem::absolute(dest, ec).lexically_normal();
 
@@ -530,8 +542,8 @@ Result<CatalogEntry> pull_model(std::string_view spec_text, const PullOptions &o
     if (!cat.ok) return fail<CatalogEntry>(cat.error.code, cat.error.message);
     auto existing = std::find_if(cat.value.begin(), cat.value.end(), [&](const CatalogEntry &e) { return e.name == name; });
     if (existing != cat.value.end() && (existing->repo != spec.value.repo || existing->file != file.value.path))
-        return fail<CatalogEntry>(ErrorCode::InvalidConfig, "hub: name '" + name + "' is already used by " + existing->repo + ":" + existing->file +
-                                                                "; choose another name or remove it first");
+        return fail<CatalogEntry>(ErrorCode::InvalidConfig, "hub: name '" + name + "' is already used by " + existing->repo + ":" +
+                                                                existing->file + "; choose another name or remove it first");
 
     CatalogEntry entry{.name = name,
                        .repo = spec.value.repo,
@@ -544,7 +556,8 @@ Result<CatalogEntry> pull_model(std::string_view spec_text, const PullOptions &o
     const auto repo_dir = std::filesystem::path(models_dir) / std::filesystem::path(repo_dir_name);
     uint64_t total_size = 0;
     for (const RemoteFile &shard : shards.value) {
-        const std::string shard_path = (shard.path == file.value.path) ? entry.path : std::filesystem::absolute(repo_dir / shard.path, ec).lexically_normal().string();
+        const std::string shard_path =
+            (shard.path == file.value.path) ? entry.path : std::filesystem::absolute(repo_dir / shard.path, ec).lexically_normal().string();
         bool have = false;
         if (std::filesystem::is_regular_file(shard_path, ec) && (shard.size == 0 || file_size_or_zero(shard_path) == shard.size)) {
             have = true;
@@ -555,8 +568,8 @@ Result<CatalogEntry> pull_model(std::string_view spec_text, const PullOptions &o
             }
         }
         if (!have) {
-            const std::string url = opts.http.endpoint + "/" + encode_path(spec.value.repo) + "/resolve/" + encode_path(spec.value.revision) + "/" +
-                                    encode_path(shard.path);
+            const std::string url = opts.http.endpoint + "/" + encode_path(spec.value.repo) + "/resolve/" +
+                                    encode_path(spec.value.revision) + "/" + encode_path(shard.path);
             DownloadOptions dl{.expected_size = shard.size,
                                .expected_sha256 = shard.sha256,
                                .on_progress = opts.on_progress,
@@ -575,8 +588,8 @@ Result<CatalogEntry> pull_model(std::string_view spec_text, const PullOptions &o
         const RemoteFile &p = *proj.value;
         const std::string proj_path = std::filesystem::absolute(repo_dir / p.path, ec).lexically_normal().string();
         if (!(std::filesystem::is_regular_file(proj_path, ec) && (p.size == 0 || file_size_or_zero(proj_path) == p.size))) {
-            const std::string url = opts.http.endpoint + "/" + encode_path(spec.value.repo) + "/resolve/" + encode_path(spec.value.revision) + "/" +
-                                    encode_path(p.path);
+            const std::string url = opts.http.endpoint + "/" + encode_path(spec.value.repo) + "/resolve/" +
+                                    encode_path(spec.value.revision) + "/" + encode_path(p.path);
             DownloadOptions dl{.expected_size = p.size,
                                .expected_sha256 = p.sha256,
                                .on_progress = opts.on_progress,

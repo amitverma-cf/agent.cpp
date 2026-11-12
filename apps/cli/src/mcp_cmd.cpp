@@ -5,7 +5,6 @@
 #include "registries.hpp"
 
 #include <agent-cpp/hub.hpp>
-
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -21,8 +20,9 @@ int mcp_ls(Context &ctx) {
     const auto servers = collect_mcp_servers(ctx, warnings);
     for (const std::string &w : warnings) std::fprintf(stderr, "warning: %s\n", w.c_str());
     if (servers.empty()) {
-        std::printf("no MCP servers configured. Add them under \"mcpServers\" in %s%s%s.\n", ctx.has_home ? (ctx.home.mcp + "/mcp.json").c_str() : "the home's mcp/mcp.json",
-                    ctx.project_root.empty() ? "" : " or ", ctx.project_root.empty() ? "" : (ctx.project_root + "/.agents/mcp.json").c_str());
+        std::printf("no MCP servers configured. Add them under \"mcpServers\" in %s%s%s.\n",
+                    ctx.has_home ? (ctx.home.mcp + "/mcp.json").c_str() : "the home's mcp/mcp.json", ctx.project_root.empty() ? "" : " or ",
+                    ctx.project_root.empty() ? "" : (ctx.project_root + "/.agents/mcp.json").c_str());
         return 0;
     }
     for (const McpServerConfig &s : servers) {
@@ -39,7 +39,8 @@ int mcp_ls(Context &ctx) {
         }
         std::printf("%-16s %s", s.name.c_str(), s.command.c_str());
         for (const std::string &a : s.args) std::printf(" %s", a.c_str());
-        std::printf("\n    sandbox: %s%s", s.sandbox.enabled ? "on" : "OFF", s.sandbox.enabled && s.sandbox.network == SandboxNetwork::Deny ? ", no network" : "");
+        std::printf("\n    sandbox: %s%s", s.sandbox.enabled ? "on" : "OFF",
+                    s.sandbox.enabled && s.sandbox.network == SandboxNetwork::Deny ? ", no network" : "");
         if (!keys.empty()) std::printf("   keys: %s", keys.c_str());
         std::printf("\n    data folder: %s\n", s.working_directory.c_str());
     }
@@ -57,7 +58,8 @@ int mcp_search(const std::string &query) {
     }
     for (const McpHit &h : hits.value) {
         auto entry = mcp_entry_for(h);
-        std::printf("%-48s %s  %s\n    %s\n", h.name.c_str(), h.version.c_str(), entry.ok ? "[can start here]" : "[hosted or container only]", h.description.substr(0, 110).c_str());
+        std::printf("%-48s %s  %s\n    %s\n", h.name.c_str(), h.version.c_str(),
+                    entry.ok ? "[can start here]" : "[hosted or container only]", h.description.substr(0, 110).c_str());
     }
     std::printf("\nadd one with: agent mcp add <name>\n");
     return 0;
@@ -66,7 +68,8 @@ int mcp_search(const std::string &query) {
 int mcp_add(const CommandLine &cl, Context &ctx) {
     const bool project = cl.has("project");
     if (project ? ctx.project_root.empty() : !ctx.has_home) {
-        std::fprintf(stderr, "agent mcp add: %s\n", project ? "this folder has no .agents project (run `agent init`)" : "no home is set (run `agent setup`)");
+        std::fprintf(stderr, "agent mcp add: %s\n",
+                     project ? "this folder has no .agents project (run `agent init`)" : "no home is set (run `agent setup`)");
         return 1;
     }
     const std::string wanted = cl.positionals[0];
@@ -78,14 +81,15 @@ int mcp_add(const CommandLine &cl, Context &ctx) {
     for (const McpHit &h : hits.value)
         if (h.name == wanted) chosen = &h;
     if (!chosen) {
-        std::fprintf(stderr, "agent mcp add: '%s' is not an exact registry name. Search first: agent mcp search %s\n", wanted.c_str(), wanted.c_str());
+        std::fprintf(stderr, "agent mcp add: '%s' is not an exact registry name. Search first: agent mcp search %s\n", wanted.c_str(),
+                     wanted.c_str());
         return 1;
     }
     auto entry = mcp_entry_for(*chosen);
     if (!entry.ok) return report_error(entry.error);
 
-    std::printf("%s %s\n  %s\n  repository: %s\n\nconfig:\n%s", chosen->name.c_str(), chosen->version.c_str(), chosen->description.c_str(), chosen->repository.c_str(),
-                entry.value.json.c_str());
+    std::printf("%s %s\n  %s\n  repository: %s\n\nconfig:\n%s", chosen->name.c_str(), chosen->version.c_str(), chosen->description.c_str(),
+                chosen->repository.c_str(), entry.value.json.c_str());
     std::printf("It will run in the sandbox: it writes only in its own data folder, and keys are handed to it by name.\n");
     if (!cl.has("yes") && !ask_yes_no("Add it?")) {
         std::printf("cancelled\n");
@@ -104,7 +108,8 @@ int mcp_add(const CommandLine &cl, Context &ctx) {
     }
     std::printf("added '%s' (%s)\n", entry.value.server_name.c_str(), path.c_str());
     for (const std::string &s : entry.value.secrets)
-        std::printf("  needs the key '%s':  agent secret set %s   then   agent secret bind %s mcp:%s\n", s.c_str(), s.c_str(), s.c_str(), entry.value.server_name.c_str());
+        std::printf("  needs the key '%s':  agent secret set %s   then   agent secret bind %s mcp:%s\n", s.c_str(), s.c_str(), s.c_str(),
+                    entry.value.server_name.c_str());
     for (const std::string &f : entry.value.to_fill) std::printf("  edit the file and set the required value %s\n", f.c_str());
     return 0;
 }
@@ -119,7 +124,9 @@ int mcp_rm(const CommandLine &cl, Context &ctx) {
             return 0;
         }
     }
-    std::fprintf(stderr, "agent mcp rm: '%s' was not added with `agent mcp add`. Servers written by hand are removed by editing mcp.json.\n", cl.positionals[0].c_str());
+    std::fprintf(stderr,
+                 "agent mcp rm: '%s' was not added with `agent mcp add`. Servers written by hand are removed by editing mcp.json.\n",
+                 cl.positionals[0].c_str());
     return 1;
 }
 

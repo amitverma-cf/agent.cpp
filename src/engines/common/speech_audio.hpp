@@ -14,7 +14,6 @@
 #pragma once
 
 #include <agent-cpp/engine_abi.h>
-
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -182,7 +181,7 @@ inline bool is_audio_part(const agent_part &p) {
 }
 
 struct UserInput {
-    std::string_view text;            // last TEXT part of the last user message
+    std::string_view text;             // last TEXT part of the last user message
     const agent_part *audio = nullptr; // last audio part of the last user message
 };
 

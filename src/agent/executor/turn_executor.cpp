@@ -320,9 +320,7 @@ Result<std::string> run_turn_with_media(Session &session, Conversation &state, s
         state.history.push_back(std::move(user_msg));
     }
 
-    {
-        maybe_compress(session, state);
-    }
+    { maybe_compress(session, state); }
 
     std::string final_text;
     int tool_rounds = 0;
@@ -433,8 +431,7 @@ Result<std::string> run_turn_with_media(Session &session, Conversation &state, s
                 if (!tool_msg || providers::accepts_tool_media(session, md.mime)) ++n_media;
             if (n_media != 0) {
                 auto mvs = arena.allocate_span<MediaView>(n_media);
-                if (mvs.size() != n_media)
-                    return fail<std::string>(ErrorCode::DecodeFailed, "Out of memory building message views.");
+                if (mvs.size() != n_media) return fail<std::string>(ErrorCode::DecodeFailed, "Out of memory building message views.");
                 size_t k = 0;
                 for (const Media &md : m.media)
                     if (!tool_msg || providers::accepts_tool_media(session, md.mime)) mvs[k++] = {md.path, md.mime};

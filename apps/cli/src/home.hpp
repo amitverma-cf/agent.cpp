@@ -11,7 +11,6 @@
 // These functions only compute and create paths; nothing here reads the model or engine files.
 
 #include <agent-cpp/agent.hpp>
-
 #include <string>
 #include <string_view>
 
@@ -21,18 +20,18 @@ inline constexpr std::string_view kHomeFolderName = ".agent.cpp-workspace";
 inline constexpr std::string_view kProjectFolderName = ".agents";
 
 struct HomeLayout {
-    std::string root;       // <home>
-    std::string config;     // <home>/config.json
-    std::string engines;    // <home>/engines          engine plugins, one folder per engine and version
+    std::string root;         // <home>
+    std::string config;       // <home>/config.json
+    std::string engines;      // <home>/engines          engine plugins, one folder per engine and version
     std::string engines_json; // <home>/engines.json
-    std::string models;     // <home>/models           model files and models.json
-    std::string skills;     // <home>/skills           skills available in every project
-    std::string mcp;        // <home>/mcp              MCP server definitions (secrets are NOT stored here)
-    std::string plugins;    // <home>/plugins          third-party plugins, each with its own data folder
-    std::string runtimes;   // <home>/runtimes         private bun / uv installs
-    std::string cache;      // <home>/cache            downloads in progress, prefix KV states, GPU kernel caches
-    std::string logs;       // <home>/logs
-    std::string workspaces; // <home>/workspaces       default workspace and per-project state outside the project
+    std::string models;       // <home>/models           model files and models.json
+    std::string skills;       // <home>/skills           skills available in every project
+    std::string mcp;          // <home>/mcp              MCP server definitions (secrets are NOT stored here)
+    std::string plugins;      // <home>/plugins          third-party plugins, each with its own data folder
+    std::string runtimes;     // <home>/runtimes         private bun / uv installs
+    std::string cache;        // <home>/cache            downloads in progress, prefix KV states, GPU kernel caches
+    std::string logs;         // <home>/logs
+    std::string workspaces;   // <home>/workspaces       default workspace and per-project state outside the project
 };
 
 HomeLayout home_layout(std::string_view root);

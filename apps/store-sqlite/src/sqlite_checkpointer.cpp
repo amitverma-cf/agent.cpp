@@ -1,12 +1,13 @@
 // SQLite CheckpointerOps: one connection per opened checkpointer (WAL), serialized by a mutex.
 
+#include "sqlite_tuning.hpp"
+
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/store_sqlite.hpp>
 #include <chrono>
 #include <filesystem>
 #include <mutex>
 #include <sqlite3.h>
-#include "sqlite_tuning.hpp"
 #include <string>
 #include <vector>
 

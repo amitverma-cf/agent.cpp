@@ -24,7 +24,7 @@ enum class NodeState { Running, Done, Interrupted, Error };
 
 struct NodeStatus {
     std::string name;
-    std::string kind;      // "agent", "function", "tool", "parallel", "loop" ("-" when the node is unknown)
+    std::string kind; // "agent", "function", "tool", "parallel", "loop" ("-" when the node is unknown)
     NodeState state = NodeState::Running;
     int64_t start_ms = 0;  // wall clock, ms since the Unix epoch (GraphEvent::timestamp_ms)
     int64_t end_ms = 0;    // when it stopped; 0 while running

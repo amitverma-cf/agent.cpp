@@ -3,11 +3,6 @@
 #include "cli_core.hpp"
 
 #include <agent-cpp/hub.hpp>
-
-#include <openssl/evp.h>
-#include <openssl/rand.h>
-#include <simdjson.h>
-
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -17,10 +12,15 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <openssl/evp.h>
+#include <openssl/rand.h>
+#include <simdjson.h>
 
 #if defined(_WIN32)
+// clang-format off
 #include <windows.h>
 #include <wincred.h>
+// clang-format on
 #elif defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
@@ -61,7 +61,8 @@ bool wincred_available(void *) { return true; }
 Result<void> wincred_set(void *, std::string_view name, std::string_view value) {
     if (!valid_secret_name(name)) return bad_name(name);
     if (value.size() > CRED_MAX_CREDENTIAL_BLOB_SIZE)
-        return fail(ErrorCode::InvalidConfig, "Windows Credential Manager holds at most " + std::to_string(CRED_MAX_CREDENTIAL_BLOB_SIZE) + " bytes per secret");
+        return fail(ErrorCode::InvalidConfig,
+                    "Windows Credential Manager holds at most " + std::to_string(CRED_MAX_CREDENTIAL_BLOB_SIZE) + " bytes per secret");
     const std::wstring target = target_name(name);
     CREDENTIALW cred{};
     cred.Type = CRED_TYPE_GENERIC;
@@ -69,7 +70,8 @@ Result<void> wincred_set(void *, std::string_view name, std::string_view value) 
     cred.CredentialBlobSize = static_cast<DWORD>(value.size());
     cred.CredentialBlob = reinterpret_cast<LPBYTE>(const_cast<char *>(value.data()));
     cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
-    if (!CredWriteW(&cred, 0)) return fail(ErrorCode::FilesystemError, "Credential Manager refused the secret (error " + std::to_string(GetLastError()) + ")");
+    if (!CredWriteW(&cred, 0))
+        return fail(ErrorCode::FilesystemError, "Credential Manager refused the secret (error " + std::to_string(GetLastError()) + ")");
     return ok();
 }
 
@@ -89,7 +91,8 @@ Result<void> wincred_remove(void *, std::string_view name) {
     if (!valid_secret_name(name)) return bad_name(name);
     const std::wstring target = target_name(name);
     if (!CredDeleteW(target.c_str(), CRED_TYPE_GENERIC, 0) && GetLastError() != ERROR_NOT_FOUND)
-        return fail(ErrorCode::FilesystemError, "Credential Manager could not delete the secret (error " + std::to_string(GetLastError()) + ")");
+        return fail(ErrorCode::FilesystemError,
+                    "Credential Manager could not delete the secret (error " + std::to_string(GetLastError()) + ")");
     return ok();
 }
 
@@ -100,8 +103,12 @@ const SecretBackend kOsBackend = {"Windows Credential Manager", nullptr, wincred
 
 struct CfString {
     CFStringRef ref;
-    explicit CfString(std::string_view s) : ref(CFStringCreateWithBytes(nullptr, reinterpret_cast<const UInt8 *>(s.data()), static_cast<CFIndex>(s.size()), kCFStringEncodingUTF8, false)) {}
-    ~CfString() { if (ref) CFRelease(ref); }
+    explicit CfString(std::string_view s)
+        : ref(CFStringCreateWithBytes(nullptr, reinterpret_cast<const UInt8 *>(s.data()), static_cast<CFIndex>(s.size()),
+                                      kCFStringEncodingUTF8, false)) {}
+    ~CfString() {
+        if (ref) CFRelease(ref);
+    }
 };
 
 CFMutableDictionaryRef keychain_query(const CfString &account) {
@@ -138,7 +145,8 @@ Result<std::string> keychain_get(void *, std::string_view name) {
     CFTypeRef found = nullptr;
     const OSStatus st = SecItemCopyMatching(q, &found);
     CFRelease(q);
-    if (st != errSecSuccess || !found) return fail<std::string>(ErrorCode::KeyNotFound, "no secret named '" + std::string(name) + "' in the Keychain");
+    if (st != errSecSuccess || !found)
+        return fail<std::string>(ErrorCode::KeyNotFound, "no secret named '" + std::string(name) + "' in the Keychain");
     CFDataRef data = static_cast<CFDataRef>(found);
     std::string value(reinterpret_cast<const char *>(CFDataGetBytePtr(data)), static_cast<size_t>(CFDataGetLength(data)));
     CFRelease(found);
@@ -151,7 +159,8 @@ Result<void> keychain_remove(void *, std::string_view name) {
     CFMutableDictionaryRef q = keychain_query(account);
     const OSStatus st = SecItemDelete(q);
     CFRelease(q);
-    if (st != errSecSuccess && st != errSecItemNotFound) return fail(ErrorCode::FilesystemError, "Keychain could not delete the secret (status " + std::to_string(st) + ")");
+    if (st != errSecSuccess && st != errSecItemNotFound)
+        return fail(ErrorCode::FilesystemError, "Keychain could not delete the secret (status " + std::to_string(st) + ")");
     return ok();
 }
 
@@ -165,16 +174,19 @@ const SecretBackend kOsBackend = {"macOS Keychain", nullptr, keychain_available,
 bool secret_tool_available(void *) {
     if (std::system("command -v secret-tool >/dev/null 2>&1") != 0) return false;
     // A session bus is needed too: `search` fails fast without one.
-    return std::system("secret-tool search service agent.cpp-probe >/dev/null 2>&1") == 0 || std::getenv("DBUS_SESSION_BUS_ADDRESS") != nullptr;
+    return std::system("secret-tool search service agent.cpp-probe >/dev/null 2>&1") == 0 ||
+           std::getenv("DBUS_SESSION_BUS_ADDRESS") != nullptr;
 }
 
 Result<void> secret_tool_set(void *, std::string_view name, std::string_view value) {
     if (!valid_secret_name(name)) return bad_name(name);
-    const std::string cmd = std::string("secret-tool store --label='agent.cpp ") + std::string(name) + "' service " + kService + " account " + std::string(name) + " 2>/dev/null";
+    const std::string cmd = std::string("secret-tool store --label='agent.cpp ") + std::string(name) + "' service " + kService +
+                            " account " + std::string(name) + " 2>/dev/null";
     FILE *p = popen(cmd.c_str(), "w");
     if (!p) return fail(ErrorCode::FilesystemError, "cannot start secret-tool");
     std::fwrite(value.data(), 1, value.size(), p);
-    return pclose(p) == 0 ? ok() : fail(ErrorCode::FilesystemError, "secret-tool could not store the secret (is a keyring running and unlocked?)");
+    return pclose(p) == 0 ? ok()
+                          : fail(ErrorCode::FilesystemError, "secret-tool could not store the secret (is a keyring running and unlocked?)");
 }
 
 Result<std::string> secret_tool_get(void *, std::string_view name) {
@@ -185,7 +197,8 @@ Result<std::string> secret_tool_get(void *, std::string_view name) {
     std::string value;
     char buf[512];
     for (size_t n; (n = std::fread(buf, 1, sizeof(buf), p)) > 0;) value.append(buf, n);
-    if (pclose(p) != 0 || value.empty()) return fail<std::string>(ErrorCode::KeyNotFound, "no secret named '" + std::string(name) + "' in the keyring");
+    if (pclose(p) != 0 || value.empty())
+        return fail<std::string>(ErrorCode::KeyNotFound, "no secret named '" + std::string(name) + "' in the keyring");
     return ok(std::move(value));
 }
 
@@ -196,7 +209,8 @@ Result<void> secret_tool_remove(void *, std::string_view name) {
     return ok();
 }
 
-const SecretBackend kOsBackend = {"Secret Service (secret-tool)", nullptr, secret_tool_available, secret_tool_set, secret_tool_get, secret_tool_remove};
+const SecretBackend kOsBackend = {
+    "Secret Service (secret-tool)", nullptr, secret_tool_available, secret_tool_set, secret_tool_get, secret_tool_remove};
 #endif
 
 // ------------------------------------------------------------------------------------------------ encrypted file
@@ -225,7 +239,9 @@ Result<std::string> passphrase_of(FileState &st) {
         if (!read_hidden_line("Passphrase for the encrypted secrets file: ", st.passphrase) || st.passphrase.empty())
             return fail<std::string>(ErrorCode::InvalidConfig, "no passphrase given");
     } else {
-        return fail<std::string>(ErrorCode::InvalidConfig, "this machine has no OS credential store, so secrets use an encrypted file: set AGENT_SECRETS_PASSPHRASE or run on a terminal");
+        return fail<std::string>(
+            ErrorCode::InvalidConfig,
+            "this machine has no OS credential store, so secrets use an encrypted file: set AGENT_SECRETS_PASSPHRASE or run on a terminal");
     }
     st.have_passphrase = true;
     return ok(st.passphrase);
@@ -289,14 +305,16 @@ Result<void> save_file_secrets(FileState &st, const std::map<std::string, std::s
     auto pass = passphrase_of(st);
     if (!pass.ok) return fail(pass.error.code, pass.error.message);
     unsigned char salt[kSaltLen], iv[kIvLen], key[32], tag[kTagLen];
-    if (RAND_bytes(salt, sizeof(salt)) != 1 || RAND_bytes(iv, sizeof(iv)) != 1) return fail(ErrorCode::DecodeFailed, "no random bytes available");
+    if (RAND_bytes(salt, sizeof(salt)) != 1 || RAND_bytes(iv, sizeof(iv)) != 1)
+        return fail(ErrorCode::DecodeFailed, "no random bytes available");
     if (!derive_key(pass.value, salt, key)) return fail(ErrorCode::DecodeFailed, "key derivation failed");
     const std::string plain = encode_map(m);
     std::string cipher(plain.size(), '\0');
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     int n = 0, total = 0;
     bool good = EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, key, iv) == 1 &&
-                EVP_EncryptUpdate(ctx, reinterpret_cast<unsigned char *>(cipher.data()), &n, reinterpret_cast<const unsigned char *>(plain.data()), static_cast<int>(plain.size())) == 1;
+                EVP_EncryptUpdate(ctx, reinterpret_cast<unsigned char *>(cipher.data()), &n,
+                                  reinterpret_cast<const unsigned char *>(plain.data()), static_cast<int>(plain.size())) == 1;
     total = n;
     good = good && EVP_EncryptFinal_ex(ctx, reinterpret_cast<unsigned char *>(cipher.data()) + total, &n) == 1 &&
            EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, static_cast<int>(kTagLen), tag) == 1;
@@ -342,7 +360,8 @@ Result<std::string> file_get(void *state, std::string_view name) {
     auto all = load_file_secrets(st);
     if (!all.ok) return fail<std::string>(all.error.code, all.error.message);
     auto it = all.value.find(std::string(name));
-    if (it == all.value.end()) return fail<std::string>(ErrorCode::KeyNotFound, "no secret named '" + std::string(name) + "' in the encrypted file");
+    if (it == all.value.end())
+        return fail<std::string>(ErrorCode::KeyNotFound, "no secret named '" + std::string(name) + "' in the encrypted file");
     return ok(it->second);
 }
 
@@ -414,7 +433,8 @@ Result<void> save_secret_index(const std::string &path, const std::vector<Secret
         out += i ? ",\n    {" : "\n    {";
         out += "\"name\": \"" + json_escape(entries[i].name) + "\", \"bindings\": [";
         for (size_t b = 0; b < entries[i].bindings.size(); ++b)
-            out += std::string(b ? ", " : "") + "{\"consumer\": \"" + json_escape(entries[i].bindings[b].consumer) + "\", \"identity\": \"" + json_escape(entries[i].bindings[b].identity) + "\"}";
+            out += std::string(b ? ", " : "") + "{\"consumer\": \"" + json_escape(entries[i].bindings[b].consumer) +
+                   "\", \"identity\": \"" + json_escape(entries[i].bindings[b].identity) + "\"}";
         out += "]}";
     }
     out += entries.empty() ? "]\n}\n" : "\n  ]\n}\n";
@@ -443,7 +463,8 @@ std::string consumer_identity(const std::vector<std::string> &parts) {
     return agent::hub::sha256_hex(joined);
 }
 
-SecretAccess check_secret_access(const std::vector<SecretEntry> &index, std::string_view name, std::string_view consumer, std::string_view identity) {
+SecretAccess check_secret_access(const std::vector<SecretEntry> &index, std::string_view name, std::string_view consumer,
+                                 std::string_view identity) {
     const auto it = std::find_if(index.begin(), index.end(), [&](const SecretEntry &e) { return e.name == name; });
     if (it == index.end()) return SecretAccess::UnknownSecret;
     bool same_consumer = false;
@@ -473,13 +494,18 @@ Result<std::string> resolve_secret_placeholders(std::string_view text, const Sec
         switch (check_secret_access(index, name, consumer, identity)) {
         case SecretAccess::Allowed: break;
         case SecretAccess::UnknownSecret:
-            return fail<std::string>(ErrorCode::KeyNotFound, "secret '" + std::string(name) + "' does not exist: add it with `agent secret set " + std::string(name) + "`");
+            return fail<std::string>(ErrorCode::KeyNotFound, "secret '" + std::string(name) +
+                                                                 "' does not exist: add it with `agent secret set " + std::string(name) +
+                                                                 "`");
         case SecretAccess::NotBound:
-            return fail<std::string>(ErrorCode::PermissionDenied, "secret '" + std::string(name) + "' is not bound to " + std::string(consumer) + ": allow it with `agent secret bind " +
+            return fail<std::string>(ErrorCode::PermissionDenied, "secret '" + std::string(name) + "' is not bound to " +
+                                                                      std::string(consumer) + ": allow it with `agent secret bind " +
                                                                       std::string(name) + " " + std::string(consumer) + "`");
         case SecretAccess::IdentityChanged:
-            return fail<std::string>(ErrorCode::PermissionDenied, std::string(consumer) + " now runs something different from what secret '" + std::string(name) +
-                                                                      "' was approved for; approve it again with `agent secret bind " + std::string(name) + " " + std::string(consumer) + "`");
+            return fail<std::string>(ErrorCode::PermissionDenied,
+                                     std::string(consumer) + " now runs something different from what secret '" + std::string(name) +
+                                         "' was approved for; approve it again with `agent secret bind " + std::string(name) + " " +
+                                         std::string(consumer) + "`");
         }
         auto value = backend.get(backend.state, name);
         if (!value.ok) return fail<std::string>(value.error.code, value.error.message);
@@ -499,7 +525,8 @@ Result<std::shared_ptr<SecretContext>> load_secret_context(const std::string &ho
     return ok(std::move(ctx));
 }
 
-Result<std::string> cli_resolve_secrets(std::string_view text, const SecretRequest &who, std::vector<std::string> &secret_values, void *user_data) {
+Result<std::string> cli_resolve_secrets(std::string_view text, const SecretRequest &who, std::vector<std::string> &secret_values,
+                                        void *user_data) {
     const auto *ctx = static_cast<const SecretContext *>(user_data);
     if (!ctx) return fail<std::string>(ErrorCode::InvalidConfig, "no secrets are configured");
     const std::vector<std::string> parts(who.identity_parts.begin(), who.identity_parts.end());

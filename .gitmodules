@@ -13,3 +13,6 @@
 [submodule "vendor/audio.cpp"]
 	path = vendor/audio.cpp
 	url = https://github.com/0xShug0/audio.cpp.git
+[submodule "vendor/FTXUI"]
+	path = vendor/FTXUI
+	url = https://github.com/ArthurSonzogni/FTXUI.git

@@ -10,7 +10,6 @@
 
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/hub.hpp>
-
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -44,8 +43,8 @@ struct SkillFiles {
 Result<SkillFiles> find_skill_in_tree(std::string_view tree_json, std::string_view skill_id);
 
 struct SkillInstall {
-    std::string dir;                 // where the skill was written
-    std::vector<std::string> files;  // relative paths
+    std::string dir;                  // where the skill was written
+    std::vector<std::string> files;   // relative paths
     std::vector<std::string> scripts; // files that are not documentation (they can only run through run_command)
 };
 // Finds the skill's folder in its GitHub repository (one API call) without downloading it, so the user can be shown
@@ -54,7 +53,8 @@ Result<SkillFiles> plan_skill(const SkillHit &hit, const agent::hub::HttpOptions
 
 // Downloads the planned files into <skills_dir>/<skill>/ and writes .source.json (the repository and a SHA-256 per
 // file) next to them. The skill appears only when every file arrived.
-Result<SkillInstall> install_skill(const SkillHit &hit, const SkillFiles &files, const std::string &skills_dir, const agent::hub::HttpOptions &http);
+Result<SkillInstall> install_skill(const SkillHit &hit, const SkillFiles &files, const std::string &skills_dir,
+                                   const agent::hub::HttpOptions &http);
 
 // ---------------------------------------------------------------- MCP registry
 
@@ -70,7 +70,7 @@ struct McpPackage {
     std::string type; // "npm", "pypi", "oci", ...
     std::string identifier;
     std::string version;
-    std::string transport; // "stdio", ...
+    std::string transport;              // "stdio", ...
     std::vector<std::string> arguments; // positional package arguments
     std::vector<McpEnvVar> env;
 };
@@ -89,10 +89,10 @@ std::string mcp_search_url(std::string_view query, int limit = 20);
 Result<std::vector<McpHit>> parse_mcp_search(std::string_view json);
 
 struct McpEntry {
-    std::string server_name;           // key in mcpServers: the last part of the registry name
-    std::string json;                  // a complete {"mcpServers": {...}} document
-    std::vector<std::string> secrets;  // secret names the entry refers to (agent secret set NAME, then bind)
-    std::vector<std::string> to_fill;  // required settings that have no default (edit the file)
+    std::string server_name;          // key in mcpServers: the last part of the registry name
+    std::string json;                 // a complete {"mcpServers": {...}} document
+    std::vector<std::string> secrets; // secret names the entry refers to (agent secret set NAME, then bind)
+    std::vector<std::string> to_fill; // required settings that have no default (edit the file)
 };
 // Builds the config for the first package we can start (npm -> npx, pypi -> uvx; `agent runtime` provides both).
 Result<McpEntry> mcp_entry_for(const McpHit &hit);

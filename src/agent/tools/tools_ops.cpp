@@ -83,7 +83,9 @@ Result<ToolResult> default_execute(Session &session, std::string_view name, std:
     if (!tool_allowed(ambient::allowed_tools, name))
         return fail<ToolResult>(ErrorCode::KeyNotFound, "Tool not allowed for the current agent node: " + std::string(name));
     if (!tool_visible(session, ambient::allowed_tools, name))
-        return fail<ToolResult>(ErrorCode::KeyNotFound, "Tool '" + std::string(name) + "' is not loaded yet: call tool_search to find tools, then load_tool with the name.");
+        return fail<ToolResult>(ErrorCode::KeyNotFound,
+                                "Tool '" + std::string(name) +
+                                    "' is not loaded yet: call tool_search to find tools, then load_tool with the name.");
 
     if (session.config.permission_check) {
         auto decision = session.config.permission_check(name, arguments, session.config.permission_user_data);

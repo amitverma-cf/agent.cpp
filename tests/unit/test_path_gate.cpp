@@ -4,7 +4,6 @@
 
 #include <agent-cpp/agent.hpp>
 #include <catch_amalgamated.hpp>
-
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -134,7 +133,8 @@ TEST_CASE("path gate: command lines are searched for paths outside the workspace
     const std::string other = "C:\\Users\\someone\\docs\\a.txt";
     const std::string inside = (ws / "x.txt").string();
 #else
-    const std::string other = (ws.parent_path() / "agent_gate_elsewhere" / "a.txt").string(); // a sibling: outside the workspace, not a system folder
+    const std::string other =
+        (ws.parent_path() / "agent_gate_elsewhere" / "a.txt").string(); // a sibling: outside the workspace, not a system folder
     const std::string inside = (ws / "x.txt").string();
 #endif
     auto found = external_paths_in_command("cat " + other + " && echo hi > " + inside, ws);

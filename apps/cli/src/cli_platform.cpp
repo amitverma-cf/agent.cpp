@@ -5,8 +5,8 @@
 
 #include <algorithm>
 #include <cerrno>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -221,7 +221,7 @@ bool read_hidden_line(const char *prompt, std::string &out) {
     const bool got = std::getline(std::cin, out).good() || !out.empty();
     SetConsoleMode(in, mode);
 #else
-    struct termios old {};
+    struct termios old{};
     if (tcgetattr(STDIN_FILENO, &old) != 0) return false;
     struct termios quiet = old;
     quiet.c_lflag &= static_cast<tcflag_t>(~ECHO);

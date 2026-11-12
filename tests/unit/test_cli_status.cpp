@@ -3,9 +3,8 @@
 
 #include "status_view.hpp"
 
-#include <catch_amalgamated.hpp>
-
 #include <algorithm>
+#include <catch_amalgamated.hpp>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -91,11 +90,10 @@ TEST_CASE("cli: render_status turns a node table into text", "[cli]") {
     apply_event(rows, ev(T::NodeStart, "review", 4000), "agent");
     apply_event(rows, ev(T::Interrupt, "review", 4100, {}, "needs approval"), "agent");
 
-    CHECK(render_status(rows, 6500) ==
-          "plan    agent     done         1.5s\n"
-          "left    agent     running      4.0s  tool: read_file\n"
-          "right   function  error        1.5s  - boom\n"
-          "review  agent     interrupted  0.1s  - needs approval\n");
+    CHECK(render_status(rows, 6500) == "plan    agent     done         1.5s\n"
+                                       "left    agent     running      4.0s  tool: read_file\n"
+                                       "right   function  error        1.5s  - boom\n"
+                                       "review  agent     interrupted  0.1s  - needs approval\n");
 
     // Long lines are cut, ending in "...".
     const std::string narrow = render_status(rows, 6500, 30);
@@ -234,10 +232,9 @@ TEST_CASE("cli: StatusView follows a parallel graph through GraphRun::on_event",
     REQUIRE(init.ok);
     agent::Session session = std::move(init.value);
 
-    agent::Graph g = agent::make_sequential(
-        "status", {agent::make_parallel("fan", {agent::make_graph(function_node("left", noop_node)),
-                                                agent::make_graph(function_node("right", noop_node))}),
-                   agent::make_graph(function_node("join", noop_node))});
+    agent::Graph g = agent::make_sequential("status", {agent::make_parallel("fan", {agent::make_graph(function_node("left", noop_node)),
+                                                                                    agent::make_graph(function_node("right", noop_node))}),
+                                                       agent::make_graph(function_node("join", noop_node))});
 
     std::FILE *f = std::tmpfile();
     REQUIRE(f != nullptr);

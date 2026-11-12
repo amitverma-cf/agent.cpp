@@ -34,7 +34,8 @@ Before submitting your PR:
   - `scripts/test.sh`: build and run the tests (`--with-engines`, `--all`).
   - `scripts/update-deps.sh`: the one dependency update script (`list`, `bump NAME`, `ort`).
   - `scripts/package.sh`: the Linux release tarball.
-  - `scripts/setup-hooks.sh`: enables `.githooks` (format check on commit, build and tests on push).
+  - `scripts/format.sh`: runs clang-format on the C++ files. Run it only when you are about to push, not while editing.
+  - `scripts/setup-hooks.sh`: enables `.githooks`: format check, build and tests before a push. Nothing runs on commit.
 - **Test your changes**:
   - Run all unit and integration tests: tests are written with [Catch2](https://github.com/catchorg/Catch2) (`tests/`), built as the `test_agent` executable, and registered individually with CTest via `catch_discover_tests`. Run all of them with `ctest --test-dir build --output-on-failure`, or filter to a subsystem with Catch2 tags, e.g. `./build/test_agent "[memory]"`.
   - Build with `-DAGENT_ENABLE_SANITIZERS=ON` (AddressSanitizer + UBSan) and run `ctest`.
@@ -56,7 +57,7 @@ After submitting your PR:
 - **Formatting**:
     - Use 4 spaces for indentation.
     - Brackets on the same line.
-    - Pointer/reference alignment: `void * ptr`, `int & a`.
+    - Pointer/reference alignment: `void *ptr`, `int &a` (what `.clang-format` produces).
     - Use code formatting tools to ensure consistency.
 - **Naming**:
     - Use `snake_case` for functions and variables; `PascalCase` for types/structs (`Session`, `Config`, `Conversation`, ...).

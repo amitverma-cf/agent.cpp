@@ -683,8 +683,8 @@ void write_solid_png(const std::filesystem::path &path, unsigned w, unsigned h, 
     for (size_t off = 0; off < raw.size(); off += 65535) {
         const size_t len = std::min<size_t>(65535, raw.size() - off);
         z.push_back(off + len >= raw.size() ? 1 : 0);
-        z.insert(z.end(), {static_cast<unsigned char>(len & 255), static_cast<unsigned char>(len >> 8), static_cast<unsigned char>(~len & 255),
-                           static_cast<unsigned char>((~len >> 8) & 255)});
+        z.insert(z.end(), {static_cast<unsigned char>(len & 255), static_cast<unsigned char>(len >> 8),
+                           static_cast<unsigned char>(~len & 255), static_cast<unsigned char>((~len >> 8) & 255)});
         z.insert(z.end(), raw.begin() + static_cast<long>(off), raw.begin() + static_cast<long>(off + len));
     }
     const uint32_t adler = (bsum << 16) | a;
@@ -738,7 +738,8 @@ TEST_CASE("multimodal embedding: an image lands nearer the text that describes i
     CHECK(r.value[0].size() == r.value[2].size());
     const float red_red = dot(r.value[2], r.value[0]), red_blue = dot(r.value[2], r.value[1]);
     const float blue_blue = dot(r.value[3], r.value[1]), blue_red = dot(r.value[3], r.value[0]);
-    WARN("red image: vs red text " << red_red << ", vs blue text " << red_blue << "; blue image: vs blue text " << blue_blue << ", vs red text " << blue_red);
+    WARN("red image: vs red text " << red_red << ", vs blue text " << red_blue << "; blue image: vs blue text " << blue_blue
+                                   << ", vs red text " << blue_red);
     CHECK(red_red > red_blue);
     CHECK(blue_blue > blue_red);
 }

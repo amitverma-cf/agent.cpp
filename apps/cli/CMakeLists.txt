@@ -51,6 +51,21 @@ else()
     target_compile_definitions(agent_cli_core PRIVATE AGENT_CLI_NO_AUDIO_DEVICE)
 endif()
 
+# The full-screen chat interface (FTXUI, MIT, vendor/FTXUI). OFF keeps only the plain line-based chat.
+option(AGENT_CLI_TUI "Build the full-screen chat interface (FTXUI) into the agent CLI" ON)
+if(AGENT_CLI_TUI)
+    set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+    set(FTXUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(FTXUI_BUILD_MODULES OFF CACHE BOOL "" FORCE)
+    set(FTXUI_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    add_subdirectory(${PROJECT_SOURCE_DIR}/vendor/FTXUI ${CMAKE_BINARY_DIR}/vendor-ftxui EXCLUDE_FROM_ALL)
+    target_sources(agent_cli_core PRIVATE src/tui.cpp)
+    target_include_directories(agent_cli_core SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/vendor/FTXUI/include)
+    target_link_libraries(agent_cli_core PRIVATE ftxui::component ftxui::dom ftxui::screen)
+    target_compile_definitions(agent_cli_core PUBLIC AGENT_CLI_HAS_TUI)
+endif()
+
 # The library target is already called `agent`, so the executable target gets another name and
 # OUTPUT_NAME agent. It lands in the top of the build tree, where it finds engine plugins under
 # engines/<name>/ (installed layout: <prefix>/bin/agent + <prefix>/lib/agent/engines/).

@@ -4,7 +4,6 @@
 // engine as a tested sibling.
 
 #include <agent-cpp/hub.hpp>
-
 #include <algorithm>
 
 namespace agent::hub {
@@ -46,7 +45,10 @@ constexpr RegistryPart kJulia[] = {{"ggml-org/Julia-1-GGUF:Q8_0", ""}};
 
 constexpr RegistryEntry kRegistry[] = {
     // alias, task, engine, parts, size MiB, engine options, notes, tested
-    {"qwen3.5-4b", "text_gen", "llama", kQwen35_4, 3704, "", "recommended all-round model for 8 GB: graph suite 7/7, function calling 88% on BFCL, image input (projector pulled automatically), prompt-lookup speculation 1.9x; has an MTP head", true},
+    {"qwen3.5-4b", "text_gen", "llama", kQwen35_4, 3704, "",
+     "recommended all-round model for 8 GB: graph suite 7/7, function calling 88% on BFCL, image input (projector pulled automatically), "
+     "prompt-lookup speculation 1.9x; has an MTP head",
+     true},
     {"qwen2.5-0.5b", "text_gen", "llama", kQwen05, 469, "", "chat, tool calls, decide; the default test model", true},
     {"qwen3-1.7b", "text_gen", "llama", kQwen3_17, 1749, "", "thinking model; Q8_0", false},
     {"qwen3-4b", "text_gen", "llama", kQwen3_4, 2382, "", "best small tool-calling model that fits 8 GB", false},
@@ -68,14 +70,19 @@ constexpr RegistryEntry kRegistry[] = {
     {"sd-turbo", "image_gen", "sdcpp", kSdTurbo, 1930, "", "", false},
     {"parakeet-tdt", "asr", "audiocpp", kParakeet, 874, "", "25 European languages, word timestamps; ~18x realtime on 4 CPU cores", true},
     {"moonshine-tiny", "asr", "audiocpp", kMoonshine, 58, "", "English, ~100x realtime on 4 CPU cores", false},
-    {"crisperwhisper-large", "asr", "audiocpp", kCrisperWhisper, 937, "", "Whisper large based, 99 languages, verbatim; slower than realtime on 4 CPU cores", false},
-    {"pocket-tts", "tts", "audiocpp", kPocketTts, 120, "", "small voice model (en fr de it pt es); needs a voice preset or reference audio, see its model card", false},
-    {"supertonic-3", "tts", "audiocpp", kSupertonic, 434, "", "30+ languages, 44.1 kHz; the default speech model, no extra dependencies", true},
+    {"crisperwhisper-large", "asr", "audiocpp", kCrisperWhisper, 937, "",
+     "Whisper large based, 99 languages, verbatim; slower than realtime on 4 CPU cores", false},
+    {"pocket-tts", "tts", "audiocpp", kPocketTts, 120, "",
+     "small voice model (en fr de it pt es); needs a voice preset or reference audio, see its model card", false},
+    {"supertonic-3", "tts", "audiocpp", kSupertonic, 434, "", "30+ languages, 44.1 kHz; the default speech model, no extra dependencies",
+     true},
     {"firered-vad", "vad", "audiocpp", kFireRedVad, 3, "", "voice activity detection", true},
-    {"nemotron-diar", "diarize", "audiocpp", kNemotronDiar, 102, "", "speaker diarization; separated two synthetic voices correctly in testing (Sortformer v1 did not)", true},
+    {"nemotron-diar", "diarize", "audiocpp", kNemotronDiar, 102, "",
+     "speaker diarization; separated two synthetic voices correctly in testing (Sortformer v1 did not)", true},
     {"minilm-onnx", "generic", "onnx", kMiniLm, 22, "", "feed input_ids / attention_mask / token_type_ids tensors", true},
     {"trellis-coarse", "mesh_gen", "trellis", kTrellis, 3300, "", "image to 3D, coarse path; ~6 min and 3.5 GB RAM on 4 CPU cores", true},
-    {"julia-1", "decide", "llama", kJulia, 160, "", "native System One decision model; runs in process through llama.cpp's own handler", false},
+    {"julia-1", "decide", "llama", kJulia, 160, "", "native System One decision model; runs in process through llama.cpp's own handler",
+     false},
 };
 
 } // namespace

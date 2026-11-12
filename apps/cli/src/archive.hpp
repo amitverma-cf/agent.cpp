@@ -4,7 +4,6 @@
 // Entries that would land outside the destination (absolute paths, "..", drive letters) are refused.
 
 #include <agent-cpp/agent.hpp>
-
 #include <cstdint>
 #include <span>
 #include <string>

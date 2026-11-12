@@ -59,7 +59,7 @@ struct GenSettings {
     bool vae_tiling = false;
     std::string negative_prompt;
     // VIDEO_GEN
-    int video_frames = 17;            // Wan wants 4n+1
+    int video_frames = 17; // Wan wants 4n+1
     int fps = 16;
     float flow_shift = INFINITY;      // model default
     std::string video_format = "avi"; // "avi" (MJPEG) or "png" (one file per frame)
@@ -561,8 +561,7 @@ int32_t sd_engine_run(void *instance, const agent_request *req, agent_response *
         return fail(inst, AGENT_ERR_UNSUPPORTED, "sdcpp: only IMAGE_GEN, IMAGE_EDIT and VIDEO_GEN are supported");
     if (video && !inst->video)
         return fail(inst, AGENT_ERR_UNSUPPORTED, "sdcpp: the loaded model does not support video generation (e.g. Wan, LTX)");
-    if (!video && !inst->image)
-        return fail(inst, AGENT_ERR_UNSUPPORTED, "sdcpp: the loaded model is a video model; use VIDEO_GEN");
+    if (!video && !inst->image) return fail(inst, AGENT_ERR_UNSUPPORTED, "sdcpp: the loaded model is a video model; use VIDEO_GEN");
 
     const agent_message *user = last_user_message(req);
     std::string prompt;
@@ -656,8 +655,9 @@ int32_t sd_engine_run(void *instance, const agent_request *req, agent_response *
         if (result) free_sd_image_generation_result(result);
         if (vresult) free_sd_video_generation_result(vresult);
         if (cancelled) return fail(inst, AGENT_ERR_CANCELLED, "sdcpp: cancelled");
-        return fail(inst, AGENT_ERR_DECODE_FAILED, std::string("sdcpp: ") + (video ? "video" : "image") + " generation failed" +
-                                                       (active.last_error.empty() ? std::string() : ": " + active.last_error));
+        return fail(inst, AGENT_ERR_DECODE_FAILED,
+                    std::string("sdcpp: ") + (video ? "video" : "image") + " generation failed" +
+                        (active.last_error.empty() ? std::string() : ": " + active.last_error));
     }
 
     std::error_code ec;

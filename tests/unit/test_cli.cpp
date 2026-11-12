@@ -1,7 +1,6 @@
 #include "cli_core.hpp"
 
 #include <catch_amalgamated.hpp>
-
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -67,15 +66,15 @@ TEST_CASE("cli: parses commands, subcommands, flags and short aliases", "[cli]")
 
 TEST_CASE("cli: rejects bad command lines", "[cli]") {
     CHECK_FALSE(parse({"frobnicate"}).ok);
-    CHECK_FALSE(parse({"engine"}).ok);                    // missing subcommand
-    CHECK_FALSE(parse({"engine", "list"}).ok);            // unknown subcommand
-    CHECK_FALSE(parse({"engine", "add"}).ok);             // missing plugin path
-    CHECK_FALSE(parse({"engine", "ls", "extra"}).ok);     // too many arguments
-    CHECK_FALSE(parse({"chat", "--model"}).ok);           // flag without value
-    CHECK_FALSE(parse({"chat", "--name", "x"}).ok);       // flag of another command
-    CHECK_FALSE(parse({"chat", "--yes=1"}).ok);           // bool flag with a value
-    CHECK_FALSE(parse({"chat", "-z"}).ok);                // unknown short option
-    CHECK_FALSE(parse({"run"}).ok);                       // missing graph file
+    CHECK_FALSE(parse({"engine"}).ok);                // missing subcommand
+    CHECK_FALSE(parse({"engine", "list"}).ok);        // unknown subcommand
+    CHECK_FALSE(parse({"engine", "add"}).ok);         // missing plugin path
+    CHECK_FALSE(parse({"engine", "ls", "extra"}).ok); // too many arguments
+    CHECK_FALSE(parse({"chat", "--model"}).ok);       // flag without value
+    CHECK_FALSE(parse({"chat", "--name", "x"}).ok);   // flag of another command
+    CHECK_FALSE(parse({"chat", "--yes=1"}).ok);       // bool flag with a value
+    CHECK_FALSE(parse({"chat", "-z"}).ok);            // unknown short option
+    CHECK_FALSE(parse({"run"}).ok);                   // missing graph file
     auto e = parse({"model", "pull", "a", "--bogus"});
     REQUIRE_FALSE(e.ok);
     CHECK(e.error.message.find("--bogus") != std::string::npos);
@@ -220,9 +219,8 @@ TEST_CASE("cli: engines run out of process unless --inprocess or engines.json sa
 }
 
 TEST_CASE("cli: model spec resolution", "[cli]") {
-    const std::vector<ModelRef> catalog = {{"stories260K", "/models/stories260K.gguf"},
-                                           {"sd-turbo", "/models/sd-turbo.safetensors"},
-                                           {"qwen", "/models/qwen.gguf"}};
+    const std::vector<ModelRef> catalog = {
+        {"stories260K", "/models/stories260K.gguf"}, {"sd-turbo", "/models/sd-turbo.safetensors"}, {"qwen", "/models/qwen.gguf"}};
 
     auto by_name = resolve_model("qwen", {}, catalog, exists_all);
     REQUIRE(by_name.ok);
@@ -408,8 +406,8 @@ TEST_CASE("cli: turn footer shows prompt speed, generation speed and KV size", "
 
 TEST_CASE("cli: the usage text names every command main() dispatches", "[cli]") {
     const std::string usage = agent::cli::usage_text();
-    for (const char *command : {"init", "doctor", "clean", "secret", "setup", "engine", "model", "chat", "run", "voice", "task", "version", "runtime", "skill", "mcp",
-                                "sandbox"}) {
+    for (const char *command : {"init", "doctor", "clean", "secret", "setup", "engine", "model", "chat", "run", "voice", "task", "version",
+                                "runtime", "skill", "mcp", "sandbox"}) {
         INFO(command);
         CHECK(usage.find(std::string("  ") + command) != std::string::npos);
     }
@@ -433,3 +431,25 @@ TEST_CASE("--no-sandbox is a global flag that turns the sandboxes off", "[cli]")
     CHECK_FALSE(off.tool_sandbox.enabled);
     set_no_sandbox(false);
 }
+
+#if defined(AGENT_CLI_HAS_TUI)
+#include "tui.hpp"
+
+TEST_CASE("tui: markdown-lite layout", "[cli][tui]") {
+    const std::string md = "# Title\n\nSome **bold** and `code` words that are long enough to wrap around a narrow screen.\n\n- first "
+                           "item\n- second item\n\n```\nint x = 1;\n```\n";
+    const std::string text = render_markdown_text(md, 30);
+    CHECK(text.find("Title") != std::string::npos);
+    CHECK(text.find("bold") != std::string::npos);
+    CHECK(text.find("**") == std::string::npos); // the markers are not shown
+    CHECK(text.find("`") == std::string::npos);
+    CHECK(text.find("first item") != std::string::npos);
+    CHECK(text.find("int x = 1;") != std::string::npos);
+    CHECK(text.find("narrow screen.") != std::string::npos); // the long sentence wrapped, none of it was cut off
+    CHECK(text.find("```") == std::string::npos);
+    // Wrapped to 30 columns: more than one line holds the long sentence.
+    size_t lines = 0;
+    for (char c : text) lines += c == '\n';
+    CHECK(lines >= 8);
+}
+#endif

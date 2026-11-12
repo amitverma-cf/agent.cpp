@@ -1,7 +1,7 @@
 // docs/guides/writing-a-graph.md: graphs from C++ builders and from agent.json, scoped state,
 // checkpointers, interrupts, time travel (fork) and per-node models from a ModelRegistry.
 //
-//   guide_graph <engine plugin> [examples/graphs dir] [workspace]
+//   guide_graph <engine plugin> [examples/03-graph-workflow/graphs dir] [workspace]
 //
 // Runs on any text engine; with the mock engine plugin every Agent node replies "echo: <input>".
 
@@ -242,7 +242,7 @@ void from_json(agent::Session &session, const std::string &examples_dir) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: %s <engine plugin> [examples/graphs dir] [workspace]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s <engine plugin> [examples/03-graph-workflow/graphs dir] [workspace]\n", argv[0]);
         return 2;
     }
     const std::string engine = argv[1];

@@ -427,9 +427,8 @@ TEST_CASE("sound devices fail cleanly when there are none", "[voice][audio]") {
 
 TEST_CASE("agent voice flags parse and validate", "[voice][cli]") {
     const std::vector<std::string_view> args = {
-        "voice", "--asr-model",  "/m/whisper", "--tts-model",  "/m/tts", "--vad-model", "/m/vad.gguf", "-m",
-        "qwen",  "--input-wav",  "q.wav",      "--output-dir", "out",       "--max-turns", "1",           "--barge-in",
-        "-y",    "--voice", "alba"};
+        "voice", "--asr-model",  "/m/whisper", "--tts-model", "/m/tts", "--vad-model", "/m/vad.gguf", "-m",      "qwen", "--input-wav",
+        "q.wav", "--output-dir", "out",        "--max-turns", "1",      "--barge-in",  "-y",          "--voice", "alba"};
     auto cl = parse_command_line(args);
     REQUIRE(cl.ok);
     REQUIRE(cl.value.command == "voice");

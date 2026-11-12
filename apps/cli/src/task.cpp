@@ -5,18 +5,16 @@
 
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/engine_abi.h>
-
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <simdjson.h>
 #include <string>
 #include <string_view>
 #include <vector>
-
-#include <simdjson.h>
 
 namespace agent::cli {
 
@@ -29,11 +27,21 @@ struct CapName {
     std::string_view name;
 };
 constexpr CapName kCaps[] = {
-    {AGENT_CAP_TEXT_GEN, "text_gen"},   {AGENT_CAP_OCR, "ocr"},           {AGENT_CAP_ASR, "asr"},
-    {AGENT_CAP_TTS, "tts"},             {AGENT_CAP_VAD, "vad"},           {AGENT_CAP_DIARIZE, "diarize"},
-    {AGENT_CAP_IMAGE_GEN, "image_gen"}, {AGENT_CAP_IMAGE_EDIT, "image_edit"}, {AGENT_CAP_VIDEO_GEN, "video_gen"},
-    {AGENT_CAP_MESH_GEN, "mesh_gen"},   {AGENT_CAP_EMBED, "embed"},       {AGENT_CAP_RERANK, "rerank"},
-    {AGENT_CAP_DECIDE, "decide"},       {AGENT_CAP_CLASSIFY, "classify"}, {AGENT_CAP_GENERIC, "generic"},
+    {AGENT_CAP_TEXT_GEN, "text_gen"},
+    {AGENT_CAP_OCR, "ocr"},
+    {AGENT_CAP_ASR, "asr"},
+    {AGENT_CAP_TTS, "tts"},
+    {AGENT_CAP_VAD, "vad"},
+    {AGENT_CAP_DIARIZE, "diarize"},
+    {AGENT_CAP_IMAGE_GEN, "image_gen"},
+    {AGENT_CAP_IMAGE_EDIT, "image_edit"},
+    {AGENT_CAP_VIDEO_GEN, "video_gen"},
+    {AGENT_CAP_MESH_GEN, "mesh_gen"},
+    {AGENT_CAP_EMBED, "embed"},
+    {AGENT_CAP_RERANK, "rerank"},
+    {AGENT_CAP_DECIDE, "decide"},
+    {AGENT_CAP_CLASSIFY, "classify"},
+    {AGENT_CAP_GENERIC, "generic"},
 };
 
 std::string mime_for(const fs::path &p) {
@@ -97,29 +105,53 @@ std::vector<std::string> split(std::string_view s, char sep) {
 bool parse_tensor_arg(std::string_view arg, TensorBuf &out, std::string &err) {
     const size_t eq = arg.find('=');
     const auto head = split(arg.substr(0, eq), ':');
-    if (head.size() != 3) { err = "expected name:dtype:shape=values"; return false; }
+    if (head.size() != 3) {
+        err = "expected name:dtype:shape=values";
+        return false;
+    }
     out.name = head[0];
     if (head[1] == "f32") out.dtype = DType::Float32;
     else if (head[1] == "i64") out.dtype = DType::Int64;
     else if (head[1] == "i32") out.dtype = DType::Int32;
     else if (head[1] == "u8") out.dtype = DType::UInt8;
-    else { err = "dtype must be f32, i64, i32 or u8"; return false; }
+    else {
+        err = "dtype must be f32, i64, i32 or u8";
+        return false;
+    }
     size_t count = 1;
     for (const std::string &d : split(head[2], ',')) {
         const long long v = std::atoll(d.c_str());
-        if (v <= 0) { err = "shape dimensions must be positive"; return false; }
+        if (v <= 0) {
+            err = "shape dimensions must be positive";
+            return false;
+        }
         out.shape.push_back(v);
         count *= static_cast<size_t>(v);
     }
     const auto values = eq == std::string_view::npos ? std::vector<std::string>{} : split(arg.substr(eq + 1), ',');
-    if (values.size() != count) { err = "shape has " + std::to_string(count) + " elements but " + std::to_string(values.size()) + " values were given"; return false; }
+    if (values.size() != count) {
+        err = "shape has " + std::to_string(count) + " elements but " + std::to_string(values.size()) + " values were given";
+        return false;
+    }
     out.bytes.resize(count * dtype_size(out.dtype));
     for (size_t i = 0; i < count; ++i) {
         uint8_t *dst = out.bytes.data() + i * dtype_size(out.dtype);
         switch (out.dtype) {
-        case DType::Float32: { const float v = std::strtof(values[i].c_str(), nullptr); std::memcpy(dst, &v, 4); break; }
-        case DType::Int64: { const int64_t v = std::strtoll(values[i].c_str(), nullptr, 10); std::memcpy(dst, &v, 8); break; }
-        case DType::Int32: { const int32_t v = static_cast<int32_t>(std::strtol(values[i].c_str(), nullptr, 10)); std::memcpy(dst, &v, 4); break; }
+        case DType::Float32: {
+            const float v = std::strtof(values[i].c_str(), nullptr);
+            std::memcpy(dst, &v, 4);
+            break;
+        }
+        case DType::Int64: {
+            const int64_t v = std::strtoll(values[i].c_str(), nullptr, 10);
+            std::memcpy(dst, &v, 8);
+            break;
+        }
+        case DType::Int32: {
+            const int32_t v = static_cast<int32_t>(std::strtol(values[i].c_str(), nullptr, 10));
+            std::memcpy(dst, &v, 4);
+            break;
+        }
         default: *dst = static_cast<uint8_t>(std::strtol(values[i].c_str(), nullptr, 10)); break;
         }
     }
@@ -138,9 +170,19 @@ void print_tensor(const TensorView &t) {
         const size_t n = g_all_values ? t.data.size() / esize : std::min<size_t>(4, t.data.size() / esize);
         std::printf("  first:");
         for (size_t i = 0; i < n; ++i) {
-            if (t.dtype == DType::Float32) { float v = 0; std::memcpy(&v, t.data.data() + i * esize, esize); std::printf(" %.4g", static_cast<double>(v)); }
-            else if (t.dtype == DType::Int64) { int64_t v = 0; std::memcpy(&v, t.data.data() + i * esize, esize); std::printf(" %lld", static_cast<long long>(v)); }
-            else { int32_t v = 0; std::memcpy(&v, t.data.data() + i * esize, esize); std::printf(" %d", v); }
+            if (t.dtype == DType::Float32) {
+                float v = 0;
+                std::memcpy(&v, t.data.data() + i * esize, esize);
+                std::printf(" %.4g", static_cast<double>(v));
+            } else if (t.dtype == DType::Int64) {
+                int64_t v = 0;
+                std::memcpy(&v, t.data.data() + i * esize, esize);
+                std::printf(" %lld", static_cast<long long>(v));
+            } else {
+                int32_t v = 0;
+                std::memcpy(&v, t.data.data() + i * esize, esize);
+                std::printf(" %d", v);
+            }
         }
     }
     std::printf("\n");
@@ -178,7 +220,7 @@ int cmd_task(const CommandLine &cl, Context &ctx) {
     apply_sandbox_choice(cfg);
     cfg.engine_options = catalog_engine_options(ctx, model_path, std::string(cl.get("engine-options")));
     cfg.model = model_path;
-    cfg.auto_default_tools = false;  // a task is not a chat turn: keep the tool instructions out of the prompt
+    cfg.auto_default_tools = false; // a task is not a chat turn: keep the tool instructions out of the prompt
     cfg.workspace_dir = workspace_dir(ctx, cl.get("workspace"));
     // The file the user named is theirs to give: let a sandboxed engine read that one file.
     if (cl.has("file")) {
@@ -213,7 +255,9 @@ int cmd_task(const CommandLine &cl, Context &ctx) {
             tool_text.emplace_back(description);
             tool_text.emplace_back(schema);
             const size_t at = tool_text.size() - 3;
-            cfg.tools.push_back(Tool{.name = tool_text[at], .description = tool_text[at + 1], .parameter_schema = tool_text[at + 2],
+            cfg.tools.push_back(Tool{.name = tool_text[at],
+                                     .description = tool_text[at + 1],
+                                     .parameter_schema = tool_text[at + 2],
                                      .callback = [](std::string_view, void *) -> Result<std::string> { return ok(std::string()); }});
         }
     }
@@ -234,7 +278,8 @@ int cmd_task(const CommandLine &cl, Context &ctx) {
     for (const Flag &f : cl.flags) {
         if (f.name != "tensor") continue;
         TensorBuf buf;
-        if (std::string err; !parse_tensor_arg(f.value, buf, err)) return report_error(Error{ErrorCode::InvalidConfig, "--tensor " + f.value + ": " + err});
+        if (std::string err; !parse_tensor_arg(f.value, buf, err))
+            return report_error(Error{ErrorCode::InvalidConfig, "--tensor " + f.value + ": " + err});
         tensor_bufs.push_back(std::move(buf));
     }
     std::vector<TensorView> tensor_views;
@@ -253,9 +298,8 @@ int cmd_task(const CommandLine &cl, Context &ctx) {
     req.params_json = cl.get("params");
     if (cl.has("max-tokens")) req.max_tokens = std::atoi(std::string(cl.get("max-tokens")).c_str());
     req.on_progress = [](uint64_t step, uint64_t total, void *) {
-        if (total && (step == total || step % std::max<uint64_t>(1, total / 10) == 0)) std::fprintf(stderr, "[progress] %llu/%llu\n",
-                                                                                                    static_cast<unsigned long long>(step),
-                                                                                                    static_cast<unsigned long long>(total));
+        if (total && (step == total || step % std::max<uint64_t>(1, total / 10) == 0))
+            std::fprintf(stderr, "[progress] %llu/%llu\n", static_cast<unsigned long long>(step), static_cast<unsigned long long>(total));
     };
 
     if (task == AGENT_CAP_RERANK) {
@@ -267,7 +311,8 @@ int cmd_task(const CommandLine &cl, Context &ctx) {
         if (!scores.ok) return report_error(scores.error);
         std::printf("task: rerank  engine: %s\n", engine.value.name.c_str());
         for (size_t i = 0; i < scores.value.size(); ++i)
-            std::printf("score[%zu]: %.4f  %.*s\n", i, static_cast<double>(scores.value[i]), static_cast<int>(docs[i].size()), docs[i].data());
+            std::printf("score[%zu]: %.4f  %.*s\n", i, static_cast<double>(scores.value[i]), static_cast<int>(docs[i].size()),
+                        docs[i].data());
         return 0;
     }
 

@@ -3,7 +3,6 @@
 
 #include <agent-cpp/agent.hpp>
 #include <catch_amalgamated.hpp>
-
 #include <filesystem>
 #include <string>
 

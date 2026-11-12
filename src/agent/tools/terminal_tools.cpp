@@ -1,7 +1,6 @@
-#include "path_gate.hpp"
-#include <simdjson.h>
 #include "../utils/utils.hpp"
 #include "hal/process.hpp"
+#include "path_gate.hpp"
 
 #include <agent-cpp/agent.hpp>
 #include <filesystem>
@@ -30,7 +29,9 @@ Result<std::string> run_command(const std::string &ws, std::string_view args, co
         auto k = field.unescaped_key();
         if (k.error()) continue;
         if (k.value() == "command") {
-            { if (field.value().get_string().get(command_sv)) command_sv = {}; }
+            {
+                if (field.value().get_string().get(command_sv)) command_sv = {};
+            }
         } else if (k.value() == "timeout_seconds") {
             int64_t v = 0;
             if (!field.value().get_int64().get(v)) timeout_seconds = v;
@@ -92,7 +93,8 @@ Result<std::string> run_command_sandboxed_cb(std::string_view args, void *ud) {
         if (!parser.iterate(json).get(doc) && !doc["command"].get_string().get(command) && !ws.empty()) {
             const bool writes = command_looks_like_write(command);
             for (const std::filesystem::path &p : external_paths_in_command(command, ws)) {
-                if (path_access_allowed(ctx, "run_command", p, writes)) (writes ? policy.read_write_paths : policy.read_only_paths).push_back(p.string());
+                if (path_access_allowed(ctx, "run_command", p, writes))
+                    (writes ? policy.read_write_paths : policy.read_only_paths).push_back(p.string());
             }
         }
     }

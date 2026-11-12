@@ -4,11 +4,10 @@
 // Link agent_hub. libagent itself has no network dependency; only the CLI links this module.
 
 #include <agent-cpp/agent.hpp>
-
 #include <atomic>
 #include <cstdint>
-#include <span>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,11 +19,11 @@ namespace agent::hub {
 // "owner/repo:file.gguf", "owner/repo:Q4_K_M" or "owner/repo" (single .gguf in the repo).
 // An optional "@revision" may follow the repo ("owner/repo@main:Q4_K_M").
 struct ModelSpec {
-    std::string repo;           // "owner/name"
+    std::string repo; // "owner/name"
     std::string revision = "main";
-    std::string file;           // exact path inside the repo, when the selector looks like a file
-    std::string quant;          // quant tag such as "Q4_K_M", when the selector is not a file
-    bool all = false;           // selector "*": every file of the repo (a folder model: TRELLIS, ...)
+    std::string file;  // exact path inside the repo, when the selector looks like a file
+    std::string quant; // quant tag such as "Q4_K_M", when the selector is not a file
+    bool all = false;  // selector "*": every file of the repo (a folder model: TRELLIS, ...)
 };
 
 Result<ModelSpec> parse_spec(std::string_view spec);
@@ -33,15 +32,15 @@ Result<ModelSpec> parse_spec(std::string_view spec);
 bool quant_matches(std::string_view filename, std::string_view quant);
 
 struct RemoteFile {
-    std::string path;           // path inside the repo ("rfilename")
-    uint64_t size = 0;          // 0 when unknown
-    std::string sha256;         // lowercase hex of the LFS object; empty when unknown
+    std::string path;   // path inside the repo ("rfilename")
+    uint64_t size = 0;  // 0 when unknown
+    std::string sha256; // lowercase hex of the LFS object; empty when unknown
 };
 
 struct RepoInfo {
     std::string repo;
-    std::string license;        // HF licence id ("apache-2.0", "cc-by-nc-4.0", "other", ...); empty if unknown
-    std::string license_name;   // cardData.license_name (used with license == "other")
+    std::string license;      // HF licence id ("apache-2.0", "cc-by-nc-4.0", "other", ...); empty if unknown
+    std::string license_name; // cardData.license_name (used with license == "other")
     bool gated = false;
     std::vector<RemoteFile> files;
 };
@@ -81,19 +80,19 @@ Result<std::string> sha256_file(const std::string &path);
 // Short names for models known to work with the engines here ("qwen3-4b", "glm-ocr", "trellis-coarse").
 // A model may need several downloads (a TTS talker and its codec); the first part is the model.
 struct RegistryPart {
-    std::string_view spec;     // an `agent model pull` spec
-    std::string_view include;  // for "owner/repo:*" parts: comma separated path filters; otherwise ""
+    std::string_view spec;    // an `agent model pull` spec
+    std::string_view include; // for "owner/repo:*" parts: comma separated path filters; otherwise ""
 };
 
 struct RegistryEntry {
     std::string_view alias;
-    std::string_view task;            // text_gen, vision, ocr, embed, rerank, image_gen, asr, tts, vad, mesh_gen, ...
-    std::string_view engine;          // llama, sdcpp, audiocpp, onnx, trellis
+    std::string_view task;   // text_gen, vision, ocr, embed, rerank, image_gen, asr, tts, vad, mesh_gen, ...
+    std::string_view engine; // llama, sdcpp, audiocpp, onnx, trellis
     std::span<const RegistryPart> parts;
-    uint32_t size_mib;                // total download, 0 = not measured
-    std::string_view engine_options;  // JSON the engine needs to serve this model, "" = none
+    uint32_t size_mib;               // total download, 0 = not measured
+    std::string_view engine_options; // JSON the engine needs to serve this model, "" = none
     std::string_view notes;
-    bool tested;                      // pulled and run end to end with agent.cpp
+    bool tested; // pulled and run end to end with agent.cpp
 };
 
 std::span<const RegistryEntry> model_registry();
@@ -102,15 +101,15 @@ const RegistryEntry *find_registry_entry(std::string_view alias);
 // -------------------------- Catalogue (models.json) --------------------------
 
 struct CatalogEntry {
-    std::string name;           // logical name used by "agent model rm" and configs
+    std::string name; // logical name used by "agent model rm" and configs
     std::string repo;
-    std::string file;           // path inside the repo
-    std::string path;           // local absolute path
+    std::string file; // path inside the repo
+    std::string path; // local absolute path
     uint64_t size = 0;
     std::string sha256;
     std::string license;
-    std::string mmproj;         // local path of the multimodal projector pulled with the model; empty if none
-    std::string mmproj_file;    // its path inside the repo
+    std::string mmproj;      // local path of the multimodal projector pulled with the model; empty if none
+    std::string mmproj_file; // its path inside the repo
 };
 
 // engine_options with "mmproj": <path> added (llama's multimodal projector), unless it already has one
@@ -140,13 +139,13 @@ struct HttpOptions {
     // Explicit option, or HF_TOKEN / HUGGING_FACE_HUB_TOKEN / the HF token file (see resolve_hf_token).
     // Sent only to hosts accepted by token_allowed_for_host(); never forwarded after a redirect to a CDN.
     std::string token;
-    std::string proxy_host;     // from HTTPS_PROXY / https_proxy; empty = direct
+    std::string proxy_host; // from HTTPS_PROXY / https_proxy; empty = direct
     int proxy_port = 0;
-    std::string proxy_user;     // "user:pass@" of HTTPS_PROXY, sent as Proxy-Authorization: Basic
+    std::string proxy_user; // "user:pass@" of HTTPS_PROXY, sent as Proxy-Authorization: Basic
     std::string proxy_pass;
-    ProxyAddress http_proxy;    // from HTTP_PROXY / http_proxy, used for plain-http URLs (host empty = direct)
-    std::string no_proxy;       // NO_PROXY / no_proxy, comma-separated host suffixes
-    std::string ca_cert_path;   // AGENT_CA_BUNDLE, SSL_CERT_FILE or CURL_CA_BUNDLE; empty = system store
+    ProxyAddress http_proxy;  // from HTTP_PROXY / http_proxy, used for plain-http URLs (host empty = direct)
+    std::string no_proxy;     // NO_PROXY / no_proxy, comma-separated host suffixes
+    std::string ca_cert_path; // AGENT_CA_BUNDLE, SSL_CERT_FILE or CURL_CA_BUNDLE; empty = system store
     int connect_timeout_sec = 30;
     int read_timeout_sec = 60;
     int max_redirects = 10;
@@ -175,8 +174,8 @@ using ProgressFn = bool (*)(uint64_t downloaded, uint64_t total, void *user_data
 Result<RepoInfo> fetch_repo_info(std::string_view repo, const HttpOptions &http, std::string_view revision = "main");
 
 struct DownloadOptions {
-    uint64_t expected_size = 0;      // 0 = unknown
-    std::string expected_sha256;     // empty = skip verification
+    uint64_t expected_size = 0;  // 0 = unknown
+    std::string expected_sha256; // empty = skip verification
     ProgressFn on_progress = nullptr;
     void *progress_user_data = nullptr;
     const std::atomic<bool> *cancel = nullptr;
@@ -199,12 +198,12 @@ Result<std::string> http_get_text(std::string_view url, const HttpOptions &http,
 std::string default_models_dir();
 
 struct PullOptions {
-    std::string models_dir;          // empty = default_models_dir()
-    std::string catalog_path;        // empty = <models_dir>/models.json
-    std::string name;                // catalogue name; empty = file basename without extension
+    std::string models_dir;   // empty = default_models_dir()
+    std::string catalog_path; // empty = <models_dir>/models.json
+    std::string name;         // catalogue name; empty = file basename without extension
     bool allow_restricted_license = false;
-    std::vector<std::string> include;  // with "owner/repo:*": keep files whose path contains any of these (empty = all)
-    std::string mmproj = "auto";    // "auto", "none", or a quant / file name fragment; see select_mmproj
+    std::vector<std::string> include; // with "owner/repo:*": keep files whose path contains any of these (empty = all)
+    std::string mmproj = "auto";      // "auto", "none", or a quant / file name fragment; see select_mmproj
     HttpOptions http = http_options_from_env();
     ProgressFn on_progress = nullptr;
     void *progress_user_data = nullptr;

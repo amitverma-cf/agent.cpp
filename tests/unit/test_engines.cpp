@@ -256,7 +256,8 @@ TEST_CASE("llama engine generates text with a real model", "[engines][llama][mod
     agent::Conversation memory;
     memory.id = "llama_real";
     auto reply = agent::run_turn(
-        session, memory, "Once upon a time", true, [](std::string_view tok, void *ud) { *static_cast<std::string *>(ud) += tok; }, &streamed);
+        session, memory, "Once upon a time", true, [](std::string_view tok, void *ud) { *static_cast<std::string *>(ud) += tok; },
+        &streamed);
     REQUIRE(reply.ok);
     REQUIRE_FALSE(streamed.empty());
     REQUIRE(memory.stats.completion_tokens > 0);
@@ -530,7 +531,8 @@ int32_t run_with_media(LlamaAbi &abi, const agent_part &media, std::string_view 
     int32_t rc = abi.engine->run(abi.inst, &req, &resp);
     if (rc == AGENT_OK) {
         for (size_t i = 0; i < resp.message.n_parts; ++i)
-            if (resp.message.parts[i].kind == AGENT_PART_TEXT) text.append(resp.message.parts[i].text.data, resp.message.parts[i].text.size);
+            if (resp.message.parts[i].kind == AGENT_PART_TEXT)
+                text.append(resp.message.parts[i].text.data, resp.message.parts[i].text.size);
         abi.engine->free_response(abi.inst, &resp);
     }
     return rc;
