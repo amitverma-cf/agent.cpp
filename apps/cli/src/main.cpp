@@ -85,6 +85,7 @@ int main(int argc, char **argv) {
     if (cl.command == "skill") return cmd_skill(cl, ctx);
     if (cl.command == "sandbox") return cmd_sandbox(cl, ctx);
     if (cl.command == "schedule") return cmd_schedule(cl, ctx);
+    if (cl.command == "wake") return cmd_wake(cl, ctx);
     if (cl.command == "clean") return cmd_clean(cl, ctx);
     if (cl.command == "voice") return cmd_voice(cl, ctx);
     std::fprintf(stderr, "agent: unhandled command '%s'\n", cl.command.c_str());

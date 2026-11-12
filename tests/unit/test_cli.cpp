@@ -614,3 +614,46 @@ TEST_CASE("schedule: quoting and names", "[cli][schedule]") {
     CHECK_FALSE(valid_schedule_name("a b"));
     CHECK_FALSE(valid_schedule_name("../x"));
 }
+
+// ------------------------------------------------------------------ waiting runs (agent wake)
+
+#include "waiting.hpp"
+
+TEST_CASE("wake: the waiting list round-trips, replaces by thread and picks what is due", "[cli][wake]") {
+    std::vector<WaitingRun> runs;
+    waiting_upsert(runs, {"nightly-1", "/g/a.json", 2000, {"--model", "qwen", "--yes"}});
+    waiting_upsert(runs, {"morning-7", "/g/b.json", 1000, {"--workspace", "/ws"}});
+    CHECK(runs.size() == 2);
+    waiting_upsert(runs, {"nightly-1", "/g/a.json", 3000, {"--model", "qwen"}}); // the same thread waits again
+    REQUIRE(runs.size() == 2);
+    CHECK(runs[0].until == 3000);
+
+    const auto parsed = waiting_from_json(waiting_to_json(runs));
+    REQUIRE(parsed.ok);
+    REQUIRE(parsed.value.size() == 2);
+    CHECK(parsed.value[0].thread == "nightly-1");
+    CHECK(parsed.value[0].flags == std::vector<std::string>{"--model", "qwen"});
+    CHECK(parsed.value[1].graph == "/g/b.json");
+
+    CHECK(waiting_due(runs, 999).empty());
+    const auto due = waiting_due(runs, 3500);
+    REQUIRE(due.size() == 2);
+    CHECK(due[0].thread == "morning-7"); // the earliest first
+    CHECK(waiting_due(runs, 1000).size() == 1);
+
+    CHECK(waiting_resume_args(runs[1]) == std::vector<std::string>{"run", "/g/b.json", "--workspace", "/ws", "--resume", "morning-7"});
+
+    CHECK(waiting_remove(runs, "nightly-1"));
+    CHECK_FALSE(waiting_remove(runs, "nightly-1"));
+    CHECK(runs.size() == 1);
+
+    // Odd text survives; an empty file and a broken one are not an error to start from.
+    std::vector<WaitingRun> odd;
+    waiting_upsert(odd, {"t\"q", "C:\\g dir\\x.json", 5, {"--input", "a \"b\""}});
+    const auto again = waiting_from_json(waiting_to_json(odd));
+    REQUIRE(again.ok);
+    CHECK(again.value[0].thread == "t\"q");
+    CHECK(again.value[0].graph == "C:\\g dir\\x.json");
+    CHECK(waiting_from_json("").ok);
+    CHECK_FALSE(waiting_from_json("{not json").ok);
+}

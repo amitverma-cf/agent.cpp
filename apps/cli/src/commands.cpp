@@ -6,6 +6,7 @@
 #include "engine_release.hpp"
 #include "runtimes.hpp"
 #include "status_view.hpp"
+#include "waiting.hpp"
 
 #include <agent-cpp/engine_abi.h>
 #include <agent-cpp/hub.hpp>
@@ -921,6 +922,35 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
                                  : resume_graph(*session, graph.value.graph, resume_id, run, cl.get("input"));
     g_run_status = nullptr;
     status.finish();
+    {
+        // Remember a run that stops at a wait node (agent wake resumes it when due); forget one that finished.
+        auto waiting = load_waiting(base.workspace_dir);
+        bool changed = false;
+        const std::string_view until_text = get_state(run.state, "wait:until");
+        if (run.status == GraphRunStatus::Interrupted && !until_text.empty()) {
+            WaitingRun w;
+            w.thread = run.thread_id;
+            std::error_code ec;
+            w.graph = fs::absolute(graph_path, ec).string();
+            w.until = std::strtoll(std::string(until_text).c_str(), nullptr, 10);
+            bool has_workspace = false;
+            for (const Flag &f : cl.flags) {
+                if (f.name == "thread" || f.name == "resume" || f.name == "set" || f.name == "input" || f.name == "json") continue;
+                has_workspace = has_workspace || f.name == "workspace";
+                w.flags.push_back("--" + f.name);
+                if (!f.value.empty()) w.flags.push_back(f.value);
+            }
+            if (!has_workspace) {
+                w.flags.push_back("--workspace");
+                w.flags.push_back(base.workspace_dir);
+            }
+            waiting_upsert(waiting, std::move(w));
+            changed = true;
+        } else if (run.status == GraphRunStatus::Completed || run.status == GraphRunStatus::Failed) {
+            changed = waiting_remove(waiting, run.thread_id);
+        }
+        if (changed) save_waiting(base.workspace_dir, waiting);
+    }
     std::printf("status: %s\n", status_name(run.status));
     if (run.status == GraphRunStatus::Interrupted) {
         std::printf("interrupted at %s: %s\n", run.interrupt_node.c_str(), run.interrupt_reason.c_str());

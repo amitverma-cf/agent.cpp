@@ -149,6 +149,7 @@ Result<void> wait_function(Session &, GraphState &state, void *user_data) {
     }
     if (epoch_now() >= until) {
         set_state(state, key, ""); // due: the node can wait again if a loop reaches it a second time
+        set_state(state, "wait:until", "");
         return ok();
     }
     set_state(state, "wait:until", std::to_string(until)); // what a scheduler reads to know when to resume this thread

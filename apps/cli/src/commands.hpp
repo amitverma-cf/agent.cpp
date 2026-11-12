@@ -4,6 +4,7 @@
 
 #include "cli_core.hpp"
 #include "home.hpp"
+#include "waiting.hpp"
 
 #include <string>
 #include <vector>
@@ -67,6 +68,10 @@ Result<void> pull_and_register_engine(Context &ctx, std::vector<EngineEntry> &en
 int cmd_runtime(const CommandLine &cl, Context &ctx);  // runtime_cmd.cpp
 int cmd_sandbox(const CommandLine &cl, Context &ctx);  // sandbox_cmd.cpp
 int cmd_schedule(const CommandLine &cl, Context &ctx); // schedule_cmd.cpp
+int cmd_wake(const CommandLine &cl, Context &ctx);     // wake_cmd.cpp
+// <workspace>/waiting.json: graph runs paused at a wait node (wake_cmd.cpp)
+std::vector<WaitingRun> load_waiting(const std::string &workspace);
+void save_waiting(const std::string &workspace, const std::vector<WaitingRun> &runs);
 std::vector<PathGrant> load_grants(const std::string &file);
 Result<void> save_grants(const std::string &file, const std::vector<PathGrant> &grants);
 std::vector<PathGrant> load_all_grants(const Context &ctx);                      // global + project

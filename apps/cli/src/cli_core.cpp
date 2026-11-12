@@ -61,6 +61,8 @@ constexpr std::string_view kSkillBool[] = {"project", "yes"};
 constexpr SubSpec kSandboxSubs[] = {{"ls", 0, 0}, {"grant", 1, 1}, {"revoke", 1, 1}};
 constexpr std::string_view kSandboxValue[] = {"for"};
 constexpr std::string_view kSandboxBool[] = {"write", "project"};
+constexpr std::string_view kWakeValue[] = {"workspace"};
+constexpr std::string_view kWakeBool[] = {"dry-run", "yes"};
 constexpr SubSpec kScheduleSubs[] = {{"ls", 0, 0}, {"add", 1, 64}, {"rm", 1, 1}};
 constexpr std::string_view kScheduleValue[] = {"every", "daily", "cron"};
 constexpr std::string_view kScheduleBool[] = {"yes"};
@@ -98,6 +100,7 @@ constexpr CommandSpec kCommands[] = {
     {"skill", kSkillSubs, 0, 0, {}, kSkillBool},
     {"sandbox", kSandboxSubs, 0, 0, kSandboxValue, kSandboxBool},
     {"schedule", kScheduleSubs, 0, 0, kScheduleValue, kScheduleBool},
+    {"wake", {}, 0, 0, kWakeValue, kWakeBool},
     {"runtime", kRuntimeSubs, 0, 0, kRuntimeValue, {}},
     {"clean", {}, 0, 0, {}, kCleanBool},
     {"engine", kEngineSubs, 0, 0, kEngineValue, {}},
@@ -271,6 +274,7 @@ std::string usage_text() {
            "  skill search|add|ls|rm     skills from skills.sh (add owner/repo/skill [--yes] [--project]); a skill is text the model "
            "follows\n"
            "  mcp search|add|ls|rm       MCP servers from the official registry (add NAME [--yes] [--project]); they run in the sandbox\n"
+           "  wake [--dry-run]           resume the graph runs paused at a wait node whose time has come (start it with agent schedule)\n"
            "  schedule ls|add|rm         run an agent command on a schedule with cron / Task Scheduler: add NAME (--every 15m|--daily "
            "09:00|--cron EXPR) -- run graph.json --yes\n"
            "  sandbox ls|grant|revoke    folders outside the workspace that tools may use: grant PATH [--write] [--for "

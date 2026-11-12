@@ -408,6 +408,13 @@ Together with the `wait` node of [agent.json](api/agent-json.md#nodes) this give
 at a wait node and exits; `agent schedule add resume --every 15m -- run graph.json --resume THREAD --yes` continues it
 whenever it is due.
 
+## agent wake
+
+`agent wake [--workspace DIR] [--dry-run]` resumes the graph runs that are paused at a `wait` node and whose time has come. `agent run`
+records such a run in `<workspace>/waiting.json` (graph, thread, wake time, the original flags); `wake` runs
+`agent run GRAPH <those flags> --resume THREAD` for each due entry, and a run that finishes leaves the list. Start it from a
+scheduler: `agent schedule add wake --every 15m -- wake`.
+
 ## agent run
 
 `agent run <graph.json>` runs a declarative graph (see [api/agent-json.md](api/agent-json.md) and

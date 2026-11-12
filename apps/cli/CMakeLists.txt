@@ -14,6 +14,7 @@ add_library(agent_cli_core STATIC
     src/status_view.cpp
     src/fit.cpp
     src/schedule.cpp
+    src/waiting.cpp
     src/audio.cpp
     src/voice_core.cpp
 )
@@ -85,6 +86,7 @@ add_executable(agent_cli_bin
     src/sandbox_cmd.cpp
     src/model_fit_cmd.cpp
     src/schedule_cmd.cpp
+    src/wake_cmd.cpp
 )
 set_target_properties(agent_cli_bin PROPERTIES OUTPUT_NAME agent RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 target_link_libraries(agent_cli_bin PRIVATE agent_cli_core agent_hub agent_store_sqlite)
