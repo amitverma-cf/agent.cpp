@@ -30,6 +30,11 @@ Before submitting your PR:
 - Search for existing PRs to prevent duplicating efforts.
 - **Understand the Architecture**: This is a zero-cost abstraction framework. Familiarize yourself with the project's core philosophies and design patterns.
 - **Memory Standards**: No heap allocations (`new`/`malloc`) are permitted in the hot-path. All per-turn memory must be managed via the `Arena` allocator (`Session::arena` / `Session::worker_arenas`).
+- **Scripts** (all run by hand; no GitHub Action runs automatically, and the CI and release workflows are manual-dispatch only):
+  - `scripts/test.sh`: build and run the tests (`--with-engines`, `--all`).
+  - `scripts/update-deps.sh`: the one dependency update script (`list`, `bump NAME`, `ort`).
+  - `scripts/package.sh`: the Linux release tarball.
+  - `scripts/setup-hooks.sh`: enables `.githooks` (format check on commit, build and tests on push).
 - **Test your changes**:
   - Run all unit and integration tests: tests are written with [Catch2](https://github.com/catchorg/Catch2) (`tests/`), built as the `test_agent` executable, and registered individually with CTest via `catch_discover_tests`. Run all of them with `ctest --test-dir build --output-on-failure`, or filter to a subsystem with Catch2 tags, e.g. `./build/test_agent "[memory]"`.
   - Build with `-DAGENT_ENABLE_SANITIZERS=ON` (AddressSanitizer + UBSan) and run `ctest`.
@@ -54,7 +59,7 @@ After submitting your PR:
     - Pointer/reference alignment: `void * ptr`, `int & a`.
     - Use code formatting tools to ensure consistency.
 - **Naming**:
-    - Use `snake_case` for functions and variables; `PascalCase` for types/structs (`Session`, `Config`, `FlowMemory`, ...).
+    - Use `snake_case` for functions and variables; `PascalCase` for types/structs (`Session`, `Config`, `Conversation`, ...).
     - Free functions take the object as the first parameter, e.g. `run_turn(session, ...)`, `init(config)`, `infer(session, request)`.
     - Use sized integer types (e.g., `int32_t`, `uint64_t`).
 

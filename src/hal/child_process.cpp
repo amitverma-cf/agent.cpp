@@ -14,6 +14,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <timeapi.h>
 #include <filesystem>
 #else
 #include <cerrno>
@@ -264,6 +265,7 @@ PipeRead ChildProcess::read(ChildStream stream, std::string &out, int timeout_ms
     HANDLE h = stream == ChildStream::Stdout ? impl_->out : impl_->err;
     if (!h) return PipeRead::Closed;
     const auto deadline = Clock::now() + std::chrono::milliseconds(timeout_ms > 0 ? timeout_ms : 0);
+    int spins = 0;
     for (;;) {
         DWORD avail = 0;
         if (!PeekNamedPipe(h, nullptr, 0, nullptr, &avail, nullptr))
@@ -277,7 +279,12 @@ PipeRead ChildProcess::read(ChildStream stream, std::string &out, int timeout_ms
             return PipeRead::Data;
         }
         if (timeout_ms >= 0 && Clock::now() >= deadline) return PipeRead::Timeout;
-        Sleep(2);
+        // Sleep() sleeps in timer ticks (15.6 ms by default), which quantised every reply from a child to ~15 ms.
+        // Ask for 1 ms ticks once, and yield instead of sleeping while a reply is likely imminent.
+        static const bool fine_timer = (timeBeginPeriod(1), true);
+        (void)fine_timer;
+        if (++spins < 200) SwitchToThread();
+        else Sleep(1);
     }
 }
 

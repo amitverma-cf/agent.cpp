@@ -52,7 +52,7 @@ and tool hooks.
 Inside `run_turn` (and graph Agent nodes, including tool calls approved on `resume_graph`):
 
 - `media` and `tensors` go on the `"tool"` `Message` (`Message::media` / `Message::tensors`). The
-  media persist with the history (`save_flow_memory`, graph checkpoints) and reach the engine as
+  media persist with the history (`save_conversation`, graph checkpoints) and reach the engine as
   `FILE` parts with every later inference of that conversation, so a vision model can look at an
   image a tool produced. Relative paths are made absolute.
 - The message text is `text` followed by one `[attached: <path> (<mime>)]` line per media item (and

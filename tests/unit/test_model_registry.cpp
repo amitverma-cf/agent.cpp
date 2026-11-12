@@ -152,7 +152,7 @@ TEST_CASE("ModelRegistry loads lazily and keeps idle models loaded", "[models]")
         REQUIRE(models[0].ram_bytes == 1 * kMiB);
         REQUIRE(models[0].loaded_at_ms > 0);
 
-        agent::FlowMemory memory;
+        agent::Conversation memory;
         memory.id = "lazy";
         auto reply = agent::run_turn(*lease.value, memory, "hi");
         REQUIRE(reply.ok);
@@ -281,7 +281,7 @@ TEST_CASE("ModelRegistry: concurrent acquires of one model load it once", "[mode
             auto lease = agent::acquire_model(registry, "shared");
             if (!lease.ok) return;
             std::lock_guard<std::mutex> turn(*lease.value.turn_mutex);
-            agent::FlowMemory memory;
+            agent::Conversation memory;
             memory.id = "shared-" + std::to_string(i);
             auto reply = agent::run_turn(*lease.value, memory, "t" + std::to_string(i));
             if (reply.ok && reply.value == "echo: t" + std::to_string(i)) ok_count.fetch_add(1);
@@ -461,7 +461,7 @@ TEST_CASE("ModelRegistry switches between two llama models under a one-model bud
         auto lease = agent::acquire_model(registry, "big");
         INFO(lease.error.message);
         REQUIRE(lease.ok);
-        agent::FlowMemory memory;
+        agent::Conversation memory;
         memory.id = "registry-big";
         auto reply = agent::run_turn(*lease.value, memory, "Say hi.");
         INFO(reply.error.message);
@@ -474,7 +474,7 @@ TEST_CASE("ModelRegistry switches between two llama models under a one-model bud
         auto lease = agent::acquire_model(registry, "tiny");
         INFO(lease.error.message);
         REQUIRE(lease.ok);
-        agent::FlowMemory memory;
+        agent::Conversation memory;
         memory.id = "registry-tiny";
         REQUIRE(agent::run_turn(*lease.value, memory, "Once upon a time").ok);
     }

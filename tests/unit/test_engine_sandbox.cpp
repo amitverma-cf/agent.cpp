@@ -2,8 +2,8 @@
 // each test runs one real request through agent-engine-host (EngineIsolation::Process) without
 // widening the policy. Linux only. Gated like the per-engine tests:
 //   AGENT_TEST_LLAMA_MODEL, AGENT_TEST_LLAMA_VISION_MODEL + AGENT_TEST_LLAMA_VISION_MMPROJ,
-//   AGENT_TEST_EMBED_MODEL, AGENT_TEST_RERANK_MODEL, AGENT_TEST_SHERPA_TTS_DIR (+ _ASR_DIR,
-//   _VAD_MODEL, _SEGMENTATION_MODEL + _EMBEDDING_MODEL), AGENT_TEST_SDCPP_MODEL. The ONNX test builds
+//   AGENT_TEST_EMBED_MODEL, AGENT_TEST_RERANK_MODEL, AGENT_TEST_AUDIOCPP_DIR,
+//   AGENT_TEST_SDCPP_MODEL. The ONNX test builds
 //   its own model; the TRELLIS test checks the create() error paths (no weights needed).
 
 #include "hal/sandbox.hpp"
@@ -131,7 +131,7 @@ TEST_CASE("sandboxed engine host: llama generates text", "[engine_sandbox][llama
     cfg.max_tokens = 8;
     cfg.temperature = 0.0f;
     agent::Session session = open(cfg, log);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     auto reply = agent::run_turn(session, memory, "Say hello.");
     INFO(reply.error.message);
     REQUIRE(reply.ok);
@@ -160,7 +160,7 @@ TEST_CASE("sandboxed engine host: llama reads an image from the workspace but no
 
     {
         const agent::Media media[] = {{image, "image/bmp"}};
-        agent::FlowMemory memory;
+        agent::Conversation memory;
         auto reply = agent::run_turn_with_media(session, memory, "What color is this image? Answer with one word.", media);
         INFO(reply.error.message);
         REQUIRE(reply.ok);
@@ -169,7 +169,7 @@ TEST_CASE("sandboxed engine host: llama reads an image from the workspace but no
     if (!landlock()) SKIP("Landlock unavailable: the secret-file check needs it");
     {
         const agent::Media media[] = {{secret, "image/bmp"}};
-        agent::FlowMemory memory;
+        agent::Conversation memory;
         auto reply = agent::run_turn_with_media(session, memory, "What color is this image? Answer with one word.", media);
         INFO("reply: " << reply.value << " error: " << reply.error.message);
         REQUIRE_FALSE(reply.ok);
@@ -177,7 +177,7 @@ TEST_CASE("sandboxed engine host: llama reads an image from the workspace but no
     }
     // The host is still usable after the denied read.
     const agent::Media media[] = {{image, "image/bmp"}};
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     CHECK(agent::run_turn_with_media(session, memory, "What color is this image? Answer with one word.", media).ok);
 }
 
@@ -265,43 +265,30 @@ TEST_CASE("sandboxed engine host: onnx runs a model", "[engine_sandbox][onnx]") 
 
 #endif // AGENT_TEST_ONNX_ENGINE_PATH
 
-// ------------------------------------------------------------------ sherpa-onnx
+// ------------------------------------------------------------------ audio.cpp
 
-#ifdef AGENT_TEST_SHERPA_ENGINE_PATH
+#ifdef AGENT_TEST_AUDIOCPP_ENGINE_PATH
 
-TEST_CASE("sandboxed engine host: sherpa speaks, transcribes, detects speech and diarizes", "[engine_sandbox][sherpa][model]") {
-    const char *tts_dir = env("AGENT_TEST_SHERPA_TTS_DIR");
-    if (!tts_dir) SKIP("AGENT_TEST_SHERPA_TTS_DIR not set");
-    const std::string d(tts_dir);
-    std::string options =
-        "{\"tts\":{\"kokoro\":{\"model\":\"" + d + "/model.onnx\",\"voices\":\"" + d + "/voices.bin\",\"tokens\":\"" + d + "/tokens.txt\"";
-    for (const char *name : {"lexicon-en-us.txt", "lexicon-us-en.txt", "lexicon.txt"})
-        if (fs::exists(d + "/" + name)) {
-            options += ",\"lexicon\":\"" + d + "/" + name + "\"";
-            break;
-        }
-    options += "}}";
-    const char *asr_dir = env("AGENT_TEST_SHERPA_ASR_DIR");
-    if (asr_dir) {
-        std::string enc, dec, tokens;
-        for (const auto &entry : fs::directory_iterator(asr_dir)) {
-            const std::string p = entry.path().string(), name = entry.path().filename().string();
-            const bool int8 = name.find("int8") != std::string::npos;
-            if (name.find("encoder") != std::string::npos && name.ends_with(".onnx") && (enc.empty() || int8)) enc = p;
-            if (name.find("decoder") != std::string::npos && name.ends_with(".onnx") && (dec.empty() || int8)) dec = p;
-            if (name.ends_with("tokens.txt")) tokens = p;
-        }
-        options += ",\"asr\":{\"whisper\":{\"encoder\":\"" + enc + "\",\"decoder\":\"" + dec + "\",\"tokens\":\"" + tokens + "\"}}";
-    }
-    if (const char *vad = env("AGENT_TEST_SHERPA_VAD_MODEL")) options += std::string(",\"vad\":{\"silero\":{\"model\":\"") + vad + "\"}}";
-    const char *seg = env("AGENT_TEST_SHERPA_SEGMENTATION_MODEL");
-    const char *emb = env("AGENT_TEST_SHERPA_EMBEDDING_MODEL");
-    if (seg && emb)
-        options += std::string(",\"diarize\":{\"pyannote\":{\"model\":\"") + seg + "\"},\"embedding\":{\"model\":\"" + emb + "\"}}";
+// AGENT_TEST_AUDIOCPP_DIR: the audio.cpp model folder (python3 tools/model_manager_v2.py install ... --models-root DIR) holding
+// Supertonic-3-GGUF, Parakeet-TDT-0.6B-v3-GGUF, FireRedVAD-GGUF and Nemotron-3-Diarization-GGUF.
+TEST_CASE("sandboxed engine host: audiocpp speaks, transcribes, detects speech and diarizes", "[engine_sandbox][audiocpp][model]") {
+    const char *dir = env("AGENT_TEST_AUDIOCPP_DIR");
+    if (!dir) SKIP("AGENT_TEST_AUDIOCPP_DIR not set");
+    const std::string d(dir);
+    auto model = [&](const char *rel) { return fs::exists(d + "/" + rel) ? d + "/" + rel : std::string(); };
+    const std::string tts = model("Supertonic-3-GGUF/supertonic-3-q8_0.gguf");
+    if (tts.empty()) SKIP("Supertonic-3-GGUF/supertonic-3-q8_0.gguf not in AGENT_TEST_AUDIOCPP_DIR");
+    const std::string asr = model("Parakeet-TDT-0.6B-v3-GGUF/parakeet-tdt-0.6b-v3-q8_0.gguf");
+    const std::string vad = model("FireRedVAD-GGUF/firered-vad-f32.gguf");
+    const std::string diar = model("Nemotron-3-Diarization-GGUF/nemotron-3-diarization-q8_0.gguf");
+    std::string options = "{\"tts\":{\"model\":\"" + tts + "\",\"language\":\"en\"}";
+    if (!asr.empty()) options += ",\"asr\":{\"model\":\"" + asr + "\"}";
+    if (!vad.empty()) options += ",\"vad\":{\"model\":\"" + vad + "\"}";
+    if (!diar.empty()) options += ",\"diarize\":{\"model\":\"" + diar + "\"}";
     options += "}";
 
     Log log;
-    auto cfg = sandboxed(AGENT_TEST_SHERPA_ENGINE_PATH, "", fresh_dir("sherpa"), log);
+    auto cfg = sandboxed(AGENT_TEST_AUDIOCPP_ENGINE_PATH, "", fresh_dir("audiocpp"), log);
     cfg.engine_options = options;
     agent::Session session = open(cfg, log);
 
@@ -314,7 +301,7 @@ TEST_CASE("sandboxed engine host: sherpa speaks, transcribes, detects speech and
     };
 
     // TTS writes its WAV into workspace/artifacts (the one read-write directory).
-    auto speech = task(AGENT_CAP_TTS, "Hello world.", {});
+    auto speech = task(AGENT_CAP_TTS, "Hello world, this is a test.", {});
     INFO(speech.error.message);
     REQUIRE(speech.ok);
     REQUIRE(speech.value.message.media.size() == 1);
@@ -322,20 +309,20 @@ TEST_CASE("sandboxed engine host: sherpa speaks, transcribes, detects speech and
     REQUIRE(fs::file_size(wav) > 44);
     const agent::MediaView audio[] = {{wav, "audio/wav"}};
 
-    if (asr_dir) {
+    if (!asr.empty()) {
         auto heard = task(AGENT_CAP_ASR, "", audio);
         INFO(heard.error.message);
         REQUIRE(heard.ok);
         INFO("transcript: " << heard.value.message.content);
         CHECK(lower(std::string(heard.value.message.content)).find("hello") != std::string::npos);
     }
-    if (env("AGENT_TEST_SHERPA_VAD_MODEL")) {
+    if (!vad.empty()) {
         auto segments = task(AGENT_CAP_VAD, "", audio);
         INFO(segments.error.message);
         REQUIRE(segments.ok);
         CHECK(std::string(segments.value.message.content).find("\"start\"") != std::string::npos);
     }
-    if (seg && emb) {
+    if (!diar.empty()) {
         auto speakers = task(AGENT_CAP_DIARIZE, "", audio);
         INFO(speakers.error.message);
         REQUIRE(speakers.ok);
@@ -343,7 +330,7 @@ TEST_CASE("sandboxed engine host: sherpa speaks, transcribes, detects speech and
     }
 }
 
-#endif // AGENT_TEST_SHERPA_ENGINE_PATH
+#endif // AGENT_TEST_AUDIOCPP_ENGINE_PATH
 
 // ------------------------------------------------------------------ stable-diffusion.cpp
 

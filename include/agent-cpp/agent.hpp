@@ -331,10 +331,13 @@ struct InferRequest {
     std::string_view params_json;
 };
 
+// What infer() / run_task() return. The views point into memory the response owns (`storage`), so a response stays valid
+// after later calls and can be moved or kept. (Internal per-turn paths use arena-backed responses that do not outlive the turn.)
 struct InferResponse {
     MessageView message;
     TokenUsage usage;
     std::span<const TensorView> output_tensors;
+    std::shared_ptr<Arena> storage;
 };
 
 struct MemoryConfig;
@@ -431,7 +434,7 @@ struct Message {
     mutable int token_count = -1;
 };
 
-struct FlowMemory {
+struct Conversation {
     std::string id;
     std::vector<Message> history;
     TurnStats stats;
@@ -449,7 +452,7 @@ struct ToolHook {
     When when = When::Pre;
     std::string_view tool_name;
 
-    using HookFn = void (*)(Session &session, FlowMemory &memory, std::string_view tool_name, std::string_view args,
+    using HookFn = void (*)(Session &session, Conversation &memory, std::string_view tool_name, std::string_view args,
                             std::string_view result, void *user_data);
     HookFn callback = nullptr;
     void *user_data = nullptr;
@@ -495,7 +498,7 @@ struct Config {
     bool sandbox_filesystem = true;
     bool auto_default_tools = true;
     // Lazy tool loading. The model starts with only tool_search, load_tool and use_skill; every other tool stays out of the
-    // prompt until the model calls load_tool(name), which keeps it for the rest of the conversation (FlowMemory::active_tools)
+    // prompt until the model calls load_tool(name), which keeps it for the rest of the conversation (Conversation::active_tools)
     // even across context compression. Saves the prompt tokens of tools that are never used. Applies where tool_search is
     // allowed: a graph Agent node whose allowed_tools omits it keeps its fixed list.
     bool lazy_tools = false;
@@ -647,6 +650,19 @@ struct AgentRuntime {
 
 void init_backend();
 void free_backend();
+// Explicit engine and model selection. Names the engine (a registered name or a plugin path) and hands it each model file by
+// role; nothing is guessed. Roles are the engine's own: llama "model" (and "mmproj"); sdcpp "diffusion_model", "llm", "vae",
+// "clip_l", "t5xxl"; audiocpp "tts.model", "asr.model", "vad.model", "diarize.model". A dotted role puts the path inside a
+// section of the engine options ("tts.model" -> {"tts":{"model":...}}). "model" sets Config::model, the rest go to
+// Config::engine_options. extra_options_json: a JSON object whose members are merged into the engine options (voices,
+// threads, ...). base supplies everything else (workspace_dir, sandbox, ...); the result is ready for init().
+struct ModelSlot {
+    std::string_view role;
+    std::string_view path;
+};
+Result<Config> engine_config(std::string_view engine, std::span<const ModelSlot> models, std::string_view extra_options_json = {},
+                             const Config &base = {});
+
 Result<Session> init(const Config &config);
 
 Result<InferResponse> infer(Session &session, const InferRequest &request);
@@ -687,12 +703,12 @@ Result<std::vector<std::string>> load_engine_manifest(std::string_view manifest_
 void register_event_hook(Session &session, EventType type, EventHookFn callback, void *user_data = nullptr);
 void trigger_event(Session &session, EventType type, std::span<const uint8_t> payload);
 
-Result<std::string> run_turn(Session &session, FlowMemory &memory, std::string_view user_prompt, bool stream = false,
+Result<std::string> run_turn(Session &session, Conversation &memory, std::string_view user_prompt, bool stream = false,
                              TokenStreamFn on_token = nullptr, void *token_user_data = nullptr);
 
 // Like run_turn, but the user message also carries media (images, audio, ...) for engines that accept them.
 // (A separate name, not an overload: a Media array would otherwise silently convert to run_turn's `bool stream`.)
-Result<std::string> run_turn_with_media(Session &session, FlowMemory &memory, std::string_view user_prompt, std::span<const Media> media,
+Result<std::string> run_turn_with_media(Session &session, Conversation &memory, std::string_view user_prompt, std::span<const Media> media,
                                         bool stream = false, TokenStreamFn on_token = nullptr, void *token_user_data = nullptr);
 
 // Cancels in-flight engine work and makes every later inference on this Session fail with
@@ -700,10 +716,10 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &memory, st
 void request_cancel(Session &session);
 void clear_cancel(Session &session);
 
-Result<void> compress_context(Session &session, FlowMemory &memory, size_t keep_recent = 6);
+Result<void> compress_context(Session &session, Conversation &memory, size_t keep_recent = 6);
 
-Result<void> save_flow_memory(Session &session, const FlowMemory &memory);
-Result<void> load_flow_memory(Session &session, FlowMemory &memory);
+Result<void> save_conversation(Session &session, const Conversation &memory);
+Result<void> load_conversation(Session &session, Conversation &memory);
 
 Result<void> init_tools(Session &session);
 // Runs a tool through the allowed_tools check (graph Agent nodes) and the permission gate. Returns
@@ -749,7 +765,7 @@ inline constexpr std::string_view kGraphEnd = "__end__";
 struct GraphState {
     std::map<std::string, std::string, std::less<>> values;
     // Agent node conversations, keyed by GraphNode::history_key (default: the node name).
-    std::map<std::string, FlowMemory, std::less<>> histories;
+    std::map<std::string, Conversation, std::less<>> histories;
 
     // Keys written via set_state() that the runtime has not processed yet.
     std::vector<std::string> written;
@@ -779,7 +795,7 @@ using GraphUntilFn = Result<bool> (*)(Session &session, const GraphState &state,
 using GraphContextFn = Result<std::string> (*)(Session &session, const GraphState &state, void *user_data);
 
 enum class GraphNodeKind {
-    Agent,    // run_turn on the node's FlowMemory (see history_key) with system_prompt + allowed_tools
+    Agent,    // run_turn on the node's Conversation (see history_key) with system_prompt + allowed_tools
     Function, // GraphFunctionFn
     Tool,     // execute_tool(tool_name, args)
     Parallel, // fan out to branches, join, then follow this node's own edge (make_parallel)
@@ -1052,6 +1068,13 @@ namespace agent {
 // session whose engine performs AGENT_CAP_EMBED. Texts go to the engine in batches. One session must
 // not run embed / rerank / run_turn concurrently from several threads.
 Result<std::vector<std::vector<float>>> embed(Session &session, std::span<const std::string_view> texts);
+// Multimodal embedding: one input = optional text plus images / audio (files). One embedding per input, in order.
+// Needs an embedding model with a projector (options.mmproj, e.g. Qwen3-VL-Embedding); text-only models reject media.
+struct EmbedInput {
+    std::string_view text;
+    std::span<const Media> media;
+};
+Result<std::vector<std::vector<float>>> embed(Session &session, std::span<const EmbedInput> inputs);
 // One relevance score per document, in document order (higher = more relevant; the scale is the
 // model's, e.g. raw reranker logits). session's engine must perform AGENT_CAP_RERANK.
 Result<std::vector<float>> rerank(Session &session, std::string_view query, std::span<const std::string_view> docs);

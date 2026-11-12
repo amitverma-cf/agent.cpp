@@ -25,7 +25,7 @@ bool has(const std::string &text, std::string_view needle) { return text.find(ne
 TEST_CASE("lazy tools: the model starts with only the meta tools", "[lazy]") {
     auto s = agent::init(lazy_config());
     REQUIRE(s.ok);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "lazy1";
     auto shown = agent::run_turn(s.value, memory, "show:tools");
     REQUIRE(shown.ok);
@@ -41,7 +41,7 @@ TEST_CASE("lazy tools: eager mode is unchanged", "[lazy]") {
     cfg.lazy_tools = false;
     auto s = agent::init(cfg);
     REQUIRE(s.ok);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "eager";
     auto shown = agent::run_turn(s.value, memory, "show:tools");
     REQUIRE(shown.ok);
@@ -53,7 +53,7 @@ TEST_CASE("lazy tools: eager mode is unchanged", "[lazy]") {
 TEST_CASE("lazy tools: tool_search lists, load_tool loads, and the tool is then advertised and callable", "[lazy]") {
     auto s = agent::init(lazy_config());
     REQUIRE(s.ok);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "lazy2";
 
     // A tool that is not loaded cannot be called, and the error says what to do.
@@ -94,7 +94,7 @@ TEST_CASE("lazy tools: tool_search lists, load_tool loads, and the tool is then 
 TEST_CASE("lazy tools: loaded tools survive pruning of the history", "[lazy]") {
     auto s = agent::init(lazy_config());
     REQUIRE(s.ok);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "lazy3";
     REQUIRE(agent::run_turn(s.value, memory, R"(call:load_tool {"name":"read_file"})").ok);
     memory.history.clear(); // what compression or pruning leaves behind is a different history, not a different tool set
@@ -106,7 +106,7 @@ TEST_CASE("lazy tools: loaded tools survive pruning of the history", "[lazy]") {
 TEST_CASE("lazy tools: a graph node whose allowlist omits tool_search keeps its fixed tools", "[lazy]") {
     auto s = agent::init(lazy_config());
     REQUIRE(s.ok);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "lazy4";
     const std::string_view allowed[] = {"read_file", "list_dir"};
     // The way a graph Agent node restricts tools: the ambient allowlist. Here through the public node API.

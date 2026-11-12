@@ -55,7 +55,7 @@ struct Graph {
 
 | Kind | What it does |
 |---|---|
-| `Agent` | Calls `run_turn` on the node's `FlowMemory` (`state.histories[history_key]`, by default `state.histories[name]`). It installs `system_prompt` (prefixed by `context_provider`'s text, if any) for the node's turn only, limits tools to `allowed_tools`, and activates its `hooks`. The user message is `state[input_key]` if that key is set, otherwise `prompt`. The final reply is written to `state[output_key]`. See [Agent nodes](#agent-nodes). |
+| `Agent` | Calls `run_turn` on the node's `Conversation` (`state.histories[history_key]`, by default `state.histories[name]`). It installs `system_prompt` (prefixed by `context_provider`'s text, if any) for the node's turn only, limits tools to `allowed_tools`, and activates its `hooks`. The user message is `state[input_key]` if that key is set, otherwise `prompt`. The final reply is written to `state[output_key]`. See [Agent nodes](#agent-nodes). |
 | `Function` | `Result<void> fn(Session &, GraphState &, void *user_data)`. Returning an error fails the node. |
 | `Tool` | Calls `execute_tool(tool_name, args)`. `args` comes from `tool_args(session, state, user_data)`, else `state[input_key]`, else `"{}"`. The result goes to `state[output_key]`. A tool error fails the node. |
 | `Parallel` | Runs every branch, joins them, then follows its own outgoing edge. Built by `make_parallel`. Branch progress is checkpointed; branches may interrupt (see [Parallel execution](#parallel-execution)). |
@@ -155,7 +155,7 @@ struct ToolHook {
     enum class When { Pre, Post };
     When when = When::Pre;
     std::string_view tool_name;   // empty = every tool; the view must outlive the node
-    using HookFn = void (*)(Session &, FlowMemory &memory, std::string_view tool_name,
+    using HookFn = void (*)(Session &, Conversation &memory, std::string_view tool_name,
                             std::string_view args, std::string_view result, void *user_data);
     HookFn callback = nullptr;
     void *user_data = nullptr;
@@ -165,7 +165,7 @@ struct ToolHook {
 `GraphNode::hooks` are active only while that Agent node runs. For each tool call: the matching `Pre` hooks fire in order (`result` empty), the tool runs, then the matching `Post` hooks fire with its result (including `Error: ...` results). `memory` is the node's conversation. Calls approved on `resume_graph` fire the hooks too; calls a reviewer denied never run, so they fire none. Hooks of nodes inside a `Parallel` branch may be called from worker threads.
 
 ```cpp
-static void audit(agent::Session &, agent::FlowMemory &, std::string_view tool, std::string_view args,
+static void audit(agent::Session &, agent::Conversation &, std::string_view tool, std::string_view args,
                   std::string_view result, void *) {
     std::printf("%s %s -> %s\n", std::string(tool).c_str(), std::string(args).c_str(), std::string(result).c_str());
 }
@@ -179,7 +179,7 @@ act.hooks = {{.when = agent::ToolHook::When::Post, .tool_name = "write_file", .c
 ```cpp
 struct GraphState {
     std::map<std::string, std::string, std::less<>> values;
-    std::map<std::string, FlowMemory, std::less<>> histories;  // per Agent node (or history_key)
+    std::map<std::string, Conversation, std::less<>> histories;  // per Agent node (or history_key)
     std::vector<std::string> written;                          // runtime bookkeeping
     bool interrupt_requested = false;
     std::string interrupt_reason;
@@ -242,7 +242,7 @@ Result<void> resume_graph(Session &, const Graph &, std::string_view thread_id, 
 
 ## Checkpoints and durability
 
-A checkpoint is a JSON object that holds the step counter, the next node, the status, interrupt details and pending tool calls, all non-`temp:` state values, and every Agent node history (in the same JSON format as `save_flow_memory`). One is written after every completed node (see the durability modes below), keyed by `(thread_id, step)`, together with a small metadata object (`{"graph", "step", "next", "status"}`).
+A checkpoint is a JSON object that holds the step counter, the next node, the status, interrupt details and pending tool calls, all non-`temp:` state values, and every Agent node history (in the same JSON format as `save_conversation`). One is written after every completed node (see the durability modes below), keyed by `(thread_id, step)`, together with a small metadata object (`{"graph", "step", "next", "status"}`).
 
 ### Checkpointers
 
@@ -332,7 +332,7 @@ agent::fork_graph_run(session, graph, "ticket-42", 1, "ticket-42-alt", alt);
 
 **Side effects on replay.** Forking and resuming re-execute nodes: every node after the forked step runs again, and on a resume the failed or interrupted node runs again from its start. Tool calls made by those nodes (Tool nodes, tool calls inside Agent turns, anything a Function node does) happen again: a file is rewritten, a message is sent twice, a command runs again. The runtime does not record or replay tool results. Make such tools idempotent (for example, key writes by thread id and step, or check before acting), or put a human approval in front of them (`interrupt_before_tools`). Agent turns also run again, so a non-deterministic model can answer differently on the new thread.
 
-Agent `FlowMemory` ids are `<thread_id>:<history>` (the node name or its `history_key`), so `run_turn` also saves them under `history:<thread_id>:<history>` in the Session's store, whichever checkpointer is used. Per-node `TurnStats` are not checkpointed.
+Agent `Conversation` ids are `<thread_id>:<history>` (the node name or its `history_key`), so `run_turn` also saves them under `history:<thread_id>:<history>` in the Session's store, whichever checkpointer is used. Per-node `TurnStats` are not checkpointed.
 
 ---
 
@@ -456,7 +456,7 @@ With the llama engine the parallelism comes from **continuous batching** inside 
 
 ## Migrating from Flow / AgentScheduler
 
-`Flow`, `FlowState`, `FlowHook`, `run_flow`, `step_flow`, `AgentScheduler` and `SubAgentResult` were removed; `FlowMemory`, `run_turn` and the rest of the conversation API are unchanged.
+`Flow`, `FlowState`, `FlowHook`, `run_flow`, `step_flow`, `AgentScheduler` and `SubAgentResult` were removed; `Conversation`, `run_turn` and the rest of the conversation API are unchanged.
 
 | Old | Graph runtime |
 |---|---|

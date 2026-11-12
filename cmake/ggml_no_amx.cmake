@@ -10,8 +10,8 @@
 # (Config::engine_isolation = Process).
 #
 # Two ways in:
-#   include(ggml_no_amx) after add_subdirectory() of a ggml project (engines/llama), or
-#   -DCMAKE_PROJECT_INCLUDE:FILEPATH=<this file> for an ExternalProject (engines/sdcpp, ...),
+#   include(ggml_no_amx) after add_subdirectory() of a ggml project (src/engines/llama), or
+#   -DCMAKE_PROJECT_INCLUDE:FILEPATH=<this file> for an ExternalProject (src/engines/sdcpp, ...),
 #   where it defers itself to the end of that build's top-level directory.
 
 function(_agent_ggml_no_amx)

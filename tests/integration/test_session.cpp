@@ -14,7 +14,7 @@ TEST_CASE("get_stats and reset_stats accumulate across turns", "[session][stats]
     auto baseline = agent::get_stats(session);
     REQUIRE(baseline.total_turns == 0);
 
-    agent::FlowMemory conv;
+    agent::Conversation conv;
     conv.id = "stats_chat";
     auto r1 = agent::run_turn(session, conv, "hello");
     REQUIRE(r1.ok);

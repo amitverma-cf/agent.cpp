@@ -1,11 +1,9 @@
 name: CI
 
+# Manual only for now (local git hooks cover commits and pushes; see .githooks/). Turn push / pull_request back on when outside
+# contributors arrive.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
-
 jobs:
   build-and-test:
     runs-on: ubuntu-latest

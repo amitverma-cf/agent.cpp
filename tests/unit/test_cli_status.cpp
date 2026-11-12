@@ -1,4 +1,4 @@
-// agent run status view (tools/cli/src/status_view.{hpp,cpp}): the pure render / format functions and
+// agent run status view (apps/cli/src/status_view.{hpp,cpp}): the pure render / format functions and
 // the table fed by GraphRun::on_event.
 
 #include "status_view.hpp"

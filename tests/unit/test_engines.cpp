@@ -149,7 +149,7 @@ TEST_CASE("AiProvider::Engine runs a turn through the plugin", "[engines]") {
     REQUIRE(res.ok);
     agent::Session session = std::move(res.value);
 
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "engine_turn";
     auto reply = agent::run_turn(session, memory, "hello");
     REQUIRE(reply.ok);
@@ -162,7 +162,7 @@ TEST_CASE("AiProvider::Engine forwards streamed text chunks", "[engines]") {
     agent::Session session = std::move(res.value);
 
     std::string streamed;
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "engine_stream";
     auto reply = agent::run_turn(
         session, memory, "stream me", true, [](std::string_view tok, void *ud) { *static_cast<std::string *>(ud) += tok; }, &streamed);
@@ -179,7 +179,7 @@ TEST_CASE("AiProvider::Engine tool calls go through execute_tool", "[engines]") 
     agent::Session session = std::move(res.value);
 
     g_ping_calls = 0;
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "engine_tools";
     auto reply = agent::run_turn(session, memory, "call:ping");
     REQUIRE(reply.ok);
@@ -253,7 +253,7 @@ TEST_CASE("llama engine generates text with a real model", "[engines][llama][mod
     agent::Session session = std::move(res.value);
 
     std::string streamed;
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "llama_real";
     auto reply = agent::run_turn(
         session, memory, "Once upon a time", true, [](std::string_view tok, void *ud) { *static_cast<std::string *>(ud) += tok; }, &streamed);
@@ -275,7 +275,7 @@ TEST_CASE("llama engine prefix cache gives the same replies as recomputing the w
 
     // The same multi-turn conversation on both: each turn's prompt extends the previous one, which is exactly
     // what the cache reuses. Greedy decoding, so any difference means the cached keys/values were wrong.
-    agent::FlowMemory with_cache, without_cache;
+    agent::Conversation with_cache, without_cache;
     with_cache.id = "prefix_a";
     without_cache.id = "prefix_b";
     const char *turns[] = {"Say a number.", "Say another number.", "Say a color.", "Say a fruit.", "Say an animal."};
@@ -334,7 +334,7 @@ TEST_CASE("llama engine rejects a prompt longer than the context instead of abor
     REQUIRE(res.ok);
     agent::Session session = std::move(res.value);
 
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "llama_overflow";
     std::string huge(4000, 'a');
     for (size_t i = 0; i < huge.size(); i += 2) huge[i] = ' ';
@@ -354,7 +354,7 @@ TEST_CASE("llama engine prefills prompts longer than n_batch in chunks", "[engin
     REQUIRE(res.ok);
     agent::Session session = std::move(res.value);
 
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "llama_chunked";
     std::string prompt;
     for (int i = 0; i < 3000; ++i) prompt += "a ";
@@ -380,7 +380,7 @@ TEST_CASE("llama engine completes a native tool-call round trip", "[engines][lla
     agent::Session session = std::move(res.value);
 
     g_ping_calls = 0;
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "llama_tools";
     auto reply = agent::run_turn(session, memory, "Call the ping tool now.");
     INFO(reply.error.message);
@@ -395,7 +395,7 @@ TEST_CASE("Media on the user message reaches the engine as FILE parts", "[engine
     agent::Session session = std::move(res.value);
 
     const agent::Media media[] = {{"/tmp/cat.png", "image/png"}, {"/tmp/hello.wav", "audio/wav"}};
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "engine_media_in";
     auto reply = agent::run_turn_with_media(session, memory, "describe", media);
     REQUIRE(reply.ok);
@@ -408,7 +408,7 @@ TEST_CASE("Engine FILE outputs become media on the assistant message and persist
     REQUIRE(res.ok);
     agent::Session session = std::move(res.value);
 
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "engine_media_out";
     auto reply = agent::run_turn(session, memory, "draw");
     REQUIRE(reply.ok);
@@ -418,9 +418,9 @@ TEST_CASE("Engine FILE outputs become media on the assistant message and persist
     REQUIRE(out.media[0].mime == "text/plain");
     REQUIRE(out.media[0].path.find("artifacts/mock_drawing.txt") != std::string::npos);
 
-    agent::FlowMemory reloaded;
+    agent::Conversation reloaded;
     reloaded.id = "engine_media_out";
-    REQUIRE(agent::load_flow_memory(session, reloaded).ok);
+    REQUIRE(agent::load_conversation(session, reloaded).ok);
     REQUIRE(reloaded.history.back().media.size() == 1);
     REQUIRE(reloaded.history.back().media[0].path == out.media[0].path);
 }
@@ -445,7 +445,7 @@ TEST_CASE("Progress reaches Config::on_progress and request_cancel stops the eng
     agent::Session session = std::move(res.value);
     progress.session = &session;
 
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "engine_progress";
     auto done = agent::run_turn(session, memory, "slow");
     REQUIRE(done.ok);
@@ -653,7 +653,7 @@ TEST_CASE("run_turn_with_media sends an image through the core to the llama engi
     agent::Session session = std::move(res.value);
 
     const agent::Media media[] = {{image_path, "image/bmp"}};
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "llama_media_e2e";
     auto reply = agent::run_turn_with_media(session, memory, "What color is this image? Answer with one word.", media);
     INFO(reply.error.message);
@@ -727,7 +727,7 @@ int32_t task_run(void *, const agent_request *req, agent_response *resp) {
 void task_free(void *, agent_response *resp) { agent_response_reset(resp); }
 const char *task_error(void *) { return ""; }
 
-// Speech-only, like sherpa: no TEXT_GEN, so the automatic task is the lowest bit (ASR).
+// Speech-only, like audiocpp: no TEXT_GEN, so the automatic task is the lowest bit (ASR).
 const agent_engine_v1 kTaskEngine = {
     AGENT_ENGINE_ABI_VERSION,
     sizeof(agent_engine_v1),
@@ -805,7 +805,7 @@ TEST_CASE("Config::default_task drives run_turn and is checked at init", "[engin
     INFO(res.error.message);
     REQUIRE(res.ok);
     agent::Session session = std::move(res.value);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "default_task";
     auto reply = agent::run_turn(session, memory, "say this");
     REQUIRE(reply.ok);

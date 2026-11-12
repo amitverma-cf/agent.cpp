@@ -128,9 +128,9 @@ Delete all key-value pairs — clears the in-memory cache immediately, and hands
 
 ## Conversation history storage
 
-After every successful `run_turn`, the conversation history and stats are serialised to JSON via `save_flow_memory` and stored under `"history:<FlowMemory::id>"` (history) and `"history_stats:<FlowMemory::id>"` (`FlowMemory::stats`). This allows histories to be inspected, exported, or resumed.
+After every successful `run_turn`, the conversation history and stats are serialised to JSON via `save_conversation` and stored under `"history:<Conversation::id>"` (history) and `"history_stats:<Conversation::id>"` (`Conversation::stats`). This allows histories to be inspected, exported, or resumed.
 
-`run_turn` only ever writes these keys — it never reads them back. To resume a conversation after a process restart, call `load_flow_memory(session, memory)` explicitly (see [conversation.md](conversation.md#history-persistence)); `save_flow_memory`/`load_flow_memory` can also be called directly outside `run_turn`.
+`run_turn` only ever writes these keys — it never reads them back. To resume a conversation after a process restart, call `load_conversation(session, memory)` explicitly (see [conversation.md](conversation.md#history-persistence)); `save_conversation`/`load_conversation` can also be called directly outside `run_turn`.
 
 The serialised format is a JSON array of objects:
 
@@ -149,7 +149,7 @@ auto r = agent::retrieve_memory(session, "history:" + conv.id);
 if (r.ok) printf("history JSON: %s\n", r.value.c_str());
 ```
 
-This persisted JSON is separate from the in-memory `FlowMemory::history`. The live history is the authoritative source for what the model sees; the persisted JSON (now durable via the write-back cache + SQLite above) is a snapshot for observability and recovery.
+This persisted JSON is separate from the in-memory `Conversation::history`. The live history is the authoritative source for what the model sees; the persisted JSON (now durable via the write-back cache + SQLite above) is a snapshot for observability and recovery.
 
 ---
 

@@ -5,30 +5,26 @@ your own C++20 program. Both start from the same build.
 
 ## Prerequisites
 
-| | Linux | macOS | Windows |
-|---|---|---|---|
-| Compiler | GCC 12+ or Clang 14+ | AppleClang (Xcode 15+) | MSVC 19.30+ (Visual Studio 2022 Build Tools, C++ workload) |
-| CMake | 3.21+ | 3.21+ | 3.21+ |
-| Build tool | Ninja (`sudo apt-get install ninja-build`) | Ninja (`brew install ninja`) | Ninja (`choco install ninja` or the copy in Visual Studio) |
-| OpenSSL 3 | `libssl-dev` | `brew install openssl@3` | `vcpkg install openssl:x64-windows` |
+| | Linux | Windows |
+|---|---|---|
+| Compiler | GCC 12+ or Clang 14+ | MSVC 19.30+ (Visual Studio 2022 Build Tools, C++ workload) |
+| CMake | 3.21+ | 3.21+ |
+| Build tool | Ninja (`sudo apt-get install ninja-build`) | Ninja (`choco install ninja` or the copy in Visual Studio) |
+| OpenSSL 3 | `libssl-dev` | `vcpkg install openssl:x64-windows` |
+
+Platforms: v1.0.0 targets Windows 11 and Linux. macOS: not tested, not supported in v1.0.0.
 
 OpenSSL is needed for `agent_hub` (the model downloader). Turn it off with `-DAGENT_BUILD_HUB=OFF`, which also
 turns off the CLI.
 
 ## Track A: the `agent` CLI
 
-### Option 1: a prebuilt archive
+### Build from source
 
-Download the archive for your platform from the
-[Releases](https://github.com/amitverma-cf/agent.cpp/releases) page, unpack it, and run `agent` from that folder.
-Archives exist for Linux, macOS and Windows on x86-64 and arm64. The Windows archive is a `.zip`; run `agent.exe`.
-
-### Option 2: build from source
-
-Linux and macOS:
+Linux:
 
 ```sh
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release       # on macOS add -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
@@ -43,7 +39,7 @@ ctest --test-dir build --output-on-failure
 ```
 
 The build puts `agent`, `agent-engine-host` and the test binaries at the top of `build/`. The llama engine is built
-into `build/engines/llama/`. Set `-DAGENT_ENGINE_LLAMA=OFF` to build without it.
+into `build/src/engines/llama/`. Set `-DAGENT_ENGINE_LLAMA=OFF` to build without it.
 
 ### First run
 
@@ -88,7 +84,7 @@ agent::AgentRuntime runtime;   // must outlive all sessions
 
 agent::Config cfg;
 cfg.provider      = agent::AiProvider::Engine;
-cfg.engine        = "build/engines/llama/agent-engine-llama.so";
+cfg.engine        = "build/src/engines/llama/agent-engine-llama.so";
 cfg.model         = ".workspace/models/my.gguf";
 cfg.workspace_dir = ".workspace";
 cfg.context_window = 4096;
@@ -106,7 +102,7 @@ agent::Session session = std::move(res.value);
 ### Step 3: run a conversation
 
 ```cpp
-agent::FlowMemory conv;
+agent::Conversation conv;
 conv.id = "my_chat";
 
 // Add an optional system message
@@ -162,8 +158,8 @@ returns, because the terminal tool interpolates it into shell commands.
 
 | Option | Effect |
 |---|---|
-| `-DAGENT_ENGINE_ONNX=ON -DONNXRUNTIME_ROOT=<prebuilt ORT>` | Builds the ONNX Runtime engine and copies `libonnxruntime` next to it. Ship the two together; the plugin finds ONNX Runtime through its RPATH (`$ORIGIN` on Linux). |
-| `-DAGENT_ENGINE_SHERPA=ON -DSHERPA_ONNX_ROOT=<sherpa-onnx>` | Builds the speech engine used by `agent voice`. |
+| `-DAGENT_ENGINE_ONNX=ON` | Builds the ONNX Runtime engine and copies `libonnxruntime` next to it. CMake downloads the pinned upstream ONNX Runtime release (never built from source); pass `-DONNXRUNTIME_ROOT=<dir>` only where upstream publishes no archive. Ship the two together; the plugin finds ONNX Runtime through its RPATH (`$ORIGIN` on Linux). |
+| `-DAGENT_ENGINE_AUDIOCPP=ON` (after `git submodule update --init vendor/audio.cpp`) | Builds the audio.cpp speech engine used by `agent voice`. |
 | `-DAGENT_ENABLE_SANITIZERS=ON` | AddressSanitizer + UndefinedBehaviorSanitizer on GCC and Clang. |
 | `-DBUILD_SHARED_LIBS=ON` | Shared `libagent`, `agent_store_sqlite` and `agent_hub`. |
 

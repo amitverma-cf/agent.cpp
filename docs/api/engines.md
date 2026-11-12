@@ -2,8 +2,8 @@
 
 `#include <agent-cpp/agent.hpp>` · plugin authors: `#include <agent-cpp/engine_abi.h>`
 
-An **engine** is a shared library wrapping an inference project (llama.cpp, whisper.cpp,
-stable-diffusion.cpp, sherpa-onnx, ...). The core loads engines at runtime, so nothing is
+An **engine** is a shared library wrapping an inference project (llama.cpp, audio.cpp,
+stable-diffusion.cpp, TRELLIS.2, ...). The core loads engines at runtime, so nothing is
 compiled in. Each plugin carries its own copy of ggml or ONNX Runtime.
 
 ## Using an engine
@@ -95,7 +95,7 @@ cfg.engine_max_restarts    = 3;     // automatic restarts per rolling minute
 ```
 
 - **InProcess**: the plugin is `dlopen`ed into this process and called directly. Lowest latency, but a
-  segfault, `abort()` (`GGML_ASSERT`), `exit()` (sherpa-onnx on a corrupt model), an escaped C++
+  segfault, `abort()` (`GGML_ASSERT`), `exit()` (a native library on a corrupt model file), an escaped C++
   exception or an OOM kill in the engine takes the whole process down.
 - **Process**: `init()` starts `agent-engine-host <plugin>`, a small executable that loads the plugin
   and serves the same ABI over its stdin/stdout. The plugin is never loaded into the calling process.
@@ -110,7 +110,7 @@ Under Process isolation the host also runs in an **OS sandbox** (`Config::engine
 default; Linux enforces it): the plugin, the model's directory and paths named in `engine_options`
 are read-only, the workspace is read-only, `workspace/artifacts` is read-write, the network and
 `/tmp` and the GPU device nodes are off, and `engine_sandbox.memory_limit_bytes` becomes the host's
-`RLIMIT_AS`. Every engine in this repository (llama, onnx, sherpa, sdcpp, trellis) has been run under
+`RLIMIT_AS`. Every engine in this repository (llama, onnx, sdcpp, trellis) has been run under
 this default policy without extra paths. GPU builds need `engine_sandbox.gpu = true`; an engine that
 needs more files must have them listed in `engine_sandbox.read_only_paths` / `read_write_paths`. See
 [../security-sandbox.md](../security-sandbox.md#real-engines-under-the-default-engine-policy).
@@ -158,7 +158,7 @@ crashed host are swept). Both sides check at startup that they can map segments;
 only, and the host writes outputs straight to `<workspace>/artifacts/`. A sandboxed host needs
 `/dev/shm` (Linux) to use shared memory.
 
-**Protocol** (`src/core/engines/engine_ipc.hpp`, internal; both ends come from the same build):
+**Protocol** (`src/agent/engines/engine_ipc.hpp`, internal; both ends come from the same build):
 length-prefixed binary frames (`u32 size | u32 type | u64 request id | payload`, native byte order),
 no JSON on the hot path. core → host: `Create`, `Run`, `Cancel` (out of band, handled by the host's
 reader thread while `run()` is busy), `CountTokens`, `ResetCache`, `Destroy`, `Shutdown`, `Release`.
@@ -206,7 +206,7 @@ static const agent_engine_v1 kEngine = {
 Each request carries `agent_request::task` (one capability bit) and `flags`:
 `AGENT_REQUEST_FLAG_AUTO_TASK` means the caller did not choose the task and the core picked it
 (`TEXT_GEN` if declared, else the lowest declared bit), so an engine with several tasks may route by
-content instead (sherpa does).
+content instead (audiocpp does).
 
 **Struct sizes (ABI 2).** `agent_engine_v1`, `agent_request` and `agent_response` start with (or, for
 the engine table, follow `abi_version` with) a `uint32_t struct_size`: the `sizeof` the writer was
@@ -235,11 +235,11 @@ Rules:
 - `run()` is serialized by the host unless the engine sets `AGENT_ENGINE_FLAG_CONCURRENT`.
 - Honour `agent_request::cancel` and report long jobs through `on_progress`.
 
-`engines/mock/mock_engine.cpp` is a complete minimal example.
+`src/engines/mock/mock_engine.cpp` is a complete minimal example.
 
 ## The llama engine
 
-`engines/llama` (`agent-engine-llama`) renders prompts with the model's own Jinja chat template and
+`src/engines/llama` (`agent-engine-llama`) renders prompts with the model's own Jinja chat template and
 parses replies into content + tool calls in the model's native format, using llama.cpp's `common_chat`.
 It sets `AGENT_ENGINE_FLAG_NATIVE_TOOLS` (the core only adds the skills list to the system message) and
 `AGENT_ENGINE_FLAG_CONCURRENT` (parallel graph branches share one continuously batched decode).
@@ -405,9 +405,11 @@ auto table = agent::ocr(session.value, agent::Media{"scan.png", "image/png"}, "T
 plugin catches at exactly those calls (template load/render, output parsing) and converts them to
 status codes. This is the only exception boundary in agent.cpp.
 
+**MTP heads.** A GGUF that carries a multi-token-prediction head (llama.cpp looks for the tensor `blk.<last>.nextn.eh_proj.weight`; `AGENT_LLAMA_TRACE=1` prints `mtp_layers=N`) is run by llama.cpp's own engine, the scheduler behind `llama-server` and `llama-cli`, linked into the plugin and called in process with in-memory requests (no socket is opened, nothing listens). It drives the head with its `draft-mtp` speculation (3 tokens per step); nothing depends on a model's name. That path does text generation with tools, images and audio (`options.mmproj`), streaming and cancel; embed, rerank, OCR and DECIDE use the plugin's own engine, so set `options.mtp=false` for those, or to skip the head. Measured on Qwen3.5-4B (4 cores): output that repeats the input accepts 98% of drafted tokens; open generation is slower with the head (upstream reports about -20%). Build with `-DAGENT_LLAMA_UPSTREAM=OFF` to leave it out.
+
 ## The onnx engine
 
-`engines/onnx` (`agent-engine-onnx`) runs any ONNX graph through the ONNX Runtime C API. It declares
+`src/engines/onnx` (`agent-engine-onnx`) runs any ONNX graph through the ONNX Runtime C API. It declares
 `AGENT_CAP_GENERIC` (raw named tensors in and out) and `AGENT_ENGINE_FLAG_CONCURRENT`: `OrtSession::Run`
 is thread-safe and every call keeps its own buffers.
 
@@ -459,7 +461,7 @@ IoBinding / device-resident outputs, and non-tensor (sequence/map) outputs.
 
 ## The sdcpp engine
 
-`engines/sdcpp` (`agent-engine-sdcpp`) wraps [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)
+`src/engines/sdcpp` (`agent-engine-sdcpp`) wraps [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)
 (`vendor/stable-diffusion.cpp`, pinned to a release tag) for image generation: SD 1.x/2.x/XL, SD3,
 FLUX, Qwen-Image, Z-Image and whatever else that sd.cpp release loads.
 
@@ -514,7 +516,7 @@ declared bit, `IMAGE_GEN`).
 
 ## The trellis engine
 
-`engines/trellis` (`agent-engine-trellis`) wraps [trellis2.cpp](https://github.com/localai-org/trellis2cpp)
+`src/engines/trellis` (`agent-engine-trellis`) wraps [trellis2.cpp](https://github.com/localai-org/trellis2cpp)
 (`vendor/trellis2cpp`, MIT, pinned to commit `2f3e6e2` of its default `pbr-textures` branch; the repo has no
 tags) for [TRELLIS.2](https://github.com/microsoft/TRELLIS.2) image-to-3D. It goes through the port's
 flat C API (`trellis2_capi.h`), so none of the port's C++ crosses the plugin boundary.
@@ -585,216 +587,78 @@ C++ underneath: an out-of-memory `std::bad_alloc` inside it is not caught, and g
 CPU generation is slow: the 512/1024 paths run two or three 1.3B-parameter DiTs over thousands of
 tokens and the 1024³ decode needs ~14 GB of host RAM.
 
-## The sherpa engine
+## The audiocpp engine
 
-`engines/sherpa` (`agent-engine-sherpa`) wraps [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) through
-its C API for speech: Kokoro text-to-speech, Whisper / NeMo transducer (Parakeet TDT) speech-to-text, Silero
-voice activity detection and pyannote speaker diarization.
-Caps `AGENT_CAP_TTS | AGENT_CAP_ASR | AGENT_CAP_VAD | AGENT_CAP_DIARIZE`, flags 0.
-
-Build against the official prebuilt shared release (`sherpa-onnx-v<ver>-linux-x64-shared.tar.bz2` from the
-GitHub releases page; tested with v2.0.1):
+`src/engines/audiocpp` (`agent-engine-audiocpp`) wraps [audio.cpp](https://github.com/0xShug0/audio.cpp)
+(`vendor/audio.cpp`, Apache-2.0) for all speech: text to speech, speech recognition, voice activity detection
+and speaker diarization. One engine serves the four tasks. Caps `AGENT_CAP_TTS | AGENT_CAP_ASR | AGENT_CAP_VAD | AGENT_CAP_DIARIZE`.
 
 ```sh
-cmake -B build -DAGENT_ENGINE_SHERPA=ON -DSHERPA_ONNX_ROOT=/path/to/sherpa-onnx-v2.0.1-linux-x64-shared
+git submodule update --init vendor/audio.cpp
+cmake -B build -G Ninja -DAGENT_ENGINE_AUDIOCPP=ON
 ```
 
-The plugin's RPATH is `$ORIGIN`: `libsherpa-onnx-c-api.so` and `libonnxruntime.so` ship **next to**
-`agent-engine-sherpa.so` (the build copies them there). Keep the three files together when installing.
+`AGENT_AUDIOCPP_MODEL_SET` (`custom` or `full`) and `AGENT_AUDIOCPP_MODELS` choose which model families are
+compiled in. `custom`, the default, builds only the families listed in `AGENT_AUDIOCPP_MODELS`; `full` builds all of them.
 
-`Config::model` may be empty. Everything comes from `Config::engine_options`; only the components that are
-configured get loaded:
+Each model is a single GGUF file, and the family is read from the file. Each component names its own file in
+`Config::engine_options`, and only the components that are configured are loaded. The file names are examples:
 
 ```json
 {
-  "threads": 2,
-  "provider": "cpu",
-  "tts": {
-    "kokoro": {"model": "kokoro-en-v0_19/model.onnx", "voices": "kokoro-en-v0_19/voices.bin",
-               "tokens": "kokoro-en-v0_19/tokens.txt", "lexicon": "lexicon-en-us.txt",
-               "data_dir": "kokoro-en-v0_19/espeak-ng-data", "lang": "en-us"},
-    "speaker_id": 0,
-    "speed": 1.0
-  },
-  "asr": {
-    "whisper": {"encoder": "tiny.en-encoder.int8.onnx", "decoder": "tiny.en-decoder.int8.onnx",
-                "tokens": "tiny.en-tokens.txt", "language": "en", "task": "transcribe"}
-  },
-  "vad": {
-    "silero": {"model": "silero_vad.onnx"},
-    "threshold": 0.5, "min_silence": 0.5, "min_speech": 0.25, "max_speech": 20, "streaming": false
-  },
-  "diarize": {
-    "pyannote": {"model": "sherpa-onnx-pyannote-segmentation-3-0/model.onnx"},
-    "embedding": {"model": "nemo_en_titanet_small.onnx"},
-    "num_speakers": 0, "threshold": 0.5, "min_duration_on": 0.3, "min_duration_off": 0.5
-  }
+  "threads": 4,
+  "backend": "cpu",
+  "tts":     {"model": "pocket-tts.gguf", "language": "en", "speed": 1.0},
+  "asr":     {"model": "parakeet-tdt.gguf", "language": "en"},
+  "vad":     {"model": "firered-vad.gguf", "streaming": true},
+  "diarize": {"model": "nemotron-diar.gguf"}
 }
 ```
 
-`tts` takes one family: `kokoro` (above), `vits` (`model`, `tokens`, `lexicon`; `noise_scale`, `noise_scale_w`, `length_scale`) or `matcha` (`acoustic_model`, `vocoder`, `tokens`, `lexicon`, optional `dict_dir` and `rule_fsts` for Chinese; `noise_scale`, `length_scale`). Tested: `vits-ljs`, and `matcha-icefall-zh-baker` with `vocos-22khz-univ.onnx`. sherpa-onnx 2.x has no espeak-ng, so a VITS / Matcha model without a lexicon (Piper voices, `matcha-icefall-en_US-ljspeech`) loads but cannot tokenize text.
+| Option | Meaning |
+|--------|---------|
+| `tts.model`, `asr.model`, `vad.model`, `diarize.model` | GGUF file of that component |
+| `tts.model`, `tts.language`, `tts.speed`, `tts.voice` | language (`en`), speed (`1.0`), and an optional voice preset if the model has one (`tts.voice`) |
+| `asr.language` | language code, for example `en` |
+| `vad.streaming` | keep the audio between calls, see "Streaming VAD" below. Default `false` |
+| `threads` | CPU threads, default 4 |
+| `backend` | `cpu`, `cuda`, `vulkan`, `metal` or `best` |
 
-`asr` takes exactly one family: `whisper` (`encoder`, `decoder`, `tokens`, optional `language`, `task`),
-`nemo_transducer` (Parakeet TDT: `encoder`, `decoder`, `joiner`, `tokens`) or `transducer` (same files, plus an
-optional `model_type`). `lexicon`, `data_dir` and `lang` are optional for Kokoro, but sherpa-onnx 2.x removed
-espeak-ng and ignores `data_dir`, so English text needs a lexicon
-([lexicon-en-us.txt](https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/lexicon-en-us.txt));
-words missing from it are skipped. Paths are checked at `create()`; a missing file fails with
-`AGENT_ERR_MODEL_LOAD_FAILED`.
-
-`vad` takes the `silero` family ([silero_vad.onnx](https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx),
-MIT). `threshold` is the speech probability, `min_silence` / `min_speech` / `max_speech` are in seconds (longer
-speech is split). `diarize` needs a pyannote segmentation model
-([sherpa-onnx-pyannote-segmentation-3-0](https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2),
-MIT) and a speaker embedding model from the `speaker-recongition-models` release (sic), for example
-`nemo_en_titanet_small.onnx` (CC-BY-4.0). `num_speakers` > 0 fixes the number of speakers; otherwise
-clusters closer than `threshold` merge. With two Kokoro voices, TitaNet separated the speakers in our test,
-while `3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx` mixed them up, also in sherpa-onnx's
-own `sherpa-onnx-offline-speaker-diarization` tool.
+Hub aliases for the GGUF files: `parakeet-tdt`, `moonshine-tiny`, `crisperwhisper-large` (asr), `pocket-tts`
+(tts; English, about 100M parameters, GGUF q8; its model family also covers fr, de, it, pt and es),
+`supertonic-3` (tts; 434 MiB, 30+ languages), `firered-vad` (vad) and `nemotron-diar` (diarize; 102 MiB). The files
+come from the Hugging Face repository `audio-cpp/audio.cpp-gguf`.
 
 Requests are routed by task, and by content when the task was not chosen explicitly. Pick it with
-`run_task(session, AGENT_CAP_TTS, req)` / `InferRequest::task`, or `Config::default_task` for
-`run_turn`:
+`run_task(session, AGENT_CAP_TTS, req)` / `InferRequest::task`, or `Config::default_task` for `run_turn`:
 
 | `task` | Last user message | Result |
 |---|---|---|
-| `TTS` | text | speech: WAV file in `output_dir` (`FILE`, `audio/wav`) + a short `TEXT` summary |
+| `TTS` | text | WAV file (`FILE`, `audio/wav`) |
 | `ASR` | audio `FILE`/`BYTES` part, `asr` configured | transcript as a `TEXT` part |
 | `ASR` | no audio part | `AGENT_ERR_INVALID_CONFIG` |
-| automatic (no task set: the core sends `ASR`, the lowest bit, with `AGENT_REQUEST_FLAG_AUTO_TASK`) or `TEXT_GEN` | audio part, `asr` configured | transcript, as for `ASR` |
+| automatic (no task set, `AGENT_REQUEST_FLAG_AUTO_TASK`) or `TEXT_GEN` | audio part, `asr` configured | transcript, as for `ASR` |
 | automatic or `TEXT_GEN` | audio part, no `asr`, `vad` configured | speech segments, as for `VAD` |
 | automatic or `TEXT_GEN` | audio part, only `diarize` configured | speaker segments, as for `DIARIZE` |
 | automatic or `TEXT_GEN` | text, no audio | speech, as for `TTS` |
 | `VAD` | audio part (+ optional `TEXT` command) | `TEXT` `[{"start":0.52,"end":1.84}, ...]` (seconds) + `TENSOR` `segments` F32 `[n, 2]` |
 | `DIARIZE` | audio part | `TEXT` `[{"start":0.03,"end":4.64,"speaker":0}, ...]` + `TENSOR` `segments` F32 `[n, 3]` (start, end, speaker) |
 
-Hosts that do not send an explicit task send the engine's lowest capability bit, `ASR`; give a session
-only a `vad` (or only a `diarize`) component and its audio requests are segmented instead of transcribed.
-A task whose component is not configured returns `AGENT_ERR_UNSUPPORTED`; `VAD` / `DIARIZE` without an
-audio part return `AGENT_ERR_INVALID_CONFIG`.
+A task whose component is not configured returns `AGENT_ERR_UNSUPPORTED`. `VAD` and `DIARIZE` without an audio part
+return `AGENT_ERR_INVALID_CONFIG`. A host that sends no task gets `ASR`, so a session with only a `vad` (or only a
+`diarize`) component segments its audio instead of transcribing it.
 
-Audio input is a `FILE` or `BYTES` WAV (16-bit PCM mono; other sample rates are resampled to 16 kHz), or an
-`F32` `TENSOR` of mono samples at 16 kHz (any name, shape `[n]`). Through the C++ API that is a
-`TensorView` on the message, so audio can go from a microphone to the engine without a file.
+Audio input is a `FILE` or `BYTES` WAV (any rate and channel count, resampled as needed), or an `F32` `TENSOR` of
+mono samples at 16 kHz. Through the C++ API that is a `TensorView` on the message, so audio can go from a microphone
+to the engine without a file.
 
-**Streaming VAD.** With `"streaming": true` the detector keeps its state between `run()` calls, so a host can
-feed microphone audio in small chunks (`agent voice` sends 100 ms). Each call returns the segments that
-*finished* during that call, with times counted from the start of the stream, plus one entry
-`{"start":s,"end":now,"open":true}` while speech is still going on (the `TENSOR` holds only finished
-segments). A `TEXT` part `reset` on the request starts a new stream (the clock goes back to 0), `flush`
-ends it and returns whatever was still open. Without `streaming`, every call is a stream of its own. During synthesis each sentence is
-streamed through `on_chunk(AGENT_CHUNK_AUDIO, samples, n_samples * sizeof(float))` (mono f32 at the model's
-sample rate, which the `TEXT` part reports), progress goes to `on_progress(step, 1000)`, and `cancel` stops
-generation at the next sentence. ASR reports progress 0/1 and 1/1 and the transcript as one `TEXT` chunk.
+**Streaming VAD.** With `vad.streaming` the engine keeps the audio since the last `reset` text command, so a host
+can feed microphone audio in small chunks (`agent voice` sends 100 ms). Times count from the last `reset`.
+A segment is returned once, when it has ended. While speech is still going on, the segment at the end of the audio
+is returned with `"open":true` and is not counted as reported, so it comes back on a later call once it has closed.
+A `TEXT` part `flush` ends the stream: an open segment is closed and returned, and the buffer is cleared. A `reset`
+starts a new stream. A stream holds at most 10 minutes of audio, so send `reset` before that. Without `streaming`,
+every call is a stream of its own.
 
-Limitation: sherpa-onnx validates configs and returns NULL for most errors, but some malformed model files
-(for example a corrupt tokens file) make it call `exit()` inside `create()`. Only point it at real model files.
-Licences: Kokoro (Apache-2.0), Whisper (MIT), Silero VAD (MIT), pyannote segmentation-3.0 (MIT) and the
-TitaNet embedding model (CC-BY-4.0) are fine for the catalogue. 3D-Speaker embedding models are Apache-2.0 according to
-the 3D-Speaker repository; check the individual model card.
-
-## The whisper engine
-
-`engines/whisper` (`agent-engine-whisper`) wraps [whisper.cpp](https://github.com/ggml-org/whisper.cpp)
-(`vendor/whisper.cpp`, pinned to the v1.9.5 release tag) through its C API (`whisper.h`) for speech-to-text, plus
-whisper.cpp's built-in Silero voice activity detection. Caps `AGENT_CAP_ASR | AGENT_CAP_VAD`, flags 0.
-
-It is opt-in because it builds another copy of ggml:
-
-```sh
-git submodule update --init --depth 1 vendor/whisper.cpp
-cmake -B build -G Ninja -DAGENT_ENGINE_WHISPER=ON [-DAGENT_WHISPER_BUILD_JOBS=2]
-```
-
-As with sdcpp, whisper.cpp's ggml has the same CMake target names as llama.cpp's, so it is a nested CMake
-project (`ExternalProject`) linked statically into the plugin with hidden visibility; on Linux also
-`-Wl,--exclude-libs,ALL` and a version script (`engines/common/exports.map`), so the plugin exports
-`agent_engine_get_v1` only. The nested build is CPU-only.
-
-`Config::model` is a ggml whisper model (`ggml-*.bin`, for example `ggml-tiny.en.bin` or `ggml-base.bin` from
-[ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp)). `Config::engine_options`:
-
-| Option | Meaning |
-|--------|---------|
-| `language` | `"en"`, `"de"`, ... or `"auto"`. Default: `"auto"` for multilingual models, `"en"` for `.en` models. An unknown code fails `create()` with `AGENT_ERR_INVALID_CONFIG` |
-| `translate` | translate to English instead of transcribing (multilingual models) |
-| `threads` | CPU threads (default 4) |
-| `beam_size` | 1 = greedy (default), 2..16 = beam search |
-| `temperature`, `initial_prompt` | decoding temperature (default 0), prompt text for the decoder |
-| `flash_attn`, `gpu` | whisper context flags (no effect in the CPU-only build) |
-| `verbose` | forward whisper.cpp info logs to stderr (errors always are) |
-| `vad` | `{"model": "ggml-silero-v5.1.2.bin", "threshold": 0.5, "min_speech_ms": 250, "min_silence_ms": 100, "max_speech_s": ..., "speech_pad_ms": 30, "filter": false}` enables the `VAD` task; `filter: true` also cuts the audio to speech before every transcription |
-
-`params_json` per request accepts `language`, `translate` and `beam_size`.
-
-| `task` | Last user message | Result |
-|---|---|---|
-| `ASR`, automatic, or `TEXT_GEN` | audio part | transcript as a `TEXT` part |
-| `ASR` / automatic / `TEXT_GEN` | no audio part | `AGENT_ERR_INVALID_CONFIG` |
-| `VAD` | audio part, `vad` configured | `TEXT` `[{"start":0.29,"end":2.21}, ...]` (seconds) + `TENSOR` `segments` F32 `[n, 2]`, as for sherpa |
-| `VAD` | no `vad` configured | `AGENT_ERR_UNSUPPORTED` |
-| anything else | | `AGENT_ERR_UNSUPPORTED` |
-
-Audio input follows the sherpa conventions: a `FILE` or `BYTES` WAV (PCM 8/16/24/32-bit or float, any channel
-count and sample rate; down-mixed and linearly resampled to 16 kHz) or an `F32` `TENSOR` of mono samples at
-16 kHz. Each decoded segment is streamed as a `TEXT` chunk (the chunks concatenate to the transcript), progress
-goes to `on_progress(percent, 100)`, and `cancel` is checked before every encoder pass and every ggml graph
-computation (`AGENT_ERR_CANCELLED`). whisper.cpp's logger is process-wide; one instance with `verbose` turns
-info logs on for all of them.
-
-Tests (`tests/unit/test_engine_whisper.cpp`) run on whisper.cpp's `samples/jfk.wav`; the real-model cases need
-`AGENT_TEST_WHISPER_MODEL` (and `AGENT_TEST_WHISPER_VAD_MODEL` for VAD).
-
-Licences: whisper.cpp (MIT), OpenAI Whisper weights in ggml form (MIT), Silero VAD in ggml form
-([ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad), MIT).
-
-## The parakeet engine
-
-`engines/parakeet` (`agent-engine-parakeet`) wraps [parakeet.cpp](https://github.com/mudler/parakeet.cpp)
-(`vendor/parakeet.cpp`, pinned to the v0.6.1 release tag), a ggml port of NVIDIA's NeMo Parakeet (TDT, RNNT, CTC,
-hybrid) and Nemotron ASR models, through its C API (`parakeet_capi.h`). Caps `AGENT_CAP_ASR`, flags 0.
-
-```sh
-git submodule update --init --depth 1 vendor/parakeet.cpp
-git -C vendor/parakeet.cpp submodule update --init --depth 1 third_party/ggml
-cmake -B build -G Ninja -DAGENT_ENGINE_PARAKEET=ON [-DAGENT_PARAKEET_BUILD_JOBS=2]
-```
-
-Built like whisper and sdcpp: a nested CMake project with its own ggml, linked statically with hidden visibility
-(Linux: `--exclude-libs,ALL` + version script, only `agent_engine_get_v1` exported), CPU only. parakeet.cpp's
-configure step applies its own ggml patches (`third_party/ggml-patches`) to its ggml checkout, so
-`vendor/parakeet.cpp` shows modified submodule content after a build; that is expected. The sound-event
-(ced.cpp) and speaker-identification (voice-detect.cpp) parts are not built.
-
-`Config::model` is a parakeet.cpp GGUF from [mudler/parakeet-cpp-gguf](https://huggingface.co/mudler/parakeet-cpp-gguf),
-for example `tdt_ctc-110m-q8_0.gguf` (178 MB, English), or a bundle GGUF (its ASR component is loaded).
-`Config::engine_options`:
-
-| Option | Meaning |
-|--------|---------|
-| `threads` | CPU threads (default 4). parakeet.cpp keeps one process-wide compute thread count, so the last instance created wins |
-| `decoder` | `"default"` (by architecture), `"ctc"` or `"tdt"` (the transducer head) |
-| `language` | locale for prompt-conditioned multilingual models (Nemotron), e.g. `"de"`; ignored by other models |
-| `component` | the component of a bundle GGUF to load (default: its ASR component) |
-
-`params_json` per request accepts `language` and `decoder`. Requests follow the ASR row of the whisper engine:
-task `ASR` (or automatic / `TEXT_GEN`) with an audio part gives the transcript as one `TEXT` part (also sent as
-one `TEXT` chunk); no audio part is `AGENT_ERR_INVALID_CONFIG`; other tasks are `AGENT_ERR_UNSUPPORTED`. Audio is a
-`FILE` / `BYTES` WAV (any format the shared reader takes, resampled to 16 kHz) or a 16 kHz `F32` `TENSOR`.
-parakeet.cpp has no progress or abort hook inside one transcription: progress is 0/1 then 1/1, and `cancel` is
-honoured before (and checked after) the call. parakeet.cpp's own VAD, diarization and streaming APIs are not
-exposed yet.
-
-Every `parakeet_capi_*` entry catches C++ exceptions itself, so none cross the plugin boundary. The thread count
-is set through `pk::set_num_threads`, an internal (non-C-API) function of the statically linked library,
-because the C API has no thread setting for the default single backend.
-
-Licences: parakeet.cpp code (MIT). The weights keep their source model's licence (parakeet.cpp `docs/licenses.md`):
-the NVIDIA Parakeet TDT / CTC / RNNT checkpoints, including `parakeet-tdt_ctc-110m` used in the tests, are
-CC-BY-4.0 (attribution required); `parakeet_realtime_eou_120m-v1` is under the NVIDIA Open Model License and the
-Nemotron 3.5 / unified / diarization models under OpenMDW 1.1, so check those before shipping them.
-Tests (`tests/unit/test_engine_parakeet.cpp`) use parakeet.cpp's `tests/fixtures/speech.wav` and need
-`AGENT_TEST_PARAKEET_MODEL` for the real-model cases.
-
-
-**MTP heads.** A GGUF that carries a multi-token-prediction head (llama.cpp looks for the tensor `blk.<last>.nextn.eh_proj.weight`; `AGENT_LLAMA_TRACE=1` prints `mtp_layers=N`) is run by llama.cpp's own engine, the scheduler behind `llama-server` and `llama-cli`, linked into the plugin and called in process with in-memory requests (no socket is opened, nothing listens). It drives the head with its `draft-mtp` speculation (3 tokens per step); nothing depends on a model's name. That path does text generation with tools, images and audio (`options.mmproj`), streaming and cancel; embed, rerank, OCR and DECIDE use the plugin's own engine, so set `options.mtp=false` for those, or to skip the head. Measured on Qwen3.5-4B (4 cores): output that repeats the input accepts 98% of drafted tokens; open generation is slower with the head (upstream reports about -20%). Build with `-DAGENT_LLAMA_UPSTREAM=OFF` to leave it out.
+Licences: audio.cpp is Apache-2.0. The model weights keep their own licences, so check the model card before you
+ship one.

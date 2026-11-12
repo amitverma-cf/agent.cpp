@@ -150,7 +150,7 @@ int main(int argc, char **argv) {
     auto vlm = open_session(vlm_cfg, "vision model");
     if (!llm.ok || !sd.ok || !vlm.ok) return 1;
 
-    agent::FlowMemory prompter; // the LLM keeps the whole exchange, so it sees every critique
+    agent::Conversation prompter; // the LLM keeps the whole exchange, so it sees every critique
     prompter.id = "image-critique-prompter";
     prompter.history.push_back({.role = "system",
                                 .content = "You write prompts for a text-to-image model. Reply with the prompt only: one line, "
@@ -178,7 +178,7 @@ int main(int argc, char **argv) {
         const std::string path(image.value.message.media[0].path);
         std::printf("  image:    %s\n", path.c_str());
 
-        agent::FlowMemory critic; // a fresh conversation per picture
+        agent::Conversation critic; // a fresh conversation per picture
         const agent::Media media[] = {{path, std::string(image.value.message.media[0].mime)}};
         auto critique = agent::run_turn_with_media(vlm.value, critic,
                                                    "The picture should show: " + o.goal +

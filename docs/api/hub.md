@@ -115,7 +115,7 @@ The catalogue is written atomically (`.tmp` file, then rename) and parsed with s
 
 ## Licence policy
 
-ROADMAP §1.1 applies: `pull_model` refuses models whose licence restricts use and returns
+`pull_model` refuses models whose licence restricts use and returns
 `ErrorCode::PermissionDenied`. The error message names the licence. `is_restricted_license(license, license_name)`
 treats these as restricted:
 

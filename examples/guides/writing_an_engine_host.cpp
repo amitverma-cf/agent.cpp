@@ -51,7 +51,7 @@ void exercise(const std::string &plugin, const std::string &workspace, agent::En
     agent::Session session = std::move(sess.value);
 
     // 1. TEXT_GEN through run_turn, streamed: every on_chunk(AGENT_CHUNK_TEXT) reaches the token callback.
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     std::string streamed;
     auto reply = agent::run_turn(session, memory, "hello world", true, collect_token, &streamed);
     check(reply.ok && reply.value == "dlrow olleh", "run_turn reverses the text", reply.ok ? reply.value : reply.error.message);

@@ -633,7 +633,9 @@ std::unique_ptr<AppContainerLaunch> appcontainer_launch_for(PreparedSandbox &pre
     launch->impl = std::make_unique<AppContainerLaunch::Impl>();
     AppContainerLaunch::Impl &im = *launch->impl;
     auto fall_back = [&](const std::string &why) {
-        prepared.warnings.push_back("sandbox: AppContainer unavailable (" + why + "); falling back to write-only confinement (Low integrity): reads and network are not restricted.");
+        // No weaker substitute: a partial sandbox would promise more than it gives. The program runs unsandboxed, and says so.
+        prepared.low_integrity = false;
+        prepared.warnings.push_back("sandbox: AppContainer is not available on this system (" + why + "); this program runs WITHOUT a sandbox.");
         return std::unique_ptr<AppContainerLaunch>();
     };
 

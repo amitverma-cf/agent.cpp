@@ -1,6 +1,6 @@
 # Guide: writing an engine plugin
 
-An engine plugin wraps an inference library (llama.cpp, whisper.cpp, stable-diffusion.cpp, ONNX
+An engine plugin wraps an inference library (llama.cpp, audio.cpp, stable-diffusion.cpp, ONNX
 Runtime, your own) behind the C ABI in [`<agent-cpp/engine_abi.h>`](../../include/agent-cpp/engine_abi.h).
 The core loads it at runtime, in process or in a sandboxed `agent-engine-host`, and routes requests to
 it by capability. This guide walks through ABI 2 with a complete plugin,
@@ -118,7 +118,7 @@ int32_t reverse_run(void *instance, const agent_request *req, agent_response *re
 (`InferRequest::task`, `agent::run_task`, `Config::default_task`); the core refuses a task the engine
 does not declare before calling `run()`. When the caller did not choose, the core sends `TEXT_GEN` if
 declared, else the lowest declared bit, and sets `AGENT_REQUEST_FLAG_AUTO_TASK` in `req->flags`; an
-engine with several tasks may then route by content (sherpa turns audio into ASR and text into TTS).
+engine with several tasks may then route by content (audiocpp turns audio into ASR and text into TTS).
 
 **Input.** `req->messages` is the conversation (`role` = `system` / `user` / `assistant` / `tool`). Each
 message is a list of parts:
@@ -252,11 +252,11 @@ Run your engine both ways in its tests; the guide driver does:
 
 ## 7. Building and packaging
 
-**Inside this repository** (an `engines/<name>/` directory, enabled by an `AGENT_ENGINE_<NAME>` option),
-follow `engines/mock/CMakeLists.txt` and install with the top-level `agent_install_engine()`:
+**Inside this repository** (a `src/engines/<name>/` directory, enabled by an `AGENT_ENGINE_<NAME>` option),
+follow `src/engines/mock/CMakeLists.txt` and install with the top-level `agent_install_engine()`:
 
 ```cmake
-# engines/mine/CMakeLists.txt (examples/CMakeLists.txt builds agent-engine-reverse the same way, minus the install)
+# src/engines/mine/CMakeLists.txt (examples/CMakeLists.txt builds agent-engine-reverse the same way, minus the install)
 add_library(agent-engine-mine SHARED mine_engine.cpp)
 target_include_directories(agent-engine-mine PRIVATE ${PROJECT_SOURCE_DIR}/include)
 set_target_properties(agent-engine-mine PROPERTIES PREFIX "" CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
@@ -275,7 +275,7 @@ agent_install_engine(agent-engine-echo)                 # -> <prefix>/lib/agent/
 ```
 
 `agent_install_engine(<target> <libs>...)` also copies the runtime libraries a plugin loads through an
-`$ORIGIN` RPATH (ONNX Runtime, sherpa-onnx, ...), keeping symlinks whose targets are listed too. Prefer
+`$ORIGIN` RPATH (ONNX Runtime, ...), keeping symlinks whose targets are listed too. Prefer
 linking your inference library statically (llama and sdcpp do), so the plugin is one file.
 
 Then register it with the CLI, which loads it once to validate the ABI and prints its capabilities:

@@ -1,8 +1,8 @@
 // Out-of-process engines (EngineIsolation::Process): the engine_ipc codec, the mock engine driven
 // through agent-engine-host, crash / hang / cancel recovery, and the restart limit.
 
-#include "core/engines/engine_ipc.hpp"
-#include "core/providers/provider_ops.hpp"
+#include "agent/engines/engine_ipc.hpp"
+#include "agent/providers/provider_ops.hpp"
 
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/engine_abi.h>
@@ -191,7 +191,7 @@ TEST_CASE("Process isolation runs a turn in agent-engine-host", "[engine_host]")
     agent::Session session = open_session(host_config());
     REQUIRE(agent::providers::engine_host_starts(session) == 1);
 
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "host_turn";
     auto reply = agent::run_turn(session, memory, "hello");
     INFO(reply.error.message);
@@ -206,7 +206,7 @@ TEST_CASE("Process isolation runs a turn in agent-engine-host", "[engine_host]")
 TEST_CASE("Process isolation forwards streamed chunks", "[engine_host]") {
     agent::Session session = open_session(host_config());
     std::string streamed;
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "host_stream";
     auto reply = agent::run_turn(
         session, memory, "stream:200", true, [](std::string_view tok, void *ud) { *static_cast<std::string *>(ud) += tok; }, &streamed);
@@ -221,7 +221,7 @@ TEST_CASE("Process isolation completes a tool-call round trip", "[engine_host]")
     agent::Session session = open_session(cfg);
 
     g_ping_calls = 0;
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "host_tools";
     auto reply = agent::run_turn(session, memory, "call:ping");
     INFO(reply.error.message);
@@ -233,7 +233,7 @@ TEST_CASE("Process isolation completes a tool-call round trip", "[engine_host]")
 TEST_CASE("Process isolation carries media in and out", "[engine_host][media]") {
     agent::Session session = open_session(host_config());
     const agent::Media media[] = {{"/tmp/cat.png", "image/png"}, {"/tmp/hello.wav", "audio/wav"}};
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "host_media";
     auto reply = agent::run_turn_with_media(session, memory, "describe", media);
     REQUIRE(reply.ok);
@@ -294,7 +294,7 @@ TEST_CASE("Process isolation reports progress and cancels across the process bou
     agent::Session session = open_session(cfg);
     progress.session = &session;
 
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "host_progress";
     auto done = agent::run_turn(session, memory, "slow");
     REQUIRE(done.ok);
@@ -331,7 +331,7 @@ TEST_CASE("A crashing engine fails the turn, and the next turn restarts the host
     for (const Case &c : cases) {
         DYNAMIC_SECTION(c.prompt) {
             agent::Session session = open_session(host_config());
-            agent::FlowMemory memory;
+            agent::Conversation memory;
             memory.id = std::string("host_") + c.prompt;
 
             auto crashed = agent::run_turn(session, memory, c.prompt);
@@ -353,7 +353,7 @@ TEST_CASE("The watchdog kills a hung engine", "[engine_host][crash]") {
     auto cfg = host_config();
     cfg.engine_timeout_ms = 300;
     agent::Session session = open_session(cfg);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "host_hang";
 
     const auto t0 = std::chrono::steady_clock::now();
@@ -375,7 +375,7 @@ TEST_CASE("A cancel the engine ignores kills the host after the grace period", "
     cfg.engine_cancel_grace_ms = 200;
     cfg.engine_max_restarts = 0; // a kill after cancel does not count as a crash restart
     agent::Session session = open_session(cfg);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "host_cancel_hang";
 
     std::thread canceller([&session] {
@@ -399,7 +399,7 @@ TEST_CASE("Host restarts are limited per minute", "[engine_host][crash]") {
     auto cfg = host_config();
     cfg.engine_max_restarts = 1;
     agent::Session session = open_session(cfg);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "host_restart_limit";
 
     REQUIRE(agent::run_turn(session, memory, "crash:exit").error.code == agent::ErrorCode::EngineCrashed);
@@ -453,7 +453,7 @@ TEST_CASE("engines.json \"isolation\" selects process isolation by default", "[e
     cfg.engine_isolation = agent::EngineIsolation::Default;
     agent::Session isolated = open_session(cfg);
     REQUIRE(agent::providers::engine_host_starts(isolated) == 1);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "host_manifest";
     REQUIRE(agent::run_turn(isolated, memory, "hi").value == "echo: hi");
 
@@ -515,7 +515,7 @@ TEST_CASE("Process isolation per-turn overhead", "[.bench][engine_host]") {
         cfg.engine_isolation = isolation;
         cfg.auto_default_tools = false;
         agent::Session session = open_session(cfg);
-        agent::FlowMemory memory;
+        agent::Conversation memory;
         memory.id = "bench";
         size_t chunks = 0;
         auto on_token = [](std::string_view, void *ud) { ++*static_cast<size_t *>(ud); };
@@ -565,7 +565,7 @@ TEST_CASE("The llama engine runs a tool-call turn through the host", "[engine_ho
 
     g_ping_calls = 0;
     std::string streamed;
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "host_llama";
     auto reply = agent::run_turn(
         session, memory, "Call the ping tool now.", true, [](std::string_view tok, void *ud) { *static_cast<std::string *>(ud) += tok; },

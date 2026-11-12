@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent.cpp/schemas/agent.schema.json",
   "title": "agent.json",
-  "description": "Declarative graph read by parse_graph_json / load_graph_json (src/core/graph/graph_json.cpp). The loader warns about unknown fields but accepts them, so additionalProperties is not restricted. Checks that need the whole document are not expressible here: unique node names, node references, one outgoing edge per node, body/branch/step ownership, registered functions, unique MCP server names.",
+  "description": "Declarative graph read by parse_graph_json / load_graph_json (src/agent/graph/graph_json.cpp). The loader warns about unknown fields but accepts them, so additionalProperties is not restricted. Checks that need the whole document are not expressible here: unique node names, node references, one outgoing edge per node, body/branch/step ownership, registered functions, unique MCP server names.",
   "type": "object",
   "required": ["nodes"],
   "properties": {

@@ -137,7 +137,7 @@ The first block defaults to `context_window * 8 + 2 MiB` (override via `Config::
 ### Lifetime rules
 
 - Do not call `reset()` manually inside a tool callback or a `TransitionFn`. `run_turn` manages resets.
-- Do not store arena-backed `string_view` or `span` values in `FlowMemory::history`. History uses owned `Message` objects.
+- Do not store arena-backed `string_view` or `span` values in `Conversation::history`. History uses owned `Message` objects.
 - Views into the arena from `InferResponse::message` become invalid after the next call to `run_turn` (or any explicit `arena.reset()`).
 
 ---

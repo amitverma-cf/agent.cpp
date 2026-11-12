@@ -45,5 +45,5 @@ driver, but whether a given driver version honours them under Landlock has not b
 ## Known gaps
 
 - ROCm / HIP, Intel Level Zero / SYCL and Metal caches are not redirected.
-- The sandbox on macOS and Windows is partial ([security-sandbox.md](security-sandbox.md)); the cache
+- The sandbox on Windows is partial ([security-sandbox.md](security-sandbox.md)); the cache
   folders matter on Linux first.

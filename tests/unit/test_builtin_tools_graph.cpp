@@ -377,7 +377,7 @@ TEST_CASE("compress_context with a process-isolated engine and a non-chat defaul
     cfg.engine_isolation = agent::EngineIsolation::Process;
     cfg.engine_host_path = AGENT_TEST_ENGINE_HOST_PATH;
     auto session = open(cfg);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     for (int i = 0; i < 6; ++i) {
         memory.history.push_back(agent::Message{.role = "user", .content = "q" + std::to_string(i)});
         memory.history.push_back(agent::Message{.role = "assistant", .content = "a" + std::to_string(i)});

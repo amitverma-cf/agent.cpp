@@ -863,16 +863,16 @@ namespace {
 
 struct HookLog {
     std::vector<std::string> calls;
-    const agent::FlowMemory *memory = nullptr;
+    const agent::Conversation *memory = nullptr;
 };
 
-void record_hook(agent::Session &, agent::FlowMemory &memory, std::string_view tool, std::string_view, std::string_view result, void *ud) {
+void record_hook(agent::Session &, agent::Conversation &memory, std::string_view tool, std::string_view, std::string_view result, void *ud) {
     auto *log = static_cast<HookLog *>(ud);
     log->memory = &memory;
     log->calls.push_back(std::string(tool) + (result.empty() ? ":pre" : ":post=" + std::string(result)));
 }
 
-void record_other_hook(agent::Session &, agent::FlowMemory &, std::string_view tool, std::string_view, std::string_view, void *ud) {
+void record_other_hook(agent::Session &, agent::Conversation &, std::string_view tool, std::string_view, std::string_view, void *ud) {
     static_cast<HookLog *>(ud)->calls.push_back("other-filter-fired:" + std::string(tool));
 }
 

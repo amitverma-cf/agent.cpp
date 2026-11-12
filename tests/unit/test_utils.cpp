@@ -43,7 +43,7 @@ TEST_CASE("File logging writes timestamped entries to workspace_dir/logs", "[uti
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
-    agent::FlowMemory conv;
+    agent::Conversation conv;
     conv.id = "filelog_chat";
     REQUIRE(agent::run_turn(session, conv, "hello").ok);
 

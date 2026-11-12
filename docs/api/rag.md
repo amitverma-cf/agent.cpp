@@ -13,7 +13,7 @@ Embedding, reranking and chat normally use **three different models**, so each r
 ```cpp
 agent::Config base;
 base.provider      = agent::AiProvider::Engine;
-base.engine        = "build/engines/llama/agent-engine-llama.so";
+base.engine        = "build/src/engines/llama/agent-engine-llama.so";
 base.workspace_dir = ".workspace";
 
 agent::Config embed_cfg = base;
@@ -70,6 +70,16 @@ Both send a non-chat task to the session's engine (`AGENT_CAP_EMBED` / `AGENT_CA
   engine refuses a task that doesn't match the instance's `mode`).
 - Don't drive one session from several threads at once (the `search_knowledge` tool serializes its
   own calls).
+
+### Multimodal embed
+
+```cpp
+struct EmbedInput { std::string_view text; std::span<const Media> media; };
+Result<std::vector<std::vector<float>>> embed(Session &session, std::span<const EmbedInput> inputs);
+```
+
+Each input is optional text plus images or audio, and gets one embedding, in order. It needs an embedding model with
+a projector: load it with the `mmproj` option. Text-only models reject media. Verified with Qwen3-VL-Embedding-2B.
 
 Engine contract, for plugin authors: for `AGENT_CAP_EMBED`, return one `AGENT_PART_TENSOR` part named
 `"embedding"` (f32, shape `[n_dim]`) per TEXT part of the request, in order. For

@@ -83,7 +83,7 @@ struct HookLog {
     std::string post;
 };
 
-void record_hook(agent::Session &, agent::FlowMemory &, std::string_view tool, std::string_view, std::string_view result, void *ud) {
+void record_hook(agent::Session &, agent::Conversation &, std::string_view tool, std::string_view, std::string_view result, void *ud) {
     auto *log = static_cast<HookLog *>(ud);
     if (result.empty()) log->pre = std::string(tool);
     else log->post = std::string(result);
@@ -167,7 +167,7 @@ TEST_CASE("parts tools go through the permission gate and relative media paths b
 
 TEST_CASE("run_turn attaches tool media to the tool message and sends it to the engine", "[tools][tool_parts]") {
     auto session = open(engine_config());
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "tool_parts_turn";
 
     auto reply = agent::run_turn(session, memory, "call:snap");
@@ -185,9 +185,9 @@ TEST_CASE("run_turn attaches tool media to the tool message and sends it to the 
     CHECK(tool_msg->media[0].path == snap_path());
 
     // Persisted with the history.
-    agent::FlowMemory loaded;
+    agent::Conversation loaded;
     loaded.id = memory.id;
-    REQUIRE(agent::load_flow_memory(session, loaded).ok);
+    REQUIRE(agent::load_conversation(session, loaded).ok);
     bool found = false;
     for (const auto &m : loaded.history)
         if (m.role == "tool" && m.media.size() == 1 && m.media[0].mime == "image/png") found = true;
@@ -201,11 +201,11 @@ TEST_CASE("run_turn attaches tool media to the tool message and sends it to the 
 
 TEST_CASE("run_turn reports tool-side failures and tensors", "[tools][tool_parts]") {
     auto session = open(engine_config());
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     REQUIRE(agent::run_turn(session, memory, "call:broken").ok);
     CHECK(memory.history[memory.history.size() - 2].content == "Error: lens cap on");
 
-    agent::FlowMemory m2;
+    agent::Conversation m2;
     REQUIRE(agent::run_turn(session, m2, "call:measure").ok);
     const auto &tool_msg = m2.history[m2.history.size() - 2];
     CHECK(tool_msg.role == "tool");
@@ -216,7 +216,7 @@ TEST_CASE("run_turn reports tool-side failures and tensors", "[tools][tool_parts
 TEST_CASE("tool media the engine cannot take stays out of the request", "[tools][tool_parts]") {
     SECTION("no matching input capability") {
         auto session = open(engine_config());
-        agent::FlowMemory memory;
+        agent::Conversation memory;
         auto reply = agent::run_turn(session, memory, "call:pdf");
         REQUIRE(reply.ok);
         CHECK(reply.value == "tool done"); // the mock does not declare application/pdf input
@@ -226,7 +226,7 @@ TEST_CASE("tool media the engine cannot take stays out of the request", "[tools]
         auto cfg = engine_config();
         cfg.engine_options = R"({"reject-media": true})";
         auto session = open(cfg);
-        agent::FlowMemory memory;
+        agent::Conversation memory;
         auto reply = agent::run_turn(session, memory, "call:snap");
         INFO(reply.error.message);
         REQUIRE(reply.ok);
@@ -242,7 +242,7 @@ TEST_CASE("tool media reaches a process-isolated engine", "[tools][tool_parts][e
     cfg.engine_isolation = agent::EngineIsolation::Process;
     cfg.engine_host_path = AGENT_TEST_ENGINE_HOST_PATH;
     auto session = open(cfg);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     auto reply = agent::run_turn(session, memory, "call:snap");
     INFO(reply.error.message);
     REQUIRE(reply.ok);
@@ -317,7 +317,7 @@ TEST_CASE("MCP image content becomes tool media", "[tools][tool_parts][mcp]") {
     CHECK(failed.value.text == "boom");
 
     // Through a turn: the model asks for the image, the engine receives it as a FILE part.
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     auto reply = agent::run_turn(session, memory, R"(call:fake.echo {"text":"pic","image":true})");
     INFO(reply.error.message);
     REQUIRE(reply.ok);
@@ -390,7 +390,7 @@ TEST_CASE("a vision model sees an image a tool returned", "[tools][tool_parts][l
     cfg.tools = {parts_tool("camera", red_camera)};
     auto session = open(cfg);
 
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.history.push_back(
         agent::Message{.role = "user", .content = "Take a photo with the camera. What color is the photo? Answer in one word."});
     agent::Message call;
@@ -437,7 +437,7 @@ TEST_CASE("a text-only model keeps working after a tool returned an image", "[to
     cfg.tools = {parts_tool("camera", red_camera)};
     auto session = open(cfg);
 
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.history.push_back(agent::Message{.role = "user", .content = "Take a photo, then say done."});
     agent::Message call;
     call.role = "assistant";

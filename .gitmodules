@@ -10,9 +10,6 @@
 [submodule "vendor/trellis2cpp"]
 	path = vendor/trellis2cpp
 	url = https://github.com/localai-org/trellis2cpp.git
-[submodule "vendor/whisper.cpp"]
-	path = vendor/whisper.cpp
-	url = https://github.com/ggml-org/whisper.cpp.git
-[submodule "vendor/parakeet.cpp"]
-	path = vendor/parakeet.cpp
-	url = https://github.com/mudler/parakeet.cpp.git
+[submodule "vendor/audio.cpp"]
+	path = vendor/audio.cpp
+	url = https://github.com/0xShug0/audio.cpp.git

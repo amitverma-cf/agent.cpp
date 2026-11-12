@@ -86,7 +86,7 @@ TEST_CASE("cli: config.json round trip", "[cli]") {
     c.workspace = "/home/me/agent ws";
     c.models_dir = "C:\\Users\\me\\models";
     c.default_model = "qwen2.5-0.5b-instruct-q4_k_m";
-    c.capabilities = {"llama", "sherpa"};
+    c.capabilities = {"llama", "audiocpp"};
     c.backend = "vulkan";
     c.hardware.cpu_cores = 8;
     c.hardware.nvidia_smi = false;
@@ -326,7 +326,7 @@ TEST_CASE("cli: slash command parsing", "[cli]") {
 
 TEST_CASE("cli: small helpers", "[cli]") {
     CHECK(json_escape("a\"b\\c\nd\x01") == "a\\\"b\\\\c\\nd\\u0001");
-    CHECK(split_list(" llama, Sherpa,,sdcpp llama ") == std::vector<std::string>{"llama", "sherpa", "sdcpp"});
+    CHECK(split_list(" llama, AudioCpp,,sdcpp llama ") == std::vector<std::string>{"llama", "audiocpp", "sdcpp"});
     CHECK(split_list("").empty());
     CHECK(caps_to_names((1u << 0) | (1u << 1) | (1u << 10)) == std::vector<std::string>{"text_gen", "tool_call", "image_gen"});
     CHECK(plugin_file_name("llama").rfind("agent-engine-llama.", 0) == 0);
@@ -415,4 +415,21 @@ TEST_CASE("cli: the usage text names every command main() dispatches", "[cli]") 
     }
     CHECK(usage.find("--download-engines") != std::string::npos);
     CHECK(usage.find("--install-runtimes") != std::string::npos);
+}
+
+TEST_CASE("--no-sandbox is a global flag that turns the sandboxes off", "[cli]") {
+    agent::Config on;
+    apply_sandbox_choice(on);
+    CHECK(on.engine_sandbox.enabled);
+    CHECK(on.tool_sandbox.enabled);
+    const std::vector<std::string_view> args = {"doctor", "--no-sandbox"};
+    auto cl = parse_command_line(args);
+    REQUIRE(cl.ok);
+    CHECK(cl.value.has("no-sandbox"));
+    set_no_sandbox(true);
+    agent::Config off;
+    apply_sandbox_choice(off);
+    CHECK_FALSE(off.engine_sandbox.enabled);
+    CHECK_FALSE(off.tool_sandbox.enabled);
+    set_no_sandbox(false);
 }

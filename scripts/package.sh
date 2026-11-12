@@ -11,13 +11,12 @@ usage() {
     cat <<'EOF'
 usage: scripts/package.sh [options] [-- extra cmake configure args]
 
-  --engines LIST         comma-separated engine plugins: llama,onnx,sdcpp,sherpa (default: llama)
+  --engines LIST         comma-separated engine plugins: llama,onnx,sdcpp,audiocpp,trellis (default: llama)
   --backend NAME         cpu | cuda | vulkan (default: cpu); selects the ggml backend of llama
   --build-dir DIR        CMake build directory (default: build-package)
   --out-dir DIR          where the tarball goes (default: dist)
   --jobs N               parallel build jobs (default: 2)
-  --onnxruntime-root DIR prebuilt ONNX Runtime (needed for --engines onnx)
-  --sherpa-onnx-root DIR prebuilt sherpa-onnx shared release (needed for --engines sherpa)
+  --onnxruntime-root DIR use this ONNX Runtime instead of downloading the pinned upstream release
   --native               optimise ggml for this machine (-march=native; not portable).
                          Default: GGML_NATIVE=OFF, i.e. AVX2/FMA/F16C/BMI2 (x86-64-v3).
   -h, --help             this help
@@ -31,7 +30,6 @@ build_dir=build-package
 out_dir=dist
 jobs=2
 ort_root=""
-sherpa_root=""
 native=OFF
 extra_args=()
 
@@ -43,7 +41,6 @@ while [ $# -gt 0 ]; do
     --out-dir) out_dir=$2; shift 2 ;;
     --jobs) jobs=$2; shift 2 ;;
     --onnxruntime-root) ort_root=$2; shift 2 ;;
-    --sherpa-onnx-root) sherpa_root=$2; shift 2 ;;
     --native) native=ON; shift ;;
     -h | --help) usage; exit 0 ;;
     --) shift; extra_args=("$@"); break ;;
@@ -65,7 +62,7 @@ version=$(sed -n 's/^project("agent.cpp" VERSION \([0-9][0-9.]*\).*/\1/p' "$src_
 
 # Engine selection -> CMake options and build targets.
 cmake_args=(-DCMAKE_BUILD_TYPE=Release -DAGENT_BUILD_CLI=ON -DAGENT_BUILD_HUB=ON -DBUILD_SHARED_LIBS=OFF
-    -DAGENT_ENGINE_LLAMA=OFF -DAGENT_ENGINE_ONNX=OFF -DAGENT_ENGINE_SDCPP=OFF -DAGENT_ENGINE_SHERPA=OFF)
+    -DAGENT_ENGINE_LLAMA=OFF -DAGENT_ENGINE_ONNX=OFF -DAGENT_ENGINE_SDCPP=OFF -DAGENT_ENGINE_AUDIOCPP=OFF)
 targets=(agent agent_store_sqlite agent_hub agent_cli_bin agent-engine-host)
 IFS=, read -r -a engine_list <<<"$engines"
 for e in "${engine_list[@]}"; do
@@ -73,15 +70,13 @@ for e in "${engine_list[@]}"; do
     llama) cmake_args+=(-DAGENT_ENGINE_LLAMA=ON -DGGML_NATIVE="$native") ;;
     sdcpp) cmake_args+=(-DAGENT_ENGINE_SDCPP=ON -DAGENT_SDCPP_BUILD_JOBS="$jobs") ;;
     onnx)
-        [ -n "$ort_root" ] || die "--engines onnx needs --onnxruntime-root"
-        cmake_args+=(-DAGENT_ENGINE_ONNX=ON -DONNXRUNTIME_ROOT="$ort_root")
+        # without --onnxruntime-root the pinned upstream release is downloaded by CMake (cmake/onnxruntime_release.cmake)
+        cmake_args+=(-DAGENT_ENGINE_ONNX=ON)
+        [ -n "$ort_root" ] && cmake_args+=(-DONNXRUNTIME_ROOT="$ort_root")
         ;;
-    sherpa)
-        [ -n "$sherpa_root" ] || die "--engines sherpa needs --sherpa-onnx-root"
-        cmake_args+=(-DAGENT_ENGINE_SHERPA=ON -DSHERPA_ONNX_ROOT="$sherpa_root")
-        ;;
+    audiocpp) cmake_args+=(-DAGENT_ENGINE_AUDIOCPP=ON -DAGENT_AUDIOCPP_BUILD_JOBS="$jobs") ;;
     "") ;;
-    *) die "unknown engine '$e' (llama, onnx, sdcpp, sherpa)" ;;
+    *) die "unknown engine '$e' (llama, onnx, sdcpp, audiocpp)" ;;
     esac
     [ -n "$e" ] && targets+=("agent-engine-$e")
 done
@@ -128,8 +123,8 @@ copy_license "$src_dir/vendor/cpp-httplib/LICENSE" cpp-httplib # the CLI's HTTP 
 copy_license "$src_dir/vendor/miniaudio/LICENSE" miniaudio     # sound devices for `agent voice`
 [[ ",$engines," == *,llama,* ]] && copy_license "$src_dir/vendor/llama.cpp/LICENSE" llama.cpp
 [[ ",$engines," == *,sdcpp,* ]] && copy_license "$src_dir/vendor/stable-diffusion.cpp/LICENSE" stable-diffusion.cpp
-[[ ",$engines," == *,onnx,* ]] && copy_license "$ort_root/LICENSE" onnxruntime
-[[ ",$engines," == *,sherpa,* ]] && copy_license "$sherpa_root/LICENSE" sherpa-onnx
+[[ ",$engines," == *,onnx,* ]] && copy_license "${ort_root:-$build_dir/_deps/agent_onnxruntime_release-src}/LICENSE" onnxruntime
+[[ ",$engines," == *,audiocpp,* ]] && copy_license "$src_dir/vendor/audio.cpp/LICENSE" audio.cpp
 
 # Sanity checks: the binary runs and every plugin resolves its libraries.
 "$pkg/bin/agent" version

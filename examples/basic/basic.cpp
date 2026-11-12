@@ -85,7 +85,7 @@ int main() {
     }
 
     {
-        agent::FlowMemory state;
+        agent::Conversation state;
         state.id = "basic_demo";
 
         auto r1 = agent::run_turn(session, state, "What is 2 + 2?");

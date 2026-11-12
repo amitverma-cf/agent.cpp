@@ -16,7 +16,7 @@ agent.cpp is structured around three core principles that inform every design de
 ```
 +---------------------------------------------------------------------+
 |                        User Application                              |
-|   Graph  GraphRun  FlowMemory  EventHooks                            |
+|   Graph  GraphRun  Conversation  EventHooks                            |
 +-----------------------------+---------------------------------------+
                               | calls
 +-----------------------------v---------------------------------------+
@@ -61,11 +61,11 @@ Session::Arena slab  (fixed, allocated once at init)
   +-- TensorView[K]      (zero-copy into TensorData buffers)
 ```
 
-Owned data — `Message::content`, `ToolCall::arguments`, history entries — live in `FlowMemory::history` on the heap. They are never placed in the arena and persist across turns.
+Owned data — `Message::content`, `ToolCall::arguments`, history entries — live in `Conversation::history` on the heap. They are never placed in the arena and persist across turns.
 
 ### Conversation history lifetime
 
-`FlowMemory::history` is a `std::vector<Message>` whose elements are stable. `std::string` members inside `Message` do not move when new messages are pushed (because `Message` owns its strings). Each `Message::token_count` is a mutable cache seeded to -1 and populated lazily by `count_message_tokens`.
+`Conversation::history` is a `std::vector<Message>` whose elements are stable. `std::string` members inside `Message` do not move when new messages are pushed (because `Message` owns its strings). Each `Message::token_count` is a mutable cache seeded to -1 and populated lazily by `count_message_tokens`.
 
 ### Session self-reference cell
 
@@ -141,7 +141,7 @@ run_turn(session, memory, user_prompt)
       |
       +-- if no tool calls  -->  break
  |
- +-- save_flow_memory()  -->  store_memory("history:<id>", JSON) + store_memory("history_stats:<id>", JSON)
+ +-- save_conversation()  -->  store_memory("history:<id>", JSON) + store_memory("history_stats:<id>", JSON)
  |
  +-- return owned std::string   (safe: copied before arena reset)
 ```
@@ -150,7 +150,7 @@ run_turn(session, memory, user_prompt)
 
 ## Graph runtime
 
-Multi-step workflows are graphs (`src/core/graph/`, [api/graph.md](api/graph.md)): named nodes (Agent, Function, Tool, Parallel, Loop) joined by static or routed edges, with a `GraphState` of scoped key/value pairs plus one `FlowMemory` per Agent conversation.
+Multi-step workflows are graphs (`src/agent/graph/`, [api/graph.md](api/graph.md)): named nodes (Agent, Function, Tool, Parallel, Loop) joined by static or routed edges, with a `GraphState` of scoped key/value pairs plus one `Conversation` per Agent conversation.
 
 ```
 run_graph(session, graph, run)
@@ -199,11 +199,11 @@ All branches share the same `Session`. Two different mechanisms are used, becaus
 | `Mock`, non-concurrent engines | Sequential | No batching support / not worth the complexity for these. |
 | Concurrent engines (llama) | Threads + continuous batching inside the plugin (see below) | A single `llama_context` can only run one `llama_decode` at a time regardless of thread count — threads alone buy nothing; the actual parallelism has to come from batching multiple sequences into one decode call. |
 
-Making any of this safe required removing all of `Session`'s ambient mutable "current turn" state and replacing it with `thread_local` variables in the `agent::ambient` namespace (`src/core/executor/ambient_turn.cpp`): which `FlowMemory`/hooks/tool-allowlist the current thread's `execute_tool` call is running under (`ambient::active_memory`, `ambient::active_hooks`, `ambient::allowed_tools`), which `Arena` slot to use (`ambient::worker_arena_index`, resolved via `ambient::current_arena(session)`), and the cached `simdjson::ondemand::parser` (`ambient::json_parser`). A single thread behaves identically to a shared-field design; concurrent threads get automatic isolation for free, no locking needed on any of it. What *is* still shared and mutex-guarded: `Session::stats` (`Session::stats_mutex`), the log file (`Session::log_mutex`), and event hook dispatch (`Session::event_mutex`), since these genuinely accumulate/fire across every concurrently-running turn.
+Making any of this safe required removing all of `Session`'s ambient mutable "current turn" state and replacing it with `thread_local` variables in the `agent::ambient` namespace (`src/agent/executor/ambient_turn.cpp`): which `Conversation`/hooks/tool-allowlist the current thread's `execute_tool` call is running under (`ambient::active_memory`, `ambient::active_hooks`, `ambient::allowed_tools`), which `Arena` slot to use (`ambient::worker_arena_index`, resolved via `ambient::current_arena(session)`), and the cached `simdjson::ondemand::parser` (`ambient::json_parser`). A single thread behaves identically to a shared-field design; concurrent threads get automatic isolation for free, no locking needed on any of it. What *is* still shared and mutex-guarded: `Session::stats` (`Session::stats_mutex`), the log file (`Session::log_mutex`), and event hook dispatch (`Session::event_mutex`), since these genuinely accumulate/fire across every concurrently-running turn.
 
 ### Continuous batching
 
-`engines/llama/llama_engine.cpp`'s `Batcher` owns the single `llama_model`/`llama_context` for an engine instance and multiplexes every concurrently-active generation onto it via llama.cpp's native multi-sequence batching (`llama_batch` entries tagged with distinct `llama_seq_id`s, context created with `n_seq_max = Config::max_parallel_subagents`):
+`src/engines/llama/llama_engine.cpp`'s `Batcher` owns the single `llama_model`/`llama_context` for an engine instance and multiplexes every concurrently-active generation onto it via llama.cpp's native multi-sequence batching (`llama_batch` entries tagged with distinct `llama_seq_id`s, context created with `n_seq_max = Config::max_parallel_subagents`):
 
 - Each generation's **prompt prefill** is decoded on its own (split into `n_batch`-sized `llama_decode` calls) when its sequence is acquired (not batched across sequences — prefill is comparatively rare and cheap relative to the token-by-token loop, and batching variable-length prompts together is a lot more complexity for little benefit).
 - Each generation's **next-token step**, from then on, goes through `Batcher::next_token()`: the first caller in a round becomes its leader, briefly releases the lock so other concurrently-running generations can join (a ~2ms debounce window), then performs **one** `llama_decode` covering every joined sequence's next token and wakes every waiter with its own sampled result. A round with only one active sequence degenerates to exactly one decode call per token — today's behavior — so continuous batching only kicks in when there's actually something to batch.
@@ -247,7 +247,7 @@ When history token total exceeds 70% of `context_window` and history has more th
 | File | AiProvider | Key dependency |
 |---|---|---|
 | `provider_ops.cpp` | Mock | — |
-| `engine_provider.cpp` | Engine | `engine_abi.h` (plugins such as `engines/llama/` and `engines/onnx/` link their own backends; the core never links llama.cpp or ONNX Runtime) |
+| `engine_provider.cpp` | Engine | `engine_abi.h` (plugins such as `src/engines/llama/` and `src/engines/onnx/` link their own backends; the core never links llama.cpp or ONNX Runtime) |
 
 All provider state is heap-allocated and type-erased as `shared_ptr<void>` in `Session::provider_state`. The provider's destructor handles cleanup.
 
@@ -255,11 +255,11 @@ All provider state is heap-allocated and type-erased as `shared_ptr<void>` in `S
 
 ## Memory backend
 
-`MemoryConfig::store` selects a `StoreOps` table. The core ships only `in_memory_store.cpp` (the default). The optional `agent_store_sqlite` library (`tools/store-sqlite/`) provides `sqlite_store()`: a bounded write-back cache (`unordered_map` + LRU list, protected by one mutex) in front of a SQLite database (WAL journal mode, `synchronous=NORMAL`). Reads and writes always hit the cache first; a background writer thread flushes dirty entries to SQLite on a size-or-time trigger and evicts LRU clean entries once over the configured byte budget. `db_path = ":memory:"` (opened with SQLite's URI shared-cache form so both the writer and reader connections see the same data) gives the old standalone InMemory provider's ephemeral behavior through the same code path. See [docs/api/memory.md](api/memory.md) for the full design.
+`MemoryConfig::store` selects a `StoreOps` table. The core ships only `in_memory_store.cpp` (the default). The optional `agent_store_sqlite` library (`apps/store-sqlite/`) provides `sqlite_store()`: a bounded write-back cache (`unordered_map` + LRU list, protected by one mutex) in front of a SQLite database (WAL journal mode, `synchronous=NORMAL`). Reads and writes always hit the cache first; a background writer thread flushes dirty entries to SQLite on a size-or-time trigger and evicts LRU clean entries once over the configured byte budget. `db_path = ":memory:"` (opened with SQLite's URI shared-cache form so both the writer and reader connections see the same data) gives the old standalone InMemory provider's ephemeral behavior through the same code path. See [docs/api/memory.md](api/memory.md) for the full design.
 
-Keys are arbitrary UTF-8 strings. Conversation history is serialised as a JSON array and stored under `"history:<FlowMemory::id>"` after every turn.
+Keys are arbitrary UTF-8 strings. Conversation history is serialised as a JSON array and stored under `"history:<Conversation::id>"` after every turn.
 
-RAG/vector search is a separate concern, never routed through this cache — see `tools/store-sqlite/src/sqlite_vec_data_source.cpp` and [docs/api/data-sources.md](api/data-sources.md).
+RAG/vector search is a separate concern, never routed through this cache — see `apps/store-sqlite/src/sqlite_vec_data_source.cpp` and [docs/api/data-sources.md](api/data-sources.md).
 
 ---
 

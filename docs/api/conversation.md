@@ -6,24 +6,24 @@ agent.cpp separates inference into two levels: a **stateless layer** (`infer`) f
 
 ---
 
-## FlowMemory
+## Conversation
 
 Holds the full history and stats for one logical conversation thread. You own this object and can pre-populate it before the first turn.
 
 ```cpp
-struct FlowMemory {
+struct Conversation {
     std::string          id;       // used as memory key "history:<id>"
     std::vector<Message> history;  // ordered list of messages
     TurnStats             stats;    // per-conversation telemetry (auto-updated)
 };
 ```
 
-`save_flow_memory`/`load_flow_memory` persist/restore a `FlowMemory` (history + stats) via the memory backend — see [History persistence](#history-persistence) below.
+`save_conversation`/`load_conversation` persist/restore a `Conversation` (history + stats) via the memory backend — see [History persistence](#history-persistence) below.
 
 Typical setup:
 
 ```cpp
-agent::FlowMemory conv;
+agent::Conversation conv;
 conv.id = "my_chat_1";
 
 // Optional: inject a system message before the first turn
@@ -39,7 +39,7 @@ The `id` is used as the key when persisting history to the memory backend (`"his
 
 ## Message
 
-Owned, heap-allocated message stored in `FlowMemory::history`.
+Owned, heap-allocated message stored in `Conversation::history`.
 
 ```cpp
 struct Message {
@@ -83,7 +83,7 @@ struct MessageView {
 
 ## infer
 
-Stateless, single-shot inference. Takes a span of `MessageView`s, returns an `InferResponse`. Does not touch `FlowMemory`.
+Stateless, single-shot inference. Takes a span of `MessageView`s, returns an `InferResponse`. Does not touch `Conversation`.
 
 ```cpp
 Result<InferResponse> infer(Session &session, const InferRequest &request);
@@ -152,7 +152,7 @@ The main high-level API. Manages history, tool call loops, pruning, compression,
 ```cpp
 Result<std::string> run_turn(
     Session           &session,
-    FlowMemory        &memory,
+    Conversation        &memory,
     std::string_view   user_prompt,
     bool               stream          = false,
     TokenStreamFn      on_token        = nullptr,
@@ -184,7 +184,7 @@ Result<std::string> run_turn(
    e. Append assistant `Message` to history.
    f. If the response contains tool calls, dispatch each one (see below), append results, continue loop.
    g. If no tool calls, exit loop.
-4. `save_flow_memory` — serialise `memory.history` (and `memory.stats`) to JSON and store under `"history:<memory.id>"` / `"history_stats:<memory.id>"`. This is a write-only step — `run_turn` never reads history back; call `load_flow_memory` explicitly to resume a conversation after a process restart (see [History persistence](#history-persistence)).
+4. `save_conversation` — serialise `memory.history` (and `memory.stats`) to JSON and store under `"history:<memory.id>"` / `"history_stats:<memory.id>"`. This is a write-only step — `run_turn` never reads history back; call `load_conversation` explicitly to resume a conversation after a process restart (see [History persistence](#history-persistence)).
 5. Return assistant text as owned `std::string`.
 
 ### Tool call loop
@@ -215,7 +215,7 @@ If the number of tool-call rounds reaches `Config::max_tool_call_rounds` (defaul
 ```cpp
 Result<void> compress_context(
     Session           &session,
-    FlowMemory        &memory,
+    Conversation        &memory,
     size_t             keep_recent = 6);
 ```
 
@@ -242,25 +242,25 @@ agent::compress_context(session, conv, 4);   // keep 4 most recent messages
 
 ## History persistence
 
-After every successful `run_turn`, the conversation history and stats are serialised to JSON and stored in the memory backend via `save_flow_memory`, under `"history:<conv.id>"` (history) and `"history_stats:<conv.id>"` (`FlowMemory::stats`). This is best-effort — if the memory write fails, the function does not propagate the error (the in-memory history is still correct).
+After every successful `run_turn`, the conversation history and stats are serialised to JSON and stored in the memory backend via `save_conversation`, under `"history:<conv.id>"` (history) and `"history_stats:<conv.id>"` (`Conversation::stats`). This is best-effort — if the memory write fails, the function does not propagate the error (the in-memory history is still correct).
 
 `run_turn` only ever *writes* history — it never reads it back. To resume a conversation after a process restart, load it explicitly:
 
 ```cpp
-Result<void> save_flow_memory(Session &session, const FlowMemory &memory);
-Result<void> load_flow_memory(Session &session, FlowMemory &memory);
+Result<void> save_conversation(Session &session, const Conversation &memory);
+Result<void> load_conversation(Session &session, Conversation &memory);
 ```
 
 ```cpp
-agent::FlowMemory conv;
+agent::Conversation conv;
 conv.id = "my_chat_1";
-auto load_res = agent::load_flow_memory(session, conv);   // fills conv.history + conv.stats
+auto load_res = agent::load_conversation(session, conv);   // fills conv.history + conv.stats
 if (!load_res.ok) {
     // no saved history yet (or it failed to parse) -- start fresh
 }
 ```
 
-`save_flow_memory`/`load_flow_memory` can also be called directly to snapshot or restore a `FlowMemory` outside the normal `run_turn` flow. You can still read the raw stored JSON manually if needed:
+`save_conversation`/`load_conversation` can also be called directly to snapshot or restore a `Conversation` outside the normal `run_turn` flow. You can still read the raw stored JSON manually if needed:
 
 ```cpp
 auto r = agent::retrieve_memory(session, "history:my_chat_1");

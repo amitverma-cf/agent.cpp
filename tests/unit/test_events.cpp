@@ -72,7 +72,7 @@ TEST_CASE("OnCompression fires during a real compress_context call", "[events][c
     HookRecord rec;
     agent::register_event_hook(session, agent::EventType::OnCompression, record_hook, &rec);
 
-    agent::FlowMemory conv;
+    agent::Conversation conv;
     conv.id = "events_compress";
     conv.history.push_back({.role = "system", .content = "sys"});
     for (int i = 0; i < 10; ++i) {
@@ -94,7 +94,7 @@ TEST_CASE("OnPrune fires when run_turn prunes history over budget", "[events][pr
     HookRecord rec;
     agent::register_event_hook(session, agent::EventType::OnPrune, record_hook, &rec);
 
-    agent::FlowMemory conv;
+    agent::Conversation conv;
     conv.id = "events_prune";
     conv.history.push_back({.role = "system", .content = "You are a helpful assistant."});
 

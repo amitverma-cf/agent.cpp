@@ -10,7 +10,7 @@ TEST_CASE("run_turn updates history and persists to memory", "[turn]") {
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
-    agent::FlowMemory state;
+    agent::Conversation state;
     state.id = "chat_1";
 
     auto add_res = agent::run_turn(session, state, "turn 1");
@@ -35,7 +35,7 @@ TEST_CASE("Sliding window pruning drops oldest turns while preserving system + r
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
-    agent::FlowMemory state;
+    agent::Conversation state;
     state.id = "chat_2";
 
     agent::Message sys_msg;

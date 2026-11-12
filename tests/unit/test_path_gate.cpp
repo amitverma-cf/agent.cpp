@@ -1,5 +1,5 @@
 // The permission gate for paths outside the workspace: grants, the host's gate, and what each answer remembers.
-#include "core/tools/path_gate.hpp"
+#include "agent/tools/path_gate.hpp"
 #include "hal/sandbox.hpp"
 
 #include <agent-cpp/agent.hpp>

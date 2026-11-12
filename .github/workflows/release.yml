@@ -1,6 +1,7 @@
 name: Release
 
-# Builds the CLI and the llama engine for every platform when a version tag is pushed (or on demand), and publishes:
+# Builds the CLI and the llama engine for Windows and Linux (macOS is not tested or supported in v1.0.0), on demand only (no tag trigger and no GitHub Release until v1.0.0), and
+# with publish=true uploads:
 #   * agent-cpp-<version>-<os>-<arch>.tar.gz / .zip     the CLI, the engine host and the engines, ready to run
 #   * agent-engine-<name>-<os>-<arch>.<so|dll|dylib>    each engine alone, for `agent engine pull` and `agent setup`
 #   * manifest.json and SHA256SUMS                       what the downloader reads, with a SHA-256 for every file
@@ -9,9 +10,12 @@ name: Release
 # CPUs build from source.
 
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Create a GitHub release from the build (not before v1.0.0)"
+        type: boolean
+        default: false
 
 
 permissions:
@@ -27,8 +31,6 @@ jobs:
         include:
           - { runner: ubuntu-22.04,     os_name: linux,   arch: x86_64,  lib_prefix: lib, lib_ext: so,    exe_ext: "",     ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON" }
           - { runner: ubuntu-22.04-arm, os_name: linux,   arch: aarch64, lib_prefix: lib, lib_ext: so,    exe_ext: "",     ggml: "-DGGML_NATIVE=OFF" }
-          - { runner: macos-15,         os_name: macos,   arch: aarch64, lib_prefix: lib, lib_ext: dylib, exe_ext: "",     ggml: "-DGGML_NATIVE=OFF" }
-          - { runner: macos-15-intel,   os_name: macos,   arch: x86_64,  lib_prefix: lib, lib_ext: dylib, exe_ext: "",     ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON" }
           - { runner: windows-2022,     os_name: windows, arch: x86_64,  lib_prefix: "",  lib_ext: dll,   exe_ext: ".exe", ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON", triplet: x64-windows, dll: x64 }
           - { runner: windows-11-arm,   os_name: windows, arch: aarch64, lib_prefix: "",  lib_ext: dll,   exe_ext: ".exe", ggml: "-DGGML_NATIVE=ON", triplet: arm64-windows, dll: arm64 }
     steps:
@@ -47,10 +49,6 @@ jobs:
         if: matrix.os_name == 'linux'
         run: sudo apt-get update && sudo apt-get install -y ninja-build libssl-dev
 
-      - name: Dependencies (macOS)
-        if: matrix.os_name == 'macos'
-        run: brew install ninja openssl@3
-
       - name: Dependencies (Windows)
         if: matrix.os_name == 'windows'
         shell: bash
@@ -68,7 +66,6 @@ jobs:
         shell: bash
         run: |
           extra=""
-          if [ "${{ matrix.os_name }}" = "macos" ]; then extra="-DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)"; fi
           if [ "${{ matrix.os_name }}" = "windows" ]; then extra="-DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}"; fi
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DAGENT_BUILD_CLI=ON -DAGENT_ENGINE_LLAMA=ON -DAGENT_BUILD_EXAMPLES=OFF \
@@ -91,7 +88,7 @@ jobs:
           mkdir -p "dist/${name}/engines" assets
           cp "build/agent${{ matrix.exe_ext }}" "dist/${name}/"
           cp "build/agent-engine-host${{ matrix.exe_ext }}" "dist/${name}/" 2>/dev/null || true
-          for f in build/engines/*/agent-engine-*.${{ matrix.lib_ext }} build/agent-engine-*.${{ matrix.lib_ext }}; do
+          for f in build/src/engines/*/agent-engine-*.${{ matrix.lib_ext }} build/agent-engine-*.${{ matrix.lib_ext }}; do
             [ -f "$f" ] || continue
             case "$f" in *mock*) continue ;; esac # test engines are not released
             cp "$f" "dist/${name}/engines/"
@@ -119,6 +116,7 @@ jobs:
           if-no-files-found: error
 
   publish:
+    if: ${{ inputs.publish }}
     needs: build
     runs-on: ubuntu-22.04
     steps:

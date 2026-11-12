@@ -25,12 +25,12 @@ agent.cpp is a local, offline-first AI agent in two parts:
 
 | Document | What it covers |
 |---|---|
-| [Getting Started](getting-started.md) | Build from source (Linux, macOS, native Windows), install, first program |
+| [Getting Started](getting-started.md) | Build from source (Linux, native Windows), install, first program |
 | [The `agent` CLI](cli.md) | `setup`, `init`, `doctor`, `clean`, `secret`, `engine`, `model`, `chat`, `run`, `voice`, `task`, `mcp`, `skill`, `runtime`, `sandbox` |
 | [Workspace layout](workspace.md) | The global home `.agent.cpp-workspace`, project `.agents/` folders, SQLite files, runtimes |
-| [Installing and packaging](packaging.md) | `cmake --install`, `find_package(agent-cpp)`, release archives, the Linux tarball script |
+| [Installing and packaging](packaging.md) | `cmake --install`, `find_package(agent-cpp)`, the Linux tarball script |
 | [Examples](../examples/README.md) | Image critique loop, RAG over a folder of docs, graph JSON examples |
-| [Guide: a local voice assistant](guides/voice-assistant.md) | `agent voice` with Silero VAD, a sherpa ASR model and Kokoro TTS |
+| [Guide: a local voice assistant](guides/voice-assistant.md) | `agent voice` with an audio.cpp VAD, ASR and TTS model |
 | [GPU engines](gpu.md) | What is built for GPUs, the sandbox cache folders, and the test checklist (untested so far) |
 
 ### Embedding the SDK
@@ -52,7 +52,7 @@ agent.cpp is a local, offline-first AI agent in two parts:
 | [API — Core Types](api/core.md) | `Result<T>`, `Error`, `ErrorCode`, `Arena` |
 | [API — Session](api/session.md) | `Config`, `Session`, `init()`, `AgentRuntime` |
 | [API — Engines](api/engines.md) | Engine plugins, `engine_abi.h`, `AiProvider::Engine`, process isolation |
-| [API — Conversation](api/conversation.md) | `FlowMemory`, `run_turn`, `run_turn_with_media`, pruning, compression |
+| [API — Conversation](api/conversation.md) | `Conversation`, `run_turn`, `run_turn_with_media`, pruning, compression |
 | [API — Graph runtime](api/graph.md) | `Graph`, Agent/Function/Tool nodes, Sequential/Parallel/Loop, scoped state, checkpoints, interrupts |
 | [API — agent.json](api/agent-json.md) | Declarative graphs: `load_graph_json`, JSON schema, routes, `register_graph_function` |
 | [API — Tools](api/tools.md) | Built-in tools, `Tool` and `ToolResult`, custom tools, skills, permission gate |
@@ -71,10 +71,8 @@ agent.cpp is a local, offline-first AI agent in two parts:
 
 | Document | What it covers |
 |---|---|
-| [OS sandbox](security-sandbox.md) | Landlock, seccomp and rlimits on Linux, AppContainer on Windows, the macOS profile; `SandboxPolicy` and platform status |
+| [OS sandbox](security-sandbox.md) | Landlock, seccomp and rlimits on Linux, AppContainer on Windows; `SandboxPolicy` and platform status |
 | [Benchmarks](benchmarks.md) | `agent_bench`: tokens/s, time to first token, peak RSS, process isolation overhead, parallel branches |
-| [Limitations](LIMITATIONS.md) | Known limitations and planned fixes |
-| [Roadmap](ROADMAP.md) | Phases, what is done and what is open |
 | [Security policy](../SECURITY.md) | How to report a vulnerability |
 
 ## Quick example (SDK)
@@ -88,7 +86,7 @@ int main() {
 
     agent::Config cfg;
     cfg.provider     = agent::AiProvider::Engine;
-    cfg.engine       = "build/engines/llama/agent-engine-llama.so";
+    cfg.engine       = "build/src/engines/llama/agent-engine-llama.so";
     cfg.model        = ".workspace/models/my-model.gguf";
     cfg.workspace_dir = ".workspace";
     cfg.context_window = 4096;
@@ -98,7 +96,7 @@ int main() {
     auto sess = agent::init(cfg);
     if (!sess.ok) { std::cerr << sess.error.message; return 1; }
 
-    agent::FlowMemory conv;
+    agent::Conversation conv;
     conv.id = "demo";
 
     auto r = agent::run_turn(sess.value, conv, "What files are in my workspace?");
@@ -119,9 +117,7 @@ The complete table is in the [README](../README.md#cmake-options). The options t
 | `AGENT_ENGINE_LLAMA` | `ON` | llama.cpp engine plugin |
 | `AGENT_ENGINE_ONNX` | `OFF` | ONNX Runtime engine plugin (needs `ONNXRUNTIME_ROOT`) |
 | `AGENT_ENGINE_SDCPP` | `OFF` | stable-diffusion.cpp engine plugin (images and video) |
-| `AGENT_ENGINE_SHERPA` | `OFF` | sherpa-onnx speech engine plugin (needs `SHERPA_ONNX_ROOT`) |
-| `AGENT_ENGINE_WHISPER` | `OFF` | whisper.cpp speech-to-text engine plugin |
-| `AGENT_ENGINE_PARAKEET` | `OFF` | parakeet.cpp speech-to-text engine plugin |
+| `AGENT_ENGINE_AUDIOCPP` | `OFF` | audio.cpp speech engine plugin (TTS, ASR, VAD, diarization; needs `vendor/audio.cpp`) |
 | `AGENT_ENGINE_TRELLIS` | `OFF` | TRELLIS.2 image-to-3D engine plugin |
 | `BUILD_SHARED_LIBS` | `OFF` | Shared `libagent`, `agent_store_sqlite` and `agent_hub` |
 | `AGENT_INSTALL` | `ON` (top level) | Install rules and the `agent-cpp` CMake package |

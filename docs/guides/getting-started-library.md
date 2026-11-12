@@ -109,7 +109,7 @@ int main(int argc, char **argv) {
     }
     agent::Session session = std::move(sess.value);
 
-    agent::FlowMemory conversation;
+    agent::Conversation conversation;
     conversation.id = "getting-started";
     const char *prompt = argc > 3 ? argv[3] : "Say hello in one short sentence.";
 
@@ -142,8 +142,8 @@ Things to know:
 - **`AgentRuntime`** initialises and frees process-wide backends; create one in `main`.
 - **`Session`** owns the engine instance, the tools, the memory store and the per-turn `Arena`.
   It is move-only. One `run_turn` at a time per Session.
-- **`FlowMemory`** is one conversation (its history and stats). Keep as many as you like per Session;
-  `save_flow_memory` / `load_flow_memory` persist them through the memory store.
+- **`Conversation`** is one conversation (its history and stats). Keep as many as you like per Session;
+  `save_conversation` / `load_conversation` persist them through the memory store.
 - **The workspace** (`workspace_dir`) is created by `init()`. Filesystem tools are confined to it
   (`sandbox_filesystem`, default true) and generated media lands in `<workspace>/artifacts/`.
 

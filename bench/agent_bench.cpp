@@ -1,7 +1,7 @@
 // agent_bench: throughput and latency of agent.cpp pipelines (AGENT_BUILD_BENCH).
 //
 //   agent_bench [--llama <agent-engine-llama.so> --model <chat.gguf>] [--mock <agent-engine-mock.so>]
-//               [--sherpa <agent-engine-sherpa.so> --tts-model <kokoro dir>] [--host <agent-engine-host>]
+//               [--audiocpp <agent-engine-audiocpp.so> --tts-model <kokoro .gguf>] [--host <agent-engine-host>]
 //               [--reps 3] [--gen-tokens 128] [--prompt-words 200] [--branches 4] [--threads 0]
 //               [--turns 2000] [--json results.json] [--md results.md]
 //
@@ -39,7 +39,7 @@ namespace {
 double ms_since(Clock::time_point t0) { return std::chrono::duration<double, std::milli>(Clock::now() - t0).count(); }
 
 struct Options {
-    std::string llama, model, mock, sherpa, tts_model, host, json_out, md_out, engine_options, kv, csv_out;
+    std::string llama, model, mock, audiocpp, tts_model, host, json_out, md_out, engine_options, kv, csv_out;
     std::string workspace = (fs::temp_directory_path() / "agent-bench").string();
     int reps = 3, gen_tokens = 128, prompt_words = 200, branches = 4, threads = 0, turns = 2000;
     int longchat = 0, ctx = 4096; // longchat: number of conversation turns (0 = section off)
@@ -291,7 +291,7 @@ void bench_longchat(const Options &o, std::vector<Table> &tables) {
     }
     const double load_ms = ms_since(t_load);
 
-    agent::FlowMemory conv;
+    agent::Conversation conv;
     conv.id = "longchat";
     std::vector<ChatTurn> turns;
     int last_prompt = 0, last_gen = 0, last_comp = 0, last_prune = 0;
@@ -453,7 +453,7 @@ void bench_overhead(const Options &o, std::vector<Table> &tables) {
         }
         std::vector<double> us;
         for (int i = 0; i < o.turns + 50; ++i) {
-            agent::FlowMemory memory;
+            agent::Conversation memory;
             const auto t0 = Clock::now();
             auto r = agent::run_turn(sess.value, memory, "hello");
             const double v = std::chrono::duration<double, std::micro>(Clock::now() - t0).count();
@@ -475,11 +475,8 @@ void bench_overhead(const Options &o, std::vector<Table> &tables) {
 
 // ---- tts ---------------------------------------------------------------------------------------
 
-std::string kokoro_options(const std::string &dir) {
-    auto in = [&](const char *f) { return (fs::path(dir) / f).string(); };
-    std::string lexicon = fs::exists(in("lexicon-us-en.txt")) ? in("lexicon-us-en.txt") : in("lexicon-en-us.txt");
-    return std::string("{\"threads\":2,\"tts\":{\"kokoro\":{\"model\":\"") + in("model.onnx") + "\",\"voices\":\"" + in("voices.bin") +
-           "\",\"tokens\":\"" + in("tokens.txt") + "\",\"lexicon\":\"" + lexicon + "\"},\"speaker_id\":0,\"speed\":1.0}}";
+std::string kokoro_options(const std::string &gguf) {
+    return std::string("{\"threads\":4,\"tts\":{\"model\":\"") + gguf + "\",\"voice\":\"af_heart\",\"language\":\"en-us\"}}";
 }
 
 constexpr const char *kTtsText = "Local inference keeps your data on your own machine. This sentence is here so that the speech "
@@ -505,13 +502,13 @@ int sample_rate_of(std::string_view text) { // "Generated 2.00 s of speech (2400
 
 void bench_tts(const Options &o, std::vector<Table> &tables) {
     Table t{.title = "TTS: time to first audio",
-            .note = "Kokoro (sherpa engine), two sentences. `engine ABI` calls the plugin's `run()` directly to see its streamed "
+            .note = "Kokoro (audiocpp engine), two sentences. `engine ABI` calls the plugin's `run()` directly to see its streamed "
                     "`AGENT_CHUNK_AUDIO` chunks (libagent does not forward audio chunks to callers yet); the libagent rows time "
                     "`run_task(AGENT_CAP_TTS)` until the WAV is written. Medians of " +
                     std::to_string(o.reps) + " runs after one warm-up.",
             .columns = {"path", "first audio ms", "total ms", "audio s", "real-time factor", "peak RSS MiB"}};
     const std::string options = kokoro_options(o.tts_model);
-    auto name = agent::load_engine_plugin(o.sherpa);
+    auto name = agent::load_engine_plugin(o.audiocpp);
     if (!name.ok) {
         std::fprintf(stderr, "tts: %s\n", name.error.message.c_str());
         return;
@@ -582,7 +579,7 @@ void bench_tts(const Options &o, std::vector<Table> &tables) {
         reset_peak_rss();
         agent::Config cfg;
         cfg.provider = agent::AiProvider::Engine;
-        cfg.engine = o.sherpa;
+        cfg.engine = o.audiocpp;
         cfg.engine_options = options;
         cfg.workspace_dir = o.workspace;
         cfg.auto_default_tools = false;
@@ -615,7 +612,7 @@ void bench_tts(const Options &o, std::vector<Table> &tables) {
 
 bool parse(int argc, char **argv, Options &o) {
     std::map<std::string, std::string *> strings = {{"--llama", &o.llama},   {"--model", &o.model},         {"--mock", &o.mock},
-                                                    {"--sherpa", &o.sherpa}, {"--tts-model", &o.tts_model}, {"--host", &o.host},
+                                                    {"--audiocpp", &o.audiocpp}, {"--tts-model", &o.tts_model}, {"--host", &o.host},
                                                     {"--json", &o.json_out}, {"--md", &o.md_out},           {"--workspace", &o.workspace},
                                                     {"--engine-options", &o.engine_options}, {"--kv", &o.kv}, {"--csv", &o.csv_out}};
     std::map<std::string, int *> ints = {{"--reps", &o.reps},         {"--gen-tokens", &o.gen_tokens}, {"--prompt-words", &o.prompt_words},
@@ -634,9 +631,9 @@ bool parse(int argc, char **argv, Options &o) {
 
 int main(int argc, char **argv) {
     Options o;
-    if (!parse(argc, argv, o) || (o.llama.empty() && o.mock.empty() && o.sherpa.empty())) {
+    if (!parse(argc, argv, o) || (o.llama.empty() && o.mock.empty() && o.audiocpp.empty())) {
         std::fprintf(stderr,
-                     "usage: %s [--llama <plugin> --model <gguf>] [--mock <plugin>] [--sherpa <plugin> --tts-model <kokoro dir>]\n"
+                     "usage: %s [--llama <plugin> --model <gguf>] [--mock <plugin>] [--audiocpp <plugin> --tts-model <kokoro .gguf>]\n"
                      "          [--host <agent-engine-host>] [--reps N] [--gen-tokens N] [--prompt-words N] [--branches N]\n"
                      "          [--threads N] [--turns N] [--workspace DIR] [--json FILE] [--md FILE]\n"
                      "          [--longchat N --ctx N [--kv f16|q8_0|q4_0] [--engine-options JSON] [--csv FILE]]\n",
@@ -654,7 +651,7 @@ int main(int argc, char **argv) {
             bench_parallel(o, tables);
         }
     }
-    if (!o.sherpa.empty() && !o.tts_model.empty()) bench_tts(o, tables);
+    if (!o.audiocpp.empty() && !o.tts_model.empty()) bench_tts(o, tables);
 
     const std::string md = markdown(tables);
     std::fputs(md.c_str(), stdout);

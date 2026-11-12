@@ -190,3 +190,51 @@ TEST_CASE("mock-all: a slow call finishes, and is cancelled when the flag is set
 }
 
 #endif
+
+TEST_CASE("embed: inputs with media give one embedding each, text-only still works", "[mock_all][embed]") {
+    for (auto isolation : {agent::EngineIsolation::InProcess, agent::EngineIsolation::Process}) {
+        Ws ws;
+        auto s = open(ws, isolation);
+        std::vector<agent::Media> img{{ws.image_s, "image/png"}};
+        std::vector<agent::EmbedInput> in{{"hello", {}}, {"", img}, {"caption", img}};
+        auto r = agent::embed(s, in);
+        INFO(r.error.message);
+        REQUIRE(r.ok);
+        REQUIRE(r.value.size() == 3);
+        auto bad = agent::embed(s, std::vector<agent::EmbedInput>{{"", {}}});
+        REQUIRE_FALSE(bad.ok);
+    }
+}
+
+TEST_CASE("engine_config: models by role, nested sections and merged options", "[engine_config]") {
+    const std::vector<agent::ModelSlot> slots = {{"model", "/m/chat.gguf"}, {"diffusion_model", "/m/flux.gguf"}, {"tts.model", "/m/k.gguf"}, {"tts.voice", "alba"}, {"asr.model", "/m/p.gguf"}};
+    auto cfg = agent::engine_config("sdcpp", slots, R"({"threads": 4})");
+    REQUIRE(cfg.ok);
+    CHECK(cfg.value.provider == agent::AiProvider::Engine);
+    CHECK(cfg.value.engine == "sdcpp");
+    CHECK(cfg.value.model == "/m/chat.gguf");
+    CHECK(cfg.value.engine_options ==
+          R"({"diffusion_model":"/m/flux.gguf","tts":{"model":"/m/k.gguf","voice":"alba"},"asr":{"model":"/m/p.gguf"},"threads": 4})");
+    CHECK_FALSE(agent::engine_config("", slots).ok);
+    CHECK_FALSE(agent::engine_config("x", std::vector<agent::ModelSlot>{{"", "p"}}).ok);
+    CHECK_FALSE(agent::engine_config("x", slots, "[1]").ok);
+    auto only_model = agent::engine_config("llama", std::vector<agent::ModelSlot>{{"model", "a\"b"}});
+    REQUIRE(only_model.ok);
+    CHECK(only_model.value.engine_options.empty());
+    CHECK(only_model.value.model == "a\"b");
+}
+
+TEST_CASE("infer: a response stays valid after later calls (it owns its memory)", "[mock_all][owning]") {
+    Ws ws;
+    auto s = open(ws, agent::EngineIsolation::InProcess);
+    const agent::MediaView audio{ws.audio_s, "audio/wav"};
+    auto first = run(s, {.text = "", .media = {audio}, .task = AGENT_CAP_ASR});
+    REQUIRE(first.ok);
+    agent::InferResponse kept = std::move(first.value);
+    for (int i = 0; i < 3; ++i) {
+        auto again = run(s, {.text = "a different request that reuses the session", .task = AGENT_CAP_OCR});
+        REQUIRE(again.ok);
+    }
+    CHECK(kept.message.content == "mock transcript");
+    CHECK(kept.storage != nullptr);
+}

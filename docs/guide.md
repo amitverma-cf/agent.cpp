@@ -29,7 +29,7 @@ agent::AgentRuntime runtime;    // init global backends; must outlive all sessio
 
 agent::Config cfg;
 cfg.provider      = agent::AiProvider::Engine;
-cfg.engine        = "build/engines/llama/agent-engine-llama.so";
+cfg.engine        = "build/src/engines/llama/agent-engine-llama.so";
 cfg.model         = ".workspace/models/my.gguf";
 cfg.workspace_dir = ".workspace";
 cfg.context_window = 4096;
@@ -66,7 +66,7 @@ Local on-device inference from GGUF files through the `agent-engine-llama` plugi
 
 ```cpp
 cfg.provider       = agent::AiProvider::Engine;
-cfg.engine         = "build/engines/llama/agent-engine-llama.so";
+cfg.engine         = "build/src/engines/llama/agent-engine-llama.so";
 cfg.model          = ".workspace/models/mistral-7b-q4_k_m.gguf";
 cfg.context_window = 8192;
 cfg.max_tokens     = 1024;
@@ -91,7 +91,7 @@ cfg.engine_options = R"({"threads": 4})";
 
 ## Low-level inference: infer
 
-`infer` is stateless. You build an `InferRequest` with a span of `MessageView`s and get an `InferResponse` back. The response views are arena-backed and valid only until the next call to `infer`/`run_turn` on the same session (or the same thread's worker arena slot, inside a parallel graph branch).
+`infer` is stateless. You build an `InferRequest` with a span of `MessageView`s and get an `InferResponse` back. The response owns its memory (`InferResponse::storage`): its views stay valid as long as the response object lives, across later calls.
 
 ```cpp
 agent::MessageView msg;
@@ -123,7 +123,7 @@ agent::infer(session, req);
 `run_turn` manages everything: history accumulation, context pruning, automatic tool call loops (ReAct), and memory persistence. It returns an owned `std::string` — the assistant's final reply.
 
 ```cpp
-agent::FlowMemory conv;
+agent::Conversation conv;
 conv.id = "my_session";        // used as memory key "history:my_session"
 
 // optional: seed with a system message
@@ -328,13 +328,13 @@ Every node is checkpointed, so a failed or interrupted run continues with `resum
 `ToolHook`s fire before (`Pre`) or after (`Post`) each tool call while a particular Agent node runs. Use them for logging and auditing.
 
 ```cpp
-static void audit_pre(agent::Session &, agent::FlowMemory &,
+static void audit_pre(agent::Session &, agent::Conversation &,
                       std::string_view name, std::string_view args,
                       std::string_view, void *) {
     printf("[PRE]  tool=%s args=%s\n", std::string(name).c_str(), std::string(args).c_str());
 }
 
-static void audit_post(agent::Session &, agent::FlowMemory &,
+static void audit_post(agent::Session &, agent::Conversation &,
                        std::string_view name, std::string_view,
                        std::string_view result, void *) {
     printf("[POST] tool=%s result=%s\n", std::string(name).c_str(), std::string(result).c_str());
@@ -401,18 +401,18 @@ Available event types: `OnTurnStart`, `OnInferenceSubmit`, `OnInferenceComplete`
 
 ## Memory
 
-Conversation history is automatically persisted to the memory backend after every turn (under key `"history:<conv.id>"`, plus a `"history_stats:<conv.id>"` sidecar for `FlowMemory::stats`) via `save_flow_memory`. To resume a conversation after a process restart, load it back explicitly:
+Conversation history is automatically persisted to the memory backend after every turn (under key `"history:<conv.id>"`, plus a `"history_stats:<conv.id>"` sidecar for `Conversation::stats`) via `save_conversation`. To resume a conversation after a process restart, load it back explicitly:
 
 ```cpp
-agent::FlowMemory conv;
+agent::Conversation conv;
 conv.id = "my_session";
-auto load_res = agent::load_flow_memory(session, conv);   // fills conv.history + conv.stats
+auto load_res = agent::load_conversation(session, conv);   // fills conv.history + conv.stats
 if (!load_res.ok) {
     // no saved history yet (or it failed to parse) -- start fresh
 }
 ```
 
-`save_flow_memory`/`load_flow_memory` are also available for calling directly if you want to snapshot or restore a `FlowMemory` outside the normal `run_turn` flow.
+`save_conversation`/`load_conversation` are also available for calling directly if you want to snapshot or restore a `Conversation` outside the normal `run_turn` flow.
 
 You can also use the memory API directly for arbitrary key-value storage:
 
@@ -484,7 +484,7 @@ printf("prune cycles:      %d\n", stats.total_prune_cycles);
 agent::reset_stats(session);    // zero all counters
 ```
 
-Per-conversation stats are on `FlowMemory::stats` and are updated automatically by `run_turn`.
+Per-conversation stats are on `Conversation::stats` and are updated automatically by `run_turn`.
 
 ---
 

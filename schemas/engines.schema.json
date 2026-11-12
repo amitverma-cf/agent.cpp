@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent.cpp/schemas/engines.schema.json",
   "title": "engines.json",
-  "description": "Engine plugin manifest read by load_engine_manifest (src/core/engines/engine_registry.cpp) and by the CLI (tools/cli/src/cli_core.cpp). Unknown keys are ignored by both parsers. load_engine_manifest treats a non-string \"name\" or \"isolation\" as absent.",
+  "description": "Engine plugin manifest read by load_engine_manifest (src/agent/engines/engine_registry.cpp) and by the CLI (apps/cli/src/cli_core.cpp). Unknown keys are ignored by both parsers. load_engine_manifest treats a non-string \"name\" or \"isolation\" as absent.",
   "type": "object",
   "required": ["engines"],
   "properties": {

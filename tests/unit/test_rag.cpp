@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -510,7 +511,7 @@ TEST_CASE("llama rejects an unknown mode and tasks that don't match the mode", "
     auto r = agent::rerank(s.value, "query", docs);
     REQUIRE_FALSE(r.ok);
     REQUIRE(r.error.message.find("mode") != std::string::npos);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     REQUIRE_FALSE(agent::run_turn(s.value, memory, "hello").ok);
 
     // A model without a classification head can't load in rerank mode.
@@ -650,5 +651,95 @@ TEST_CASE("search_knowledge tool with a real embedder", "[rag][llama][model]") {
     REQUIRE(out.ok);
     INFO(out.value);
     REQUIRE(out.value.find("Photosynthesis") != std::string::npos);
+}
+#endif
+
+// ------------------------------------------------------------------ multimodal embedding (real model)
+
+#ifdef AGENT_TEST_LLAMA_ENGINE_PATH
+namespace {
+
+uint32_t crc32_bytes(const unsigned char *p, size_t n, uint32_t crc = 0xFFFFFFFFu) {
+    for (size_t i = 0; i < n; ++i) {
+        crc ^= p[i];
+        for (int k = 0; k < 8; ++k) crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+    }
+    return crc;
+}
+
+// A solid-colour PNG (RGB8, stored deflate blocks): enough for a vision tower, no image library needed.
+void write_solid_png(const std::filesystem::path &path, unsigned w, unsigned h, unsigned char r, unsigned char g, unsigned char b) {
+    std::vector<unsigned char> raw;
+    for (unsigned y = 0; y < h; ++y) {
+        raw.push_back(0);
+        for (unsigned x = 0; x < w; ++x) raw.insert(raw.end(), {r, g, b});
+    }
+    std::vector<unsigned char> z = {0x78, 0x01};
+    uint32_t a = 1, bsum = 0;
+    for (unsigned char c : raw) {
+        a = (a + c) % 65521u;
+        bsum = (bsum + a) % 65521u;
+    }
+    for (size_t off = 0; off < raw.size(); off += 65535) {
+        const size_t len = std::min<size_t>(65535, raw.size() - off);
+        z.push_back(off + len >= raw.size() ? 1 : 0);
+        z.insert(z.end(), {static_cast<unsigned char>(len & 255), static_cast<unsigned char>(len >> 8), static_cast<unsigned char>(~len & 255),
+                           static_cast<unsigned char>((~len >> 8) & 255)});
+        z.insert(z.end(), raw.begin() + static_cast<long>(off), raw.begin() + static_cast<long>(off + len));
+    }
+    const uint32_t adler = (bsum << 16) | a;
+    for (int s = 24; s >= 0; s -= 8) z.push_back(static_cast<unsigned char>(adler >> s));
+    std::vector<unsigned char> png = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    auto chunk = [&](const char *type, const std::vector<unsigned char> &data) {
+        for (int s = 24; s >= 0; s -= 8) png.push_back(static_cast<unsigned char>(data.size() >> s));
+        std::vector<unsigned char> body(type, type + 4);
+        body.insert(body.end(), data.begin(), data.end());
+        png.insert(png.end(), body.begin(), body.end());
+        const uint32_t crc = ~crc32_bytes(body.data(), body.size());
+        for (int s = 24; s >= 0; s -= 8) png.push_back(static_cast<unsigned char>(crc >> s));
+    };
+    std::vector<unsigned char> ihdr;
+    for (unsigned v : {w, h})
+        for (int s = 24; s >= 0; s -= 8) ihdr.push_back(static_cast<unsigned char>(v >> s));
+    ihdr.insert(ihdr.end(), {8, 2, 0, 0, 0});
+    chunk("IHDR", ihdr);
+    chunk("IDAT", z);
+    chunk("IEND", {});
+    std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char *>(png.data()), static_cast<std::streamsize>(png.size()));
+}
+
+} // namespace
+
+// AGENT_TEST_EMBED_MM_MODEL + AGENT_TEST_EMBED_MM_MMPROJ: a projector-equipped embedding model, e.g. Qwen3-VL-Embedding-2B
+// (ifire/Qwen3-VL-Embedding-2B-GGUF).
+TEST_CASE("multimodal embedding: an image lands nearer the text that describes it", "[rag][llama][model][embed_mm]") {
+    const char *model = std::getenv("AGENT_TEST_EMBED_MM_MODEL");
+    const char *mmproj = std::getenv("AGENT_TEST_EMBED_MM_MMPROJ");
+    if (!model || !mmproj) SKIP("AGENT_TEST_EMBED_MM_MODEL / AGENT_TEST_EMBED_MM_MMPROJ not set");
+    const std::filesystem::path dir = std::filesystem::path(kWorkspace) / "mm";
+    std::filesystem::create_directories(dir);
+    write_solid_png(dir / "red.png", 64, 64, 220, 20, 20);
+    write_solid_png(dir / "blue.png", 64, 64, 20, 20, 220);
+
+    agent::Config cfg = llama_task_config(model, "embed");
+    cfg.context_window = 2048;
+    cfg.engine_options = std::string(R"({"mode":"embed","mmproj":")") + mmproj + "\"}";
+    auto s = agent::init(cfg);
+    INFO(s.error.message);
+    REQUIRE(s.ok);
+
+    const std::string red = (dir / "red.png").string(), blue = (dir / "blue.png").string();
+    std::vector<agent::Media> red_img{{red, "image/png"}}, blue_img{{blue, "image/png"}};
+    std::vector<agent::EmbedInput> in{{"A solid red square.", {}}, {"A solid blue square.", {}}, {"", red_img}, {"", blue_img}};
+    auto r = agent::embed(s.value, in);
+    INFO(r.error.message);
+    REQUIRE(r.ok);
+    REQUIRE(r.value.size() == 4);
+    CHECK(r.value[0].size() == r.value[2].size());
+    const float red_red = dot(r.value[2], r.value[0]), red_blue = dot(r.value[2], r.value[1]);
+    const float blue_blue = dot(r.value[3], r.value[1]), blue_red = dot(r.value[3], r.value[0]);
+    WARN("red image: vs red text " << red_red << ", vs blue text " << red_blue << "; blue image: vs blue text " << blue_blue << ", vs red text " << blue_red);
+    CHECK(red_red > red_blue);
+    CHECK(blue_blue > blue_red);
 }
 #endif

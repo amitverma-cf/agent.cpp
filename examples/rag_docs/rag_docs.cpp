@@ -160,7 +160,7 @@ int main(int argc, char **argv) {
         std::fprintf(stderr, "rag_docs: chat model: %s\n", chat.error.message.c_str());
         return 1;
     }
-    agent::FlowMemory conversation;
+    agent::Conversation conversation;
     conversation.history.push_back({.role = "system",
                                     .content = "Answer the question using only the documentation excerpts below. Cite the "
                                                "excerpt ids in brackets. If they do not contain the answer, say so.\n\n" +

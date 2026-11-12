@@ -1,0 +1,18 @@
+#!/bin/sh
+# Runs before every commit: clang-format must be clean on the staged C++ files.
+# Enable once per clone:  sh scripts/setup-hooks.sh     Skip in an emergency:  git commit --no-verify
+files=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(cpp|hpp|h)$' | grep -v '^vendor/')
+[ -z "$files" ] && exit 0
+if ! command -v clang-format >/dev/null 2>&1; then
+    echo "pre-commit: clang-format not found; skipping the format check" >&2
+    exit 0
+fi
+bad=""
+for f in $files; do
+    if ! clang-format --dry-run --Werror "$f" >/dev/null 2>&1; then bad="$bad $f"; fi
+done
+if [ -n "$bad" ]; then
+    echo "pre-commit: not formatted:$bad" >&2
+    echo "fix with:  clang-format -i$bad  (then git add them)" >&2
+    exit 1
+fi

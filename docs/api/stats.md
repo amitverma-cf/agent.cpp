@@ -8,7 +8,7 @@ agent.cpp tracks token usage, tool calls, context management operations, and tur
 
 ## TurnStats
 
-Tracks usage for a single `FlowMemory`. Updated automatically by `run_turn`.
+Tracks usage for a single `Conversation`. Updated automatically by `run_turn`.
 
 ```cpp
 struct TurnStats {
@@ -21,10 +21,10 @@ struct TurnStats {
 };
 ```
 
-Access via `FlowMemory::stats`:
+Access via `Conversation::stats`:
 
 ```cpp
-agent::FlowMemory conv;
+agent::Conversation conv;
 conv.id = "demo";
 
 agent::run_turn(session, conv, "Hello");
@@ -86,7 +86,7 @@ printf("  prune cycles:      %d\n", stats.total_prune_cycles);
 void reset_stats(Session &session);
 ```
 
-Zeroes all fields in `session.stats`. Does not affect individual `FlowMemory::stats`.
+Zeroes all fields in `session.stats`. Does not affect individual `Conversation::stats`.
 
 Use this to measure stats for a specific time window:
 

@@ -33,7 +33,7 @@ agent::register_model(registry, coder);
 {
     auto lease = agent::acquire_model(registry, "qwen");     // loads qwen
     if (!lease.ok) { /* lease.error.code == ErrorCode::OutOfMemory, ... */ }
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     agent::run_turn(*lease.value, memory, "Hello");
 }                                                            // lease released: qwen stays loaded, idle
 
@@ -55,7 +55,7 @@ auto lease = agent::acquire_model(registry, "coder");        // evicts qwen if b
 | `loaded_models(registry)` | `LoadedModelInfo` for each loaded model, most recently used first: name, RAM/VRAM estimate, pinned, outstanding leases, loaded-at and last-used times, load time |
 | `set_budget` / `get_budget` | `set_budget` replaces the budget and evicts idle, unpinned models (LRU first) until the rest fit. |
 | `estimate_model_memory(spec)` | What the registry will charge for the spec (see below) |
-| `process_rss_bytes()` | Resident set size of this process: `/proc/self/statm` on Linux, `GetProcessMemoryInfo` on Windows, `task_info` on macOS. 0 if unavailable. |
+| `process_rss_bytes()` | Resident set size of this process: `/proc/self/statm` on Linux, `GetProcessMemoryInfo` on Windows. 0 if unavailable. |
 
 ### Leases
 
@@ -105,7 +105,6 @@ memory from the files on disk:
 |---|---|---|---|
 | `llama` | 1.0 | 64 MiB | mmap'ed weights, plus compute buffers. The KV cache is added separately (below). |
 | `onnx` | 1.5 | 32 MiB | ORT keeps a copy of the initializers, plus its arena |
-| `sherpa` | 1.5 | 32 MiB | ORT sessions |
 | `sdcpp` | 1.2 | 256 MiB | weights, plus large diffusion compute buffers |
 | `trellis` | 1.2 | 512 MiB | several sub-models, plus 3D decoding buffers |
 | `mock` | 1.0 | 0 | test engine: exactly the file size |
@@ -173,7 +172,7 @@ agent::Result<void> summarize(agent::Session &, agent::GraphState &state, void *
     auto lease = agent::acquire_model(registry, "qwen");
     if (!lease.ok) return agent::fail(lease.error.code, lease.error.message);
     std::lock_guard<std::mutex> turn(*lease.value.turn_mutex);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     auto reply = agent::run_turn(*lease.value, memory, std::string(agent::get_state(state, "text")));
     if (!reply.ok) return agent::fail(reply.error.code, reply.error.message);
     agent::set_state(state, "summary", std::move(reply.value));

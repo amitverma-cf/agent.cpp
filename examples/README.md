@@ -25,8 +25,8 @@ a score of 8 or after `--rounds` (3).
 cmake -B build -G Ninja -DAGENT_ENGINE_SDCPP=ON        # the sdcpp engine is opt-in (builds its own ggml)
 cmake --build build
 ./build/examples/image_critique \
-    --llama build/engines/llama/agent-engine-llama.so --llm models/qwen2.5-0.5b-instruct-q4_k_m.gguf \
-    --sdcpp build/engines/sdcpp/agent-engine-sdcpp.so --sd-model models/sdxs-512-tinySDdistilled_Q8_0.gguf \
+    --llama build/src/engines/llama/agent-engine-llama.so --llm models/qwen2.5-0.5b-instruct-q4_k_m.gguf \
+    --sdcpp build/src/engines/sdcpp/agent-engine-sdcpp.so --sd-model models/sdxs-512-tinySDdistilled_Q8_0.gguf \
     --vlm models/SmolVLM-256M-Instruct-Q8_0.gguf --mmproj models/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf \
     --goal "a red lighthouse on a rocky coast at sunset"
 ```
@@ -51,7 +51,7 @@ is answered from the top-k chunks of `rag_query` (optionally reranked with `--re
 model cites the chunk ids it used.
 
 ```sh
-./build/examples/rag_docs --llama build/engines/llama/agent-engine-llama.so \
+./build/examples/rag_docs --llama build/src/engines/llama/agent-engine-llama.so \
     --embed models/bge-small-en-v1.5-q8_0.gguf --chat models/qwen2.5-0.5b-instruct-q4_k_m.gguf \
     --docs docs/ --question "How do I run an engine out of process?" \
     [--rerank models/jina-reranker-v1-tiny-en-Q8_0.gguf] [--k 4]

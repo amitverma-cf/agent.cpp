@@ -14,6 +14,10 @@ sandbox does. It is applied to three kinds of children:
 In-process engines are not sandboxed (they are the calling process). Neither is anything your own
 tools start.
 
+The sandbox is on by default. The `agent` CLI's global `--no-sandbox` flag runs engines, tools and commands
+without it. Where the OS cannot provide a sandbox, or with `--no-sandbox`, things run unsandboxed and a warning
+says so. There are no weaker fallbacks.
+
 ## Policy
 
 ```cpp
@@ -104,8 +108,8 @@ engine's `backend` in `engines.json` (or `config.json`) is anything but `"cpu"`.
 JIT cache in `~/.nv/ComputeCache` (`$CUDA_CACHE_PATH`): without a read-write entry for it the cache
 is simply not written (kernels are re-JITed per start). Untested: this machine has no GPU.
 
-**Graceful degradation.** A kernel without Landlock (older than 5.13, or Landlock not in the active
-LSM list) or without seccomp still spawns the child; what could not be enforced is returned as
+**No substitute protections.** A kernel without Landlock (older than 5.13, or Landlock not in the active
+LSM list) or without seccomp still runs the child, unsandboxed for that part; what could not be enforced is returned as
 warnings (`ChildProcess::sandbox_warnings()`), logged through `Config::logger` for the engine host
 and MCP servers, and reported in run_command's result as a `"sandbox_warning"` field. Detection
 uses the `landlock_create_ruleset(..., LANDLOCK_CREATE_RULESET_VERSION)` syscall, not
@@ -123,27 +127,9 @@ uses the `landlock_create_ruleset(..., LANDLOCK_CREATE_RULESET_VERSION)` syscall
 - `/proc` is readable (needed for CPU detection and sanitizers). Other users' processes are
   protected by the usual `/proc` permissions, not by the sandbox.
 
-## macOS (written, untested)
+## macOS
 
-The same `setsid` / rlimit / close-on-exec steps, then `sandbox_init()` with an SBPL profile:
-`(allow default)`, `(deny file-read* file-write*)`, `(allow file-read-metadata)` (stat / realpath /
-dyld walk the parents of allowed paths; names and attributes stay visible, contents do not), then
-the allow-lists re-allowed as `subpath` rules on their canonical paths (`/tmp` becomes
-`/private/tmp`; system list: `/System`, `/usr`, `/bin`, `/sbin`, `/Library`, `/opt/homebrew`,
-`/private/etc`, `/private/var/db/dyld`, `/dev`, ...), and `(deny network*)` except Unix sockets when
-the network is denied. `sandbox_init` is deprecated but still present; the profile has never been
-run. Every sandboxed spawn reports the warning "the macOS sandbox_init() profile is untested".
-
-Known gaps, from review only:
-
-- `sandbox_init()` runs in the child between `fork()` and `exec()`. It compiles the profile, which
-  allocates; in a multithreaded parent that is not async-signal-safe and can deadlock on a malloc
-  lock held by another thread at fork time. The fix is to exec through `/usr/bin/sandbox-exec -p
-  <profile>` (deprecated too) or to compile the profile in the parent (private
-  `sandbox_compile_string` / `sandbox_apply`).
-- `SandboxPolicy::gpu` does nothing: Metal goes through IOKit / Mach services, which `(allow
-  default)` leaves open anyway. Mach lookups, IPC and `process-exec` are not restricted at all.
-- `RLIMIT_AS` is not enforced by the macOS kernel for most allocations.
+macOS: not supported in v1.0.0.
 
 ## Windows
 
@@ -168,15 +154,11 @@ for any AppContainer. `test_sandbox_windows.cpp` covers the write, read and gran
 network pair (curl succeeds with `Allow`, fails with `Deny`).
 
 If the container or an ACL cannot be set up (a folder the user cannot change, such as one an administrator made under `C:\`),
-the child falls back to the **Low integrity level** (writes confined to the allowed folders; reads and network not restricted)
-and `sandbox_warnings` says so. Engine hosts leave the flag off: they need more of the system than a container allows, so they get
-the Job Object only.
+the child runs without a sandbox and `sandbox_warnings` says so. There is no weaker substitute mode.
 
 The container grants are kept: the profile `agent-cpp.sandbox` and the ACEs stay on the folders after a run, so a later run is
 quick. Removing them is `icacls <folder> /remove "<container sid>"`, or deleting the folder.
 
-Still open on Windows: `bInheritHandles = TRUE` lets the child inherit every inheritable handle of the parent, not only its three
-pipe ends (add `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` to the same attribute list).
 Other review notes: a failed `AssignProcessToJobObject` (e.g. a parent job that forbids nesting on
 Windows 7) degrades to a warning and the child runs without limits; `SandboxPolicy::gpu` has no
 meaning (no device files).
@@ -218,7 +200,6 @@ directory, the plugin's directory (bundled runtime libraries) and any path named
 | llama (Qwen2.5-0.5B, SmolVLM + mmproj, bge-small, jina reranker) | chat turn; image from the workspace; embed; rerank | none. ggml's CPU feature detection, OpenMP and the model `mmap` stay inside `/proc`, `/sys`, `/usr/lib` and the model directory |
 | llama vision, secret file | the same image placed outside every allow-list | the read fails with `EACCES` (`Unable to open file ...: Permission denied`), the turn fails cleanly, the host keeps serving |
 | onnx (ORT 1.31.1, generated `Add` model) | `infer()` | ORT's 1DS telemetry: `$TMPDIR/.ses`, `~/.cache/Microsoft/DeveloperTools/.onnxruntime/onnxruntime.db`, `/run/systemd/container`. ORT logs "Failed to persist telemetry device ID; using an in-memory identifier" and carries on. `DisableTelemetryEvents()` cannot avoid it: the accesses happen inside `CreateEnv` |
-| sherpa-onnx 2.0.1 (Kokoro TTS with espeak-ng data, Whisper tiny, Silero VAD, pyannote + 3D-Speaker diarization) | TTS into `artifacts/`, then ASR, VAD and diarization of that WAV | none. No temporary files: the WAV goes to the request's output directory, espeak-ng data is read from the Kokoro directory |
 | sdcpp (SDXS-512 Q8_0) | 64x64, 1-step text-to-image | none |
 | trellis (no weights here) | `create()` with an empty and with a garbage model directory | none; the errors name the missing / invalid `dino_f16.gguf`, so the host could see the directory |
 

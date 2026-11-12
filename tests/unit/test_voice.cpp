@@ -1,9 +1,8 @@
 // agent voice: speech detection, utterance segmentation, the loop with mock engines, WAV I/O, flags.
 //
 // The end-to-end test at the bottom runs the real `agent voice` binary on a WAV file (file audio
-// backend) and is gated on AGENT_TEST_SHERPA_TTS_DIR (Kokoro), AGENT_TEST_SHERPA_ASR_DIR (Whisper)
-// and AGENT_TEST_LLAMA_MODEL (a chat GGUF); AGENT_TEST_SHERPA_VAD_MODEL (silero_vad.onnx) switches
-// it from the energy gate to the Silero VAD.
+// backend) and is gated on AGENT_TEST_AUDIOCPP_DIR (the audio.cpp model folder: Supertonic, Parakeet, FireRed VAD)
+// and AGENT_TEST_LLAMA_MODEL (a chat GGUF). With the VAD GGUF present it switches from the energy gate to the VAD.
 #include "audio.hpp"
 #include "voice.hpp"
 
@@ -338,7 +337,7 @@ TEST_CASE("transcripts without words are skipped and replies are cleaned for TTS
     CHECK(is_meaningful_transcript("[noise] hello"));
 
     CHECK(speakable_text("**Four.** Two plus two is `4`.") == "Four. Two plus two is four.");
-    // Kokoro's lexicon has no digits or symbols: they are spelled out.
+    // Digits and symbols are spelled out for the TTS model.
     CHECK(speakable_text("2 + 2 = 4") == "two plus two equals four");
     CHECK(speakable_text("It costs 1,250.75 dollars, 15% off.") ==
           "It costs one thousand two hundred fifty point seven five dollars, fifteen percent off.");
@@ -428,22 +427,22 @@ TEST_CASE("sound devices fail cleanly when there are none", "[voice][audio]") {
 
 TEST_CASE("agent voice flags parse and validate", "[voice][cli]") {
     const std::vector<std::string_view> args = {
-        "voice", "--asr-model",  "/m/whisper", "--tts-model",  "/m/kokoro", "--vad-model", "/m/vad.onnx", "-m",
+        "voice", "--asr-model",  "/m/whisper", "--tts-model",  "/m/tts", "--vad-model", "/m/vad.gguf", "-m",
         "qwen",  "--input-wav",  "q.wav",      "--output-dir", "out",       "--max-turns", "1",           "--barge-in",
-        "-y",    "--speaker-id", "3"};
+        "-y",    "--voice", "alba"};
     auto cl = parse_command_line(args);
     REQUIRE(cl.ok);
     REQUIRE(cl.value.command == "voice");
     auto s = voice_settings_from(cl.value);
     REQUIRE(s.ok);
     CHECK(s.value.asr_model == "/m/whisper");
-    CHECK(s.value.tts_model == "/m/kokoro");
-    CHECK(s.value.vad_model == "/m/vad.onnx");
+    CHECK(s.value.tts_model == "/m/tts");
+    CHECK(s.value.vad_model == "/m/vad.gguf");
     CHECK(s.value.model == "qwen");
     CHECK(s.value.input_wav == "q.wav");
     CHECK(s.value.output_dir == "out");
     CHECK(s.value.max_turns == 1);
-    CHECK(s.value.speaker_id == 3);
+    CHECK(s.value.voice == "alba");
     CHECK(s.value.barge_in);
     CHECK(s.value.auto_approve);
 
@@ -463,48 +462,33 @@ TEST_CASE("agent voice flags parse and validate", "[voice][cli]") {
     CHECK(usage_text().find("  voice ") != std::string::npos);
 }
 
-TEST_CASE("sherpa options come from model directories", "[voice][cli]") {
-    const fs::path asr = temp_dir("agent_test_voice_asr");
-    for (const char *n :
-         {"tiny.en-encoder.onnx", "tiny.en-encoder.int8.onnx", "tiny.en-decoder.onnx", "tiny.en-decoder.int8.onnx", "tiny.en-tokens.txt"})
-        std::ofstream(asr / n) << "x";
-    auto whisper = sherpa_asr_options(asr.string());
-    REQUIRE(whisper.ok);
-    CHECK(whisper.value.find("\"whisper\"") != std::string::npos);
-    CHECK(whisper.value.find("tiny.en-encoder.int8.onnx") != std::string::npos);
-    CHECK(whisper.value.find("tiny.en-decoder.int8.onnx") != std::string::npos);
+TEST_CASE("audiocpp options come from GGUF files", "[voice][cli]") {
+    const fs::path dir = temp_dir("agent_test_voice_models");
+    for (const char *n : {"asr.gguf", "tts.gguf", "vad.gguf"}) std::ofstream(dir / n) << "x";
+    auto asr = audiocpp_asr_options((dir / "asr.gguf").string());
+    REQUIRE(asr.ok);
+    CHECK(asr.value.find("\"asr\":{\"model\":") != std::string::npos);
+    CHECK(audiocpp_asr_options(R"({"model":"m","language":"en"})").value == R"({"asr":{"model":"m","language":"en"}})");
+    CHECK_FALSE(audiocpp_asr_options("/nonexistent/asr.gguf").ok);
+    CHECK_FALSE(audiocpp_asr_options(dir.string()).ok); // a folder is not a model file
 
-    std::ofstream(asr / "joiner.onnx") << "x";
-    auto nemo = sherpa_asr_options(asr.string());
-    REQUIRE(nemo.ok);
-    CHECK(nemo.value.find("\"nemo_transducer\"") != std::string::npos);
-    CHECK(sherpa_asr_options(R"({"whisper":{"encoder":"e"}})").value == R"({"asr":{"whisper":{"encoder":"e"}}})");
-    CHECK_FALSE(sherpa_asr_options("/nonexistent/dir").ok);
-    const fs::path empty = temp_dir("agent_test_voice_empty");
-    CHECK_FALSE(sherpa_asr_options(empty.string()).ok);
+    auto tts = audiocpp_tts_options((dir / "tts.gguf").string(), "alba");
+    REQUIRE(tts.ok);
+    CHECK(tts.value.find("\"voice\":\"alba\"") != std::string::npos);
+    auto tts_default = audiocpp_tts_options((dir / "tts.gguf").string());
+    REQUIRE(tts_default.ok);
+    CHECK(tts_default.value.find("\"voice\"") == std::string::npos);
+    CHECK_FALSE(audiocpp_tts_options("/nonexistent/tts.gguf").ok);
 
-    const fs::path tts = temp_dir("agent_test_voice_tts");
-    for (const char *n : {"model.onnx", "voices.bin", "tokens.txt", "lexicon-us-en.txt", "lexicon-zh.txt"}) std::ofstream(tts / n) << "x";
-    fs::create_directories(tts / "espeak-ng-data");
-    auto kokoro = sherpa_tts_options(tts.string(), 4);
-    REQUIRE(kokoro.ok);
-    CHECK(kokoro.value.find("\"kokoro\"") != std::string::npos);
-    CHECK(kokoro.value.find("lexicon-us-en.txt") != std::string::npos);
-    CHECK(kokoro.value.find("espeak-ng-data") != std::string::npos);
-    CHECK(kokoro.value.find("\"speaker_id\":4") != std::string::npos);
-    CHECK_FALSE(sherpa_tts_options(empty.string()).ok);
-
-    std::ofstream(asr / "silero_vad.onnx") << "x";
-    auto vad = sherpa_vad_options((asr / "silero_vad.onnx").string());
+    auto vad = audiocpp_vad_options((dir / "vad.gguf").string());
     REQUIRE(vad.ok);
-    CHECK(vad.value.find("\"silero\"") != std::string::npos);
     CHECK(vad.value.find("\"streaming\":true") != std::string::npos);
-    CHECK_FALSE(sherpa_vad_options("/nonexistent/silero_vad.onnx").ok);
+    CHECK_FALSE(audiocpp_vad_options("/nonexistent/vad.gguf").ok);
 }
 
 // -------------------------- end to end --------------------------
 
-#if defined(AGENT_TEST_CLI_PATH) && defined(AGENT_TEST_SHERPA_ENGINE_PATH)
+#if defined(AGENT_TEST_CLI_PATH) && defined(AGENT_TEST_AUDIOCPP_ENGINE_PATH)
 
 namespace {
 
@@ -545,25 +529,28 @@ std::string line_starting(const std::string &text, std::string_view prefix) {
 } // namespace
 
 TEST_CASE("agent voice answers a spoken question from a WAV file", "[voice][model]") {
-    const char *tts_dir = env_or_null("AGENT_TEST_SHERPA_TTS_DIR");
-    const char *asr_dir = env_or_null("AGENT_TEST_SHERPA_ASR_DIR");
+    const char *models = env_or_null("AGENT_TEST_AUDIOCPP_DIR");
     const char *llm = env_or_null("AGENT_TEST_LLAMA_MODEL");
-    const char *vad = env_or_null("AGENT_TEST_SHERPA_VAD_MODEL");
-    if (!tts_dir || !asr_dir || !llm) SKIP("AGENT_TEST_SHERPA_TTS_DIR, AGENT_TEST_SHERPA_ASR_DIR and AGENT_TEST_LLAMA_MODEL not all set");
+    if (!models || !llm) SKIP("AGENT_TEST_AUDIOCPP_DIR and AGENT_TEST_LLAMA_MODEL not both set");
+    const std::string tts_dir = std::string(models) + "/Supertonic-3-GGUF/supertonic-3-q8_0.gguf";
+    const std::string asr_dir = std::string(models) + "/Parakeet-TDT-0.6B-v3-GGUF/parakeet-tdt-0.6b-v3-q8_0.gguf";
+    const std::string vad_file = std::string(models) + "/FireRedVAD-GGUF/firered-vad-f32.gguf";
+    const char *vad = fs::exists(vad_file) ? vad_file.c_str() : nullptr;
+    if (!fs::exists(tts_dir) || !fs::exists(asr_dir)) SKIP("Supertonic or Parakeet GGUF missing in AGENT_TEST_AUDIOCPP_DIR");
     const fs::path dir = temp_dir("agent_test_voice_e2e");
 
-    // The question, spoken by Kokoro through the sherpa engine, with some silence around it.
-    auto tts_opts = sherpa_tts_options(tts_dir);
+    // The question, spoken by the TTS model through the audiocpp engine, with some silence around it.
+    auto tts_opts = audiocpp_tts_options(tts_dir);
     REQUIRE(tts_opts.ok);
     std::string options = tts_opts.value.substr(1, tts_opts.value.size() - 2); // {"tts":{...}} -> "tts":{...}
     agent::Config cfg;
     cfg.provider = agent::AiProvider::Engine;
-    cfg.engine = AGENT_TEST_SHERPA_ENGINE_PATH;
+    cfg.engine = AGENT_TEST_AUDIOCPP_ENGINE_PATH;
     cfg.workspace_dir = (dir / "tts-ws").string();
     cfg.engine_options = "{" + options + "}";
     auto session = agent::init(cfg);
     REQUIRE(session.ok);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     memory.id = "question";
     REQUIRE(agent::run_turn(session.value, memory, "What is two plus two?").ok);
     REQUIRE(memory.history.back().media.size() == 1);

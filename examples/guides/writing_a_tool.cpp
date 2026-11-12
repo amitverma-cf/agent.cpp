@@ -3,7 +3,7 @@
 //
 //   guide_tool <engine plugin> [mcp server command] [workspace]
 //
-// With the mock engine plugin (engines/mock) a user message "call:<tool>" makes the model request
+// With the mock engine plugin (src/engines/mock) a user message "call:<tool>" makes the model request
 // <tool> with {} arguments, so the whole tool loop runs without a real model.
 
 #include <agent-cpp/agent.hpp>
@@ -91,7 +91,7 @@ void on_tool_event(const agent::Event &event, void *user_data) {
     ++*static_cast<int *>(user_data);
 }
 
-void audit(agent::Session &, agent::FlowMemory &, std::string_view tool, std::string_view args, std::string_view result, void *user_data) {
+void audit(agent::Session &, agent::Conversation &, std::string_view tool, std::string_view args, std::string_view result, void *user_data) {
     std::printf("   post-hook %.*s(%.*s) -> %.*s\n", static_cast<int>(tool.size()), tool.data(), static_cast<int>(args.size()), args.data(),
                 static_cast<int>(result.size()), result.data());
     ++*static_cast<int *>(user_data);
@@ -141,7 +141,7 @@ int main(int argc, char **argv) {
 
     // 2. Model-requested call inside run_turn: the mock model asks for word_count, the result goes back
     //    to it as a "tool" message, and the turn continues ("tool done").
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     auto turn = agent::run_turn(session, memory, "call:word_count");
     check(turn.ok && turn.value == "tool done", "run_turn dispatches the tool call", turn.ok ? turn.value : turn.error.message);
     check(counter.calls == 3 && events >= 2, "tool ran and OnToolCall/OnToolResult fired",

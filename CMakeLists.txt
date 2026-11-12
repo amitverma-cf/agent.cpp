@@ -71,40 +71,40 @@ if(AGENT_ENABLE_COVERAGE)
 endif()
 
 add_library(agent
-    src/core/agent.cpp
-    src/core/arena.cpp
-    src/core/events.cpp
-    src/core/executor/turn_executor.cpp
-    src/core/executor/ambient_turn.cpp
-    src/core/graph/graph_builders.cpp
-    src/core/graph/graph_checkpoint.cpp
-    src/core/graph/graph_checkpointer.cpp
-    src/core/graph/graph_executor.cpp
-    src/core/graph/graph_json.cpp
-    src/core/mcp/mcp_client.cpp
-    src/core/models/model_registry.cpp
-    src/core/data/data_source_registry.cpp
-    src/core/skills/skills_registry.cpp
-    src/core/providers/provider_ops.cpp
-    src/core/providers/engine_provider.cpp
-    src/core/engines/engine_registry.cpp
-    src/core/engines/engine_remote.cpp
-    src/core/engines/engine_shm.cpp
-    src/core/utils/utils.cpp
-    src/core/memory/in_memory_store.cpp
-    src/core/tools/tools_ops.cpp
-    src/core/tools/filesystem_tools.cpp
-    src/core/tools/terminal_tools.cpp
-    src/core/tools/path_gate.cpp
-    src/core/tools/context_compressor.cpp
-    src/core/tools/lazy_tools.cpp
-    src/core/rag/engine_tasks.cpp
-    src/core/rag/in_memory_vector_store.cpp
-    src/core/rag/chunker.cpp
-    src/core/rag/rag_pipeline.cpp
-    src/core/tasks/decide.cpp
-    src/core/tasks/ocr.cpp
-    src/core/sandbox/sandbox_policy.cpp
+    src/agent/agent.cpp
+    src/agent/arena.cpp
+    src/agent/events.cpp
+    src/agent/executor/turn_executor.cpp
+    src/agent/executor/ambient_turn.cpp
+    src/agent/graph/graph_builders.cpp
+    src/agent/graph/graph_checkpoint.cpp
+    src/agent/graph/graph_checkpointer.cpp
+    src/agent/graph/graph_executor.cpp
+    src/agent/graph/graph_json.cpp
+    src/agent/mcp/mcp_client.cpp
+    src/agent/models/model_registry.cpp
+    src/agent/data/data_source_registry.cpp
+    src/agent/skills/skills_registry.cpp
+    src/agent/providers/provider_ops.cpp
+    src/agent/providers/engine_provider.cpp
+    src/agent/engines/engine_registry.cpp
+    src/agent/engines/engine_remote.cpp
+    src/agent/engines/engine_shm.cpp
+    src/agent/utils/utils.cpp
+    src/agent/memory/in_memory_store.cpp
+    src/agent/tools/tools_ops.cpp
+    src/agent/tools/filesystem_tools.cpp
+    src/agent/tools/terminal_tools.cpp
+    src/agent/tools/path_gate.cpp
+    src/agent/tools/context_compressor.cpp
+    src/agent/tools/lazy_tools.cpp
+    src/agent/rag/engine_tasks.cpp
+    src/agent/rag/in_memory_vector_store.cpp
+    src/agent/rag/chunker.cpp
+    src/agent/rag/rag_pipeline.cpp
+    src/agent/tasks/decide.cpp
+    src/agent/tasks/ocr.cpp
+    src/agent/sandbox/sandbox_policy.cpp
     src/hal/time.cpp
     src/hal/path.cpp
     src/hal/process.cpp
@@ -143,7 +143,7 @@ set_source_files_properties(
 find_package(Threads REQUIRED)
 target_link_libraries(agent PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
 if(WIN32)
-    target_link_libraries(agent PRIVATE advapi32 userenv) # token / ACL calls of the Windows sandbox
+    target_link_libraries(agent PRIVATE advapi32 userenv winmm) # token / ACL calls of the Windows sandbox
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # shm_open / shm_unlink (engine IPC shared memory); part of libc since glibc 2.34.
@@ -153,15 +153,15 @@ endif()
 # Optional SQLite storage (KV store + sqlite-vec data source). Used by the CLI; library users opt in
 # by linking agent_store_sqlite. libagent itself has no SQLite dependency.
 add_library(agent_store_sqlite
-    tools/store-sqlite/src/sqlite_checkpointer.cpp
-    tools/store-sqlite/src/sqlite_store.cpp
-    tools/store-sqlite/src/sqlite_vec_data_source.cpp
+    apps/store-sqlite/src/sqlite_checkpointer.cpp
+    apps/store-sqlite/src/sqlite_store.cpp
+    apps/store-sqlite/src/sqlite_vec_data_source.cpp
     vendor/sqlite/sqlite3.c
     vendor/sqlite-vec/sqlite-vec.c
 )
 add_library(agent-cpp::store_sqlite ALIAS agent_store_sqlite)
 target_include_directories(agent_store_sqlite PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/tools/store-sqlite/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/apps/store-sqlite/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_include_directories(agent_store_sqlite PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${AGENT_SIMDJSON_INCLUDE_DIR})
@@ -185,13 +185,13 @@ option(AGENT_BUILD_HUB "Build the agent_hub model downloader (requires OpenSSL)"
 if(AGENT_BUILD_HUB)
 find_package(OpenSSL REQUIRED)
 add_library(agent_hub
-    tools/hub/src/hub.cpp
-    tools/hub/src/hub_http.cpp
-    tools/hub/src/registry.cpp
+    apps/hub/src/hub.cpp
+    apps/hub/src/hub_http.cpp
+    apps/hub/src/registry.cpp
 )
 add_library(agent-cpp::hub ALIAS agent_hub)
 target_include_directories(agent_hub PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/tools/hub/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/apps/hub/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_include_directories(agent_hub PRIVATE ${AGENT_SIMDJSON_INCLUDE_DIR})
@@ -209,26 +209,24 @@ target_compile_options(agent_hub PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${
 target_link_options(agent_hub PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 endif()
 
-# The `agent` CLI binary (tools/cli): setup wizard, engine/model manager, chat TUI.
-option(AGENT_BUILD_CLI "Build the agent CLI binary (tools/cli; requires AGENT_BUILD_HUB)" ON)
+# The `agent` CLI binary (apps/cli): setup wizard, engine/model manager, chat TUI.
+option(AGENT_BUILD_CLI "Build the agent CLI binary (apps/cli; requires AGENT_BUILD_HUB)" ON)
 if(AGENT_BUILD_CLI AND NOT AGENT_BUILD_HUB)
     message(WARNING "AGENT_BUILD_CLI needs AGENT_BUILD_HUB; the agent CLI will not be built")
     set(AGENT_BUILD_CLI OFF)
 endif()
 if(AGENT_BUILD_CLI)
-    add_subdirectory(tools/cli)
+    add_subdirectory(apps/cli)
 endif()
 
-option(AGENT_ENGINE_LLAMA "Build the llama.cpp engine plugin (engines/llama)" ON)
-option(AGENT_ENGINE_ONNX "Build the ONNX Runtime engine plugin (engines/onnx; needs a prebuilt ONNX Runtime, see ONNXRUNTIME_ROOT)" OFF)
+option(AGENT_ENGINE_LLAMA "Build the llama.cpp engine plugin (src/engines/llama)" ON)
+option(AGENT_ENGINE_ONNX "Build the ONNX Runtime engine plugin (src/engines/onnx; needs a prebuilt ONNX Runtime, see ONNXRUNTIME_ROOT)" OFF)
 # Heavy (builds stable-diffusion.cpp + its own ggml), so off by default for now.
-option(AGENT_ENGINE_SDCPP "Build the stable-diffusion.cpp image generation engine plugin (engines/sdcpp)" OFF)
+option(AGENT_ENGINE_SDCPP "Build the stable-diffusion.cpp image generation engine plugin (src/engines/sdcpp)" OFF)
 # Heavy (builds trellis2.cpp + its own ggml), so off by default.
-option(AGENT_ENGINE_TRELLIS "Build the TRELLIS.2 image-to-3D engine plugin (engines/trellis)" OFF)
-option(AGENT_ENGINE_SHERPA "Build the sherpa-onnx speech engine plugin (engines/sherpa, needs SHERPA_ONNX_ROOT)" OFF)
-# Builds whisper.cpp + its own ggml, so off by default.
-option(AGENT_ENGINE_WHISPER "Build the whisper.cpp speech-to-text engine plugin (engines/whisper)" OFF)
-option(AGENT_ENGINE_PARAKEET "Build the parakeet.cpp speech-to-text engine plugin (engines/parakeet)" OFF)
+option(AGENT_ENGINE_TRELLIS "Build the TRELLIS.2 image-to-3D engine plugin (src/engines/trellis)" OFF)
+# audio.cpp (Apache-2.0): TTS, ASR, VAD, diarization and more from one library; builds its own ggml, so off by default.
+option(AGENT_ENGINE_AUDIOCPP "Build the audio.cpp speech engine plugin (src/engines/audiocpp)" OFF)
 # ggml's AMX kernels break when another in-process engine touches the AMX tile state; see
 # cmake/ggml_no_amx.cmake. Only matters for GGML_NATIVE builds on AMX CPUs.
 option(AGENT_GGML_AMX "Keep Intel AMX in the engines' ggml (safe only with process-isolated engines)" OFF)
@@ -247,7 +245,7 @@ endif()
 
 # Out-of-process engine host (EngineIsolation::Process). Lands next to the agent CLI and the tests,
 # where the core looks for it.
-add_executable(agent-engine-host tools/engine-host/engine_host.cpp)
+add_executable(agent-engine-host apps/engine-host/engine_host.cpp)
 target_include_directories(agent-engine-host PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(agent-engine-host PRIVATE agent Threads::Threads ${CMAKE_DL_LIBS})
 set_target_properties(agent-engine-host PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
@@ -263,27 +261,21 @@ if(AGENT_INSTALL)
     install(TARGETS agent-engine-host RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 
-add_subdirectory(engines/mock)
+add_subdirectory(src/engines/mock)
 if(AGENT_ENGINE_LLAMA)
-    add_subdirectory(engines/llama)
+    add_subdirectory(src/engines/llama)
 endif()
 if(AGENT_ENGINE_ONNX)
-    add_subdirectory(engines/onnx)
+    add_subdirectory(src/engines/onnx)
 endif()
 if(AGENT_ENGINE_SDCPP)
-    add_subdirectory(engines/sdcpp)
+    add_subdirectory(src/engines/sdcpp)
 endif()
 if(AGENT_ENGINE_TRELLIS)
-    add_subdirectory(engines/trellis)
+    add_subdirectory(src/engines/trellis)
 endif()
-if(AGENT_ENGINE_SHERPA)
-    add_subdirectory(engines/sherpa)
-endif()
-if(AGENT_ENGINE_WHISPER)
-    add_subdirectory(engines/whisper)
-endif()
-if(AGENT_ENGINE_PARAKEET)
-    add_subdirectory(engines/parakeet)
+if(AGENT_ENGINE_AUDIOCPP)
+    add_subdirectory(src/engines/audiocpp)
 endif()
 
 enable_testing()
@@ -384,22 +376,9 @@ if(AGENT_ENGINE_TRELLIS)
     target_compile_definitions(test_agent PRIVATE AGENT_TEST_TRELLIS_ENGINE_PATH="$<TARGET_FILE:agent-engine-trellis>")
     add_dependencies(test_agent agent-engine-trellis)
 endif()
-if(AGENT_ENGINE_SHERPA)
-    target_sources(test_agent PRIVATE tests/unit/test_engine_sherpa.cpp)
-    target_compile_definitions(test_agent PRIVATE AGENT_TEST_SHERPA_ENGINE_PATH="$<TARGET_FILE:agent-engine-sherpa>")
-    add_dependencies(test_agent agent-engine-sherpa)
-endif()
-if(AGENT_ENGINE_WHISPER)
-    target_sources(test_agent PRIVATE tests/unit/test_engine_whisper.cpp)
-    target_compile_definitions(test_agent PRIVATE AGENT_TEST_WHISPER_ENGINE_PATH="$<TARGET_FILE:agent-engine-whisper>"
-                                                  AGENT_TEST_WHISPER_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/vendor/whisper.cpp/samples")
-    add_dependencies(test_agent agent-engine-whisper)
-endif()
-if(AGENT_ENGINE_PARAKEET)
-    target_sources(test_agent PRIVATE tests/unit/test_engine_parakeet.cpp)
-    target_compile_definitions(test_agent PRIVATE AGENT_TEST_PARAKEET_ENGINE_PATH="$<TARGET_FILE:agent-engine-parakeet>"
-                                                  AGENT_TEST_PARAKEET_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/vendor/parakeet.cpp/tests/fixtures")
-    add_dependencies(test_agent agent-engine-parakeet)
+if(AGENT_ENGINE_AUDIOCPP)
+    target_compile_definitions(test_agent PRIVATE AGENT_TEST_AUDIOCPP_ENGINE_PATH="$<TARGET_FILE:agent-engine-audiocpp>")
+    add_dependencies(test_agent agent-engine-audiocpp)
 endif()
 target_compile_options(test_agent PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 if(MSVC)
@@ -410,7 +389,7 @@ endif()
 target_link_options(test_agent PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/vendor/catch2/extras/Catch.cmake)
-catch_discover_tests(test_agent)
+catch_discover_tests(test_agent ADD_TAGS_AS_LABELS)
 
 # Example programs and the code of docs/guides (smoke tests on the mock engine: ctest -L examples).
 option(AGENT_BUILD_EXAMPLES "Build examples/ (guide code, image critique, RAG over docs) and their smoke tests" ON)
@@ -452,11 +431,11 @@ if(AGENT_INSTALL)
     install(FILES
         include/agent-cpp/agent.hpp
         include/agent-cpp/engine_abi.h
-        tools/store-sqlite/include/agent-cpp/store_sqlite.hpp
+        apps/store-sqlite/include/agent-cpp/store_sqlite.hpp
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/agent-cpp
     )
     if(AGENT_BUILD_HUB)
-        install(FILES tools/hub/include/agent-cpp/hub.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/agent-cpp)
+        install(FILES apps/hub/include/agent-cpp/hub.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/agent-cpp)
     endif()
     install(EXPORT agent-cppTargets NAMESPACE agent-cpp:: DESTINATION ${AGENT_CMAKE_INSTALL_DIR})
     install(FILES README.md LICENSE docs/cli.md DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/agent)

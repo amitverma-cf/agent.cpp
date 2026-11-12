@@ -153,7 +153,7 @@ agent::register_event_hook(session, agent::EventType::OnInferenceComplete,
     [](const agent::Event &, void *ud) {
         auto *st = static_cast<TokenStats*>(ud);
         // get_stats gives session-wide totals; subtract to get this turn's delta
-        // (or use FlowMemory::stats directly after run_turn)
+        // (or use Conversation::stats directly after run_turn)
     },
     &my_stats);
 ```
@@ -194,7 +194,7 @@ agent::register_event_hook(session, agent::EventType::OnCompression,
 |---|---|---|
 | Scope | Session-wide; fires for all conversations | Node-specific; fires only while that Agent node runs |
 | Tool visibility | `OnToolCall` fires for all tools | Can be narrowed to a specific `tool_name` |
-| Result access | `OnToolResult` provides result bytes | `ToolHook::Post` receives `std::string_view result` and the node's `FlowMemory` |
+| Result access | `OnToolResult` provides result bytes | `ToolHook::Post` receives `std::string_view result` and the node's `Conversation` |
 | Use case | Telemetry, logging, dashboards | Node-scoped auditing and logging |
 
 Use both together for comprehensive observability:
@@ -208,7 +208,7 @@ agent::register_event_hook(session, agent::EventType::OnInferenceComplete, stop_
 worker_node.hooks = {
     { .when = agent::ToolHook::When::Pre,
       .tool_name = "delete_path",
-      .callback = [](agent::Session &, agent::FlowMemory &, std::string_view, std::string_view args,
+      .callback = [](agent::Session &, agent::Conversation &, std::string_view, std::string_view args,
                      std::string_view, void *) {
           printf("[WARN] agent is about to delete: %s\n", std::string(args).c_str());
       }

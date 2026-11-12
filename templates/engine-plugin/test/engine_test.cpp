@@ -37,7 +37,7 @@ void run_checks(const std::string &plugin, const std::string &host, agent::Engin
     if (!sess.ok) return;
     agent::Session session = std::move(sess.value);
 
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     std::string streamed;
     auto reply = agent::run_turn(session, memory, "hello engine", true, collect, &streamed);
     check(reply.ok && reply.value == "echo: hello engine", "run_turn", reply.ok ? reply.value : reply.error.message);

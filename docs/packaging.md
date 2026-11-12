@@ -3,7 +3,7 @@
 ## Version
 
 The version is set once, in `project("agent.cpp" VERSION x.y.z)` in the top-level `CMakeLists.txt`.
-`agent version`, the CMake package version (`agent-cppConfigVersion.cmake`) and the release tarball
+`agent version`, the CMake package version (`agent-cppConfigVersion.cmake`) and the Linux tarball
 names all come from it.
 
 ## `cmake --install`
@@ -20,7 +20,7 @@ Installed layout:
 |---|---|
 | `bin/agent` | the CLI |
 | `bin/agent-engine-host` | runs engines out of process (found next to `agent`) |
-| `lib/agent/engines/agent-engine-*.so` | engine plugins, plus the runtime libraries they load through their `$ORIGIN` RPATH (`libonnxruntime.so.1`, `libsherpa-onnx-c-api.so`, ...) |
+| `lib/agent/engines/agent-engine-*.so` | engine plugins, plus the runtime libraries they load through their `$ORIGIN` RPATH (`libonnxruntime.so.1`, ...) |
 | `lib/libagent.a` (or `.so`) | the library |
 | `lib/libagent_store_sqlite.a`, `lib/libagent_hub.a` | the optional SQLite store and Hugging Face hub libraries |
 | `include/agent-cpp/` | `agent.hpp`, `engine_abi.h`, `store_sqlite.hpp`, `hub.hpp` |
@@ -45,7 +45,7 @@ RPATHs:
 
 - `agent` with static libraries: no RPATH. With shared libraries: `$ORIGIN/../lib` (the `CMAKE_INSTALL_LIBDIR`).
 - shared `libagent_store_sqlite.so` / `libagent_hub.so`: `$ORIGIN`, so they find `libagent.so` next to them.
-- `agent-engine-onnx` and `agent-engine-sherpa`: `$ORIGIN`, so they find their bundled runtime libraries.
+- `agent-engine-onnx`: `$ORIGIN`, so it finds its bundled runtime libraries.
 - `agent-engine-llama` and `agent-engine-sdcpp` link llama.cpp / stable-diffusion.cpp statically and need
   only system libraries (`libstdc++`, `libgomp` for OpenMP, `libc`).
 
@@ -89,14 +89,13 @@ registering the result with `agent engine add`. See [guides/writing-an-engine.md
 
 ## Linux tarball: `scripts/package.sh`
 
-This script makes a Linux-only tarball from a local build. The GitHub release archives are described in
-[Release archives](#release-archives) below.
+This script makes a Linux-only tarball from a local build.
 
 ```sh
 scripts/package.sh                                   # agent-0.1.2-linux-x64.tar.gz, llama engine, CPU
 scripts/package.sh --engines llama,sdcpp
 scripts/package.sh --engines llama,onnx --onnxruntime-root ~/onnxruntime-linux-x64-1.23.2
-scripts/package.sh --engines llama,sherpa --sherpa-onnx-root ~/sherpa-onnx-v2.0.1-linux-x64-shared
+scripts/package.sh --engines llama,audiocpp
 scripts/package.sh --backend vulkan                  # agent-0.1.2-linux-x64-vulkan.tar.gz
 ```
 
@@ -119,7 +118,7 @@ left out: the tarball is the end-user CLI. Before packing it runs `bin/agent ver
 
 By default ggml is built with `GGML_NATIVE=OFF`, which enables AVX, AVX2, FMA, F16C and BMI2 (roughly
 x86-64-v3) instead of `-march=native`; `--native` builds for the packaging machine only. Native builds still leave out Intel AMX unless
-`-DAGENT_GGML_AMX=ON` (see [LIMITATIONS.md](LIMITATIONS.md#1-robustness-and-isolation)).
+`-DAGENT_GGML_AMX=ON`.
 
 The binary links the system OpenSSL 3 (`libssl.so.3`, `libcrypto.so.3`), `libstdc++` and glibc of the
 build machine, so build on the oldest distribution you want to support.
@@ -129,39 +128,19 @@ Not done yet:
 - The `cuda` and `vulkan` backends only pass `GGML_CUDA` / `GGML_VULKAN` to the llama build. They have
   not been built or tested, and the CUDA runtime libraries are not bundled.
 - Licence files for cpp-httplib, sqlite-vec and SQLite (public domain) are not in `vendor/`, so they are
-  not copied into `licenses/`. The sherpa-onnx shared release has no top-level `LICENSE`, so nothing is
-  copied for it either.
-- With both `onnx` and `sherpa`, two ONNX Runtime builds sit side by side in `lib/agent/engines/`:
-  `libonnxruntime.so.1` (from `--onnxruntime-root`, used by the onnx plugin) and `libonnxruntime.so`
-  (from sherpa-onnx). Their sonames differ, so each plugin loads its own, and both plugins load from the
-  extracted tarball. Running both in one process at the same time has not been tested.
+  not copied into `licenses/`.
 
 ## Release archives
 
-Pushing a `v*` tag runs [`.github/workflows/release.yml`](../.github/workflows/release.yml). It builds the CLI and the
-llama engine on six platforms (Linux, macOS and Windows, each on x86-64 and arm64) and publishes:
-
-| Asset | Contents |
-|---|---|
-| `agent-cpp-<tag>-<os>-<arch>.tar.gz` (Linux, macOS) or `.zip` (Windows) | `agent`, `agent-engine-host`, `engines/` (the llama plugin), `LICENSE`, `README.md`; on Windows also the OpenSSL 3 DLLs |
-| `agent-engine-llama-<os>-<arch>.so` / `.dylib` / `.dll` | the llama plugin on its own, for `agent engine pull` and `agent setup --download-engines` |
-| `manifest.json`, `SHA256SUMS` | SHA-256 and size of every asset; the downloader checks them |
-
-`<os>` is `linux`, `macos` or `windows`; `<arch>` is `x86_64` or `aarch64`. The x86-64 builds need AVX2, FMA, F16C and
-BMI2 (no `-march=native`). The archives are not code-signed or notarized.
-
-The archive is flat: `agent`, `agent-engine-host` and `engines/` sit side by side, which is where the CLI looks for
-plugins first. Windows archives are built with MSVC and vcpkg OpenSSL.
+No release archives are published yet (the version is `dev-v0.0.x`, and there are no GitHub Releases).
+Build from source as described in [getting-started.md](getting-started.md#track-a-the-agent-cli), or use the Linux
+tarball script above. The script is run by hand. No GitHub Action runs automatically: the CI and release
+workflows are manual-dispatch only.
 
 ## Windows notes
 
 - Plugin DLLs are loaded with `LoadLibraryExW(..., LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)`
-  (`src/hal/dylib.cpp`), so a plugin finds the ONNX Runtime or sherpa-onnx DLLs next to it.
-- `agent_hub` needs OpenSSL 3 at build time. The release archive carries its DLLs.
+  (`src/hal/dylib.cpp`), so a plugin finds the ONNX Runtime DLLs next to it.
+- `agent_hub` needs OpenSSL 3 at build time.
 - Build from source with the steps in [getting-started.md](getting-started.md#track-a-the-agent-cli).
 
-## macOS notes
-
-- Release archives for Apple silicon and Intel are built on macOS runners in CI. The sandbox profile has never been run.
-- Plugins are `.dylib` files. The CLI and the plugins find each other through the install layout above.
-- The sandbox profile is written but has not been run (see [security-sandbox.md](security-sandbox.md#macos-written-untested)).

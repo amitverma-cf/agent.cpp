@@ -17,7 +17,7 @@ TEST_CASE("compress_context replaces older history with a summary, keeping recen
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
-    agent::FlowMemory conv;
+    agent::Conversation conv;
     conv.id = "compress_test";
     conv.history.push_back(make_msg("system", "You are a helpful assistant."));
     for (int i = 0; i < 10; ++i) {
@@ -47,7 +47,7 @@ TEST_CASE("compress_context is a no-op when history is too short", "[context_com
     REQUIRE(session_result.ok);
     agent::Session session = std::move(session_result.value);
 
-    agent::FlowMemory conv;
+    agent::Conversation conv;
     conv.id = "compress_short";
     conv.history.push_back(make_msg("system", "sys"));
     conv.history.push_back(make_msg("user", "hi"));

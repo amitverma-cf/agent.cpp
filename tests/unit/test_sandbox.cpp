@@ -358,7 +358,7 @@ TEST_CASE("the engine host runs the mock engine under its default sandbox", "[sa
     agent::Session session = std::move(session_res.value);
 
     auto turn = [&](const std::string &prompt) {
-        agent::FlowMemory memory;
+        agent::Conversation memory;
         auto r = agent::run_turn(session, memory, prompt);
         INFO(r.error.message);
         REQUIRE(r.ok);
@@ -385,7 +385,7 @@ TEST_CASE("the engine host runs the mock engine under its default sandbox", "[sa
     cfg.engine_sandbox.enabled = false;
     auto open_res = agent::init(cfg);
     REQUIRE(open_res.ok);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     auto r = agent::run_turn(open_res.value, memory, "read:" + root + "/secret/secret.txt");
     REQUIRE(r.ok);
     CHECK(r.value == "read ok: 10 bytes");
@@ -410,7 +410,7 @@ TEST_CASE("engine_sandbox.memory_limit_bytes reaches the host", "[sandbox][engin
     auto roomy = agent::init(cfg);
     INFO(roomy.error.message);
     REQUIRE(roomy.ok);
-    agent::FlowMemory memory;
+    agent::Conversation memory;
     auto r = agent::run_turn(roomy.value, memory, "hello");
     REQUIRE(r.ok);
     CHECK(r.value == "echo: hello");

@@ -21,15 +21,15 @@ shape.** Re-run on your own hardware before drawing conclusions.
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAGENT_BUILD_BENCH=ON
 cmake --build build
-build/agent_bench --llama build/engines/llama/agent-engine-llama.so \
+build/agent_bench --llama build/src/engines/llama/agent-engine-llama.so \
                   --model qwen2.5-0.5b-instruct-q4_k_m.gguf \
-                  --mock build/engines/mock/agent-engine-mock.so \
+                  --mock build/src/engines/mock/agent-engine-mock.so \
                   --reps 3 --gen-tokens 128 --prompt-words 200 --branches 4 --turns 2000 \
                   --json results.json --md results.md
 ```
 
 `agent_bench --help` lists every option. Sections run when their inputs are given: `llm` and
-`parallel` need `--llama` and `--model`, `overhead` needs `--mock`, `tts` needs `--sherpa` and
+`parallel` need `--llama` and `--model`, `overhead` needs `--mock`, `tts` needs `--audiocpp` and
 `--tts-model`.
 
 ## Core overhead per turn (mock engine)
@@ -83,10 +83,10 @@ should not be trusted.
 
 ## Not measured
 
-- **Time to first audio chunk (TTS):** the harness implements it (`--sherpa`, `--tts-model`), but
-  no TTS model was available on the machine used, so it has not been run. [ROADMAP](ROADMAP.md)
-  keeps this open.
-- GPU backends, larger models, and Windows or macOS.
+- **Time to first audio chunk (TTS):** the harness implements it (`--audiocpp`, `--tts-model`), but
+  no TTS model was available on the machine used, so it has not been run.
+- **Speech recognition, VAD and diarization** with the audio.cpp engine: not benchmarked yet.
+- GPU backends and larger models.
 
 ## Graph evaluation, speculation and memory pressure (4 vCPU, 8 GB, CPU only)
 
@@ -145,8 +145,7 @@ allow writing.
 
 **Every engine, one real model each:** image generation (sdxs, 4 s), OCR (GLM-OCR reads "Lighthouse" from the generated image), image
 description (SmolVLM and Qwen3.5-4B both describe the lighthouse), text embedding (bge, Qwen3-VL-Embedding-2B), reranking, ONNX
-embedding (MiniLM), TTS (sherpa Kokoro) and a round trip through Whisper, Parakeet and sherpa Whisper (all transcribe "The quick
-brown fox jumps over the lazy dog." exactly), VAD (Whisper/Silero, sherpa), 3D (TRELLIS: 22 423 vertices, 369 s, 3.5 GB), audio into
+embedding (MiniLM), 3D (TRELLIS: 22 423 vertices, 369 s, 3.5 GB), audio into
 an LLM (Voxtral answers "a fox" about the clip; asked to "transcribe" it refuses, a property of that model's instruction following).
 
 **Not supported:** video input (the llama engine has no video capability; frames can be sent as images), and images or audio into an

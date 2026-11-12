@@ -17,6 +17,10 @@ binary named `agent` at the top of the build tree. The binary looks for engine p
 next to itself, in `engines/` and its subdirectories (so the build tree works as is), and in
 `../lib/agent/engines/` (an install prefix).
 
+**Global flags.** `--no-sandbox` works with any command: it runs engines, tools and commands without the OS
+sandbox. The sandbox is on by default; where the OS cannot provide one, or with `--no-sandbox`, things run
+unsandboxed and a warning says so. There are no weaker fallbacks. See [security-sandbox.md](security-sandbox.md).
+
 ## Files
 
 Everything the CLI uses lives in the global home (see [Where files live](#where-files-live)). The home is chosen at
@@ -42,7 +46,7 @@ folders (`~/.local/share/agent/` on Linux, `%LOCALAPPDATA%\agent\` on Windows).
   "workspace": "/home/me/.local/share/agent/workspace",
   "models_dir": "/home/me/.local/share/agent/models",
   "default_model": "qwen2.5-0.5b-instruct-q4_k_m",
-  "capabilities": ["llama", "sherpa", "sdcpp", "onnx"],
+  "capabilities": ["llama", "audiocpp", "sdcpp", "onnx"],
   "backend": "cpu",
   "hardware": {"cpu_cores": 4, "nvidia_smi": false, "nvidia_device": false, "dri_nodes": []},
   "context_window": 4096,
@@ -96,17 +100,16 @@ agent setup                         # asks questions on a terminal
 agent setup --yes --home ~/.agent.cpp-workspace --model qwen2.5-0.5b --model bge-small
 agent setup --no-models             # layout, engines and config only
 agent setup --caps llama,sdcpp --engines-dir /opt/engines --backend cpu
-agent setup --yes --download-engines --install-runtimes   # fetch missing engines and the private bun / uv
+agent setup --yes --install-runtimes   # the private bun / uv
 ```
 
 1. **Asks where the global home goes** (`--home DIR` answers it), creates its folders and remembers the choice.
 2. **Detects hardware**: CPU cores, installed RAM, whether `nvidia-smi` is on `PATH`, `/dev/nvidia0`, and the
    `/dev/dri/renderD*` nodes. From that it suggests a backend: `cuda`, `vulkan` or `cpu`.
-3. **Picks engines.** The default is the starter pack `llama,sherpa,sdcpp,onnx`.
+3. **Picks engines.** The default is the starter pack `llama,audiocpp,sdcpp,onnx`.
 4. **Looks for each engine's plugin** (`agent-engine-<name>.so` / `.dll` / `.dylib`) in `--engines-dir`
    and the default plugin directories, loads it to check it, and records it in `engines.json`. Engines already
-   listed are kept. Engines that are still missing are offered for download from the release (`agent engine pull`);
-   `--download-engines` does that without asking.
+   listed are kept. Engines that are still missing are reported. Build them from source and register them with `agent engine add`.
 5. **Shows the models this machine can run** and downloads **nothing by default**. On a terminal you choose numbers
    from the list (registry models whose engine is installed and whose size fits in 70% of RAM with room for the KV
    cache), or type any `owner/repo[:quant]`. Without a terminal, `--model NAME|owner/repo[:quant]` (repeatable) picks them.
@@ -153,7 +156,7 @@ agent secret unbind OPENAI_KEY mcp:github
 agent secret rm OPENAI_KEY
 ```
 
-Values go to the OS credential store: Windows Credential Manager, the macOS Keychain, or `secret-tool` (libsecret) on
+Values go to the OS credential store: Windows Credential Manager, or `secret-tool` (libsecret) on
 Linux. Where none of those is available the CLI keeps them in an encrypted file in the home folder. A value is never
 printed again. MCP configs refer to secrets as `${secret:NAME}`, so the value never appears in a config file or in the
 model's context. `bind` allows one consumer to read a secret: `mcp:NAME` (an MCP server), `tool:NAME` or `group:NAME`.
@@ -177,7 +180,7 @@ described in [security-sandbox.md](security-sandbox.md).
 
 ```sh
 agent engine ls                     # name, version, backend, ok/MISSING, path, caps
-agent engine add build/engines/sdcpp/agent-engine-sdcpp.so
+agent engine add build/src/engines/sdcpp/agent-engine-sdcpp.so
 agent engine rm sdcpp               # forgets the entry; the file stays
 ```
 
@@ -185,13 +188,7 @@ agent engine rm sdcpp               # forgets the entry; the file stays
 capabilities before it records the plugin. A plugin that fails to load (wrong ABI version, missing
 dependency libraries) is rejected and the load error is shown.
 
-`agent engine pull NAME` downloads the prebuilt engine for this machine from the project's GitHub release
-(`--tag vX.Y.Z` for a specific one, `--repo owner/name` for a fork), checks its SHA-256 against the release's
-`manifest.json`, stores it in `<home>/engines/NAME/<version>/` and records it. `agent setup` offers the same for
-missing engines (`--download-engines` to do it without asking). The release is built by
-[`.github/workflows/release.yml`](../.github/workflows/release.yml) for Linux, macOS and Windows on x86-64 and arm64
-without `-march=native` (x86-64 builds need AVX2). Each release currently contains the llama engine only; the other
-engines are built from source with the options in the [README](../README.md#cmake-options).
+`agent engine pull NAME` downloads a prebuilt engine from a project GitHub release (`--tag vX.Y.Z` for a specific one, `--repo owner/name` for a fork), checks it against the release's `manifest.json` and stores it in `<home>/engines/NAME/<version>/`. No release is published yet (the version is `dev-v0.0.x`), so build the engines from source with the options in the [README](../README.md#cmake-options) and register them with `agent engine add`.
 
 ## agent runtime
 
@@ -217,8 +214,7 @@ agent runtime path uv
 ```
 
 Private copies of [bun](https://bun.sh) and [uv](https://docs.astral.sh/uv/) in `<home>/runtimes/`, so MCP servers and
-skills written for `npx` / `uvx` run without Node, npm or Python on the machine. The archive comes from the
-project's GitHub release and is checked against the published SHA-256 before it is unpacked. Once installed, an MCP
+skills written for `npx` / `uvx` run without Node, npm or Python on the machine. The archive is checked against the published SHA-256 before it is unpacked. Once installed, an MCP
 server whose command is `npx` / `bunx` runs through `bun x`, and `uvx` through `uv tool run`; every cache, tool and
 Python install is redirected into `<home>/cache` (`BUN_INSTALL_CACHE_DIR`, `UV_CACHE_DIR`, `UV_TOOL_DIR`,
 `UV_PYTHON_INSTALL_DIR`), nothing is written to the user's own profile, and the runtimes folder is read-only inside
@@ -262,7 +258,7 @@ agent model info owner/repo                  # quants with sizes, projectors, li
 agent model pull qwen3-4b                    # a registry name (pulls every part, e.g. a talker and its codec)
 agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M [--name qwen] [--allow-restricted]
 agent model pull owner/repo --quant Q4_K_M [--mmproj auto|none|QUANT] [--no-mmproj]
-agent model pull owner/repo:* [--include int8,tokens]     # every file of a folder model (sherpa voices, TRELLIS)
+agent model pull owner/repo:* [--include int8,tokens]     # every file of a folder model (TRELLIS)
 agent model ls
 agent model rm qwen [--keep-file]
 ```
@@ -283,7 +279,7 @@ agent task text_gen -e llama -m qwen3-4b --text "Say hi" --max-tokens 16
 agent task embed -e llama -m bge-small --engine-options '{"mode":"embed"}' --text "hello"
 agent task rerank -e llama -m jina-reranker-tiny --engine-options '{"mode":"rerank"}' --text "capital of France" --doc "Paris is..." --doc "Bananas are..."
 agent task image_gen -e sdcpp -m sdxs-512 --text "a red lighthouse" --params '{"steps":1,"cfg_scale":1}'
-agent task asr -e whisper -m whisper-tiny.en --file speech.wav
+agent task asr -e audiocpp -m parakeet-tdt --file speech.wav
 agent task generic -e onnx -m minilm-onnx --tensor input_ids:i64:1,4=101,2023,2003,102 --tensor attention_mask:i64:1,4=1,1,1,1
 ```
 
@@ -414,23 +410,23 @@ store cannot be resumed.
 ## agent voice
 
 `agent voice` is a spoken conversation: microphone → speech detection → speech-to-text → one LLM turn →
-text-to-speech → speaker, in a loop until Ctrl-C. Speech runs on the `sherpa` engine (found like any other
+text-to-speech → speaker, in a loop until Ctrl-C. Speech runs on the `audiocpp` engine (found like any other
 engine: `engines.json`, else next to the binary); the LLM turn is the same as in `agent chat`. A guide with
 model downloads is in [guides/voice-assistant.md](guides/voice-assistant.md).
 
 ```sh
-agent voice --asr-model ~/models/sherpa-onnx-whisper-tiny.en --tts-model ~/models/kokoro-en-v0_19 \
-            --vad-model ~/models/silero_vad.onnx --model qwen
+agent voice --asr-model ~/models/parakeet-tdt.gguf --tts-model ~/models/pocket-tts.gguf \
+            --vad-model ~/models/firered-vad.gguf --model qwen
 # no sound card (or a test): read the microphone from a WAV file, write the replies as WAV files
 agent voice --asr-model ... --tts-model ... --input-wav question.wav --output-dir replies/ --max-turns 1
 ```
 
 | Flag | |
 |---|---|
-| `--asr-model DIR` | sherpa-onnx Whisper (`*encoder*.onnx`, `*decoder*.onnx`, `*tokens.txt`) or NeMo transducer / Parakeet (also `*joiner*.onnx`) directory; int8 files are preferred. A JSON object is passed through as the engine's `asr` options. Required |
-| `--tts-model DIR` | sherpa-onnx Kokoro directory (`model.onnx`, `voices.bin`, `tokens.txt`, a `lexicon*.txt`). Or a JSON `tts` object. Required |
-| `--speaker-id N` | Kokoro voice (default 0) |
-| `--vad-model FILE` | `silero_vad.onnx`: utterances are cut by Silero VAD in the sherpa engine (streaming mode). Without it an energy gate is used, which works in a quiet room only |
+| `--asr-model FILE` | audio.cpp speech-recognition GGUF, for example `parakeet-tdt` or `moonshine-tiny`. Required |
+| `--tts-model FILE` | audio.cpp text-to-speech GGUF, for example `pocket-tts` (English) or `supertonic-3` (30+ languages). Required |
+| `--vad-model FILE` | audio.cpp VAD GGUF, for example `firered-vad`: utterances are cut by the engine's streaming VAD. Without it an energy gate is used, which works in a quiet room only |
+| `--voice ID` | optional TTS voice preset, if the TTS model has one |
 | `-m, --model`, `-e, --engine`, `--engine-options`, `--ctx`, `--max-tokens`, `--workspace`, `--inprocess`, `-y, --yes`, `--verbose` | as for `agent chat` |
 | `--input-wav FILE` | file backend: the microphone is this WAV (any rate, resampled to 16 kHz); the loop ends at its end |
 | `--output-dir DIR` | file backend for the speaker: each reply becomes `DIR/reply-NNN.wav` |
@@ -439,12 +435,12 @@ agent voice --asr-model ... --tts-model ... --input-wav question.wav --output-di
 | `--resume ID` | continue a saved conversation (voice and chat conversations share the store) |
 
 **How a turn goes.** Audio is captured as 16 kHz mono f32 and fed to the detector in 100 ms chunks. When a
-speech segment ends (0.6 s of silence for Silero, see `min_silence`), the segment plus 200 ms before and
+speech segment ends (the VAD decides when a segment ends), the segment plus 200 ms before and
 150 ms after goes to the ASR session as an in-memory tensor. Transcripts without words (`[BLANK_AUDIO]`,
 `(music)`) and utterances shorter than 250 ms are skipped. The transcript is the user message of a normal
 `run_turn` (streamed, tools and permission prompts as in `agent chat`, saved after each turn as
 `voice-YYYYMMDD-HHMMSS`). The reply is cleaned for speech (markdown, code blocks and tool-call markup are
-dropped; numbers and `+ - = % / x` are spelled out, because Kokoro's lexicon has no digits), synthesized
+dropped; numbers and `+ - = % / x` are spelled out), synthesized
 by the TTS session and played. Without `--barge-in` the loop is half-duplex: what the microphone hears
 while a reply is produced or played is dropped, so the agent does not answer itself.
 
@@ -457,7 +453,7 @@ run time, so the binary has no link-time audio dependency; `-DAGENT_CLI_AUDIO_DE
 Only the CLI links it, never `libagent`. When there is no microphone, `agent voice` stops with a hint to use
 `--input-wav`; when there is no speaker, replies go to `<workspace>/voice/` as WAV files. The device backend
 was tested on Linux against PulseAudio virtual devices (a null sink as the microphone, another as the speaker: the question
-was transcribed, answered and played), not on a physical sound card or on Windows / macOS; the file backend is what the unit
+was transcribed, answered and played), not on a physical sound card; the file backend is what the unit
 tests run.
 
 **Graph form.** A graph file cannot express this loop today: a graph runs on one engine session, and
@@ -472,7 +468,7 @@ binary against a stand-in server on the loopback interface.
 
 ## Code layout
 
-`tools/cli/src/`:
+`apps/cli/src/`:
 
 - `cli_core.{hpp,cpp}`: the testable logic, built as the `agent_cli_core` library and covered by
   `tests/unit/test_cli.cpp`. It handles argument parsing, `config.json` and `engines.json`, model and
@@ -484,7 +480,7 @@ binary against a stand-in server on the loopback interface.
 - `chat.cpp`: the chat screen.
 - `audio.{hpp,cpp}` (+ `miniaudio_impl.c`): WAV read/write, resampling, and the file and miniaudio
   device backends behind small op tables (in `agent_cli_core`).
-- `voice.hpp`, `voice_core.cpp`: the energy gate, the voice loop, flag handling and the sherpa options
-  built from model directories (in `agent_cli_core`, covered by `tests/unit/test_voice.cpp`).
+- `voice.hpp`, `voice_core.cpp`: the energy gate, the voice loop, flag handling and the audiocpp options
+  built from model files (in `agent_cli_core`, covered by `tests/unit/test_voice.cpp`).
 - `voice.cpp`: `agent voice` (engine sessions and the hooks the loop calls).
 - `main.cpp`: dispatches to the commands.

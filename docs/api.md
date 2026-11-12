@@ -268,7 +268,7 @@ struct MessageView {
 
 ### `Message`
 
-Owned, heap-allocated message stored in `FlowMemory::history`.
+Owned, heap-allocated message stored in `Conversation::history`.
 
 ```cpp
 struct Message {
@@ -304,7 +304,8 @@ struct InferRequest {
 
 ### `InferResponse`
 
-Output from `infer`. Views are arena-backed and invalidated on the next `infer`/`run_turn` call that reuses the same arena slot.
+Output from `infer` and `run_task`. The response owns the memory its views point into (`storage`), so it stays valid
+across later calls and can be kept or moved.
 
 ```cpp
 struct InferResponse {
@@ -398,7 +399,7 @@ struct EventHook {
 
 ### `TurnStats`
 
-Per-conversation counters, stored on `FlowMemory::stats`. Updated automatically by `run_turn`.
+Per-conversation counters, stored on `Conversation::stats`. Updated automatically by `run_turn`.
 
 ```cpp
 struct TurnStats {
@@ -428,19 +429,19 @@ struct SessionStats {
 
 ---
 
-## FlowMemory
+## Conversation
 
 Stores the history and stats for one conversation thread.
 
 ```cpp
-struct FlowMemory {
+struct Conversation {
     std::string          id;        // used as key "history:<id>" in memory
     std::vector<Message> history;   // owned message list
     TurnStats             stats;    // per-conversation telemetry
 };
 ```
 
-You create this on the stack or heap and pass it by reference to `run_turn` (graph Agent nodes keep theirs in `GraphState::histories`). Its lifetime must exceed every call that uses it. `save_flow_memory`/`load_flow_memory` persist/restore it via the memory backend (see [Memory](#memory-1) below).
+You create this on the stack or heap and pass it by reference to `run_turn` (graph Agent nodes keep theirs in `GraphState::histories`). Its lifetime must exceed every call that uses it. `save_conversation`/`load_conversation` persist/restore it via the memory backend (see [Memory](#memory-1) below).
 
 ---
 
@@ -460,7 +461,7 @@ struct ToolHook {
     std::string_view tool_name;
 
     using HookFn = void (*)(Session &session,
-                            FlowMemory &memory,
+                            Conversation &memory,
                             std::string_view tool_name,
                             std::string_view args,
                             std::string_view result,  // empty for Pre hooks
@@ -658,18 +659,36 @@ void free_backend();
 Result<Session> init(const Config &config);
 ```
 
+### engine_config
+
+Builds a `Config` for an explicit engine from per-role model files, so you do not write `engine_options` JSON for
+the model paths:
+
+```cpp
+struct ModelSlot { std::string_view role; std::string_view path; };
+Result<Config> engine_config(std::string_view engine, std::span<const ModelSlot> models,
+                             std::string_view extra_options_json = {}, const Config &base = {});
+```
+
+- `engine` is the engine name or the plugin path.
+- Roles: llama `model` and `mmproj`; sdcpp `diffusion_model`, `llm`, `vae`, `clip_l`, `t5xxl`; audiocpp `tts.model`,
+  `asr.model`, `vad.model`, `diarize.model`. A `model` role sets `Config::model`; the others go to `engine_options`
+  (`"tts.model"` becomes `{"tts":{"model":...}}`).
+- `extra_options_json` is a JSON object merged into the engine options (threads, voices, ...). `base` supplies the
+  rest (workspace, sandbox). The result is ready for `init()`.
+
 ### Inference
 
 ```cpp
-// Stateless single-turn inference. The returned InferResponse contains arena-backed
-// views valid only until the next infer()/run_turn() call reusing the same arena slot.
+// Stateless single-turn inference. The returned InferResponse owns the memory its views point into (InferResponse::storage),
+// so it stays valid across later calls and can be moved or kept.
 Result<InferResponse> infer(Session &session, const InferRequest &request);
 
 // infer() with InferRequest::task set to one AGENT_CAP_* bit, e.g. run_task(session, AGENT_CAP_TTS, request).
 Result<InferResponse> run_task(Session &session, uint32_t task, const InferRequest &request);
 
 // run_turn with media attached to the user message (images, audio, ...), for engines that accept them.
-Result<std::string> run_turn_with_media(Session &session, FlowMemory &memory, std::string_view user_prompt,
+Result<std::string> run_turn_with_media(Session &session, Conversation &memory, std::string_view user_prompt,
                                         std::span<const Media> media, bool stream = false,
                                         TokenStreamFn on_token = nullptr, void *token_user_data = nullptr);
 ```
@@ -683,11 +702,11 @@ Result<std::string> run_turn_with_media(Session &session, FlowMemory &memory, st
 //   - Prunes history to fit context budget (orphaned tool-message runs are skipped
 //     as a group, not treated as a pruning dead-end).
 //   - Calls infer() and resolves all tool call loops.
-//   - Persists history to memory (via save_flow_memory) after each successful turn.
+//   - Persists history to memory (via save_conversation) after each successful turn.
 //   - Returns the assistant's final reply as an owned std::string.
 Result<std::string> run_turn(
     Session          &session,
-    FlowMemory       &memory,
+    Conversation       &memory,
     std::string_view  user_prompt,
     bool              stream          = false,
     TokenStreamFn     on_token        = nullptr,
@@ -697,14 +716,14 @@ Result<std::string> run_turn(
 // single "[Compressed history]: ..." message. Non-fatal if LLM call fails.
 Result<void> compress_context(
     Session    &session,
-    FlowMemory &memory,
+    Conversation &memory,
     size_t      keep_recent = 6);
 
-// Persist / restore FlowMemory.history (+ stats) via the session's memory backend,
-// under keys "history:<id>" and "history_stats:<id>". Use load_flow_memory to resume
+// Persist / restore Conversation.history (+ stats) via the session's memory backend,
+// under keys "history:<id>" and "history_stats:<id>". Use load_conversation to resume
 // a conversation after a process restart -- run_turn only ever writes, never reads.
-Result<void> save_flow_memory(Session &session, const FlowMemory &memory);
-Result<void> load_flow_memory(Session &session, FlowMemory &memory);
+Result<void> save_conversation(Session &session, const Conversation &memory);
+Result<void> load_conversation(Session &session, Conversation &memory);
 ```
 
 ### Graph runtime

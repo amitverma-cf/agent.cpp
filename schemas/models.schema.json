@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent.cpp/schemas/models.schema.json",
   "title": "models.json",
-  "description": "Model catalogue read by catalog_from_json (tools/hub/src/hub.cpp) and written by catalog_to_json. Only \"name\" is checked by the parser; the other fields become an empty string or 0 when missing or of the wrong type. Unknown keys are ignored. load_catalog also accepts an empty file.",
+  "description": "Model catalogue read by catalog_from_json (apps/hub/src/hub.cpp) and written by catalog_to_json. Only \"name\" is checked by the parser; the other fields become an empty string or 0 when missing or of the wrong type. Unknown keys are ignored. load_catalog also accepts an empty file.",
   "type": "object",
   "required": ["models"],
   "properties": {

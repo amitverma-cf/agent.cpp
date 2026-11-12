@@ -23,7 +23,7 @@ int main() {
     }
     agent::Session session = std::move(sess.value);
 
-    agent::FlowMemory conv;
+    agent::Conversation conv;
     conv.id = "consumer";
     auto r = agent::run_turn(session, conv, "hello");
     if (!r.ok) {

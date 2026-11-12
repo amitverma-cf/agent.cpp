@@ -59,7 +59,7 @@ int main(int argc, char **argv) {
     }
     agent::Session session = std::move(sess.value);
 
-    agent::FlowMemory conversation;
+    agent::Conversation conversation;
     conversation.id = "getting-started";
     const char *prompt = argc > 3 ? argv[3] : "Say hello in one short sentence.";
 
