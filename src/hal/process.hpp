@@ -12,7 +12,7 @@ struct ProcessResult {
     int exit_code = -1;
     std::string output;
     bool timed_out = false;
-    bool cancelled = false; // stopped because *cancel became non-zero; output is what was captured so far
+    bool cancelled = false;                    // stopped because *cancel became non-zero; output is what was captured so far
     std::vector<std::string> sandbox_warnings; // what the sandbox could not enforce here
 };
 

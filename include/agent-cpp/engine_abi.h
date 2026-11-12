@@ -57,25 +57,25 @@ enum agent_status {
 
 /* Capability bits (agent_engine_v1::caps, agent_request::task). */
 enum agent_capability {
-    AGENT_CAP_TEXT_GEN = 1u << 0,   /* chat / completion */
-    AGENT_CAP_TOOL_CALL = 1u << 1,  /* emits structured tool calls */
-    AGENT_CAP_VISION_IN = 1u << 2,  /* image parts in input */
-    AGENT_CAP_AUDIO_IN = 1u << 3,   /* audio parts in input */
-    AGENT_CAP_VIDEO_IN = 1u << 4,   /* video parts in input */
+    AGENT_CAP_TEXT_GEN = 1u << 0,  /* chat / completion */
+    AGENT_CAP_TOOL_CALL = 1u << 1, /* emits structured tool calls */
+    AGENT_CAP_VISION_IN = 1u << 2, /* image parts in input */
+    AGENT_CAP_AUDIO_IN = 1u << 3,  /* audio parts in input */
+    AGENT_CAP_VIDEO_IN = 1u << 4,  /* video parts in input */
     AGENT_CAP_OCR = 1u << 5,
-    AGENT_CAP_ASR = 1u << 6,        /* speech to text */
-    AGENT_CAP_TTS = 1u << 7,        /* text to speech */
+    AGENT_CAP_ASR = 1u << 6, /* speech to text */
+    AGENT_CAP_TTS = 1u << 7, /* text to speech */
     AGENT_CAP_VAD = 1u << 8,
     AGENT_CAP_DIARIZE = 1u << 9,
     AGENT_CAP_IMAGE_GEN = 1u << 10,
     AGENT_CAP_IMAGE_EDIT = 1u << 11,
     AGENT_CAP_VIDEO_GEN = 1u << 12,
-    AGENT_CAP_MESH_GEN = 1u << 13,  /* 3D */
+    AGENT_CAP_MESH_GEN = 1u << 13, /* 3D */
     AGENT_CAP_EMBED = 1u << 14,
     AGENT_CAP_RERANK = 1u << 15,
-    AGENT_CAP_DECIDE = 1u << 16,    /* choice / score / yes-no decision models */
+    AGENT_CAP_DECIDE = 1u << 16, /* choice / score / yes-no decision models */
     AGENT_CAP_CLASSIFY = 1u << 17,
-    AGENT_CAP_GENERIC = 1u << 18,   /* raw named tensors in / out */
+    AGENT_CAP_GENERIC = 1u << 18, /* raw named tensors in / out */
 };
 
 /* Engine flags (agent_engine_v1::flags). */
@@ -110,16 +110,16 @@ enum agent_dtype {
 };
 
 typedef struct agent_part {
-    uint32_t kind;          /* agent_part_kind */
-    agent_str text;         /* TEXT */
-    agent_str path;         /* FILE */
-    agent_str mime;         /* FILE, BYTES */
-    agent_str name;         /* TENSOR (input/output name) */
-    uint32_t dtype;         /* TENSOR, agent_dtype */
-    const int64_t *shape;   /* TENSOR */
-    size_t ndim;            /* TENSOR */
-    const void *data;       /* BYTES, TENSOR */
-    size_t size;            /* BYTES, TENSOR: bytes */
+    uint32_t kind;        /* agent_part_kind */
+    agent_str text;       /* TEXT */
+    agent_str path;       /* FILE */
+    agent_str mime;       /* FILE, BYTES */
+    agent_str name;       /* TENSOR (input/output name) */
+    uint32_t dtype;       /* TENSOR, agent_dtype */
+    const int64_t *shape; /* TENSOR */
+    size_t ndim;          /* TENSOR */
+    const void *data;     /* BYTES, TENSOR */
+    size_t size;          /* BYTES, TENSOR: bytes */
 } agent_part;
 
 typedef struct agent_tool_call {
@@ -159,9 +159,9 @@ typedef struct agent_request {
     uint32_t flags;       /* agent_request_flag bits */
     const agent_message *messages;
     size_t n_messages;
-    agent_str tools_json;   /* JSON array of tool definitions, empty if none */
-    agent_str params_json;  /* per-call parameters, e.g. {"max_tokens":512,"temperature":0.7} */
-    agent_str output_dir;   /* where FILE outputs must be written */
+    agent_str tools_json;          /* JSON array of tool definitions, empty if none */
+    agent_str params_json;         /* per-call parameters, e.g. {"max_tokens":512,"temperature":0.7} */
+    agent_str output_dir;          /* where FILE outputs must be written */
     agent_chunk_fn on_chunk;       /* optional streaming */
     agent_progress_fn on_progress; /* optional, for long jobs (image/video/3D) */
     void *user_data;
@@ -185,13 +185,13 @@ enum agent_kv_type {
 /* Optional measurements of one request. An engine fills what it knows and leaves the rest 0; the host
  * shows them (per-turn line, stats). Present only when AGENT_HAS_FIELD(response, agent_response, stats). */
 typedef struct agent_run_stats {
-    int32_t cached_tokens;  /* prompt tokens that were already in the KV cache (not decoded again) */
-    int32_t kv_tokens;      /* tokens in the request's KV sequence when it finished */
-    int32_t kv_max_tokens;  /* capacity of one sequence (the context window) */
-    int32_t kv_type;        /* agent_kv_type */
-    uint64_t kv_bytes;      /* size of the whole KV cache (an estimate for hybrid models) */
-    float prefill_ms;       /* time spent decoding the prompt */
-    float decode_ms;        /* time spent generating the reply */
+    int32_t cached_tokens; /* prompt tokens that were already in the KV cache (not decoded again) */
+    int32_t kv_tokens;     /* tokens in the request's KV sequence when it finished */
+    int32_t kv_max_tokens; /* capacity of one sequence (the context window) */
+    int32_t kv_type;       /* agent_kv_type */
+    uint64_t kv_bytes;     /* size of the whole KV cache (an estimate for hybrid models) */
+    float prefill_ms;      /* time spent decoding the prompt */
+    float decode_ms;       /* time spent generating the reply */
 } agent_run_stats;
 
 typedef struct agent_response {
@@ -206,8 +206,8 @@ typedef struct agent_engine_v1 {
     uint32_t struct_size; /* sizeof(agent_engine_v1) as the engine was compiled; >= AGENT_ENGINE_V2_SIZE */
     const char *name;     /* "llama", "whisper", "sdcpp", ... */
     const char *version;
-    uint64_t caps;        /* agent_capability bits */
-    uint32_t flags;       /* agent_engine_flag bits */
+    uint64_t caps;  /* agent_capability bits */
+    uint32_t flags; /* agent_engine_flag bits */
 
     /* Load a model. config_json: {"model": "...", "context_window": 4096, "threads": 8, ...}.
      * On failure write a NUL-terminated message into err (capacity err_cap) and return non-zero. */

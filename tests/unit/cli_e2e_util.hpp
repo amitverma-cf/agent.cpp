@@ -3,7 +3,6 @@
 #if defined(AGENT_TEST_CLI_PATH) && defined(AGENT_TEST_MOCK_ENGINE_PATH)
 
 #include <catch_amalgamated.hpp>
-
 #include <cstdio>
 #ifndef _WIN32
 #include <sys/wait.h>
@@ -50,7 +49,8 @@ struct Home {
         fs::remove_all(root, ec);
         fs::create_directories(workspace);
         std::ofstream(model) << "x";
-        std::ofstream(graph) << R"({"name":"g","engine":"mock","entry":"a","nodes":[{"name":"a","kind":"agent","system_prompt":"s","input_key":"request","output_key":"answer"}],"edges":[]})";
+        std::ofstream(graph)
+            << R"({"name":"g","engine":"mock","entry":"a","nodes":[{"name":"a","kind":"agent","system_prompt":"s","input_key":"request","output_key":"answer"}],"edges":[]})";
         set_env("AGENT_HOME", (root / "home").string());
         set_env("AGENT_CONFIG_DIR", "");
     }
@@ -86,7 +86,8 @@ struct Home {
         return r;
     }
     std::string engine_args() const {
-        return "-e " + quote(AGENT_TEST_MOCK_ENGINE_PATH) + " -m " + quote(model.string()) + " --inprocess --workspace " + quote(workspace.string());
+        return "-e " + quote(AGENT_TEST_MOCK_ENGINE_PATH) + " -m " + quote(model.string()) + " --inprocess --workspace " +
+               quote(workspace.string());
     }
 };
 

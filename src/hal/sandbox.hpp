@@ -55,12 +55,12 @@ class PreparedSandbox {
     std::vector<BpfInsn> seccomp; // Linux: empty = no filter
     uint64_t memory_limit_bytes = 0;
     int max_processes = 0;
-    std::string macos_profile;         // macOS: SBPL text for sandbox_init(), empty = none
-    bool low_integrity = false;        // Windows: run the child at Low integrity; only low_write_paths accept its writes
+    std::string macos_profile;  // macOS: SBPL text for sandbox_init(), empty = none
+    bool low_integrity = false; // Windows: run the child at Low integrity; only low_write_paths accept its writes
     std::vector<std::string> low_write_paths;
     std::vector<std::string> read_paths; // Windows: folders the child may read (AppContainer)
     bool windows_network_allowed = true; // Windows: the AppContainer gets the internet capabilities
-    std::vector<std::string> warnings; // what could not be enforced; callers log these
+    std::vector<std::string> warnings;   // what could not be enforced; callers log these
 };
 
 // Resolves policy for the current machine. Fails only on invalid input; missing kernel features
@@ -116,8 +116,8 @@ class AppContainerLaunch {
 // only for invalid input. extra_read: more folders to make readable (e.g. the folder of the program being started).
 // inherit_handles: the only handles the child inherits (PROC_THREAD_ATTRIBUTE_HANDLE_LIST): its standard streams, nothing else the
 // parent holds. They must be inheritable and the process must be created with bInheritHandles = TRUE.
-std::unique_ptr<AppContainerLaunch> appcontainer_launch_for(PreparedSandbox &prepared, const std::vector<std::string> &extra_read, const std::vector<void *> &inherit_handles,
-                                                            std::string &error);
+std::unique_ptr<AppContainerLaunch> appcontainer_launch_for(PreparedSandbox &prepared, const std::vector<std::string> &extra_read,
+                                                            const std::vector<void *> &inherit_handles, std::string &error);
 // The same attribute list without a container: only the handle list, for spawns that run outside an AppContainer (engine hosts, the
 // Low integrity fallback). Without it CreateProcess(bInheritHandles = TRUE) hands the child every inheritable handle of the parent.
 // nullptr when the list cannot be built (the caller then spawns as before).

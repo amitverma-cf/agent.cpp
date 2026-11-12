@@ -6,7 +6,6 @@
 
 using namespace cli_e2e;
 
-
 TEST_CASE("cli e2e: version, help and bad commands", "[cli_e2e]") {
     Home h;
     auto v = h.run("version");
@@ -67,8 +66,8 @@ TEST_CASE("cli e2e: task runs one engine call", "[cli_e2e]") {
     CHECK(has(r, "task: text_gen"));
     CHECK(has(r, "echo: hello"));
     CHECK(has(r, "usage:"));
-    auto isolated = h.run("task text_gen -e " + quote(AGENT_TEST_MOCK_ENGINE_PATH) + " -m " + quote(h.model.string()) + " --text again --workspace " +
-                          quote(h.workspace.string())); // out of process, through the engine host
+    auto isolated = h.run("task text_gen -e " + quote(AGENT_TEST_MOCK_ENGINE_PATH) + " -m " + quote(h.model.string()) +
+                          " --text again --workspace " + quote(h.workspace.string())); // out of process, through the engine host
     INFO(isolated.out);
     CHECK(has(isolated, "echo: again"));
     CHECK(h.run("task not_a_task " + h.engine_args()).code != 0);
@@ -189,7 +188,8 @@ TEST_CASE("cli e2e: run with a thread id, --json, --input and a resume", "[cli_e
     CHECK(first.code == 0);
     CHECK(has(first, "echo: one"));
     CHECK(has(first, "{"));
-    auto input = h.run("run " + quote(h.graph.string()) + " " + h.engine_args() + " --thread t3 --input typed-input"); // --input answers an interrupted run: nothing to answer here
+    auto input = h.run("run " + quote(h.graph.string()) + " " + h.engine_args() +
+                       " --thread t3 --input typed-input"); // --input answers an interrupted run: nothing to answer here
     CHECK(input.code == 0);
     auto resume = h.run("run " + quote(h.graph.string()) + " " + h.engine_args() + " --resume t1");
     CHECK_FALSE(resume.out.empty());
@@ -214,7 +214,8 @@ TEST_CASE("cli e2e: task drives every capability of the mock-all engine", "[cli_
     const std::string audio = (h.root / "in.wav").string(), image = (h.root / "in.png").string();
     std::ofstream(audio, std::ios::binary) << "RIFFxxxx";
     std::ofstream(image, std::ios::binary) << "\x89PNG";
-    const std::string eng = std::string(" -e ") + quote(AGENT_TEST_MOCK_ALL_ENGINE_PATH) + " -m " + quote(h.model.string()) + " --inprocess --workspace " + quote(h.workspace.string());
+    const std::string eng = std::string(" -e ") + quote(AGENT_TEST_MOCK_ALL_ENGINE_PATH) + " -m " + quote(h.model.string()) +
+                            " --inprocess --workspace " + quote(h.workspace.string());
     auto task = [&](const std::string &args) { return h.run("task " + args + eng); };
     auto expect = [&](const std::string &args, const std::string &needle, int code = 0) {
         auto r = task(args);
@@ -240,7 +241,8 @@ TEST_CASE("cli e2e: task drives every capability of the mock-all engine", "[cli_
     expect("ocr --text mock-empty", "task: ocr");
     expect("ocr --text mock-slow", "slow task finished");
     // Out of process, through the engine host.
-    auto isolated = h.run("task embed -e " + quote(AGENT_TEST_MOCK_ALL_ENGINE_PATH) + " -m " + quote(h.model.string()) + " --text hello --workspace " + quote(h.workspace.string()));
+    auto isolated = h.run("task embed -e " + quote(AGENT_TEST_MOCK_ALL_ENGINE_PATH) + " -m " + quote(h.model.string()) +
+                          " --text hello --workspace " + quote(h.workspace.string()));
     CHECK(has(isolated, "embedding"));
 }
 #endif

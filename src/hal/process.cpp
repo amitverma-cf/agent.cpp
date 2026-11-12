@@ -27,8 +27,7 @@ namespace {
 
 bool cancel_requested(const volatile int32_t *cancel) {
     // Written with std::atomic_ref by request_cancel() (executor/turn_executor.cpp).
-    return cancel != nullptr &&
-           std::atomic_ref<int32_t>(*const_cast<int32_t *>(cancel)).load(std::memory_order_relaxed) != 0;
+    return cancel != nullptr && std::atomic_ref<int32_t>(*const_cast<int32_t *>(cancel)).load(std::memory_order_relaxed) != 0;
 }
 
 #if defined(AGENT_HAL_WINDOWS)
@@ -49,8 +48,7 @@ HANDLE make_kill_job(HANDLE process) {
     if (!job) return nullptr;
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
     info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info, sizeof(info)) ||
-        !AssignProcessToJobObject(job, process)) {
+    if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info, sizeof(info)) || !AssignProcessToJobObject(job, process)) {
         CloseHandle(job);
         return nullptr;
     }
@@ -83,7 +81,8 @@ Result<ProcessResult> run_shell_windows(std::string_view working_directory, std:
     HANDLE nul = nullptr;
     if (sandbox.active) {
         HANDLE in_w = nullptr; // an empty pipe: stdin that is at its end (a NUL handle is refused by an AppContainer)
-        if (CreatePipe(&nul, &in_w, &sa, 0)) CloseHandle(in_w); else nul = nullptr;
+        if (CreatePipe(&nul, &in_w, &sa, 0)) CloseHandle(in_w);
+        else nul = nullptr;
         si.hStdInput = nul;
     }
 
@@ -99,11 +98,12 @@ Result<ProcessResult> run_shell_windows(std::string_view working_directory, std:
         return fail<ProcessResult>(ErrorCode::SandboxViolation, "cannot confine the command to its folders: " + why);
     }
     PROCESS_INFORMATION pi{};
-    BOOL created = low_token ? CreateProcessAsUserW(low_token, nullptr, wcmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr,
-                                                    wdir.empty() ? nullptr : wdir.c_str(), &si, &pi)
-                             : CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE,
-                                              CREATE_NO_WINDOW | CREATE_SUSPENDED | (container ? EXTENDED_STARTUPINFO_PRESENT : 0), nullptr,
-                                              wdir.empty() ? nullptr : wdir.c_str(), &si, &pi);
+    BOOL created = low_token
+                       ? CreateProcessAsUserW(low_token, nullptr, wcmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED,
+                                              nullptr, wdir.empty() ? nullptr : wdir.c_str(), &si, &pi)
+                       : CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE,
+                                        CREATE_NO_WINDOW | CREATE_SUSPENDED | (container ? EXTENDED_STARTUPINFO_PRESENT : 0), nullptr,
+                                        wdir.empty() ? nullptr : wdir.c_str(), &si, &pi);
     if (low_token) CloseHandle(low_token);
     CloseHandle(write_pipe);
     if (nul && nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
@@ -277,10 +277,8 @@ Result<ProcessResult> run_shell_posix(std::string_view working_directory, std::s
     // cannot be recycled while we still signal it.
     for (;;) {
         if (stop == Stop::None) {
-            if (cancel_requested(cancel))
-                stop = Stop::Cancelled;
-            else if (timeout_seconds > 0 && ms_since(start) >= static_cast<long long>(timeout_seconds) * 1000)
-                stop = Stop::TimedOut;
+            if (cancel_requested(cancel)) stop = Stop::Cancelled;
+            else if (timeout_seconds > 0 && ms_since(start) >= static_cast<long long>(timeout_seconds) * 1000) stop = Stop::TimedOut;
             if (stop != Stop::None) {
                 signal_tree(pid, SIGTERM);
                 stop_at = SteadyClock::now();
@@ -328,8 +326,7 @@ Result<ProcessResult> run_shell_posix(std::string_view working_directory, std::s
     }
     close(fd);
 
-    if (!reaped && waitpid(pid, &status, 0) < 0)
-        return fail<ProcessResult>(ErrorCode::FilesystemError, "waitpid() failed.");
+    if (!reaped && waitpid(pid, &status, 0) < 0) return fail<ProcessResult>(ErrorCode::FilesystemError, "waitpid() failed.");
 
     int exit_code = -1;
     if (WIFEXITED(status)) {
