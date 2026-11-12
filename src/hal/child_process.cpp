@@ -192,14 +192,18 @@ Result<std::unique_ptr<ChildProcess>> spawn_child(const SpawnOptions &options) {
     }
     auto container = agent::hal::appcontainer_launch_for(prepared.value, readable, {in_r, out_w, err_w}, why);
     HANDLE low_token = container || !why.empty() ? nullptr : static_cast<HANDLE>(agent::hal::low_integrity_token_for(prepared.value, why));
+    // Outside a container the child still inherits only its three stream handles, not everything inheritable in this process.
+    std::unique_ptr<agent::hal::AppContainerLaunch> handle_list;
+    if (!container) handle_list = agent::hal::handle_list_only({in_r, out_w, err_w});
     if (container) sie.lpAttributeList = static_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(container->attributes());
+    else if (handle_list) sie.lpAttributeList = static_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(handle_list->attributes());
     if (!why.empty()) {
         cleanup();
         return R{.ok = false, .value = {}, .error = make_error(ErrorCode::SandboxViolation, "cannot confine '" + options.program + "' to its folders: " + why)};
     }
 
     PROCESS_INFORMATION pi{};
-    DWORD flags = CREATE_NO_WINDOW | (container ? EXTENDED_STARTUPINFO_PRESENT : 0) | (env_block.empty() ? 0 : CREATE_UNICODE_ENVIRONMENT) | (prepared.value.active ? CREATE_SUSPENDED : 0);
+    DWORD flags = CREATE_NO_WINDOW | (sie.lpAttributeList ? EXTENDED_STARTUPINFO_PRESENT : 0) | (env_block.empty() ? 0 : CREATE_UNICODE_ENVIRONMENT) | (prepared.value.active ? CREATE_SUSPENDED : 0);
     BOOL created = low_token ? CreateProcessAsUserW(low_token, nullptr, cmd.data(), nullptr, nullptr, TRUE, flags, env_block.empty() ? nullptr : env_block.data(),
                                                     wdir.empty() ? nullptr : wdir.c_str(), &si, &pi)
                              : CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, flags, env_block.empty() ? nullptr : env_block.data(),

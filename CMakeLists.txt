@@ -19,7 +19,7 @@ option(AGENT_ENABLE_SANITIZERS "Enable Address and Undefined Behavior Sanitizers
 set(SANITIZER_FLAGS "")
 if(AGENT_ENABLE_SANITIZERS)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        set(SANITIZER_FLAGS -fsanitize=address -fno-omit-frame-pointer)
+        set(SANITIZER_FLAGS -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined)
     endif()
 endif()
 

@@ -1,6 +1,7 @@
 #include "archive.hpp"
 
 #include <algorithm>
+#include <mutex>
 #include <array>
 #include <cstring>
 #include <filesystem>
@@ -153,8 +154,8 @@ class Inflater {
 
     int fixed() {
         static Huffman lencode, distcode;
-        static bool built = false;
-        if (!built) {
+        static std::once_flag built; // the two fixed tables are built once, even when several threads inflate at the same time
+        std::call_once(built, [&] {
             uint16_t lengths[kFixLCodes];
             int s = 0;
             for (; s < 144; ++s) lengths[s] = 8;
@@ -164,8 +165,7 @@ class Inflater {
             construct(lencode, lengths, kFixLCodes);
             for (s = 0; s < kMaxDCodes; ++s) lengths[s] = 5;
             construct(distcode, lengths, kMaxDCodes);
-            built = true;
-        }
+        });
         return codes(lencode, distcode);
     }
 
@@ -253,7 +253,8 @@ std::string entry_path(std::string name, int strip, bool &bad) {
         std::string part = name.substr(start, end - start);
         start = end + 1;
         if (part.empty() || part == ".") continue;
-        if (part == "..") {
+        if (part == ".." || part.find(':') != std::string::npos || part.find('\0') != std::string::npos) {
+            // ".." climbs out; a colon is a Windows drive ("top/C:/x" after stripping "top") or an NTFS stream; NUL ends a name early
             bad = true;
             return {};
         }
@@ -345,7 +346,7 @@ Result<void> extract_zip_bytes(std::span<const uint8_t> zip, const std::string &
         if (static_cast<size_t>(local) + 30 > zip.size() || le32(zip.data() + local) != 0x04034b50u) return fail(ErrorCode::ParseError, "zip: bad local header");
         const uint8_t *l = zip.data() + local;
         const size_t data_at = static_cast<size_t>(local) + 30 + le16(l + 26) + le16(l + 28);
-        if (data_at + comp > zip.size()) return fail(ErrorCode::ParseError, "zip: entry data is out of range");
+        if (data_at > zip.size() || comp > zip.size() - data_at) return fail(ErrorCode::ParseError, "zip: entry data is out of range");
         std::string content;
         if (method == 0) {
             content.assign(reinterpret_cast<const char *>(zip.data() + data_at), comp);
@@ -382,7 +383,7 @@ Result<void> extract_tar_bytes(std::span<const uint8_t> tar, const std::string &
         const uint64_t size = octal(h + 124, 12);
         const char type = static_cast<char>(h[156]);
         const size_t data_at = pos + 512;
-        if (data_at + size > tar.size()) return fail(ErrorCode::ParseError, "tar: entry data is out of range");
+        if (size > tar.size() - data_at) return fail(ErrorCode::ParseError, "tar: entry data is out of range");
         const std::string_view data(reinterpret_cast<const char *>(tar.data() + data_at), static_cast<size_t>(size));
         pos = data_at + static_cast<size_t>((size + 511) / 512 * 512);
 

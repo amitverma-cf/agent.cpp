@@ -689,6 +689,24 @@ std::unique_ptr<AppContainerLaunch> appcontainer_launch_for(PreparedSandbox &pre
     return launch;
 }
 
+std::unique_ptr<AppContainerLaunch> handle_list_only(const std::vector<void *> &inherit_handles) {
+    auto launch = std::make_unique<AppContainerLaunch>();
+    launch->impl = std::make_unique<AppContainerLaunch::Impl>();
+    AppContainerLaunch::Impl &im = *launch->impl;
+    for (void *h : inherit_handles)
+        if (h && h != INVALID_HANDLE_VALUE) im.handles.push_back(static_cast<HANDLE>(h));
+    if (im.handles.empty()) return nullptr;
+    SIZE_T size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+    im.list.assign(size, 0);
+    auto *attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(im.list.data());
+    if (!InitializeProcThreadAttributeList(attrs, 1, 0, &size)) return nullptr;
+    im.list_ready = true;
+    if (!UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, im.handles.data(), im.handles.size() * sizeof(HANDLE), nullptr, nullptr))
+        return nullptr;
+    return launch;
+}
+
 void *create_low_integrity_token(std::string &error) {
     HANDLE self = nullptr, primary = nullptr;
     PSID low = nullptr;

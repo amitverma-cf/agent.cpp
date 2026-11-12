@@ -116,12 +116,16 @@ cmake --install "$build_dir" --prefix "$stage" --strip
 # The tarball is the end-user CLI: no headers, static libraries or CMake package files.
 mkdir -p "$pkg/bin" "$pkg/lib/agent" "$pkg/share/doc"
 cp -a "$stage/bin/agent" "$pkg/bin/"
+# Engines run out of process by default, so the host program must ship next to the CLI.
+cp -a "$stage/bin/agent-engine-host" "$pkg/bin/"
 if [ -d "$stage/lib/agent/engines" ]; then cp -a "$stage/lib/agent/engines" "$pkg/lib/agent/"; fi
 cp -a "$stage/share/doc/agent" "$pkg/share/doc/"
 lic="$pkg/share/doc/agent/licenses"
 mkdir -p "$lic"
 copy_license() { if [ -f "$1" ]; then cp "$1" "$lic/$2.LICENSE"; fi; }
 copy_license "$src_dir/vendor/simdjson/LICENSE" simdjson # compiled into the CLI and every plugin
+copy_license "$src_dir/vendor/cpp-httplib/LICENSE" cpp-httplib # the CLI's HTTP client
+copy_license "$src_dir/vendor/miniaudio/LICENSE" miniaudio     # sound devices for `agent voice`
 [[ ",$engines," == *,llama,* ]] && copy_license "$src_dir/vendor/llama.cpp/LICENSE" llama.cpp
 [[ ",$engines," == *,sdcpp,* ]] && copy_license "$src_dir/vendor/stable-diffusion.cpp/LICENSE" stable-diffusion.cpp
 [[ ",$engines," == *,onnx,* ]] && copy_license "$ort_root/LICENSE" onnxruntime
@@ -130,7 +134,7 @@ copy_license "$src_dir/vendor/simdjson/LICENSE" simdjson # compiled into the CLI
 # Sanity checks: the binary runs and every plugin resolves its libraries.
 "$pkg/bin/agent" version
 status=0
-for so in "$pkg/bin/agent" "$pkg"/lib/agent/engines/agent-engine-*; do
+for so in "$pkg/bin/agent" "$pkg/bin/agent-engine-host" "$pkg"/lib/agent/engines/agent-engine-*; do
     [ -e "$so" ] || continue
     if ldd "$so" | grep -q "not found"; then
         echo "package.sh: unresolved libraries in $so:" >&2

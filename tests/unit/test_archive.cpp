@@ -196,3 +196,44 @@ TEST_CASE("archive: entries that would leave the destination are refused", "[arc
         fs::remove_all(dir);
     }
 }
+
+TEST_CASE("archive: drive letters and streams after stripped components, and sizes that overflow", "[archive]") {
+    auto tar_with = [](const std::string &name, const char *size_octal) {
+        std::string t(512, '\0');
+        std::memcpy(t.data(), name.data(), name.size());
+        std::memcpy(t.data() + 100, "0000644", 7);
+        std::memcpy(t.data() + 124, size_octal, 11);
+        t[156] = '0';
+        t.append(1024, '\0');
+        return t;
+    };
+    auto extract = [&](const std::string &t, const fs::path &dir, int strip) {
+        return extract_tar_bytes(std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(t.data()), t.size()), dir.string(), strip);
+    };
+    // "top/" is stripped, which would leave "C:/..." (a drive on Windows) or "foo:bar" (an NTFS stream): both refused.
+    for (const char *name : {"top/C:/evil.txt", "top/foo:bar", "top/dir/C:evil"}) {
+        const fs::path dir = fresh_dir("agent_test_archive_strip");
+        auto r = extract(tar_with(name, "00000000000"), dir, 1);
+        INFO(name);
+        CHECK_FALSE(r.ok);
+        CHECK(r.error.code == agent::ErrorCode::PermissionDenied);
+        fs::remove_all(dir);
+    }
+    // A name with an embedded NUL after the first segment is not silently cut short.
+    {
+        std::string name = std::string("top/ok") + '\0' + "../x";
+        const fs::path dir = fresh_dir("agent_test_archive_nul");
+        auto r = extract(tar_with(name, "00000000000"), dir, 1);
+        (void)r; // the tar reader stops a name at the NUL; nothing may be written outside the destination
+        CHECK_FALSE(fs::exists(dir.parent_path() / "x"));
+        fs::remove_all(dir);
+    }
+    // A size field far beyond the archive is an error, not an out-of-range read.
+    {
+        const fs::path dir = fresh_dir("agent_test_archive_size");
+        auto r = extract(tar_with("big.bin", "77777777777"), dir, 0);
+        CHECK_FALSE(r.ok);
+        CHECK(r.error.code == agent::ErrorCode::ParseError);
+        fs::remove_all(dir);
+    }
+}

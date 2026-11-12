@@ -7,6 +7,9 @@
 #include <agent-cpp/agent.hpp>
 #include <catch_amalgamated.hpp>
 
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
 
 #include <cstdlib>
 #include <filesystem>
@@ -102,4 +105,43 @@ TEST_CASE("Windows: the sandbox keeps the network when allowed and cuts it when 
     fs::remove_all(dir, ec);
 }
 
+// A child gets only its three stream handles: an inheritable pipe end the parent holds must not reach it. If it did, the pipe would keep
+// a writer alive and the reader would never see the end of the stream while the child runs.
+TEST_CASE("Windows: a spawned child does not inherit unrelated inheritable handles", "[sandbox][windows]") {
+    for (bool confined : {false, true}) {
+        SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+        HANDLE r = nullptr, w = nullptr;
+        REQUIRE(CreatePipe(&r, &w, &sa, 0));
+        SetHandleInformation(r, HANDLE_FLAG_INHERIT, 0);
+
+        agent::SandboxPolicy policy;
+        policy.enabled = confined; // false: the plain spawn (like an engine host); true: the Low integrity / AppContainer path
+        policy.filesystem = confined;
+        policy.windows_low_integrity = confined;
+        fs::path dir = fs::temp_directory_path() / "agent_test_win_handles";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        policy.read_write_paths = {dir.string()};
+
+        agent::hal::SpawnOptions opts;
+        opts.program = "cmd.exe";
+        opts.args = {"/c", "for /l %i in (1,1,300000000) do @rem"}; // keeps running for a few seconds
+        opts.sandbox = policy;
+        opts.working_directory = dir.string();
+        auto child = agent::hal::spawn_child(opts);
+        REQUIRE(child.ok);
+        CloseHandle(w); // the parent's own copy: no writer may be left if the child did not inherit it
+
+        bool broken = false;
+        for (int i = 0; i < 100 && !broken; ++i) {
+            DWORD avail = 0;
+            if (!PeekNamedPipe(r, nullptr, 0, nullptr, &avail, nullptr)) broken = GetLastError() == ERROR_BROKEN_PIPE;
+            else Sleep(20);
+        }
+        CHECK(broken);
+        child.value->terminate(1000);
+        CloseHandle(r);
+        fs::remove_all(dir, ec);
+    }
+}
 #endif

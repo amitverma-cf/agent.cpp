@@ -100,6 +100,11 @@ jobs:
           done
           if [ "${{ matrix.os_name }}" = "windows" ]; then cp "$VCPKG_INSTALLATION_ROOT"/installed/${{ matrix.triplet }}/bin/{libssl-3-${{ matrix.dll }},libcrypto-3-${{ matrix.dll }}}.dll "dist/${name}/"; fi
           cp LICENSE README.md "dist/${name}/"
+          # third-party licences of what is compiled in
+          mkdir -p "dist/${name}/licenses"
+          for l in simdjson cpp-httplib miniaudio llama.cpp sqlite-vec; do
+            for f in vendor/$l/LICENSE vendor/$l/LICENSE.md vendor/$l/LICENSE.txt; do [ -f "$f" ] && cp "$f" "dist/${name}/licenses/$l.LICENSE" && break; done
+          done
           if [ "${{ matrix.os_name }}" = "windows" ]; then
             (cd dist && 7z a -tzip "../assets/${name}.zip" "${name}")
           else

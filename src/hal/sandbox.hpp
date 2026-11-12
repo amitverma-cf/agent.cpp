@@ -118,6 +118,10 @@ class AppContainerLaunch {
 // parent holds. They must be inheritable and the process must be created with bInheritHandles = TRUE.
 std::unique_ptr<AppContainerLaunch> appcontainer_launch_for(PreparedSandbox &prepared, const std::vector<std::string> &extra_read, const std::vector<void *> &inherit_handles,
                                                             std::string &error);
+// The same attribute list without a container: only the handle list, for spawns that run outside an AppContainer (engine hosts, the
+// Low integrity fallback). Without it CreateProcess(bInheritHandles = TRUE) hands the child every inheritable handle of the parent.
+// nullptr when the list cannot be built (the caller then spawns as before).
+std::unique_ptr<AppContainerLaunch> handle_list_only(const std::vector<void *> &inherit_handles);
 #endif
 
 } // namespace agent::hal

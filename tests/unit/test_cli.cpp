@@ -405,3 +405,14 @@ TEST_CASE("cli: turn footer shows prompt speed, generation speed and KV size", "
     cold.kv_max_tokens = 4096;
     CHECK(format_turn_footer(cold) == "prompt 100 tok 500 tok/s | gen 11 tok 100 tok/s | KV 111/4096");
 }
+
+TEST_CASE("cli: the usage text names every command main() dispatches", "[cli]") {
+    const std::string usage = agent::cli::usage_text();
+    for (const char *command : {"init", "doctor", "clean", "secret", "setup", "engine", "model", "chat", "run", "voice", "task", "version", "runtime", "skill", "mcp",
+                                "sandbox"}) {
+        INFO(command);
+        CHECK(usage.find(std::string("  ") + command) != std::string::npos);
+    }
+    CHECK(usage.find("--download-engines") != std::string::npos);
+    CHECK(usage.find("--install-runtimes") != std::string::npos);
+}
