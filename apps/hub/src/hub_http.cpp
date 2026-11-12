@@ -396,6 +396,35 @@ Result<std::string> http_get_text(std::string_view url, const HttpOptions &http,
     return ok(std::move(body.text));
 }
 
+Result<std::string> http_get_range(std::string_view url, const HttpOptions &http, uint64_t offset, uint64_t length) {
+    struct Body {
+        std::string bytes;
+        size_t max = 0;
+        bool cut = false;
+    } body;
+    body.max = static_cast<size_t>(length);
+    Sink sink;
+    sink.user = &body;
+    sink.on_data = [](const char *data, size_t len, void *user) {
+        auto *b = static_cast<Body *>(user);
+        const size_t room = b->max - b->bytes.size();
+        b->bytes.append(data, std::min(len, room));
+        if (len > room) {
+            b->cut = true; // a server that ignored Range: enough read, stop the transfer
+            return false;
+        }
+        return true;
+    };
+    httplib::Headers headers{{"User-Agent", "agent-cpp"},
+                             {"Range", "bytes=" + std::to_string(offset) + "-" + std::to_string(offset + length - 1)}};
+    auto reply = http_get(std::string(url), headers, http, sink);
+    if (!reply.ok) return fail<std::string>(reply.error.code, reply.error.message);
+    const int status = reply.value.status;
+    if (status != 200 && status != 206 && !(body.cut && reply.value.aborted))
+        return fail<std::string>(ErrorCode::HttpError, status_message(reply.value, std::string(url)));
+    return ok(std::move(body.bytes));
+}
+
 Result<void> download_file(std::string_view url, const std::string &dest, const HttpOptions &http, const DownloadOptions &opts) {
     const std::string part = dest + ".part";
     std::error_code ec;

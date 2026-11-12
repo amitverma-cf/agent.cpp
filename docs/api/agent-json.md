@@ -115,6 +115,14 @@ Every node has a `name` and a `kind`. Names must be unique, non-empty, not `"__e
 | `parallel` | `branches` (required, non-empty array of node names) | `GraphNodeKind::Parallel` |
 | `loop` | `body` (required node name), `max_iterations` (required, >= 1), `until` | `GraphNodeKind::Loop` |
 | `sequential` | `steps` (required, non-empty array of node names, no duplicates) | See below |
+| `wait` | `seconds` or `until` (exactly one) | `GraphNodeKind::Function` that pauses the run until a time: see below |
+
+**Wait nodes.** `{"name": "nap", "kind": "wait", "seconds": 3600}` pauses the run for an hour after the node is first reached;
+`{"name": "morning", "kind": "wait", "until": "2026-11-14T09:00"}` pauses until a local time. The run stops with status
+`interrupted` (reason `waiting until ...`) and its checkpoint holds the wake time (`wait:until` in the thread state, in epoch
+seconds). Nothing keeps running: later, `agent run graph.json --resume THREAD` continues it. If it is resumed too early it
+waits again; once the time has passed the next node runs. Use [`agent schedule`](../cli.md#agent-schedule) to do the resuming
+on a timer. A wait node reached a second time (in a loop) waits again.
 
 **Function nodes.** JSON cannot hold function pointers. Register the C++ function first with `register_graph_function(name, fn, user_data)`; the registry is process-wide and protected by a mutex. The loader looks the name up when it parses, so registering or replacing a function later does not change graphs that are already loaded. An unregistered name is an error.
 
@@ -184,6 +192,7 @@ node         := { name, kind: "agent",      system_prompt?, prompt?, input_key?,
               | { name, kind: "parallel",   branches: [node name, ...] }
               | { name, kind: "loop",       body: node name, max_iterations: int>=1, until?: { key, equals } }
               | { name, kind: "sequential", steps: [node name, ...] }
+              | { name, kind: "wait",       seconds: int>=0 | until: "YYYY-MM-DDTHH:MM" }
 edge         := { from: node name, to: node name | "__end__" }
               | { from: node name, route: { key, cases: { value: node name | "__end__" }, default?: node name | "__end__" } }
 ```

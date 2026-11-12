@@ -82,7 +82,7 @@
       "required": ["name", "kind"],
       "properties": {
         "name": { "$ref": "#/$defs/node_name" },
-        "kind": { "enum": ["agent", "tool", "function", "parallel", "loop", "sequential"] }
+        "kind": { "enum": ["agent", "tool", "function", "parallel", "loop", "sequential", "wait"] }
       },
       "allOf": [
         {
@@ -117,6 +117,17 @@
           "then": {
             "required": ["function"],
             "properties": { "function": { "type": "string", "minLength": 1 } }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "wait" } } },
+          "then": {
+            "description": "Pauses the run until a time and continues from the checkpoint when it is resumed (agent run --resume, or agent schedule). Exactly one of seconds / until.",
+            "oneOf": [{ "required": ["seconds"] }, { "required": ["until"] }],
+            "properties": {
+              "seconds": { "type": "integer", "minimum": 0, "description": "Wait this long after the node is first reached." },
+              "until": { "type": "string", "description": "Local time such as 2026-11-14T09:00." }
+            }
           }
         },
         {

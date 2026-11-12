@@ -278,7 +278,9 @@ int run_tui(const TuiHost &host) {
                                   input_box->Render() | flex) |
                              borderStyled(ROUNDED));
         }
-        Element status = hbox(text(busy ? " Esc: stop   " : " Enter: send   /help   Ctrl-D: quit   "), filler(), text(footer + " ")) | dim;
+        // The speed footer needs the whole line once there is one; the key hints show until then (and while an answer is running).
+        Element status = (busy || footer.empty()) ? text(busy ? " Esc: stop" : " Enter: send   /help   Ctrl-D: quit") | dim
+                                                  : hbox(text(" "), text(footer) | dim, filler());
         return vbox({text(" " + header) | ftxui::bold | inverted, transcript, vbox(bottom), status});
     });
 

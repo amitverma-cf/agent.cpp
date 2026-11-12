@@ -453,3 +453,164 @@ TEST_CASE("tui: markdown-lite layout", "[cli][tui]") {
     CHECK(lines >= 8);
 }
 #endif
+
+// ------------------------------------------------------------------ fit: GGUF header and the estimate
+
+#include "fit.hpp"
+
+namespace {
+
+void put_u32(std::string &s, uint32_t v) { s.append(reinterpret_cast<const char *>(&v), 4); }
+void put_u64(std::string &s, uint64_t v) { s.append(reinterpret_cast<const char *>(&v), 8); }
+void put_str(std::string &s, std::string_view v) {
+    put_u64(s, v.size());
+    s.append(v);
+}
+void kv_u32(std::string &s, std::string_view key, uint32_t v) {
+    put_str(s, key);
+    put_u32(s, 4);
+    put_u32(s, v);
+}
+
+// A tiny GGUF header: a 24-layer, 16-head, 8-kv-head, 2048-wide model, then a tokenizer array that may be cut short.
+std::string fake_gguf(bool cut_in_tokens) {
+    std::string s = "GGUF";
+    put_u32(s, 3);
+    put_u64(s, 0); // tensors
+    put_u64(s, 8); // metadata entries
+    put_str(s, "general.architecture");
+    put_u32(s, 8);
+    put_str(s, "llama");
+    kv_u32(s, "llama.block_count", 24);
+    kv_u32(s, "llama.embedding_length", 2048);
+    kv_u32(s, "llama.attention.head_count", 16);
+    kv_u32(s, "llama.attention.head_count_kv", 8);
+    kv_u32(s, "llama.context_length", 32768);
+    kv_u32(s, "llama.expert_count", 0);
+    put_str(s, "tokenizer.ggml.tokens");
+    put_u32(s, 9);
+    put_u32(s, 8);
+    put_u64(s, 3);
+    for (const char *t : {"a", "bb", "ccc"}) put_str(s, t);
+    if (cut_in_tokens) s.resize(s.size() - 5);
+    return s;
+}
+
+} // namespace
+
+TEST_CASE("fit: the GGUF header gives the layer shape", "[cli][fit]") {
+    auto info = parse_gguf_header(fake_gguf(false));
+    REQUIRE(info.valid);
+    CHECK(info.complete);
+    CHECK(info.architecture == "llama");
+    CHECK(info.block_count == 24);
+    CHECK(info.embedding_length == 2048);
+    CHECK(info.head_count == 16);
+    CHECK(info.head_count_kv == 8);
+    CHECK(info.context_length == 32768);
+    CHECK(info.has_shape());
+
+    // Cut short inside the tokenizer: the hyper-parameters read so far are kept.
+    auto cut = parse_gguf_header(fake_gguf(true));
+    REQUIRE(cut.valid);
+    CHECK_FALSE(cut.complete);
+    CHECK(cut.has_shape());
+
+    CHECK_FALSE(parse_gguf_header("not a gguf file at all, really").valid);
+    CHECK_FALSE(parse_gguf_header("").valid);
+}
+
+TEST_CASE("fit: memory needed and speed", "[cli][fit]") {
+    auto info = parse_gguf_header(fake_gguf(false));
+    Machine m;
+    m.ram_total = 16ull << 30;
+    m.ram_free = 10ull << 30;
+    m.mem_bandwidth = 20e9; // 20 GB/s
+    const uint64_t file = 2ull << 30;
+
+    auto small = estimate_fit(info, file, m, 4096, KvType::Q8);
+    CHECK(small.fits);
+    CHECK_FALSE(small.on_gpu);
+    // KV: 2 * 24 layers * 8 kv heads * 128 head dim * 4096 tokens * 1.0625 bytes = 214 MB
+    CHECK(small.kv_cache > 200'000'000);
+    CHECK(small.kv_cache < 230'000'000);
+    CHECK(small.need == small.weights + small.kv_cache + small.buffers);
+    // 0.6 * 20 GB/s over a 2 GiB model: about 5.6 tokens per second.
+    CHECK(small.tokens_per_second > 5.0);
+    CHECK(small.tokens_per_second < 6.5);
+
+    // The same model with a quarter of the KV bytes per element needs less.
+    CHECK(estimate_fit(info, file, m, 4096, KvType::Q4).kv_cache < small.kv_cache);
+    // A bigger context needs more.
+    CHECK(estimate_fit(info, file, m, 32768, KvType::Q8).kv_cache > small.kv_cache);
+
+    // Does not fit: a 12 GiB model against 10 GiB free.
+    auto big = estimate_fit(info, 12ull << 30, m, 4096);
+    CHECK_FALSE(big.fits);
+    CHECK(big.tokens_per_second == 0);
+    CHECK(big.note.find("needs") != std::string::npos);
+
+    // A GPU with enough memory takes it.
+    m.vram_total = 8ull << 30;
+    auto gpu = estimate_fit(info, file, m, 4096);
+    CHECK(gpu.fits);
+    CHECK(gpu.on_gpu);
+}
+
+// ------------------------------------------------------------------ schedule: cron text
+
+#include "schedule.hpp"
+
+TEST_CASE("schedule: intervals become cron expressions", "[cli][schedule]") {
+    CHECK(cron_from_every("15m").value == "*/15 * * * *");
+    CHECK(cron_from_every("1m").value == "* * * * *");
+    CHECK(cron_from_every("2h").value == "0 */2 * * *");
+    CHECK(cron_from_every("1d").value == "0 0 * * *");
+    CHECK_FALSE(cron_from_every("7m").ok); // does not divide 60: the runs would not be evenly spaced
+    CHECK_FALSE(cron_from_every("5h").ok);
+    CHECK_FALSE(cron_from_every("2d").ok);
+    CHECK_FALSE(cron_from_every("m").ok);
+    CHECK_FALSE(cron_from_every("15x").ok);
+    CHECK(cron_from_daily("09:30").value == "30 9 * * *");
+    CHECK(cron_from_daily("9:5").value == "5 9 * * *");
+    CHECK_FALSE(cron_from_daily("25:00").ok);
+    CHECK_FALSE(cron_from_daily("nine").ok);
+    CHECK(check_cron("0  9 * * 1-5").value == "0 9 * * 1-5");
+    CHECK_FALSE(check_cron("0 9 * *").ok);
+    CHECK_FALSE(check_cron("0 9 * * mon").ok);
+}
+
+TEST_CASE("schedule: crontab entries are added, found and removed without touching other lines", "[cli][schedule]") {
+    const std::string other = "MAILTO=me\n0 3 * * * /usr/bin/backup --all\n";
+    const std::string one = crontab_block("nightly", "0 2 * * *", "/opt/agent/agent --home /h run g.json --yes");
+    const std::string two = crontab_block("hourly", "0 * * * *", "/opt/agent/agent run 'my graph.json'");
+    const std::string crontab = other + one + two;
+
+    const auto entries = parse_crontab(crontab);
+    REQUIRE(entries.size() == 2);
+    CHECK(entries[0].name == "nightly");
+    CHECK(entries[0].expression == "0 2 * * *");
+    CHECK(entries[0].command == "/opt/agent/agent --home /h run g.json --yes");
+    CHECK(entries[1].name == "hourly");
+    CHECK(entries[1].command == "/opt/agent/agent run 'my graph.json'");
+
+    CHECK(crontab_without(crontab, "nightly") == other + two);
+    CHECK(crontab_without(crontab, "hourly") == other + one);
+    CHECK(crontab_without(crontab, "missing") == crontab);
+    CHECK(parse_crontab(crontab_without(crontab_without(crontab, "nightly"), "hourly")).empty());
+    CHECK(crontab_without(crontab_without(crontab, "nightly"), "hourly") == other);
+}
+
+TEST_CASE("schedule: quoting and names", "[cli][schedule]") {
+    CHECK(quote_posix("run") == "run");
+    CHECK(quote_posix("my graph.json") == "'my graph.json'");
+    CHECK(quote_posix("it's") == "'it'\\''s'");
+    CHECK(quote_posix("") == "''");
+    CHECK(quote_windows("run") == "run");
+    CHECK(quote_windows("C:\\Program Files\\agent.exe") == "\"C:\\Program Files\\agent.exe\"");
+    CHECK(quote_windows("say \"hi\"") == "\"say \\\"hi\\\"\"");
+    CHECK(valid_schedule_name("nightly-report_2"));
+    CHECK_FALSE(valid_schedule_name(""));
+    CHECK_FALSE(valid_schedule_name("a b"));
+    CHECK_FALSE(valid_schedule_name("../x"));
+}

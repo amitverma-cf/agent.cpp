@@ -945,3 +945,51 @@ TEST_CASE("graph: parallel agent branches run to completion and fire OnSubAgentC
         CHECK(run.state.histories.at(name).stats.turns == 1);
     }
 }
+
+TEST_CASE("graph: a wait node pauses the run and a later resume continues it", "[graph][wait]") {
+    auto session = make_session();
+    auto loaded = agent::load_graph_json(session, R"({
+        "name": "nap_then_ping",
+        "nodes": [
+            {"name": "nap", "kind": "wait", "seconds": 1},
+            {"name": "ping", "kind": "tool", "tool": "ping", "output_key": "pong"}
+        ],
+        "edges": [{"from": "nap", "to": "ping"}, {"from": "ping", "to": "__end__"}]
+    })");
+    REQUIRE(loaded.ok);
+    const agent::Graph &g = loaded.value.graph;
+
+    g_ping_calls = 0;
+    agent::GraphRun run;
+    run.thread_id = "nap-thread";
+    run.durability = agent::GraphDurability::Sync;
+    auto first = agent::run_graph(session, g, run);
+    REQUIRE(first.ok);
+    CHECK(run.status == agent::GraphRunStatus::Interrupted);
+    CHECK(run.interrupt_reason.find("waiting until") != std::string::npos);
+    CHECK_FALSE(agent::get_state(run.state, "wait:until").empty()); // what a scheduler reads
+    CHECK(g_ping_calls == 0);
+
+    // Too early: it waits again, and does not run the next node.
+    agent::GraphRun early;
+    REQUIRE(agent::resume_graph(session, g, "nap-thread", early).ok);
+    CHECK(early.status == agent::GraphRunStatus::Interrupted);
+    CHECK(g_ping_calls == 0);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1300));
+    agent::GraphRun due;
+    auto done = agent::resume_graph(session, g, "nap-thread", due);
+    REQUIRE(done.ok);
+    CHECK(due.status == agent::GraphRunStatus::Completed);
+    CHECK(g_ping_calls == 1);
+    CHECK(agent::get_state(due.state, "pong") == "pong");
+}
+
+TEST_CASE("agent.json: wait node fields are checked", "[graph_json][wait]") {
+    auto bad = [](const char *json) { return agent::parse_graph_json(json).ok; };
+    CHECK(bad(R"({"nodes": [{"name": "w", "kind": "wait", "seconds": 5}]})"));
+    CHECK(bad(R"({"nodes": [{"name": "w", "kind": "wait", "until": "2031-01-02T03:04"}]})"));
+    CHECK_FALSE(bad(R"({"nodes": [{"name": "w", "kind": "wait"}]})"));
+    CHECK_FALSE(bad(R"({"nodes": [{"name": "w", "kind": "wait", "seconds": 5, "until": "2031-01-02T03:04"}]})"));
+    CHECK_FALSE(bad(R"({"nodes": [{"name": "w", "kind": "wait", "until": "tomorrow"}]})"));
+}

@@ -9,7 +9,10 @@
 
 #include <agent-cpp/agent.hpp>
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <ctime>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -55,7 +58,16 @@ struct UntilSpec {
     std::string equals;
 };
 
+// A "wait" node: pause the run until a time, then continue. The wake time lives in the thread state, so it survives the process that
+// started the run: something later (a scheduler running `agent run --resume`) finds the run due and continues it from its checkpoint.
+struct WaitSpec {
+    std::string node;
+    int64_t seconds = 0;     // wait this long after the node is first reached ...
+    int64_t until_epoch = 0; // ... or until this moment (local time in the file)
+};
+
 struct Storage {
+    std::deque<WaitSpec> waits;
     std::deque<RouteSpec> routes;
     std::deque<UntilSpec> untils;
     std::deque<std::string> tool_args;
@@ -87,6 +99,62 @@ Result<std::string> static_tool_args(Session &, const GraphState &, void *user_d
 }
 
 Result<void> noop_function(Session &, GraphState &, void *) { return ok(); }
+
+int64_t epoch_now() {
+    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+std::string local_time_text(int64_t epoch) {
+    const std::time_t t = static_cast<std::time_t>(epoch);
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm);
+    return buf;
+}
+
+// "2026-11-14T09:00" or "2026-11-14 09:00[:30]", local time.
+bool parse_local_time(std::string_view text, int64_t &epoch) {
+    int y = 0, mo = 0, d = 0, h = 0, mi = 0, sec = 0;
+    const std::string s(text);
+    int n = std::sscanf(s.c_str(), "%d-%d-%dT%d:%d:%d", &y, &mo, &d, &h, &mi, &sec);
+    if (n < 5) n = std::sscanf(s.c_str(), "%d-%d-%d %d:%d:%d", &y, &mo, &d, &h, &mi, &sec);
+    if (n < 5 || mo < 1 || mo > 12 || d < 1 || d > 31 || h < 0 || h > 23 || mi < 0 || mi > 59) return false;
+    std::tm tm{};
+    tm.tm_year = y - 1900;
+    tm.tm_mon = mo - 1;
+    tm.tm_mday = d;
+    tm.tm_hour = h;
+    tm.tm_min = mi;
+    tm.tm_sec = n >= 6 ? sec : 0;
+    tm.tm_isdst = -1;
+    const std::time_t t = std::mktime(&tm);
+    if (t == static_cast<std::time_t>(-1)) return false;
+    epoch = static_cast<int64_t>(t);
+    return true;
+}
+
+Result<void> wait_function(Session &, GraphState &state, void *user_data) {
+    const auto *w = static_cast<const WaitSpec *>(user_data);
+    const std::string key = "wait:" + w->node;
+    const std::string_view stored = get_state(state, key);
+    int64_t until = stored.empty() ? 0 : std::strtoll(std::string(stored).c_str(), nullptr, 10);
+    if (until == 0) {
+        until = w->until_epoch ? w->until_epoch : epoch_now() + w->seconds;
+        set_state(state, key, std::to_string(until));
+    }
+    if (epoch_now() >= until) {
+        set_state(state, key, ""); // due: the node can wait again if a loop reaches it a second time
+        return ok();
+    }
+    set_state(state, "wait:until", std::to_string(until)); // what a scheduler reads to know when to resume this thread
+    request_interrupt(state, "waiting until " + local_time_text(until));
+    return ok();
+}
 
 constexpr std::string_view kDoneSuffix = "#done";
 
@@ -565,6 +633,22 @@ Result<LoadedGraph> parse_document(Parser &p, simdjson::dom::element root, std::
                 return failure(p.error(where, "function '" + fn_name + "' is not registered (call agent::register_graph_function first)"));
             n.function = it->second.fn;
             n.user_data = it->second.user_data;
+        } else if (kind == "wait") {
+            n.kind = GraphNodeKind::Function;
+            p.check_fields(obj, where, {"name", "kind", "seconds", "until"});
+            WaitSpec spec;
+            spec.node = n.name;
+            int seconds = -1;
+            std::string until;
+            if (!read_int(p, obj, "seconds", seconds, where, err) || !read_string(p, obj, "until", until, where, err)) return failure(err);
+            if (seconds < 0 && until.empty()) return failure(p.error(where, "wait node needs \"seconds\" or \"until\""));
+            if (seconds >= 0 && !until.empty()) return failure(p.error(where, "wait node takes \"seconds\" or \"until\", not both"));
+            if (!until.empty() && !parse_local_time(until, spec.until_epoch))
+                return failure(p.error(where, "\"until\" must look like 2026-11-14T09:00 (local time)"));
+            spec.seconds = seconds < 0 ? 0 : seconds;
+            storage->waits.push_back(std::move(spec));
+            n.function = wait_function;
+            n.user_data = &storage->waits.back();
         } else if (kind == "parallel") {
             n.kind = GraphNodeKind::Parallel;
             p.check_fields(obj, where, {"name", "kind", "branches"});

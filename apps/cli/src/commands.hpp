@@ -56,14 +56,17 @@ int report_error(const Error &e);
 int cmd_setup(const CommandLine &cl, Context &ctx);
 int cmd_engine(const CommandLine &cl, Context &ctx);
 int cmd_model(const CommandLine &cl, Context &ctx);
+int cmd_model_fit(const CommandLine &cl, Context &ctx);
+int cmd_model_recommend(const CommandLine &cl, Context &ctx);
 int cmd_chat(const CommandLine &cl, Context &ctx);
 int cmd_run(const CommandLine &cl, Context &ctx);
 int cmd_secret(const CommandLine &cl, Context &ctx); // secret_cmd.cpp
 int cmd_mcp(const CommandLine &cl, Context &ctx);    // mcp_cmd.cpp
 Result<void> pull_and_register_engine(Context &ctx, std::vector<EngineEntry> &engines, const std::string &name, std::string_view repo,
                                       std::string_view tag);
-int cmd_runtime(const CommandLine &cl, Context &ctx); // runtime_cmd.cpp
-int cmd_sandbox(const CommandLine &cl, Context &ctx); // sandbox_cmd.cpp
+int cmd_runtime(const CommandLine &cl, Context &ctx);  // runtime_cmd.cpp
+int cmd_sandbox(const CommandLine &cl, Context &ctx);  // sandbox_cmd.cpp
+int cmd_schedule(const CommandLine &cl, Context &ctx); // schedule_cmd.cpp
 std::vector<PathGrant> load_grants(const std::string &file);
 Result<void> save_grants(const std::string &file, const std::vector<PathGrant> &grants);
 std::vector<PathGrant> load_all_grants(const Context &ctx);                      // global + project

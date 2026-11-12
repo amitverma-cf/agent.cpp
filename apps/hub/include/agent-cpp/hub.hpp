@@ -191,6 +191,10 @@ Result<void> download_file(std::string_view url, const std::string &dest, const 
 // fail instead of being cut.
 Result<std::string> http_get_text(std::string_view url, const HttpOptions &http, size_t max_bytes = 4u << 20);
 
+// GET bytes [offset, offset + length) of `url` (following redirects): the first megabytes of a large file, for example a GGUF header.
+// A server that ignores Range and sends the whole file is cut after `length` bytes. Fewer bytes come back when the file is shorter.
+Result<std::string> http_get_range(std::string_view url, const HttpOptions &http, uint64_t offset, uint64_t length);
+
 // -------------------------- High-level commands --------------------------
 
 // Default: $AGENT_MODELS_DIR, else %LOCALAPPDATA%\agent\models (Windows) or

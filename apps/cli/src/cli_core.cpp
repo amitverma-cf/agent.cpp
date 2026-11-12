@@ -61,14 +61,18 @@ constexpr std::string_view kSkillBool[] = {"project", "yes"};
 constexpr SubSpec kSandboxSubs[] = {{"ls", 0, 0}, {"grant", 1, 1}, {"revoke", 1, 1}};
 constexpr std::string_view kSandboxValue[] = {"for"};
 constexpr std::string_view kSandboxBool[] = {"write", "project"};
+constexpr SubSpec kScheduleSubs[] = {{"ls", 0, 0}, {"add", 1, 64}, {"rm", 1, 1}};
+constexpr std::string_view kScheduleValue[] = {"every", "daily", "cron"};
+constexpr std::string_view kScheduleBool[] = {"yes"};
 constexpr SubSpec kRuntimeSubs[] = {{"ls", 0, 0}, {"install", 1, 1}, {"rm", 1, 1}, {"path", 1, 1}, {"use", 1, 1}};
 constexpr std::string_view kRuntimeValue[] = {"version"};
 constexpr std::string_view kCleanBool[] = {"downloads", "cache", "logs", "yes"};
 constexpr std::string_view kSecretValue[] = {"identity"};
 constexpr std::string_view kSecretBool[] = {"stdin"};
 
-constexpr SubSpec kModelSubs[] = {{"ls", 0, 0}, {"search", 0, 1}, {"info", 1, 1}, {"pull", 1, 1}, {"rm", 1, 1}};
-constexpr std::string_view kModelValue[] = {"name", "quant", "mmproj", "include", "task"};
+constexpr SubSpec kModelSubs[] = {{"ls", 0, 0},        {"search", 0, 1}, {"info", 1, 1}, {"fit", 1, 1},
+                                  {"recommend", 0, 1}, {"pull", 1, 1},   {"rm", 1, 1}};
+constexpr std::string_view kModelValue[] = {"name", "quant", "mmproj", "include", "task", "ctx", "kv", "limit"};
 constexpr std::string_view kModelBool[] = {"allow-restricted", "keep-file", "no-mmproj"};
 
 constexpr std::string_view kChatValue[] = {"model", "engine", "resume", "workspace", "ctx", "max-tokens", "engine-options"};
@@ -93,6 +97,7 @@ constexpr CommandSpec kCommands[] = {
     {"mcp", kMcpSubs, 0, 0, {}, kMcpBool},
     {"skill", kSkillSubs, 0, 0, {}, kSkillBool},
     {"sandbox", kSandboxSubs, 0, 0, kSandboxValue, kSandboxBool},
+    {"schedule", kScheduleSubs, 0, 0, kScheduleValue, kScheduleBool},
     {"runtime", kRuntimeSubs, 0, 0, kRuntimeValue, {}},
     {"clean", {}, 0, 0, {}, kCleanBool},
     {"engine", kEngineSubs, 0, 0, kEngineValue, {}},
@@ -266,6 +271,8 @@ std::string usage_text() {
            "  skill search|add|ls|rm     skills from skills.sh (add owner/repo/skill [--yes] [--project]); a skill is text the model "
            "follows\n"
            "  mcp search|add|ls|rm       MCP servers from the official registry (add NAME [--yes] [--project]); they run in the sandbox\n"
+           "  schedule ls|add|rm         run an agent command on a schedule with cron / Task Scheduler: add NAME (--every 15m|--daily "
+           "09:00|--cron EXPR) -- run graph.json --yes\n"
            "  sandbox ls|grant|revoke    folders outside the workspace that tools may use: grant PATH [--write] [--for "
            "run_command|files|mcp:NAME]\n"
            "  engine ls                  list engines in engines.json\n"
@@ -278,6 +285,9 @@ std::string usage_text() {
            "        (vision / audio / OCR repos: the projector is fetched too, recorded, and used automatically)\n"
            "  model search [TEXT] [--task T]  curated registry: short names for tested models (pull by name)\n"
            "  model info <repo>          list a Hugging Face repo: quants with sizes, projectors, licence\n"
+           "  model fit <repo[:quant]|file.gguf>  will it run here, and about how fast ([--ctx N] [--kv f16|q8|q4])\n"
+           "  model recommend [TEXT]     search Hugging Face and list what fits this machine, fastest first ([--quant Q4_K_M] [--limit "
+           "N])\n"
            "        (pick a file, then: model pull owner/repo:QUANT)\n"
            "  model ls                   list downloaded models (models.json)\n"
            "  model rm <name> [--keep-file]\n"
