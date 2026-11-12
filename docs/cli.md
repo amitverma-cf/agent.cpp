@@ -19,14 +19,20 @@ next to itself, in `engines/` and its subdirectories (so the build tree works as
 
 ## Files
 
+Everything the CLI uses lives in the global home (see [Where files live](#where-files-live)). The home is chosen at
+`agent setup` and remembered in a pointer file, `home.json`, in the platform config folder (`%APPDATA%\agent\` on
+Windows, `$XDG_CONFIG_HOME/agent/` or `~/.config/agent/` elsewhere).
+
 | File | Location |
 |---|---|
-| `config.json` | `$AGENT_CONFIG_DIR`, else `%APPDATA%\agent\` (Windows), else `$XDG_CONFIG_HOME/agent/`, else `~/.config/agent/` |
-| `engines.json` | next to `config.json` |
-| `models.json` + model files | `models_dir` from `config.json`, else the hub default (`$AGENT_MODELS_DIR`, `~/.local/share/agent/models`, `%LOCALAPPDATA%\agent\models`) |
-| workspace | `workspace` from `config.json`, else `~/.local/share/agent/workspace` (`%LOCALAPPDATA%\agent\workspace`). The file tools are sandboxed to it. Conversations go in `memory/db.sqlite3`, logs in `logs/`, and generated media in `artifacts/`. |
+| `home.json` (pointer to the home) | the platform config folder (above); `--home DIR` and `$AGENT_HOME` override it for one run |
+| `config.json`, `engines.json` | the home folder |
+| models and `models.json` | `<home>/models/` |
+| workspace (file tools, `memory/db.sqlite3`, `logs/`, `artifacts/`) | `<home>/workspaces/default/` |
 
-`--config-dir DIR` works with any command and overrides the config location.
+The file tools are sandboxed to the workspace. An explicit `--config-dir DIR` (or `$AGENT_CONFIG_DIR`) keeps the older
+layout instead: `config.json` and `engines.json` in that folder, and models and the workspace in the platform data
+folders (`~/.local/share/agent/` on Linux, `%LOCALAPPDATA%\agent\` on Windows).
 
 `config.json`:
 
@@ -90,6 +96,7 @@ agent setup                         # asks questions on a terminal
 agent setup --yes --home ~/.agent.cpp-workspace --model qwen2.5-0.5b --model bge-small
 agent setup --no-models             # layout, engines and config only
 agent setup --caps llama,sdcpp --engines-dir /opt/engines --backend cpu
+agent setup --yes --download-engines --install-runtimes   # fetch missing engines and the private bun / uv
 ```
 
 1. **Asks where the global home goes** (`--home DIR` answers it), creates its folders and remembers the choice.
@@ -98,7 +105,8 @@ agent setup --caps llama,sdcpp --engines-dir /opt/engines --backend cpu
 3. **Picks engines.** The default is the starter pack `llama,sherpa,sdcpp,onnx`.
 4. **Looks for each engine's plugin** (`agent-engine-<name>.so` / `.dll` / `.dylib`) in `--engines-dir`
    and the default plugin directories, loads it to check it, and records it in `engines.json`. Engines already
-   listed are kept. Downloading prebuilt engine plugins is not implemented yet.
+   listed are kept. Engines that are still missing are offered for download from the release (`agent engine pull`);
+   `--download-engines` does that without asking.
 5. **Shows the models this machine can run** and downloads **nothing by default**. On a terminal you choose numbers
    from the list (registry models whose engine is installed and whose size fits in 70% of RAM with room for the KV
    cache), or type any `owner/repo[:quant]`. Without a terminal, `--model NAME|owner/repo[:quant]` (repeatable) picks them.
@@ -115,6 +123,55 @@ agent init ~/code/app
 
 Creates `.agents/` with `skills/`, `memory/`, `cache/`, `local/` and a `.gitignore` that keeps the last three out of
 git. The nearest ancestor of the working directory that has a `.agents/` folder is the project.
+
+## agent doctor
+
+```sh
+agent doctor
+```
+
+Prints what is installed: the engines with their status, the private runtimes, the models, and how much disk each
+area of the home uses (`models/`, `cache/`, `runtimes/`, `logs/`), with what is safe to remove. It changes nothing.
+
+## agent clean
+
+```sh
+agent clean --downloads          # partial downloads (.part files)
+agent clean --cache --yes        # rebuildable caches: saved prefix KV states, GPU kernel caches, package caches
+agent clean --logs --yes         # old log files
+```
+
+Removes one area per flag. Models, memory and conversations are never removed. `--yes` skips the confirmation.
+
+## agent secret
+
+```sh
+agent secret set OPENAI_KEY                 # the value is typed without echo; --stdin reads it from a pipe
+agent secret ls
+agent secret bind OPENAI_KEY mcp:github     # let that MCP server read the secret
+agent secret unbind OPENAI_KEY mcp:github
+agent secret rm OPENAI_KEY
+```
+
+Values go to the OS credential store: Windows Credential Manager, the macOS Keychain, or `secret-tool` (libsecret) on
+Linux. Where none of those is available the CLI keeps them in an encrypted file in the home folder. A value is never
+printed again. MCP configs refer to secrets as `${secret:NAME}`, so the value never appears in a config file or in the
+model's context. `bind` allows one consumer to read a secret: `mcp:NAME` (an MCP server), `tool:NAME` or `group:NAME`.
+For an MCP server the binding pins its command and arguments, so changing the command needs a new `bind`.
+
+## agent sandbox
+
+```sh
+agent sandbox ls                              # folders outside the workspace that sandboxed tools may use
+agent sandbox grant ~/notes --for files       # read access for the file tools
+agent sandbox grant ~/data --write --for mcp:files
+agent sandbox revoke ~/notes
+```
+
+`--for` limits a grant to one consumer: `run_command`, `files` (the file tools) or `mcp:NAME`. A tool that needs a path
+outside the workspace asks first, with `[o] allow once  [a] allow always  [n] no`. Grants are saved in the project's
+`.agents/` folder (run `agent init` there first) or in the global home. The operating-system sandbox that enforces them is
+described in [security-sandbox.md](security-sandbox.md).
 
 ## agent engine
 
@@ -133,8 +190,8 @@ dependency libraries) is rejected and the load error is shown.
 `manifest.json`, stores it in `<home>/engines/NAME/<version>/` and records it. `agent setup` offers the same for
 missing engines (`--download-engines` to do it without asking). The release is built by
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) for Linux, macOS and Windows on x86-64 and arm64
-without `-march=native` (x86-64 builds need AVX2). Until a release has been published the command reports that the
-manifest was not found.
+without `-march=native` (x86-64 builds need AVX2). Each release currently contains the llama engine only; the other
+engines are built from source with the options in the [README](../README.md#cmake-options).
 
 ## agent runtime
 

@@ -25,6 +25,9 @@ enum class ErrorCode {
     ToolCallLimitExceeded,// max_tool_call_rounds reached
     SandboxViolation,     // path escapes workspace_dir (sandbox mode)
     PermissionDenied,     // permission_check returned Deny, or an Ask was declined
+    EngineCrashed,        // the agent-engine-host process died or could not be restarted (process isolation)
+    OutOfMemory,          // ModelRegistry could not fit the model in its RAM/VRAM budget
+    ToolError,            // a tool reported is_error (string execute_tool; execute_tool_parts returns the ToolResult)
 };
 ```
 
@@ -180,6 +183,36 @@ struct ToolCall {               // owned, lives in Message
 };
 ```
 
+### `Media` and `MediaView`
+
+Media referenced by file path: images, audio, video, meshes. Inputs can live anywhere. Files that engines generate are
+written to `<workspace>/artifacts/`.
+
+```cpp
+struct MediaView { std::string_view path; std::string_view mime; };   // e.g. "image/png", "audio/wav"
+struct Media     { std::string path; std::string mime; };
+```
+
+Pass media with `run_turn_with_media` (user messages) or return it from a tool (`ToolResult::media`).
+
+### `ToolResult`
+
+What a tool returns through `Tool::parts_callback`: text, media and/or tensors.
+
+```cpp
+struct ToolResult {
+    std::string text;
+    std::vector<Media> media;
+    std::vector<TensorData> tensors;
+    bool is_error = false;
+};
+```
+
+Inside `run_turn` the media and tensors go on the `tool` message, so they persist with the history and reach the engine
+as FILE / TENSOR parts on the next inference. The message text lists each attachment as `[attached: <path> (<mime>)]`.
+With `is_error`, the conversation gets `Error: <text>`, and the string `execute_tool` fails with `ErrorCode::ToolError`.
+See [Tools](api/tools.md#tools-that-return-parts).
+
 ### `Tool`
 
 A callable function the LLM can invoke.
@@ -260,6 +293,12 @@ struct InferRequest {
     bool           stream          = false;
     TokenStreamFn  on_token        = nullptr;
     void          *token_user_data = nullptr;
+    ProgressFn     on_progress     = nullptr;   // long-running engine jobs (image, video, 3D)
+    void          *progress_user_data = nullptr;
+    const volatile int32_t *cancel = nullptr;  // engines stop with ErrorCode::Cancelled when *cancel != 0
+    // AiProvider::Engine: the one AGENT_CAP_* capability this call performs (e.g. AGENT_CAP_TTS).
+    // 0 = Config::default_task, then automatic (AGENT_CAP_TEXT_GEN when declared).
+    uint32_t       task            = 0;
 };
 ```
 
@@ -530,6 +569,38 @@ struct Config {
 
     LogFn logger          = nullptr;
     void *logger_user_data = nullptr;
+
+    // Progress and cancel for long-running engine jobs (run_turn)
+    ProgressFn on_progress = nullptr;
+    void      *progress_user_data = nullptr;
+
+    // Process isolation (AiProvider::Engine). See "Isolation" in engines.md.
+    EngineIsolation engine_isolation = EngineIsolation::Default;
+    std::string     engine_host_path;           // agent-engine-host; empty = auto-detect
+    int             engine_timeout_ms = 0;      // per-request watchdog; 0 = none
+    int             engine_cancel_grace_ms = 2000;
+    int             engine_max_restarts = 3;    // automatic restarts per rolling minute
+
+    // OS sandboxes (see security-sandbox.md)
+    SandboxPolicy engine_sandbox{.enabled = true, .allow_tmp = false, .network = SandboxNetwork::Deny};  // engine host
+    SandboxPolicy tool_sandbox{.enabled = true};                                                         // run_command
+
+    // Paths outside the workspace that sandboxed tools may use, and the gate asked for any other path
+    std::vector<PathGrant> path_grants;
+    PathGateFn path_gate = nullptr;
+    void      *path_gate_user_data = nullptr;
+
+    // Lazy tool loading: only tool_search, load_tool and use_skill start in the prompt
+    bool lazy_tools = false;
+
+    // ${secret:NAME} placeholders in MCP server env, resolved when the server starts
+    SecretResolverFn secret_resolver = nullptr;
+    void            *secret_user_data = nullptr;
+
+    // Called on a copy of every MCP server config before it starts, e.g. to run npx / uvx on a private runtime
+    using McpLauncherFn = void (*)(McpServerConfig &server, void *user_data);
+    McpLauncherFn mcp_launcher = nullptr;
+    void         *mcp_launcher_user_data = nullptr;
 };
 ```
 
@@ -593,6 +664,14 @@ Result<Session> init(const Config &config);
 // Stateless single-turn inference. The returned InferResponse contains arena-backed
 // views valid only until the next infer()/run_turn() call reusing the same arena slot.
 Result<InferResponse> infer(Session &session, const InferRequest &request);
+
+// infer() with InferRequest::task set to one AGENT_CAP_* bit, e.g. run_task(session, AGENT_CAP_TTS, request).
+Result<InferResponse> run_task(Session &session, uint32_t task, const InferRequest &request);
+
+// run_turn with media attached to the user message (images, audio, ...), for engines that accept them.
+Result<std::string> run_turn_with_media(Session &session, FlowMemory &memory, std::string_view user_prompt,
+                                        std::span<const Media> media, bool stream = false,
+                                        TokenStreamFn on_token = nullptr, void *token_user_data = nullptr);
 ```
 
 ### Conversation

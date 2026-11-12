@@ -1,35 +1,142 @@
 # agent.cpp
 
-A modular, lightweight C++20 AI agent orchestration library for edge devices, offline inference, and ultra-low-latency deployments.
+A fast, local, offline-first AI agent. It ships as the `agent` command-line app and as `libagent`, a C++20
+runtime with a single public header. Models run on your machine through engine plugins (llama.cpp, ONNX
+Runtime, whisper.cpp, parakeet.cpp, sherpa-onnx, stable-diffusion.cpp, TRELLIS.2). No cloud API and no
+global Python or Node install are needed.
 
 ---
 
-## What it does
+## Why agent.cpp
 
-agent.cpp provides a complete runtime for building AI agents on local inference backends (llama.cpp, ONNX Runtime, ... loaded as engine plugins), fully offline. It handles context management, tool calling, graph workflows with parallel subagents, memory persistence, and observability — all with no heap allocations in the hot path.
-
----
-
-## Key features
-
-- **Zero hot-path allocations.** A session-owned bump-pointer `Arena` handles all per-turn memory. Resets in O(1) between turns.
-- **Data-oriented dispatch.** Providers, memory backends, and tools resolve through `constexpr` function-pointer tables — no virtual dispatch, no RTTI.
-- **Monadic error handling.** Every fallible function returns `Result<T>`. No exceptions anywhere.
-- **Single public header.** `#include <agent-cpp/agent.hpp>`. Backend headers are behind CMake flags.
-- **Graph workflows.** LangGraph / ADK-style graphs of agent, function and tool nodes: per-node system prompt, tool allowlist and pre/post tool hooks, private or shared conversations, conditional edges, sequential / parallel / loop builders, checkpoints and human-in-the-loop interrupts. Load them from C++ or `agent.json`.
-- **Parallel subagents.** Parallel graph branches run concurrently on concurrent engines; llama.cpp branches share one continuously-batched decode.
-- **Automatic context management.** Sliding-window pruning and LLM-based compression keep conversations within the context budget automatically.
-- **Built-in tools.** Filesystem (8 tools), terminal, and context compressor — registered by default.
-- **Skills.** Load [SKILL.md](https://agentskills.io)-format capability packages from a directory; only name/description sit in context until the model calls `use_skill` to load the rest.
-- **Permission gate.** Optional per-call Allow/Ask/Deny policy checked before any tool dispatch — native tools, data-source tools, and `use_skill` alike.
-- **Sandbox enforcement.** Filesystem tools block paths outside `workspace_dir` when sandbox mode is on.
-- **File logging.** Structured timestamped log files written to `workspace_dir/logs/` when enabled.
-- **KV cache management.** Explicit cache clear for llama.cpp to manage VRAM between tasks.
-- **Telemetry.** Per-conversation and session-wide token/tool/compression counters.
+- **One local CLI for chat, tasks, graphs and voice.** `agent chat` streams replies and runs tools, `agent task`
+  runs one engine capability once, `agent run` executes declarative graphs, and `agent voice` is a spoken loop.
+- **Any local engine, one interface.** Text and vision with llama.cpp, speech with Whisper, Parakeet and
+  sherpa-onnx, images and video with stable-diffusion.cpp, 3D meshes with TRELLIS.2, and generic ONNX models.
+  See the [engine matrix](#engines).
+- **Engines run in their own process.** A crashing engine fails one turn, not the CLI. On Linux the engine host
+  and `run_command` run under Landlock and seccomp. On Windows 11 the sandbox uses an AppContainer, tested.
+  The macOS sandbox profile is written but has not been run yet.
+- **MCP servers and skills.** Connect stdio MCP servers and load `SKILL.md` skills. Private copies of `bun` and
+  `uv` run the servers that are published as npm or Python packages.
+- **A zero-hot-path-allocation SDK.** Per-turn memory comes from a bump-pointer `Arena`. Errors are `Result<T>`,
+  with no exceptions. Providers and tools are dispatched through `constexpr` function-pointer tables.
 
 ---
 
-## Quick start
+## 60-second quickstart
+
+Prebuilt archives are published for Linux, macOS and Windows on x86-64 and arm64 on the
+[Releases](https://github.com/amitverma-cf/agent.cpp/releases) page. Each archive holds `agent`
+(`agent.exe` on Windows), `agent-engine-host`, the llama engine in `engines/`, and the license.
+
+```sh
+# Linux / macOS: pick the archive for your platform, for example agent-cpp-<tag>-linux-x86_64.tar.gz
+tar xzf agent-cpp-<tag>-linux-x86_64.tar.gz
+cd agent-cpp-<tag>-linux-x86_64
+
+./agent setup --yes                                              # home folder, hardware check, engines, config
+./agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M        # download and smoke-test a model from Hugging Face
+./agent chat                                                     # interactive chat with streaming and tools
+./agent task text_gen -e llama -m qwen2.5-0.5b-instruct-q4_k_m --text "Say hi" --max-tokens 16
+./agent run my-graph.json --model qwen2.5-0.5b-instruct-q4_k_m   # run a declarative agent graph
+```
+
+On Windows, unzip the `.zip` archive and run `.\agent.exe setup --yes` from that folder in PowerShell.
+
+Other commands you will use:
+
+| Command | What it does |
+|---|---|
+| `agent engine pull <name>` | download a prebuilt engine from the release, checksum-verified |
+| `agent model search [TEXT]` | the curated registry of tested models, by short name |
+| `agent doctor` | what is installed, disk use per area, and what is safe to clean |
+| `agent secret set NAME` | store an API key in the OS credential store |
+| `agent mcp` / `agent skill` / `agent sandbox` | MCP servers, skills, and folders that sandboxed tools may use |
+
+`agent voice` runs on the sherpa engine (build with `AGENT_ENGINE_SHERPA`) with a sherpa speech model and a TTS model, see [docs/cli.md](docs/cli.md#agent-voice).
+
+To build the CLI from source instead:
+
+```sh
+cmake -B build -G Ninja
+cmake --build build
+./build/agent setup --yes
+```
+
+Full CLI reference: [docs/cli.md](docs/cli.md). Setup, layout and runtimes: [docs/workspace.md](docs/workspace.md).
+
+---
+
+## Engines
+
+<a id="engines"></a>
+
+| Engine | Capabilities | Build option (default) | Prebuilt in releases |
+|---|---|---|---|
+| `llama` (llama.cpp b12020) | text and tool calls, image and audio input (with `mmproj`), OCR, embeddings, rerank, decision models (choice, score, yes/no) | `AGENT_ENGINE_LLAMA` (ON) | yes |
+| `sherpa` (sherpa-onnx) | speech recognition, text to speech (Kokoro, VITS, Matcha), VAD, speaker diarization | `AGENT_ENGINE_SHERPA` (OFF, needs `SHERPA_ONNX_ROOT`) | no |
+| `whisper` (whisper.cpp) | speech recognition, Silero VAD | `AGENT_ENGINE_WHISPER` (OFF) | no |
+| `parakeet` (parakeet.cpp) | speech recognition (NVIDIA Parakeet) | `AGENT_ENGINE_PARAKEET` (OFF) | no |
+| `sdcpp` (stable-diffusion.cpp) | image generation, image editing, video generation (Wan 2.1 tested) | `AGENT_ENGINE_SDCPP` (OFF) | no |
+| `trellis` (TRELLIS.2) | image to 3D mesh (GLB) | `AGENT_ENGINE_TRELLIS` (OFF) | no |
+| `onnx` (ONNX Runtime) | generic named-tensor models | `AGENT_ENGINE_ONNX` (OFF, needs `ONNXRUNTIME_ROOT`) | no |
+| `mock` | test engine, not released | always built for tests | no |
+
+`agent engine pull <name>` fetches a prebuilt engine from the release for this machine. The current release
+includes the llama engine. Build the others from source with the options above. `agent engine add <path>`
+registers any plugin you built yourself.
+
+---
+
+## Build
+
+```sh
+cmake -B build -G Ninja
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+Native Windows (MSVC, Ninja, OpenSSL) and Linux/macOS instructions, and the install step, are in
+[docs/getting-started.md](docs/getting-started.md). The options table is below.
+
+### CMake options
+
+| Option | Default | Description |
+|---|---|---|
+| `AGENT_BUILD_CLI` | `ON` | Build the `agent` CLI (`tools/cli`); needs `AGENT_BUILD_HUB` |
+| `AGENT_BUILD_HUB` | `ON` | Build `agent_hub`, the Hugging Face and GitHub downloader (needs OpenSSL) |
+| `AGENT_CLI_AUDIO_DEVICE` | `ON` | Build microphone and speaker support (miniaudio) into the CLI; `OFF` leaves it out |
+| `AGENT_ENGINE_LLAMA` | `ON` | Build the llama.cpp engine plugin (`engines/llama`) |
+| `AGENT_LLAMA_UPSTREAM` | `ON` | Link llama.cpp's own server handlers in process (MTP models and native System One decision models) |
+| `AGENT_ENGINE_ONNX` | `OFF` | Build the ONNX Runtime engine (`engines/onnx`); needs `-DONNXRUNTIME_ROOT=<prebuilt ORT>` |
+| `AGENT_ENGINE_SDCPP` | `OFF` | Build the stable-diffusion.cpp engine for images and video (`engines/sdcpp`) |
+| `AGENT_ENGINE_SHERPA` | `OFF` | Build the sherpa-onnx speech engine (`engines/sherpa`); needs `-DSHERPA_ONNX_ROOT=<sherpa-onnx>` |
+| `AGENT_ENGINE_WHISPER` | `OFF` | Build the whisper.cpp speech-to-text and VAD engine (`engines/whisper`); needs the `vendor/whisper.cpp` submodule |
+| `AGENT_ENGINE_PARAKEET` | `OFF` | Build the parakeet.cpp speech-to-text engine (`engines/parakeet`); needs the `vendor/parakeet.cpp` submodule |
+| `AGENT_ENGINE_TRELLIS` | `OFF` | Build the TRELLIS.2 image-to-3D engine (`engines/trellis`); needs the `vendor/trellis2cpp` submodule |
+| `AGENT_TRELLIS_BUILD_JOBS`, `AGENT_WHISPER_BUILD_JOBS`, `AGENT_PARAKEET_BUILD_JOBS` | (empty) | Parallel jobs for the nested build of the TRELLIS, whisper and parakeet engines; empty uses the build tool's default |
+| `AGENT_GGML_AMX` | `OFF` | Keep Intel AMX kernels in the engines' ggml; only safe when every engine runs out of process |
+| `BUILD_SHARED_LIBS` | `OFF` | Build `libagent`, `agent_store_sqlite` and `agent_hub` as shared libraries |
+| `AGENT_INSTALL` | `ON` (top level) | Generate install rules and the `agent-cpp` CMake package |
+| `AGENT_BUILD_EXAMPLES` | `ON` | Build `examples/` (guide code, image critique, RAG over docs) and their smoke tests (`ctest -L examples`) |
+| `AGENT_BUILD_BENCH` | `OFF` | Build `agent_bench`, the benchmark harness (`bench/`); results in [docs/benchmarks.md](docs/benchmarks.md) |
+| `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UndefinedBehaviorSanitizer on GCC and Clang |
+| `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |
+
+---
+
+## C++ SDK
+
+`libagent` is a C++20 library with one public header, `#include <agent-cpp/agent.hpp>`. Install it with
+`cmake --install build --prefix <prefix>` and link it from your own project:
+
+```cmake
+find_package(agent-cpp REQUIRED)
+target_link_libraries(my_app PRIVATE agent-cpp::agent)
+```
+
+A minimal chat loop:
 
 ```cpp
 #include <agent-cpp/agent.hpp>
@@ -70,56 +177,8 @@ int main() {
 }
 ```
 
----
-
-## Build
-
-```bash
-cmake -B build -G Ninja
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
-
-## The `agent` CLI
-
-The build also produces `build/agent`, the command-line app: a setup wizard, an engine and model
-manager (Hugging Face downloads) and a chat TUI with streaming and tool calls.
-
-```bash
-./build/agent setup --yes
-./build/agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M
-./build/agent chat
-```
-
-See [docs/cli.md](docs/cli.md).
-
-## Install and package
-
-```bash
-cmake --install build --prefix /opt/agent   # bin/agent, lib/agent/engines/, libagent + headers + CMake package
-scripts/package.sh --engines llama          # dist/agent-<version>-linux-x64.tar.gz
-```
-
-Library users: `find_package(agent-cpp)` and link `agent-cpp::agent` (plus `agent-cpp::store_sqlite`,
-`agent-cpp::hub`). See [docs/packaging.md](docs/packaging.md); Windows and macOS packaging are still TODO.
-
-### CMake options
-
-| Option | Default | Description |
-|---|---|---|
-| `AGENT_ENGINE_LLAMA` | `ON` | Build the llama.cpp engine plugin (`engines/llama`, GGUF models) |
-| `AGENT_BUILD_CLI` | `ON` | Build the `agent` CLI binary (`tools/cli`); needs `AGENT_BUILD_HUB` |
-| `AGENT_BUILD_HUB` | `ON` | Build `agent_hub`, the Hugging Face model downloader (needs OpenSSL) |
-| `BUILD_SHARED_LIBS` | `OFF` | Build `libagent`, `agent_store_sqlite`, `agent_hub` as shared libraries |
-| `AGENT_INSTALL` | `ON` (top level) | Generate install rules and the `agent-cpp` CMake package |
-| `AGENT_ENGINE_ONNX` | `OFF` | Build the ONNX Runtime engine plugin (`engines/onnx`); needs `-DONNXRUNTIME_ROOT=<prebuilt ORT>` |
-| `AGENT_ENGINE_TRELLIS` | `OFF` | Build the TRELLIS.2 image-to-3D (GLB) engine plugin (`engines/trellis`); needs the `vendor/trellis2cpp` submodule and its ggml; `AGENT_TRELLIS_BUILD_JOBS` caps the nested build |
-| `AGENT_ENGINE_WHISPER` | `OFF` | Build the whisper.cpp speech-to-text + Silero VAD engine plugin (`engines/whisper`); needs the `vendor/whisper.cpp` submodule; `AGENT_WHISPER_BUILD_JOBS` caps the nested build |
-| `AGENT_ENGINE_PARAKEET` | `OFF` | Build the parakeet.cpp (NVIDIA Parakeet / Nemotron) speech-to-text engine plugin (`engines/parakeet`); needs the `vendor/parakeet.cpp` submodule and its ggml; `AGENT_PARAKEET_BUILD_JOBS` caps the nested build |
-| `AGENT_BUILD_EXAMPLES` | `ON` | Build `examples/` (guide code, image critique, RAG over docs) and their mock-engine smoke tests (`ctest -L examples`) |
-| `AGENT_BUILD_BENCH` | `OFF` | Build `agent_bench`, the benchmark harness (`bench/`); results in [docs/benchmarks.md](docs/benchmarks.md) |
-| `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UBSan |
-| `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |
+The SDK covers providers, the graph runtime, tools and MCP servers, skills, the permission gate, RAG and the
+model registry. Start with [docs/guides/getting-started-library.md](docs/guides/getting-started-library.md).
 
 ---
 
@@ -128,13 +187,14 @@ Library users: `find_package(agent-cpp)` and link `agent-cpp::agent` (plus `agen
 | Provider | Enum | Notes |
 |---|---|---|
 | Mock | `AiProvider::Mock` | Fixed response; always available; for testing |
-| Engine plugin | `AiProvider::Engine` | Any engine shared library built against `engine_abi.h`: `agent-engine-llama` (GGUF), `agent-engine-onnx` (`.onnx`, raw tensors), ... (see [docs/api/engines.md](docs/api/engines.md)) |
+| Engine plugin | `AiProvider::Engine` | Any engine shared library built against `engine_abi.h`, such as `agent-engine-llama` (GGUF) or `agent-engine-onnx` (`.onnx`). See [docs/api/engines.md](docs/api/engines.md). |
 
 ---
 
 ## Workspace layout
 
-`workspace_dir` is required. Created automatically by `init()`:
+The CLI keeps one global home (`.agent.cpp-workspace`, chosen at `agent setup`) and an optional `.agents/`
+folder per project. The SDK needs a `workspace_dir`, which `init()` creates as:
 
 ```
 .workspace/
@@ -144,70 +204,56 @@ Library users: `find_package(agent-cpp)` and link `agent-cpp::agent` (plus `agen
   tmp/       <-- scratch space for tools
 ```
 
+Details: [docs/workspace.md](docs/workspace.md).
+
 ---
 
 ## Documentation
 
-Full documentation here: [`docs`](docs/index.md)
-
-Guides: [embedding the library](docs/guides/getting-started-library.md) ·
-[writing an engine plugin](docs/guides/writing-an-engine.md) ([template](templates/engine-plugin)) ·
-[writing a tool](docs/guides/writing-a-tool.md) · [writing a graph](docs/guides/writing-a-graph.md) ·
-[a local voice assistant](docs/guides/voice-assistant.md). Their code builds and runs as tests from
-[`examples/guides/`](examples/guides).
-More examples (image critique loop, RAG over docs, graph JSON): [`examples/`](examples/README.md). Benchmarks: [docs/benchmarks.md](docs/benchmarks.md).
+- [Documentation index](docs/index.md): the full map
+- [Getting started](docs/getting-started.md): build from source, native Windows, first program
+- [The `agent` CLI](docs/cli.md): every command and flag
+- [Packaging and install](docs/packaging.md): `cmake --install`, `find_package(agent-cpp)`, release archives
+- [Architecture](docs/architecture.md) and [API reference](docs/api.md)
+- Guides: [embedding the library](docs/guides/getting-started-library.md) ·
+  [writing an engine plugin](docs/guides/writing-an-engine.md) ([template](templates/engine-plugin)) ·
+  [writing a tool](docs/guides/writing-a-tool.md) · [writing a graph](docs/guides/writing-a-graph.md) ·
+  [a local voice assistant](docs/guides/voice-assistant.md)
+- Examples (image critique loop, RAG over docs, graph JSON): [`examples/`](examples/README.md)
+- Security: [OS sandbox](docs/security-sandbox.md) and [SECURITY.md](SECURITY.md)
+- Status: [known limitations](docs/LIMITATIONS.md), [roadmap](docs/ROADMAP.md), [benchmarks](docs/benchmarks.md)
 
 ---
 
 ## Project layout
 
 ```
-include/agent-cpp/agent.hpp    -- single public header
-src/core/
-  agent.cpp                    -- init(), infer(), public functions
-  arena.cpp                    -- bump allocator
-  events.cpp                   -- event hook dispatch
-  executor/
-    turn_executor.cpp          -- run_turn, pruning, save/load_flow_memory
-    ambient_turn.cpp           -- thread_local turn/hook/tool-allowlist/arena/json_parser state
-  data/
-    data_source_registry.cpp   -- register_data_source, query_data_source, bind_data_source_tool
-  skills/
-    skills_registry.cpp        -- load_skills_dir, read_skill_body, use_skill tool
-  graph/
-    graph_executor.cpp         -- run_graph, resume_graph, parallel branches
-    graph_builders.cpp         -- make_graph / make_sequential / make_parallel / make_loop
-    graph_checkpoint.cpp       -- checkpoints, scoped state persistence
-    graph_json.cpp             -- agent.json loader
-  providers/
-    provider_ops.cpp           -- Mock + Engine dispatch
-    engine_provider.cpp        -- adapter to engine plugins (engine_abi.h)
-  memory/
-    in_memory_store.cpp        -- default StoreOps (no persistence)
-  tools/
-    tools_ops.cpp              -- dispatch table, permission gate (Allow/Ask/Deny)
-    filesystem_tools.cpp       -- read_file, write_file, ...
-    terminal_tools.cpp         -- run_command
-    context_compressor.cpp     -- compress_context tool
-  utils/
-    utils.cpp                  -- logging, JSON escaping
-src/hal/                       -- hardware/OS abstraction layer
-  platform.hpp                 -- AGENT_HAL_WINDOWS / MACOS / LINUX / POSIX detection
-  time.cpp                     -- UTC time formatting (gmtime_s vs gmtime_r)
-  path.cpp                     -- sandboxed path resolution (symlink/.. escape hardened)
-  process.cpp                  -- shell command execution (CreateProcess / posix_spawn)
-  log_file.cpp                 -- session log file open/write
-engines/
-  mock/ llama/ onnx/ sdcpp/ sherpa/ trellis/ whisper/ parakeet/  -- engine plugins (agent-engine-<name>)
+include/agent-cpp/        agent.hpp (single public header), engine_abi.h (plugin ABI v2)
+src/core/                 libagent: agent, arena, events, executor/, graph/, mcp/, models/ (ModelRegistry),
+                          providers/, engines/, memory/, tools/, rag/, tasks/ (decide, ocr), skills/,
+                          data/, sandbox/, utils/
+src/hal/                  OS abstraction: child_process, process, dylib, sandbox, path, time, log_file
+engines/                  plugins: common/ (shared speech helpers), llama/, onnx/, sdcpp/, sherpa/,
+                          trellis/, whisper/, parakeet/, mock/ (tests only)
 tools/
-  cli/                         -- the `agent` binary (docs/cli.md)
-  hub/                         -- agent_hub: Hugging Face downloads, models.json
-  store-sqlite/                -- agent_store_sqlite: SQLite KV store, sqlite-vec
+  cli/                    the agent binary (commands, chat, voice, audio)
+  engine-host/            agent-engine-host: runs one engine per process
+  hub/                    agent_hub: Hugging Face and GitHub downloads, models.json
+  store-sqlite/           agent_store_sqlite: SQLite store, checkpointer, sqlite-vec
+cmake/                    package config, engine helpers, ggml AMX switch
+templates/engine-plugin/  standalone template for an out-of-tree engine plugin
+examples/                 guide code, image critique, RAG over docs, graph JSON
+bench/                    agent_bench benchmark harness
 tests/
-  unit/                        -- Catch2 tests: providers, memory, tools, hal, skills, permissions, ...
-  integration/                 -- session lifecycle, conversation tests
-vendor/
-  llama.cpp / simdjson / cpp-httplib / sqlite / sqlite-vec / catch2
+  unit/                   Catch2 unit tests
+  integration/            session, turn and graph tests
+  consumer/               an out-of-tree project that uses the installed package
+  helpers/                fake MCP server and test helpers
+schemas/                  JSON schemas for engines.json, models.json and agent.json
+scripts/                  package.sh (Linux tarball)
+docs/                     documentation
+vendor/                   llama.cpp, whisper.cpp, parakeet.cpp, stable-diffusion.cpp, trellis2cpp,
+                          onnxruntime, simdjson, cpp-httplib, sqlite, sqlite-vec, miniaudio, catch2
 ```
 
 ---

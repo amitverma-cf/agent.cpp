@@ -529,4 +529,4 @@ if (!res.ok) {
 }
 ```
 
-Full error code list: `Ok`, `InvalidConfig`, `UnsupportedProvider`, `FilesystemError`, `ProviderInitFailed`, `ModelLoadFailed`, `DecodeFailed`, `NetworkError`, `HttpError`, `ParseError`, `Cancelled`, `KeyNotFound`, `ToolCallLimitExceeded`, `SandboxViolation`, `PermissionDenied`.
+Full error code list: `Ok`, `InvalidConfig`, `UnsupportedProvider`, `FilesystemError`, `ProviderInitFailed`, `ModelLoadFailed`, `DecodeFailed`, `NetworkError`, `HttpError`, `ParseError`, `Cancelled`, `KeyNotFound`, `ToolCallLimitExceeded`, `SandboxViolation`, `PermissionDenied`, `EngineCrashed` (the engine host process died; the next call restarts it), `OutOfMemory` (a `ModelRegistry` could not fit the model in its budget), `ToolError` (a tool reported `is_error`).

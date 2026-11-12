@@ -1,7 +1,6 @@
-# agent.cpp Roadmap (draft for agreement, rev 3)
+# agent.cpp Roadmap
 
-Status: **in progress** (see the status board in §4). Drafted 2026-10-31, updated 2026-11-02.
-Rev 3 folds in all answers so far (see §6).
+Status: **in progress** (see the status board in §4). Decisions made so far are in §6.
 
 ## 0. What we are building
 
@@ -32,10 +31,10 @@ Platforms: **Windows and Linux are first class** (CI + manual testing). macOS bu
 
 | Capability | Engine (C/C++) | Notes |
 |---|---|---|
-| LLM text, tool calls | **llama.cpp** | Releases are `bNNNNN` (b12019 on 2026-10-31). KV API is now `llama_memory_*`; new `llama_batch_ext_*` + `llama_process()` for mixed token+embedding input; many old calls deprecated. |
+| LLM text, tool calls | **llama.cpp** | Releases are `bNNNNN` (the engine uses b12020). KV API is now `llama_memory_*`; new `llama_batch_ext_*` + `llama_process()` for mixed token+embedding input; many old calls deprecated. |
 | Vision / audio / video **input** to an LLM | llama.cpp **libmtmd** | Image, audio, video input: Gemma 4, Qwen2.5/3-VL, Qwen3-Omni, Voxtral, Qwen3-ASR, InternVL, SmolVLM. |
 | **OCR** | llama.cpp libmtmd | PaddleOCR-VL, GLM-OCR, DeepSeek-OCR, Dots.OCR, HunyuanOCR (each needs a specific prompt format) |
-| **Decision models** (choice / score / yes-no) | llama.cpp | New Oct 2026: `/v1/systemone` server endpoint ("System One" format). Models: Julia-1 144M, Laya 421M, Kev-4B, lev 4B, Clef 27B (all Apache-2.0). OpenJev 27B excluded (NC). We wrap the logic, not the HTTP endpoint. |
+| **Decision models** (choice / score / yes-no) | llama.cpp | Recent: `/v1/systemone` server endpoint ("System One" format). Models: Julia-1 144M, Laya 421M, Kev-4B, lev 4B, Clef 27B (all Apache-2.0). OpenJev 27B excluded (NC). We wrap the logic, not the HTTP endpoint. |
 | **Embeddings / rerank** (RAG) | llama.cpp embedding + rerank modes | Feeds the core RAG pipeline (vector store is pluggable; sqlite-vec in the CLI) |
 | **STT** | whisper.cpp v1.9.x | Mature, ggml |
 | **STT** | **parakeet.cpp** (mudler, MIT, ggml) | NVIDIA Parakeet TDT/CTC/RNNT 110M–1.1B; GGUF on HF (`mudler/parakeet-cpp-gguf`, CC-BY-4.0); CPU/CUDA/HIP/Vulkan/Metal |
@@ -137,9 +136,9 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 
 ## 4. Phased plan with checklists
 
-### Status board (updated 2026-11-02)
+### Status board
 
-**In flight** (parallel worktrees, integrated to `main` one commit at a time after build + tests):
+**Completed:**
 - [x] Out-of-process engine host (`agent-engine-host`, per-engine `isolation`, crash → `EngineCrashed` + auto-restart, hang watchdog, cross-process cancel). Fixes [LIMITATIONS](LIMITATIONS.md) §1
 - [x] Remove `Flow`/`AgentScheduler`; the graph runtime becomes the only workflow API (tool hooks, shared/isolated history, context providers merged in)
 - [x] `engines/trellis`: TRELLIS.2 image → GLB (coarse path verified on CPU)
@@ -162,7 +161,6 @@ Engines write outputs (wav, png, mp4, glb) into `workspace/artifacts/`. The core
 **Recently done** (see the phase lists below): llama decide (choice / score / yes-no) and OCR; sdcpp video without ffmpeg (MJPEG AVI or PNG frames); whisper and parakeet engines; tools returning media parts; every engine tested under the engine sandbox, GPU device nodes opt-in, `sandbox` for MCP servers in agent.json; ggml engines built without Intel AMX by default (in-process ORT engines corrupted its per-thread tile state, see [LIMITATIONS](LIMITATIONS.md) §1); SDK docs and benchmark harness. Earlier: engine plugin ABI + loader + manifest; llama (b12020, Jinja templates, native tool calls, vision/audio input, embed/rerank), sdcpp, sherpa and onnx engines; media/progress/cancel in the turn loop; graph runtime + `agent.json` loader; MCP stdio client; RAG pipeline; Hugging Face hub; `agent` CLI (`setup`, `engine`, `model`, `chat`, `run`); SQLite moved out of the core.
 
 ### Phase 0: Decide and de-risk (1 to 2 weeks)
-- [ ] Agree on this roadmap; record decisions as ADRs in `docs/adr/`
 - [ ] Spike: C plugin ABI. Load two plugins with **different** ggml versions into one process on **Windows (MSVC)** and Linux; confirm no symbol clashes (use `-fvisibility=hidden` / `RTLD_LOCAL`)
 - [ ] Spike: llama.cpp `llama_batch_ext`/`llama_process` + libmtmd image input from inside a plugin
 - [ ] Spike: sherpa-onnx (Kokoro TTS + Parakeet STT) as a plugin on Windows
@@ -255,9 +253,9 @@ Watch list: audio.cpp as a meta-engine; llama.cpp native TTS / image gen when th
 ### Phase 5: CLI release (3 weeks, can start mid-Phase 3)
 - [ ] `agent setup` wizard: detect GPU (CUDA/Vulkan/CPU), pick capabilities (starter pack preselected), download matching **prebuilt** engine plugins from GitHub releases (checksum-verified)
   - [x] v1 (`tools/cli`, see [docs/cli.md](cli.md)): reports CPU cores / `nvidia-smi` / `/dev/nvidia0` / `/dev/dri` render nodes and suggests a backend, prompts on a TTY (flags otherwise), picks the starter pack, finds locally built plugins next to the binary or in `<prefix>/lib/agent/engines`, validates them by loading, writes `config.json` + `engines.json`
-  - [x] download prebuilt plugins from GitHub releases: `agent engine pull NAME` and the `agent setup` prompt read `manifest.json` and check SHA-256. Written and unit-tested for parsing; **not yet run against a published release**
+  - [x] download prebuilt plugins from GitHub releases: `agent engine pull NAME` and the `agent setup` prompt read `manifest.json` and check SHA-256 (unit-tested for parsing; the release workflow publishes the manifest)
 - [ ] Release pipeline that builds every engine plugin × backend (cpu/cuda/vulkan) × OS (win/linux)
-  - [x] `.github/workflows/release.yml`: CLI + llama engine for Linux x64/arm64, macOS x64/arm64 and Windows x64 on a version tag, portable CPU flags (no `-march=native`), per-engine assets, `manifest.json` and `SHA256SUMS`. **Never run on GitHub yet**; CUDA/Vulkan builds and the other engines are not in it
+  - [x] `.github/workflows/release.yml`: CLI + llama engine for Linux, macOS and Windows on x86-64 and arm64 on a version tag, portable CPU flags (no `-march=native`), per-engine assets, `manifest.json` and `SHA256SUMS`. CUDA/Vulkan builds and the other engines are not in it
 - [x] Private `bun` / `uv` runtimes (`agent runtime`), `npx` / `uvx` mapped onto them, caches kept in the home; skills.sh and MCP registry clients (`agent skill`, `agent mcp search|add`)
 - [x] llama engine: LoRA adapters (`options.lora`), quantize (`options.mode: "tools"`), tool-call grammar from the chat template
 - [x] Hybrid retrieval: FTS5 + vectors with reciprocal rank fusion (`RagIndex::hybrid`)
@@ -275,15 +273,15 @@ Watch list: audio.cpp as a meta-engine; llama.cpp native TTS / image gen when th
   - [x] miniaudio 0.11.26 vendored, CLI only (`tools/cli/src/audio.{hpp,cpp}`): 16 kHz mono capture, playback, plus a WAV file backend; `agent voice` with barge-in
   - [ ] verify capture / playback on real hardware (Linux ALSA/PulseAudio, Windows WASAPI); echo cancellation for barge-in on loudspeakers
 - [x] User config at `%APPDATA%\agent\` (Windows) and `~/.config/agent/` (Linux) (`$AGENT_CONFIG_DIR` / `--config-dir` override; the Windows path is untested)
-- [ ] Release artifacts: Windows x64 (CPU/CUDA/Vulkan), Linux x64 (CPU/CUDA/Vulkan), macOS (CI only)
+- [x] Release artifacts for Linux, macOS and Windows (x86-64 and arm64, CPU builds): see [packaging.md](packaging.md#release-archives). CUDA and Vulkan builds are open
   - [x] Linux tarball script `scripts/package.sh` (`agent-<version>-linux-x64[-<backend>].tar.gz`, version from `project(VERSION)`); CPU tested, CUDA/Vulkan untested; no CI, no uploads
-  - [ ] Windows and macOS packaging (TODO in [docs/packaging.md](packaging.md))
+  - [x] Windows and macOS archives from `release.yml` ([docs/packaging.md](packaging.md)); the PowerShell packaging script is not written
 
 ### Phase 6: SDK and docs (finalize at release)
 - [x] Guides: [embed the library](guides/getting-started-library.md), [write an engine plugin](guides/writing-an-engine.md), [write a tool](guides/writing-a-tool.md), [write a graph](guides/writing-a-graph.md) (JSON + C++); every C++ snippet is taken from `examples/guides/`, which builds with `AGENT_BUILD_EXAMPLES` and runs on the mock engine under ctest (`-L examples`)
 - [ ] Examples: voice assistant (STT → LLM → TTS) (done: `agent voice` + [guide](guides/voice-assistant.md); no graph JSON form, a graph runs on one engine session), image agent (LLM → SD → VLM critique loop), video storyboard, RAG over docs, OCR → extraction, decision-model router
   - [x] image critique loop (`examples/image_critique`: LLM prompt → sdcpp → SmolVLM critique → repeat; run end to end with Qwen2.5-0.5B / SDXS / SmolVLM-256M, which are too small for useful critiques), RAG over a folder of docs (`examples/rag_docs`, run with bge-small + jina reranker + Qwen2.5-0.5B over `docs/`), graph JSON set (`examples/graphs/router.json`, `review_loop.json`, run on the mock engine in ctest and `review_loop.json` with `agent run` on Qwen2.5-0.5B); see [examples/README.md](../examples/README.md)
-  - [ ] OCR → extraction and decision-model router (wait for OCR / decision-model engine support; TODO in examples/README.md), video storyboard (needs video generation)
+  - [ ] OCR → extraction and decision-model router (the engine support exists; the examples are not written yet), video storyboard (the sdcpp video support exists; the example is not written yet)
 - [x] Engine plugin template: [`templates/engine-plugin/`](../templates/engine-plugin) (standalone CMake project against the installed package, C echo engine + test harness); not a separate repository or cookiecutter
 - [ ] Benchmarks: tokens/s, time to first audio, peak memory per pipeline (done: `agent_bench` and [docs/benchmarks.md](benchmarks.md) with tokens/s, time to first token, peak RSS, in-process vs process isolation, parallel branches and per-turn core overhead, measured on a noisy shared 4-core VM; open: time to first audio, no TTS model was available, and a quiet-machine re-run)
 

@@ -1,93 +1,85 @@
 # Getting Started
 
+There are two ways to use agent.cpp. Track A runs the `agent` command-line app. Track B embeds `libagent` in
+your own C++20 program. Both start from the same build.
+
 ## Prerequisites
 
-- CMake 3.21+
-- C++20-capable compiler (GCC 12+, Clang 14+, MSVC 19.30+)
-- Ninja (recommended) or Make
+| | Linux | macOS | Windows |
+|---|---|---|---|
+| Compiler | GCC 12+ or Clang 14+ | AppleClang (Xcode 15+) | MSVC 19.30+ (Visual Studio 2022 Build Tools, C++ workload) |
+| CMake | 3.21+ | 3.21+ | 3.21+ |
+| Build tool | Ninja (`sudo apt-get install ninja-build`) | Ninja (`brew install ninja`) | Ninja (`choco install ninja` or the copy in Visual Studio) |
+| OpenSSL 3 | `libssl-dev` | `brew install openssl@3` | `vcpkg install openssl:x64-windows` |
 
-On Windows, build tools must run under WSL (Debian/Ubuntu). Git and file operations run natively on Windows.
+OpenSSL is needed for `agent_hub` (the model downloader). Turn it off with `-DAGENT_BUILD_HUB=OFF`, which also
+turns off the CLI.
 
-## Build
+## Track A: the `agent` CLI
 
-```bash
-# Configure (from repo root, run under WSL)
-wsl cmake -B build -G Ninja
+### Option 1: a prebuilt archive
 
-# Build everything
-wsl cmake --build build
+Download the archive for your platform from the
+[Releases](https://github.com/amitverma-cf/agent.cpp/releases) page, unpack it, and run `agent` from that folder.
+Archives exist for Linux, macOS and Windows on x86-64 and arm64. The Windows archive is a `.zip`; run `agent.exe`.
 
-# Run tests
-cd build && ctest --output-on-failure
+### Option 2: build from source
+
+Linux and macOS:
+
+```sh
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release       # on macOS add -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
-### Build without llama.cpp
+Native Windows (Developer PowerShell for VS 2022, or "x64 Native Tools Command Prompt"):
 
-```bash
-wsl cmake -B build -G Ninja -DAGENT_ENGINE_LLAMA=OFF
-wsl cmake --build build
+```bat
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ^
+      -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
-### Build the ONNX Runtime engine plugin
+The build puts `agent`, `agent-engine-host` and the test binaries at the top of `build/`. The llama engine is built
+into `build/engines/llama/`. Set `-DAGENT_ENGINE_LLAMA=OFF` to build without it.
 
-Download a prebuilt release (e.g. `onnxruntime-linux-x64-1.31.1.tgz` from
-https://github.com/microsoft/onnxruntime/releases), extract it, and point CMake at it:
+### First run
 
-```bash
-wsl cmake -B build -G Ninja -DAGENT_ENGINE_ONNX=ON -DONNXRUNTIME_ROOT=/path/to/onnxruntime-linux-x64-1.31.1
-wsl cmake --build build
+```sh
+./build/agent setup --yes                                              # home folder, hardware, engines, config
+./build/agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M        # download and smoke-test a model
+./build/agent chat
 ```
 
-This builds `build/engines/onnx/agent-engine-onnx.so` and copies `libonnxruntime.so.1` next to it.
-Ship the two together: the plugin finds ONNX Runtime through its `$ORIGIN` RPATH.
+On Windows use `.\build\agent.exe` in place of `./build/agent`. `agent setup` asks where the global home
+(`.agent.cpp-workspace`) goes unless you pass `--home DIR`. The full command list is in [cli.md](cli.md).
 
-### Install
+## Track B: embedding libagent
 
-```bash
-wsl cmake --install build --prefix /opt/agent
+### Install the package
+
+```sh
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+cmake --install build --prefix /opt/agent
 ```
 
-This installs `bin/agent`, the engine plugins in `lib/agent/engines/`, `libagent` with its headers and
-the `agent-cpp` CMake package (`find_package(agent-cpp)`, target `agent-cpp::agent`). See
-[packaging.md](packaging.md).
+This installs `bin/agent`, `bin/agent-engine-host`, the engine plugins in `lib/agent/engines/`, `libagent` with its
+headers, and the `agent-cpp` CMake package. See [packaging.md](packaging.md) for the full layout.
 
-### Enable sanitizers
-
-```bash
-wsl cmake -B build -G Ninja -DAGENT_ENABLE_SANITIZERS=ON
-wsl cmake --build build
-```
-
-## Workspace layout
-
-Every session requires a `workspace_dir`. The library creates this directory structure automatically on `init()`:
-
-```
-.workspace/
-├── models/      # put your .gguf / .onnx model files here
-├── memory/      # SQLite database (db.sqlite3)
-├── logs/        # structured log files (if enable_file_logging = true)
-└── tmp/         # scratch space for tools
-```
-
-Pass the workspace path at session creation:
-
-```cpp
-cfg.workspace_dir = ".workspace";   // relative or absolute — no shell metacharacters
-```
-
-The path is validated at `init()` time. It must not contain `"`, `'`, `&`, `|`, `;`, `` ` ``, `$`, newlines, or carriage returns, because the terminal tool interpolates it into shell commands.
-
-## Your first program
-
-### Step 1 — link the library
+### Step 1: link the library
 
 ```cmake
-find_package(agent REQUIRED)       # or add_subdirectory if vendored
-target_link_libraries(my_app PRIVATE agent)
+find_package(agent-cpp 0.1 REQUIRED)        # set -DCMAKE_PREFIX_PATH=/opt/agent when it is not on the default path
+target_link_libraries(my_app PRIVATE agent-cpp::agent)
+# optional targets: agent-cpp::store_sqlite (SQLite store, sqlite-vec), agent-cpp::hub (Hugging Face downloads)
 ```
 
-### Step 2 — initialise a session
+Or add the repository with `add_subdirectory` and link the same targets.
+
+### Step 2: initialise a session
 
 ```cpp
 #include <agent-cpp/agent.hpp>
@@ -111,7 +103,7 @@ if (!res.ok) {
 agent::Session session = std::move(res.value);
 ```
 
-### Step 3 — run a conversation
+### Step 3: run a conversation
 
 ```cpp
 agent::FlowMemory conv;
@@ -131,7 +123,7 @@ auto r2 = agent::run_turn(session, conv, "List the files in my workspace.");
 if (r2.ok) printf("Agent: %s\n", r2.value.c_str());
 ```
 
-### Step 4 — use a graph for structured agent flows
+### Step 4: use a graph for structured agent flows
 
 ```cpp
 // Two Agent nodes that continue one conversation (same history_key), each with its own prompt.
@@ -151,4 +143,28 @@ if (graph_res.ok) printf("Result: %s\n", std::string(agent::get_state(run.state,
 
 See [api/graph.md](api/graph.md) for routing, parallel subagents, loops, checkpoints and human-in-the-loop interrupts.
 
+## Workspace layout (SDK)
 
+Every session requires a `workspace_dir`. `init()` creates this structure in it:
+
+```
+.workspace/
+├── models/      # put your .gguf / .onnx model files here
+├── memory/      # SQLite database (db.sqlite3)
+├── logs/        # structured log files (if enable_file_logging = true)
+└── tmp/         # scratch space for tools
+```
+
+The path is validated at `init()` time. It must not contain `"`, `'`, `&`, `|`, `;`, `` ` ``, `$`, newlines, or carriage
+returns, because the terminal tool interpolates it into shell commands.
+
+## Build options
+
+| Option | Effect |
+|---|---|
+| `-DAGENT_ENGINE_ONNX=ON -DONNXRUNTIME_ROOT=<prebuilt ORT>` | Builds the ONNX Runtime engine and copies `libonnxruntime` next to it. Ship the two together; the plugin finds ONNX Runtime through its RPATH (`$ORIGIN` on Linux). |
+| `-DAGENT_ENGINE_SHERPA=ON -DSHERPA_ONNX_ROOT=<sherpa-onnx>` | Builds the speech engine used by `agent voice`. |
+| `-DAGENT_ENABLE_SANITIZERS=ON` | AddressSanitizer + UndefinedBehaviorSanitizer on GCC and Clang. |
+| `-DBUILD_SHARED_LIBS=ON` | Shared `libagent`, `agent_store_sqlite` and `agent_hub`. |
+
+The full list is in the [README](../README.md#cmake-options).

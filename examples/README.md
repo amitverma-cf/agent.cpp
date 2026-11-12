@@ -86,10 +86,11 @@ the `example.guide_graph` test.
     --set "request=What is 17 * 23?"
 ```
 
-## Not here yet
+## Not written yet
 
-- **OCR → extraction** (TODO): waits for the OCR engine support being added (`AGENT_CAP_OCR`).
-- **Decision-model router** (TODO): waits for decision-model support (`AGENT_CAP_DECIDE`, choice / score /
-  yes-no) in the llama engine; `router.json` routes on a chat model's one-word answer meanwhile.
+The engine support for these exists, but the examples are not written:
+
+- **OCR → extraction**: `ocr` (`AGENT_CAP_OCR`) returns plain text; an example that parses the text into fields is open.
+- **Decision-model router**: `decide` / `decide_score` / `decide_yes_no` (`AGENT_CAP_DECIDE`) can route a request. `router.json` routes on a chat model's one-word answer for now.
+- **Video storyboard**: sdcpp generates video (`AGENT_CAP_VIDEO_GEN`, Wan 2.1 tested); a storyboard example is open.
 - **Voice assistant**: `agent voice` ([guide](../docs/guides/voice-assistant.md)) rather than a separate example.
-- **Video storyboard**: needs video generation in the sdcpp engine (ROADMAP Phase 4).

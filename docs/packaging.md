@@ -87,14 +87,17 @@ engine plus a test harness that loads it in process and through the host. Checke
 temporary prefix, building a copy of the template outside the source tree, running its test and
 registering the result with `agent engine add`. See [guides/writing-an-engine.md](guides/writing-an-engine.md).
 
-## Linux release tarball: `scripts/package.sh`
+## Linux tarball: `scripts/package.sh`
+
+This script makes a Linux-only tarball from a local build. The GitHub release archives are described in
+[Release archives](#release-archives) below.
 
 ```sh
-scripts/package.sh                                   # agent-0.1.0-linux-x64.tar.gz, llama engine, CPU
+scripts/package.sh                                   # agent-0.1.2-linux-x64.tar.gz, llama engine, CPU
 scripts/package.sh --engines llama,sdcpp
 scripts/package.sh --engines llama,onnx --onnxruntime-root ~/onnxruntime-linux-x64-1.23.2
 scripts/package.sh --engines llama,sherpa --sherpa-onnx-root ~/sherpa-onnx-v2.0.1-linux-x64-shared
-scripts/package.sh --backend vulkan                  # agent-0.1.0-linux-x64-vulkan.tar.gz
+scripts/package.sh --backend vulkan                  # agent-0.1.2-linux-x64-vulkan.tar.gz
 ```
 
 The script configures a Release build (`build-package/` by default, `--build-dir` to change it), builds
@@ -102,10 +105,13 @@ only the installed targets, installs with `--strip` into a staging directory and
 
 ```
 agent-<version>-linux-<arch>[-<backend>]/
-  bin/agent, bin/agent-engine-host
+  bin/agent
   lib/agent/engines/agent-engine-*.so  (+ bundled runtime libraries)
   share/doc/agent/README.md, LICENSE, cli.md, licenses/<third party>.LICENSE
 ```
+
+The tarball also holds `bin/agent-engine-host`: the CLI runs engines in that process by default
+(`EngineIsolation::Process`), so the packaged `agent` needs it next to the binary.
 
 next to a `.sha256` file in `dist/` (`--out-dir`). Headers, static libraries and the CMake package are
 left out: the tarball is the end-user CLI. Before packing it runs `bin/agent version` and fails if
@@ -129,27 +135,33 @@ Not done yet:
   `libonnxruntime.so.1` (from `--onnxruntime-root`, used by the onnx plugin) and `libonnxruntime.so`
   (from sherpa-onnx). Their sonames differ, so each plugin loads its own, and both plugins load from the
   extracted tarball. Running both in one process at the same time has not been tested.
-- Downloading these tarballs or single plugins from GitHub releases in `agent setup` (ROADMAP Phase 5).
 
-## Windows (TODO)
+## Release archives
 
-Not implemented or tested. Open points:
+Pushing a `v*` tag runs [`.github/workflows/release.yml`](../.github/workflows/release.yml). It builds the CLI and the
+llama engine on six platforms (Linux, macOS and Windows, each on x86-64 and arm64) and publishes:
 
-- `install()` already places `agent.exe` in `bin/` and plugin `.dll`s in `lib/agent/engines/`, and
-  `CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS` is set for a shared `libagent`, but nothing has been built with MSVC.
-  Exported data symbols need explicit `__declspec(dllimport)`; static libraries are the safer choice.
-- Windows has no RPATH: the ONNX Runtime / sherpa-onnx DLLs next to a plugin are found only if the plugin
-  is loaded with `LoadLibraryEx(..., LOAD_WITH_ALTERED_SEARCH_PATH)` or the directory is added with
-  `AddDllDirectory`. Check `src/hal/dylib.cpp` before shipping.
-- Packaging script (PowerShell) producing `agent-<version>-windows-x64[-<backend>].zip`, and OpenSSL
-  DLLs for `agent_hub`.
+| Asset | Contents |
+|---|---|
+| `agent-cpp-<tag>-<os>-<arch>.tar.gz` (Linux, macOS) or `.zip` (Windows) | `agent`, `agent-engine-host`, `engines/` (the llama plugin), `LICENSE`, `README.md`; on Windows also the OpenSSL 3 DLLs |
+| `agent-engine-llama-<os>-<arch>.so` / `.dylib` / `.dll` | the llama plugin on its own, for `agent engine pull` and `agent setup --download-engines` |
+| `manifest.json`, `SHA256SUMS` | SHA-256 and size of every asset; the downloader checks them |
 
-## macOS (TODO)
+`<os>` is `linux`, `macos` or `windows`; `<arch>` is `x86_64` or `aarch64`. The x86-64 builds need AVX2, FMA, F16C and
+BMI2 (no `-march=native`). The archives are not code-signed or notarized.
 
-Not implemented or tested. Open points:
+The archive is flat: `agent`, `agent-engine-host` and `engines/` sit side by side, which is where the CLI looks for
+plugins first. Windows archives are built with MSVC and vcpkg OpenSSL.
 
-- The CLI (shared build) and the onnx plugin set `@executable_path` / `@loader_path` RPATHs; the sherpa
-  plugin and shared `agent_store_sqlite` / `agent_hub` still need them. No macOS build has been done.
-- Plugins are `.dylib`; the CLI search and `lib/agent/engines` layout are the same as on Linux.
-- Code signing and notarization of the binary and every plugin, and a `.tar.gz` (or `.pkg`) layout.
-- ggml Metal backend option for the llama plugin.
+## Windows notes
+
+- Plugin DLLs are loaded with `LoadLibraryExW(..., LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)`
+  (`src/hal/dylib.cpp`), so a plugin finds the ONNX Runtime or sherpa-onnx DLLs next to it.
+- `agent_hub` needs OpenSSL 3 at build time. The release archive carries its DLLs.
+- Build from source with the steps in [getting-started.md](getting-started.md#track-a-the-agent-cli).
+
+## macOS notes
+
+- Release archives for Apple silicon and Intel are built on macOS runners in CI. The sandbox profile has never been run.
+- Plugins are `.dylib` files. The CLI and the plugins find each other through the install layout above.
+- The sandbox profile is written but has not been run (see [security-sandbox.md](security-sandbox.md#macos-written-untested)).
