@@ -4,13 +4,11 @@
 #if defined(AGENT_TEST_CLI_PATH) && defined(AGENT_TEST_MOCK_ENGINE_PATH)
 
 #include "cli_e2e_util.hpp"
-
-#include "runtimes.hpp"
 #include "engine_release.hpp"
+#include "runtimes.hpp"
 
 #include <agent-cpp/hub.hpp>
 #include <httplib.h>
-
 #include <map>
 #include <thread>
 
@@ -31,7 +29,7 @@ struct FakeNet {
     int port = 0;
     std::map<std::string, std::string> hf_files; // "<repo>/<file>" -> bytes
     size_t manifest_size = 0;
-    std::string requests; // every request path and status, for failure messages
+    std::string requests;                         // every request path and status, for failure messages
     std::string engine_asset_bytes, manifest_sha; // the manifest lists the checksum of the bytes as first served
 
     std::string base() const { return "http://127.0.0.1:" + std::to_string(port); }
@@ -60,7 +58,8 @@ struct FakeNet {
         hf_files["acme/folder/a.bin"] = "AAAA";
         hf_files["acme/folder/sub/b.txt"] = "BBBB";
         svr.Get(R"(/api/models/acme/tiny-GGUF)", [this](const httplib::Request &, httplib::Response &res) {
-            res.set_content(repo_json("acme/tiny-GGUF", "apache-2.0", {"tiny-Q4_K_M.gguf", "tiny-Q8_0.gguf", "mmproj-F16.gguf"}), "application/json");
+            res.set_content(repo_json("acme/tiny-GGUF", "apache-2.0", {"tiny-Q4_K_M.gguf", "tiny-Q8_0.gguf", "mmproj-F16.gguf"}),
+                            "application/json");
         });
         svr.Get(R"(/api/models/acme/gated-GGUF)", [this](const httplib::Request &, httplib::Response &res) {
             res.set_content(repo_json("acme/gated-GGUF", "cc-by-nc-4.0", {"gated-Q4_K_M.gguf"}), "application/json");
@@ -79,27 +78,31 @@ struct FakeNet {
         // ---- GitHub release (engine pull)
         svr.Get(R"(/gh/acme/agent.cpp/releases/download/v9.9.9/manifest.json)", [this](const httplib::Request &, httplib::Response &res) {
             const std::string asset = agent::cli::engine_asset_name("mock", agent::cli::host_os(), agent::cli::host_arch());
-            res.set_content("{\"version\":\"v9.9.9\",\"repository\":\"acme/agent.cpp\",\"files\":[{\"name\":" + json_str(asset) + ",\"sha256\":" +
-                                json_str(manifest_sha) + ",\"size\":" + std::to_string(manifest_size) + "}]}",
+            res.set_content("{\"version\":\"v9.9.9\",\"repository\":\"acme/agent.cpp\",\"files\":[{\"name\":" + json_str(asset) +
+                                ",\"sha256\":" + json_str(manifest_sha) + ",\"size\":" + std::to_string(manifest_size) + "}]}",
                             "application/json");
         });
-        svr.Get(R"(/gh/acme/agent.cpp/releases/download/v9.9.9/(agent-engine-.+))", [this](const httplib::Request &, httplib::Response &res) {
-            res.set_content(engine_asset_bytes, "application/octet-stream");
-        });
+        svr.Get(
+            R"(/gh/acme/agent.cpp/releases/download/v9.9.9/(agent-engine-.+))",
+            [this](const httplib::Request &, httplib::Response &res) { res.set_content(engine_asset_bytes, "application/octet-stream"); });
         // ---- runtimes: an asset that is not an archive
-        svr.Get(R"(/gh/astral-sh/uv/releases/.*)", [](const httplib::Request &, httplib::Response &res) { res.set_content("not an archive", "application/octet-stream"); });
+        svr.Get(R"(/gh/astral-sh/uv/releases/.*)",
+                [](const httplib::Request &, httplib::Response &res) { res.set_content("not an archive", "application/octet-stream"); });
         // ---- skills.sh and GitHub's API
         svr.Get(R"(/skills/api/search)", [](const httplib::Request &, httplib::Response &res) {
-            res.set_content(R"({"skills":[{"id":"acme/skills/pdf","source":"acme/skills","skillId":"pdf","name":"pdf","installs":42}]})", "application/json");
+            res.set_content(R"({"skills":[{"id":"acme/skills/pdf","source":"acme/skills","skillId":"pdf","name":"pdf","installs":42}]})",
+                            "application/json");
         });
         svr.Get(R"(/ghapi/repos/acme/skills/git/trees/HEAD)", [](const httplib::Request &, httplib::Response &res) {
-            res.set_content(R"({"truncated":false,"tree":[{"type":"blob","path":"pdf/SKILL.md","size":40},{"type":"blob","path":"pdf/scripts/run.py","size":12},{"type":"blob","path":"other/SKILL.md","size":5}]})",
-                            "application/json");
+            res.set_content(
+                R"({"truncated":false,"tree":[{"type":"blob","path":"pdf/SKILL.md","size":40},{"type":"blob","path":"pdf/scripts/run.py","size":12},{"type":"blob","path":"other/SKILL.md","size":5}]})",
+                "application/json");
         });
         svr.Get(R"(/raw/acme/skills/HEAD/pdf/SKILL.md)", [](const httplib::Request &, httplib::Response &res) {
             res.set_content("---\nname: pdf\ndescription: test skill\n---\nbody\n", "text/plain");
         });
-        svr.Get(R"(/raw/acme/skills/HEAD/pdf/scripts/run.py)", [](const httplib::Request &, httplib::Response &res) { res.set_content("print(1)\n", "text/plain"); });
+        svr.Get(R"(/raw/acme/skills/HEAD/pdf/scripts/run.py)",
+                [](const httplib::Request &, httplib::Response &res) { res.set_content("print(1)\n", "text/plain"); });
         // ---- MCP registry
         svr.Get(R"(/mcp/v0.1/servers)", [](const httplib::Request &, httplib::Response &res) {
             res.set_content(
@@ -109,14 +112,17 @@ struct FakeNet {
                 R"({"server":{"name":"io.acme/hosted","description":"Hosted only","version":"1","remotes":[{"url":"https://example.invalid/mcp"}]}}]})",
                 "application/json");
         });
-        svr.set_logger([this](const httplib::Request &req, const httplib::Response &res) { requests += req.path + " -> " + std::to_string(res.status) + "\n"; });
+        svr.set_logger([this](const httplib::Request &req, const httplib::Response &res) {
+            requests += req.path + " -> " + std::to_string(res.status) + "\n";
+        });
         port = svr.bind_to_any_port("127.0.0.1");
         th = std::thread([this] { svr.listen_after_bind(); });
         svr.wait_until_ready();
         const std::string b = base();
         set_env("HF_ENDPOINT", b);
-        set_env("AGENT_HTTP_REWRITE", "https://github.com=" + b + "/gh;https://api.github.com=" + b + "/ghapi;https://raw.githubusercontent.com=" + b +
-                                           "/raw;https://skills.sh=" + b + "/skills;https://registry.modelcontextprotocol.io=" + b + "/mcp");
+        set_env("AGENT_HTTP_REWRITE", "https://github.com=" + b + "/gh;https://api.github.com=" + b +
+                                          "/ghapi;https://raw.githubusercontent.com=" + b + "/raw;https://skills.sh=" + b +
+                                          "/skills;https://registry.modelcontextprotocol.io=" + b + "/mcp");
         engine_asset_bytes = slurp(AGENT_TEST_MOCK_ENGINE_PATH);
         manifest_sha = sha(engine_asset_bytes);
         manifest_size = engine_asset_bytes.size();
@@ -220,8 +226,8 @@ TEST_CASE("cli net: MCP servers are searched, added and removed", "[cli_net]") {
     CHECK(add.code == 0);
     CHECK(has(add, "api_key")); // the secret it needs
     CHECK(has(h.run("mcp ls"), "files"));
-    CHECK(h.run("mcp add io.acme/hosted --yes").code != 0);   // no package that runs here
-    CHECK(h.run("mcp add io.acme/unknown --yes").code != 0);  // not an exact registry name
+    CHECK(h.run("mcp add io.acme/hosted --yes").code != 0);  // no package that runs here
+    CHECK(h.run("mcp add io.acme/unknown --yes").code != 0); // not an exact registry name
     CHECK(h.run("mcp rm files").code == 0);
     CHECK(h.run("mcp rm files").code != 0);
 }

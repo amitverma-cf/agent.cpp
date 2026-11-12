@@ -1,7 +1,6 @@
 #include "secrets.hpp"
 
 #include <catch_amalgamated.hpp>
-
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -120,7 +119,7 @@ TEST_CASE("secrets: a secret reaches only the consumer it is bound to, and only 
 
     const std::vector<SecretEntry> index = {{"github", {{"mcp:github", id}}}};
     CHECK(check_secret_access(index, "github", "mcp:github", id) == SecretAccess::Allowed);
-    CHECK(check_secret_access(index, "github", "mcp:other", id) == SecretAccess::NotBound);          // another server
+    CHECK(check_secret_access(index, "github", "mcp:other", id) == SecretAccess::NotBound);            // another server
     CHECK(check_secret_access(index, "github", "mcp:github", other) == SecretAccess::IdentityChanged); // same name, different command
     CHECK(check_secret_access(index, "missing", "mcp:github", id) == SecretAccess::UnknownSecret);
 }

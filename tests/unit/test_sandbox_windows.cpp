@@ -8,13 +8,11 @@
 #include <catch_amalgamated.hpp>
 
 #define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
-
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <windows.h>
 
 namespace fs = std::filesystem;
 
@@ -27,7 +25,8 @@ std::string native(std::string p) {
 }
 
 // Runs cmd.exe /c <command> under `policy`; returns the exit code, or -1 when it could not be started.
-int run_cmd(const std::string &command, const agent::SandboxPolicy &policy, std::string *spawn_error = nullptr, std::string *output = nullptr, const std::string &cwd = {}) {
+int run_cmd(const std::string &command, const agent::SandboxPolicy &policy, std::string *spawn_error = nullptr,
+            std::string *output = nullptr, const std::string &cwd = {}) {
     agent::hal::SpawnOptions opts;
     opts.program = "cmd.exe";
     opts.args = {"/c", command};
@@ -76,7 +75,12 @@ TEST_CASE("Windows: a sandboxed child writes only in its allowed folder", "[sand
     CHECK(run_cmd("type " + native((dir / "outside" / "secret.txt").string()) + " >nul", policy) != 0);
     agent::SandboxPolicy granted = policy;
     granted.read_only_paths = {(dir / "outside").string()};
-    { std::string out; int rc = run_cmd("type " + native((dir / "outside" / "secret.txt").string()), granted, nullptr, &out); INFO(out); CHECK(rc == 0); }
+    {
+        std::string out;
+        int rc = run_cmd("type " + native((dir / "outside" / "secret.txt").string()), granted, nullptr, &out);
+        INFO(out);
+        CHECK(rc == 0);
+    }
 
     // Without the sandbox the same write works: the refusal above came from the confinement, not from the path.
     agent::SandboxPolicy off;
@@ -99,7 +103,12 @@ TEST_CASE("Windows: the sandbox keeps the network when allowed and cuts it when 
     policy.read_write_paths = {dir.string()};
     const std::string fetch = "curl.exe -s -m 8 -o nul https://example.com";
     policy.network = agent::SandboxNetwork::Allow;
-    { std::string out; int rc = run_cmd("curl.exe -sS -m 8 -o nul https://example.com 2>&1", policy, nullptr, &out, dir.string()); INFO(out); CHECK(rc == 0); }
+    {
+        std::string out;
+        int rc = run_cmd("curl.exe -sS -m 8 -o nul https://example.com 2>&1", policy, nullptr, &out, dir.string());
+        INFO(out);
+        CHECK(rc == 0);
+    }
     policy.network = agent::SandboxNetwork::Deny;
     CHECK(run_cmd(fetch, policy, nullptr, nullptr, dir.string()) != 0);
     fs::remove_all(dir, ec);

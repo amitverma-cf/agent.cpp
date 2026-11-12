@@ -14,9 +14,13 @@ TEST_CASE("engine release: asset names and URLs", "[engine_release]") {
 
 TEST_CASE("engine release: reading the manifest", "[engine_release]") {
     const std::string a(64, 'a'), b(64, 'b');
-    const std::string json = R"({"version":"v0.2.0","repository":"o/r","files":[)" "{\"name\":\"agent-engine-llama-linux-x86_64.so\",\"sha256\":\"" + a + "\",\"size\":1234},"
+    const std::string json = R"({"version":"v0.2.0","repository":"o/r","files":[)"
+                             "{\"name\":\"agent-engine-llama-linux-x86_64.so\",\"sha256\":\"" +
+                             a +
+                             "\",\"size\":1234},"
                              "{\"name\":\"bad-hash.so\",\"sha256\":\"short\",\"size\":1},"
-                             "{\"name\":\"agent-cpp-v0.2.0-windows-x86_64.zip\",\"sha256\":\"" + b + "\"}]}";
+                             "{\"name\":\"agent-cpp-v0.2.0-windows-x86_64.zip\",\"sha256\":\"" +
+                             b + "\"}]}";
     auto m = parse_release_manifest(json);
     REQUIRE(m.ok);
     CHECK(m.value.version == "v0.2.0");

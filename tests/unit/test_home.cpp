@@ -1,7 +1,6 @@
 #include "home.hpp"
 
 #include <catch_amalgamated.hpp>
-
 #include <filesystem>
 #include <fstream>
 

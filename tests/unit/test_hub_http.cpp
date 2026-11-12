@@ -1,12 +1,10 @@
 // The hub's HTTP client against a throw-away server on the loopback interface (test code only: the product opens no listening socket).
 #include <agent-cpp/hub.hpp>
-#include <catch_amalgamated.hpp>
-
-#include <httplib.h>
-
 #include <atomic>
+#include <catch_amalgamated.hpp>
 #include <filesystem>
 #include <fstream>
+#include <httplib.h>
 #include <string>
 #include <thread>
 
@@ -126,7 +124,8 @@ TEST_CASE("hub http: download_file writes, verifies size and resumes a partial f
     TestServer s;
     std::string content;
     for (int i = 0; i < 20000; ++i) content += static_cast<char>('a' + i % 26);
-    s.svr.Get("/file", [&content](const httplib::Request &, httplib::Response &res) { res.set_content(content, "application/octet-stream"); });
+    s.svr.Get("/file",
+              [&content](const httplib::Request &, httplib::Response &res) { res.set_content(content, "application/octet-stream"); });
     s.start();
 
     const fs::path dir = fs::temp_directory_path() / "agent_test_hub_http";

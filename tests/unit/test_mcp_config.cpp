@@ -2,7 +2,6 @@
 #include "secrets.hpp"
 
 #include <catch_amalgamated.hpp>
-
 #include <filesystem>
 #include <fstream>
 
@@ -61,7 +60,8 @@ TEST_CASE("mcp config: every server gets its own data folder and a scoped sandbo
     CHECK(s.working_directory == "/h/plugins/github/data");
     CHECK(s.sandbox.enabled);
     CHECK(s.sandbox.network == agent::SandboxNetwork::Allow);
-    CHECK(s.sandbox.read_write_paths == std::vector<std::string>{"/h/plugins/github/data"}); // its own folder only, not the home or the shared cache
+    CHECK(s.sandbox.read_write_paths ==
+          std::vector<std::string>{"/h/plugins/github/data"}); // its own folder only, not the home or the shared cache
 
     agent::McpServerConfig own;
     own.name = "x";

@@ -1,7 +1,6 @@
 #include "runtimes.hpp"
 
 #include <catch_amalgamated.hpp>
-
 #include <filesystem>
 #include <fstream>
 
@@ -14,14 +13,16 @@ TEST_CASE("runtimes: release assets for each platform", "[runtimes]") {
     CHECK(bun.value.url == "https://github.com/oven-sh/bun/releases/latest/download/bun-linux-x64.zip");
     CHECK(bun.value.checksum_url == "https://github.com/oven-sh/bun/releases/latest/download/SHASUMS256.txt");
     CHECK(runtime_asset("bun", "latest", "macos", "aarch64").value.archive_name == "bun-darwin-aarch64.zip");
-    CHECK(runtime_asset("bun", "1.2.3", "windows", "x86_64").value.url == "https://github.com/oven-sh/bun/releases/download/bun-v1.2.3/bun-windows-x64.zip");
+    CHECK(runtime_asset("bun", "1.2.3", "windows", "x86_64").value.url ==
+          "https://github.com/oven-sh/bun/releases/download/bun-v1.2.3/bun-windows-x64.zip");
     CHECK_FALSE(runtime_asset("bun", "latest", "windows", "aarch64").ok);
 
     auto uv = runtime_asset("uv", "latest", "linux", "aarch64");
     REQUIRE(uv.ok);
     CHECK(uv.value.archive_name == "uv-aarch64-unknown-linux-gnu.tar.gz");
     CHECK(uv.value.checksum_url == uv.value.url + ".sha256");
-    CHECK(runtime_asset("uv", "0.5.1", "windows", "x86_64").value.url == "https://github.com/astral-sh/uv/releases/download/0.5.1/uv-x86_64-pc-windows-msvc.zip");
+    CHECK(runtime_asset("uv", "0.5.1", "windows", "x86_64").value.url ==
+          "https://github.com/astral-sh/uv/releases/download/0.5.1/uv-x86_64-pc-windows-msvc.zip");
     CHECK(runtime_asset("uv", "", "macos", "x86_64").value.archive_name == "uv-x86_64-apple-darwin.tar.gz");
 
     CHECK_FALSE(runtime_asset("deno", "latest", "linux", "x86_64").ok);
@@ -112,8 +113,9 @@ TEST_CASE("runtimes: npx / uvx run on the private runtimes, caches stay in the h
 }
 
 TEST_CASE("runtimes: node (with pnpm) and nub assets", "[runtimes]") {
-    const std::string sums = std::string(64, 'a') + "  node-v24.22.2-darwin-arm64.tar.gz\n" + std::string(64, 'b') + "  node-v24.22.2-linux-x64.tar.gz\n" +
-                             std::string(64, 'c') + "  node-v24.22.2-win-x64.zip\n" + std::string(64, 'd') + "  node-v24.22.2-linux-x64.tar.xz\n";
+    const std::string sums = std::string(64, 'a') + "  node-v24.22.2-darwin-arm64.tar.gz\n" + std::string(64, 'b') +
+                             "  node-v24.22.2-linux-x64.tar.gz\n" + std::string(64, 'c') + "  node-v24.22.2-win-x64.zip\n" +
+                             std::string(64, 'd') + "  node-v24.22.2-linux-x64.tar.xz\n";
     CHECK(find_node_archive(sums, "linux", "x86_64") == "node-v24.22.2-linux-x64.tar.gz");
     CHECK(find_node_archive(sums, "windows", "x86_64") == "node-v24.22.2-win-x64.zip");
     CHECK(find_node_archive(sums, "macos", "aarch64") == "node-v24.22.2-darwin-arm64.tar.gz");
@@ -125,7 +127,8 @@ TEST_CASE("runtimes: node (with pnpm) and nub assets", "[runtimes]") {
     CHECK(runtime_asset("node", "v22.1.0", "linux", "x86_64").value.url == "https://nodejs.org/dist/v22.1.0/");
     CHECK(runtime_asset("nub", "latest", "linux", "x86_64").value.archive_name == "nub-linux-x64.tar.gz");
     CHECK(runtime_asset("nub", "latest", "windows", "x86_64").value.archive_name == "nub-win32-x64.zip");
-    CHECK(runtime_asset("nub", "0.10.0", "macos", "aarch64").value.url == "https://github.com/nubjs/nub/releases/download/v0.10.0/nub-darwin-arm64.tar.gz");
+    CHECK(runtime_asset("nub", "0.10.0", "macos", "aarch64").value.url ==
+          "https://github.com/nubjs/nub/releases/download/v0.10.0/nub-darwin-arm64.tar.gz");
     CHECK(runtimes_for_js("node") == std::vector<std::string>{"node", "pnpm"});
     CHECK(runtimes_for_js("nub") == std::vector<std::string>{"nub"});
     CHECK(runtimes_for_js("bun") == std::vector<std::string>{"bun"});
@@ -180,9 +183,9 @@ TEST_CASE("runtimes: the JavaScript choice decides what npx / npm / node become"
     REQUIRE(npx.args.size() == 4);
     CHECK(fs::path(npx.args[0]).filename().string() == "pnpm.cjs");
     CHECK(npx.args[1] == "dlx");
-    CHECK(npx.args[2] == "pkg"); // -y dropped
+    CHECK(npx.args[2] == "pkg");                                                 // -y dropped
     CHECK(npx.env.at("npm_config_store_dir").find("data") != std::string::npos); // inside the server's folder
-    CHECK_FALSE(rewrite_launcher(npx, home, "node").rewritten); // a second pass changes nothing
+    CHECK_FALSE(rewrite_launcher(npx, home, "node").rewritten);                  // a second pass changes nothing
     CHECK(npx.args.size() == 4);
 
     auto npm = server("npm", {"i", "left-pad"});

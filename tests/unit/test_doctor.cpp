@@ -1,7 +1,6 @@
 #include "doctor.hpp"
 
 #include <catch_amalgamated.hpp>
-
 #include <chrono>
 #include <filesystem>
 #include <fstream>

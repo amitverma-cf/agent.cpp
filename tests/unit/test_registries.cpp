@@ -88,7 +88,8 @@ TEST_CASE("registries: finding a skill folder in a repository listing", "[regist
     CHECK_FALSE(find_skill_in_tree(R"({"truncated":true,"tree":[]})", "pdf").ok);
 
     // A skill at the root of its repository.
-    auto root = find_skill_in_tree(R"({"truncated":false,"tree":[{"path":"SKILL.md","type":"blob","size":1},{"path":"ref.md","type":"blob","size":2}]})", "my-skill");
+    auto root = find_skill_in_tree(
+        R"({"truncated":false,"tree":[{"path":"SKILL.md","type":"blob","size":1},{"path":"ref.md","type":"blob","size":2}]})", "my-skill");
     REQUIRE(root.ok);
     CHECK(root.value.dir.empty());
     CHECK(root.value.files.size() == 2);

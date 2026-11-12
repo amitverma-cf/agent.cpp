@@ -158,7 +158,8 @@ TEST_CASE("trellis engine fails cleanly without usable model files", "[engines][
     REQUIRE(error.find("pipeline") != std::string::npos);
 
     // Files that exist but are not GGUFs: trellis2.cpp's loader must fail, not crash.
-    for (const char *name : {"dino_f16.gguf", "ss_flow_f16.gguf", "ss_dec_f16.gguf"}) write_file((dir / name).string(), "this is not a gguf");
+    for (const char *name : {"dino_f16.gguf", "ss_flow_f16.gguf", "ss_dec_f16.gguf"})
+        write_file((dir / name).string(), "this is not a gguf");
     REQUIRE(create(engine, R"({"model":")" + dir.string() + "\"}", &inst, error) == AGENT_ERR_MODEL_LOAD_FAILED);
     REQUIRE(inst == nullptr);
     REQUIRE(error.find("dino") != std::string::npos);

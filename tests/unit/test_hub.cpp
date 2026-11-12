@@ -1,6 +1,5 @@
 #include <agent-cpp/hub.hpp>
 #include <catch_amalgamated.hpp>
-
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -149,7 +148,8 @@ TEST_CASE("parse_repo_info licence fallbacks", "[hub]") {
     REQUIRE(tags.ok);
     CHECK(tags.value.license == "cc-by-nc-4.0");
 
-    auto other = parse_repo_info(R"({"id":"a/b","gated":"manual","cardData":{"license":"other","license_name":"fish-audio-research-license"}})");
+    auto other =
+        parse_repo_info(R"({"id":"a/b","gated":"manual","cardData":{"license":"other","license_name":"fish-audio-research-license"}})");
     REQUIRE(other.ok);
     CHECK(other.value.gated);
     CHECK(other.value.license == "other");
@@ -199,8 +199,13 @@ TEST_CASE("models.json round trip, escaping and remove", "[hub]") {
     write_file(model_path, "GGUF");
     std::vector<CatalogEntry> entries = {
         {.name = "qwen", .repo = "Qwen/X", .file = "x.gguf", .path = model_path, .size = 4, .sha256 = "ab", .license = "apache-2.0"},
-        {.name = "we\"ird\\name\n\t\x01", .repo = "a/b", .file = "dir/y.gguf", .path = "C:\\models\\y.gguf", .size = 18446744073709551615ull,
-         .sha256 = "", .license = "other (custom)"},
+        {.name = "we\"ird\\name\n\t\x01",
+         .repo = "a/b",
+         .file = "dir/y.gguf",
+         .path = "C:\\models\\y.gguf",
+         .size = 18446744073709551615ull,
+         .sha256 = "",
+         .license = "other (custom)"},
     };
     REQUIRE(save_catalog(catalog, entries).ok);
     CHECK_FALSE(std::filesystem::exists(catalog + ".tmp"));
@@ -355,9 +360,7 @@ TEST_CASE("HF token is only sent to Hugging Face hosts", "[hub]") {
 // Network test, opt-in: AGENT_TEST_HUB_NETWORK=1. Uses HTTPS_PROXY / SSL_CERT_FILE etc. from the env.
 TEST_CASE("hub downloads stories260K from Hugging Face", "[hub][network]") {
     const char *flag = std::getenv("AGENT_TEST_HUB_NETWORK");
-    if (!flag || std::string_view(flag) != "1") {
-        SKIP("set AGENT_TEST_HUB_NETWORK=1 to run");
-    }
+    if (!flag || std::string_view(flag) != "1") { SKIP("set AGENT_TEST_HUB_NETWORK=1 to run"); }
     const auto dir = std::filesystem::temp_directory_path() / "agent_hub_network_test";
     std::filesystem::remove_all(dir);
 
@@ -428,7 +431,7 @@ TEST_CASE("select_mmproj picks the projector that goes with the model file", "[h
     REQUIRE(same_quant.value.has_value());
     CHECK(same_quant.value->path == "mmproj-vlm-f16.gguf");
 
-    auto fallback = select_mmproj(info.value, "vlm-Q4_K_M.gguf");  // no Q4 projector: Q8_0 is the default
+    auto fallback = select_mmproj(info.value, "vlm-Q4_K_M.gguf"); // no Q4 projector: Q8_0 is the default
     REQUIRE(fallback.ok);
     CHECK(fallback.value->path == "mmproj-vlm-Q8_0.gguf");
 
@@ -437,8 +440,8 @@ TEST_CASE("select_mmproj picks the projector that goes with the model file", "[h
     CHECK(wanted.value->path == "mmproj-vlm-f16.gguf");
 
     CHECK_FALSE(select_mmproj(info.value, "vlm-Q8_0.gguf", "none").value.has_value());
-    CHECK_FALSE(select_mmproj(info.value, "mmproj-vlm-Q8_0.gguf").value.has_value());  // already a projector
-    CHECK_FALSE(select_mmproj(info.value, "vlm-Q8_0.gguf", "bf16").ok);                  // asked for one that is not there
+    CHECK_FALSE(select_mmproj(info.value, "mmproj-vlm-Q8_0.gguf").value.has_value()); // already a projector
+    CHECK_FALSE(select_mmproj(info.value, "vlm-Q8_0.gguf", "bf16").ok);               // asked for one that is not there
 
     auto text_only = parse_repo_info(R"({"id":"x/llm","siblings":[{"rfilename":"llm-Q4_K_M.gguf","size":1}]})");
     REQUIRE(text_only.ok);
@@ -449,19 +452,25 @@ TEST_CASE("with_mmproj_option adds the projector to engine options once", "[hub]
     CHECK(with_mmproj_option("", "/m/p.gguf") == R"({"mmproj":"/m/p.gguf"})");
     CHECK(with_mmproj_option("{}", "/m/p.gguf") == R"({"mmproj":"/m/p.gguf"})");
     CHECK(with_mmproj_option(R"({"threads":4})", "/m/p.gguf") == R"({"mmproj":"/m/p.gguf","threads":4})");
-    CHECK(with_mmproj_option(R"({"mmproj":"other.gguf"})", "/m/p.gguf") == R"({"mmproj":"other.gguf"})");  // the user's wins
+    CHECK(with_mmproj_option(R"({"mmproj":"other.gguf"})", "/m/p.gguf") == R"({"mmproj":"other.gguf"})"); // the user's wins
     CHECK(with_mmproj_option(R"({"threads":4})", "") == R"({"threads":4})");
-    CHECK(with_mmproj_option("", R"(C:\models\p.gguf)") == R"({"mmproj":"C:\\models\\p.gguf"})");      // Windows paths stay valid JSON
+    CHECK(with_mmproj_option("", R"(C:\models\p.gguf)") == R"({"mmproj":"C:\\models\\p.gguf"})"); // Windows paths stay valid JSON
 }
 
 TEST_CASE("the catalogue keeps the projector of a model", "[hub][mmproj]") {
-    CatalogEntry e{.name = "vlm", .repo = "x/vlm", .file = "vlm.gguf", .path = "/m/vlm.gguf", .size = 5, .license = "mit",
-                   .mmproj = "/m/mmproj.gguf", .mmproj_file = "mmproj.gguf"};
+    CatalogEntry e{.name = "vlm",
+                   .repo = "x/vlm",
+                   .file = "vlm.gguf",
+                   .path = "/m/vlm.gguf",
+                   .size = 5,
+                   .license = "mit",
+                   .mmproj = "/m/mmproj.gguf",
+                   .mmproj_file = "mmproj.gguf"};
     auto back = catalog_from_json(catalog_to_json(std::span<const CatalogEntry>(&e, 1)));
     REQUIRE(back.ok);
     REQUIRE(back.value.size() == 1);
     CHECK(back.value[0].mmproj == "/m/mmproj.gguf");
     CHECK(back.value[0].mmproj_file == "mmproj.gguf");
     CatalogEntry plain{.name = "llm", .repo = "x/llm", .file = "llm.gguf", .path = "/m/llm.gguf"};
-    CHECK(catalog_to_json(std::span<const CatalogEntry>(&plain, 1)).find("mmproj") == std::string::npos);  // old format unchanged
+    CHECK(catalog_to_json(std::span<const CatalogEntry>(&plain, 1)).find("mmproj") == std::string::npos); // old format unchanged
 }

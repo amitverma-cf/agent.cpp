@@ -262,7 +262,8 @@ TEST_CASE("MCP serialises concurrent calls on one server", "[mcp]") {
 namespace {
 
 // A stand-in for the CLI's resolver: "token" resolves for mcp:fake, "denied" never does.
-agent::Result<std::string> fake_secret_resolver(std::string_view text, const agent::SecretRequest &who, std::vector<std::string> &values, void *user) {
+agent::Result<std::string> fake_secret_resolver(std::string_view text, const agent::SecretRequest &who, std::vector<std::string> &values,
+                                                void *user) {
     auto *seen = static_cast<std::vector<std::string> *>(user);
     seen->push_back(std::string(who.consumer) + " runs " + (who.identity_parts.empty() ? std::string() : who.identity_parts[0]));
     if (text.find("${secret:denied}") != std::string_view::npos)
