@@ -4,7 +4,6 @@
 // resume the ones that are due. Pure part: the list, its JSON form, and the command line that resumes an entry.
 
 #include <agent-cpp/agent.hpp>
-
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -13,10 +12,10 @@
 namespace agent::cli {
 
 struct WaitingRun {
-    std::string thread;               // graph thread id (agent run --resume THREAD)
-    std::string graph;                // absolute path of the graph file
-    int64_t until = 0;                // wake time, epoch seconds
-    std::vector<std::string> flags;   // the original flags of the run, as words: "--model", "qwen", "--yes", ...
+    std::string thread;             // graph thread id (agent run --resume THREAD)
+    std::string graph;              // absolute path of the graph file
+    int64_t until = 0;              // wake time, epoch seconds
+    std::vector<std::string> flags; // the original flags of the run, as words: "--model", "qwen", "--yes", ...
 };
 
 std::string waiting_to_json(const std::vector<WaitingRun> &runs);

@@ -12,8 +12,8 @@ std::string waiting_to_json(const std::vector<WaitingRun> &runs) {
     for (size_t i = 0; i < runs.size(); ++i) {
         const WaitingRun &r = runs[i];
         out += i ? ",\n    {" : "\n    {";
-        out += "\"thread\": \"" + json_escape(r.thread) + "\", \"graph\": \"" + json_escape(r.graph) + "\", \"until\": " + std::to_string(r.until) +
-               ", \"flags\": [";
+        out += "\"thread\": \"" + json_escape(r.thread) + "\", \"graph\": \"" + json_escape(r.graph) +
+               "\", \"until\": " + std::to_string(r.until) + ", \"flags\": [";
         for (size_t f = 0; f < r.flags.size(); ++f) out += (f ? ", \"" : "\"") + json_escape(r.flags[f]) + "\"";
         out += "]}";
     }
