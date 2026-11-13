@@ -1,7 +1,7 @@
 #pragma once
 
-// The full-screen chat interface (RTXUI): a welcome screen, a scrolling transcript with markdown rendering and compact tool cards,
-// a slash-command palette, an input line with history, a status bar with a context gauge, and a modal for tool permissions. It knows
+// The full-screen chat interface (RTXUI), laid out like a chat website: a sidebar with the saved sessions grouped by project, the
+// conversation with metrics under each answer, and the input at the bottom, with a slash-command palette and tool permission prompts. It knows
 // nothing about models or sessions: chat.cpp hands it a TuiHost, a table of function pointers (the project avoids virtual calls), and
 // the host does the work on a worker thread.
 
@@ -18,12 +18,28 @@ enum class TuiKind {
     Tool,      // "[tool] name args" and "[result] ..." blocks
     Note,      // everything else the host prints (help, stats, switching models)
     Error,
+    Metrics, // one line under an answer: model, tokens, speed
 };
 
 // A slash command offered in the palette that opens when the input starts with "/".
 struct TuiCommand {
     const char *name; // "/model"
     const char *help; // "show or switch the model"
+};
+
+// One saved conversation in the sidebar. Sessions of the same project (workspace folder) are listed together.
+struct TuiSession {
+    std::string id;
+    std::string title;     // the first thing the user asked
+    std::string workspace; // the project folder
+    int messages = 0;
+    bool active = false;
+};
+
+// One message of a conversation, for repainting the transcript after switching sessions.
+struct TuiMessage {
+    TuiKind kind;
+    std::string text;
 };
 
 struct TuiHost {
@@ -39,6 +55,13 @@ struct TuiHost {
     bool (*submit)(void *user, const std::string &line) = nullptr;
     // Cancels the running answer (Esc, or Ctrl-C while it is running). Safe to call from the UI thread.
     void (*cancel)(void *user) = nullptr;
+    // The saved conversations of all known projects, the open one marked active. Called from the UI thread while no answer is running.
+    std::vector<TuiSession> (*sessions)(void *user) = nullptr;
+    // Switches to a saved conversation (an empty id starts a new one) in `workspace`, which changes the project the agent works in.
+    // Runs on the worker thread; returns false when it failed (the reason is printed with tui_emit).
+    bool (*switch_session)(void *user, const std::string &id, const std::string &workspace) = nullptr;
+    // The messages of the open conversation, called after a switch to repaint the transcript.
+    std::vector<TuiMessage> (*history)(void *user) = nullptr;
     // The commands listed in the palette.
     std::span<const TuiCommand> commands;
 };

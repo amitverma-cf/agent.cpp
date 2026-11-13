@@ -46,12 +46,21 @@ agent chat --list                 # saved conversations
 agent chat --plain                # line mode, for pipes
 ```
 
-In a terminal this opens a full-screen chat, built with [RTXUI](https://github.com/ArthurSonzogni/RTXUI) (HTML and CSS for the
-terminal): a title bar with the model and engine, the conversation, an input line and a footer with speed and token counts.
-Answers are rendered as markdown: headings, lists, quotes, tables and fenced code in a frame. Tool calls appear as cyan lines, and a
-tool that needs permission asks `y` once, `n`, or `a` for the rest of the session. `Esc` (or Ctrl-C while answering) stops an answer;
+In a terminal this opens a full-screen chat laid out like a chat website, built with [RTXUI](https://github.com/ArthurSonzogni/RTXUI)
+(HTML and CSS for the terminal):
+
+- **Sidebar:** your saved conversations, grouped by project (the folder the agent works in). Click a session, or press `Ctrl+K`, move
+  with Up/Down and press Enter. Picking a session from another project switches the agent to that folder: its files, tools and memory
+  change with it (the model is loaded again for the new folder). `Ctrl+N` starts a new chat, `Ctrl+B` hides the sidebar. The projects
+  are remembered in `workspaces.txt` in the agent home.
+- **Conversation:** your messages in a frame, answers rendered as markdown (headings, lists, quotes, tables, framed code), tool calls as
+  cyan lines, and under every answer a line with the model, the speed in tokens per second, the token counts and the time.
+- **Input:** at the bottom, with a command palette (type `/` or press `Ctrl+P`), history on Up/Down, and a footer with the speeds and how
+  full the context window is.
+
+A tool that needs permission asks `y` once, `n`, or `a` for the rest of the session. `Esc` (or Ctrl-C while answering) stops an answer;
 Ctrl-C or Ctrl-D at the prompt quits. The mouse wheel, PgUp/PgDn and Home scroll the conversation; `End` jumps back to the newest line
-and follows it again. Select text with the mouse to copy it. The empty screen centers the input box under the name, with a tip; `Ctrl+P` (or typing `/`) opens the command palette. Your messages carry a pink bar, and the footer shows speed and how full the context window is. The screen uses four colors (black, white, neon cyan, hot pink).
+and follows it again. Select text with the mouse to copy it. The screen uses four colors (black, white, neon cyan, hot pink).
 
 | Command | What it does |
 |---|---|

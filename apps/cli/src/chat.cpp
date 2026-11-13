@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
 
 #if !defined(_WIN32)
 #include <signal.h>
@@ -339,6 +340,27 @@ void print_chat_help() {
          "Ctrl-C while the model is answering cancels the answer.\n");
 }
 
+// The line under an answer in the full-screen interface: which model answered, how fast, how many tokens.
+std::string format_metrics(const ChatState &st) {
+    const TokenUsage &u = st.memory.stats.last;
+    if (u.completion_tokens <= 0) return {};
+    char buf[160];
+    std::string out = st.model.name;
+    if (u.decode_ms > 0.0f && u.completion_tokens > 1) {
+        std::snprintf(buf, sizeof(buf), "  \xC2\xB7  %.0f tok/s",
+                      static_cast<double>(u.completion_tokens - 1) / (static_cast<double>(u.decode_ms) / 1000.0));
+        out += buf;
+    }
+    std::snprintf(buf, sizeof(buf), "  \xC2\xB7  %d tokens", u.completion_tokens);
+    out += buf;
+    const double seconds = (static_cast<double>(u.prefill_ms) + static_cast<double>(u.decode_ms)) / 1000.0;
+    if (seconds > 0.0) {
+        std::snprintf(buf, sizeof(buf), "  \xC2\xB7  %.1f s", seconds);
+        out += buf;
+    }
+    return out;
+}
+
 void run_one_turn(ChatState &st, const std::string &text, std::span<const Media> media) {
     if (!st.lease) {
         out("[error] no model is loaded; switch with /model NAME\n");
@@ -365,6 +387,12 @@ void run_one_turn(ChatState &st, const std::string &text, std::span<const Media>
     if (r.ok) {
         const std::string footer = format_turn_footer(st.memory.stats.last);
         if (!footer.empty()) std::fprintf(g_err, "[%s]\n", footer.c_str());
+#if defined(AGENT_CLI_HAS_TUI)
+        if (g_tui) {
+            const std::string metrics = format_metrics(st);
+            if (!metrics.empty()) tui_emit(TuiKind::Metrics, metrics);
+        }
+#endif
     }
     remember_conversation(st);
 }
@@ -443,6 +471,150 @@ void switch_model(ChatState &st, const std::string &spec) {
         if (auto r = save_conversation(*st.lease, st.memory); !r.ok) out("[error] " + r.error.message + "\n");
     }
     out("now using " + st.model.name + " on " + st.engine.name + "\n");
+}
+
+// ---- sessions: the sidebar lists the saved conversations of every project the CLI has worked in.
+
+fs::path workspaces_file(const Context &ctx) { return fs::path(ctx.has_home ? ctx.home.root : ctx.config_dir) / "workspaces.txt"; }
+
+std::vector<std::string> known_workspaces(const Context &ctx) {
+    std::vector<std::string> list;
+    std::ifstream in(workspaces_file(ctx));
+    for (std::string line; std::getline(in, line);) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        if (!line.empty()) list.push_back(line);
+    }
+    return list;
+}
+
+// Puts the current project first in the list kept in the home folder.
+void remember_workspace(const ChatState &st) {
+    std::vector<std::string> list = known_workspaces(*st.ctx);
+    list.erase(std::remove(list.begin(), list.end(), st.workspace), list.end());
+    list.insert(list.begin(), st.workspace);
+    if (list.size() > 12) list.resize(12);
+    std::error_code ec;
+    fs::create_directories(workspaces_file(*st.ctx).parent_path(), ec);
+    std::ofstream out_file(workspaces_file(*st.ctx), std::ios::trunc);
+    for (const std::string &w : list) out_file << w << '\n';
+}
+
+// What a conversation is called in the sidebar: the first thing the user said, on one line.
+std::string conversation_title(const Conversation &c) {
+    for (const Message &m : c.history) {
+        if (m.role != "user" || m.content.empty()) continue;
+        std::string title = m.content.substr(0, 120);
+        for (char &ch : title)
+            if (ch == '\n' || ch == '\r' || ch == '\t') ch = ' ';
+        const size_t a = title.find_first_not_of(' ');
+        return a == std::string::npos ? std::string() : title.substr(a);
+    }
+    return {};
+}
+
+void list_workspace_sessions(Session &session, const std::string &workspace, const std::string &open_id, const std::string &open_workspace,
+                             std::vector<TuiSession> &sessions) {
+    auto index = retrieve_memory(session, kIndexKey);
+    const auto ids = conversation_ids(index.ok ? index.value : std::string());
+    int shown = 0;
+    for (auto it = ids.rbegin(); it != ids.rend() && shown < 12; ++it, ++shown) {
+        Conversation c;
+        c.id = *it;
+        if (!load_conversation(session, c).ok) continue;
+        TuiSession s;
+        s.id = *it;
+        s.title = conversation_title(c);
+        s.workspace = workspace;
+        s.messages = static_cast<int>(c.history.size());
+        s.active = *it == open_id && workspace == open_workspace;
+        sessions.push_back(std::move(s));
+    }
+}
+
+std::vector<TuiSession> tui_sessions(ChatState &st) {
+    std::vector<TuiSession> sessions;
+    // The open project first: its conversations are read through the open store.
+    if (st.lease) list_workspace_sessions(*st.lease, st.workspace, st.memory.id, st.workspace, sessions);
+    const bool saved = std::any_of(sessions.begin(), sessions.end(), [](const TuiSession &s) { return s.active; });
+    if (!saved) sessions.insert(sessions.begin(), TuiSession{st.memory.id, conversation_title(st.memory), st.workspace, 0, true});
+    for (const std::string &w : known_workspaces(*st.ctx)) {
+        if (w == st.workspace) continue;
+        std::error_code ec;
+        if (!fs::is_directory(w, ec)) continue;
+        Config cfg;
+        cfg.provider = AiProvider::Mock;
+        cfg.workspace_dir = w;
+        cfg.memory = {.store = store::sqlite_store()};
+        cfg.auto_default_tools = false;
+        auto other = init(cfg);
+        if (!other.ok) continue;
+        list_workspace_sessions(other.value, w, st.memory.id, st.workspace, sessions);
+    }
+    return sessions;
+}
+
+std::vector<TuiMessage> tui_history(const ChatState &st) {
+    std::vector<TuiMessage> messages;
+    for (const Message &m : st.memory.history) {
+        if (m.role == "user") {
+            messages.push_back({TuiKind::User, m.content});
+        } else if (m.role == "assistant") {
+            for (const ToolCall &call : m.tool_calls)
+                messages.push_back({TuiKind::Tool, "[tool] " + std::string(call.name) + " " + std::string(call.arguments)});
+            if (!m.content.empty()) messages.push_back({TuiKind::Assistant, m.content});
+        } else if (m.role == "tool") {
+            messages.push_back({TuiKind::Tool, "[result] " + m.content});
+        }
+    }
+    return messages;
+}
+
+// Opens another conversation (an empty id: a new one) in `workspace`. A different project means a different folder for the tools, the
+// store and the logs, so the model is loaded again for it.
+bool switch_session(ChatState &st, const std::string &id, const std::string &workspace) {
+    if (!workspace.empty() && workspace != st.workspace) {
+        std::error_code ec;
+        if (!fs::is_directory(workspace, ec)) {
+            out("[error] the project folder " + workspace + " no longer exists\n");
+            return false;
+        }
+        release_model(st.lease);
+        unload_model(st.registry, st.model.name);
+        st.workspace = workspace;
+        Config store_cfg;
+        store_cfg.provider = AiProvider::Mock;
+        store_cfg.workspace_dir = st.workspace;
+        store_cfg.memory = {.store = store::sqlite_store()};
+        store_cfg.auto_default_tools = false;
+        auto store_session = init(store_cfg);
+        if (!store_session.ok) {
+            out("[error] " + store_session.error.message + "\n");
+            return false;
+        }
+        st.store = std::move(store_session.value);
+        if (auto r = open_session(st); !r.ok) {
+            out("[error] " + r.error.message + "\n");
+            return false;
+        }
+        remember_workspace(st);
+    }
+    st.artifacts.clear();
+    if (id.empty()) {
+        st.memory = Conversation{};
+        st.memory.id = new_conversation_id();
+        st.memory.history.push_back(Message{.role = "system", .content = std::string(kSystemPrompt)});
+        st.saved = false;
+        return true;
+    }
+    Conversation c;
+    c.id = id;
+    if (auto r = load_conversation(*st.lease, c); !r.ok) {
+        out("[error] could not open the session: " + r.error.message + "\n");
+        return false;
+    }
+    st.memory = std::move(c);
+    st.saved = true;
+    return true;
 }
 
 int chat_fail(const Error &e) {
@@ -711,6 +883,7 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
     auto store_session = init(store_cfg);
     if (!store_session.ok) return chat_fail(store_session.error);
     st.store = std::move(store_session.value);
+    remember_workspace(st);
     set_budget(st.registry, ModelBudget{.ram_bytes = static_cast<uint64_t>(std::max<int64_t>(0, st.ctx->config.memory_budget_mb)) << 20});
 
     std::fprintf(g_err, "loading %s ...\n", st.model.path.c_str());
@@ -761,6 +934,11 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
             return format_turn_footer(c->memory.stats.last);
         };
         host.submit = [](void *u, const std::string &line) { return handle_line(*static_cast<ChatState *>(u), line); };
+        host.sessions = [](void *u) { return tui_sessions(*static_cast<ChatState *>(u)); };
+        host.switch_session = [](void *u, const std::string &id, const std::string &workspace) {
+            return switch_session(*static_cast<ChatState *>(u), id, workspace);
+        };
+        host.history = [](void *u) { return tui_history(*static_cast<ChatState *>(u)); };
         host.cancel = [](void *) {
             if (!g_generating.load()) return;
             if (int32_t *flag = g_cancel_flag.load()) std::atomic_ref<int32_t>(*flag).store(1, std::memory_order_relaxed);

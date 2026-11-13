@@ -1,6 +1,6 @@
 # agent.cpp
 
-<p align="center"><img src="docs/images/banner.svg" alt="agent.cpp: the welcome screen of the chat" width="1000"></p>
+<p align="center"><img src="docs/images/banner.svg" alt="The agent.cpp chat screen: sessions grouped by project on the left, the input at the bottom" width="1000"></p>
 
 **Run AI agents on your own machine, from one small C++ library or one command.**
 
@@ -8,9 +8,9 @@ agent.cpp is a local-first agent runtime. Chat with a model that can read your f
 speak, draw, turn a picture into a 3D mesh, or wire all of that into a graph that runs on a schedule. Nothing leaves your
 computer, and you do not need Python, Node or a cloud account.
 
-<p align="center"><img src="docs/images/chat.svg" alt="The agent.cpp chat screen: a model runs a command with permission and answers" width="860"></p>
+<p align="center"><img src="docs/images/chat.svg" alt="A reply in the agent.cpp chat with the model and speed under it" width="1000"></p>
 
-That is the real chat screen (Qwen2.5-0.5B on a 4-core CPU): the model asked to run `ls`, the chat asked permission first, and the answer followed.
+That is the real chat screen (Qwen2.5-0.5B on a 4-core CPU), laid out like a chat website: your sessions on the left, grouped by project (pick one and the agent switches to that folder), the conversation in the middle with the model and speed under every answer, and the input at the bottom.
 
 > Status: pre-1.0. Flags, APIs and file formats can still change. Targets Windows 11 and Linux.
 
@@ -84,7 +84,6 @@ On Windows use `.\build\agent.exe`. `agent --help` lists every command, and `age
 
 Typing `/` in the chat opens a command palette (`/model`, `/image`, `/open`, `/stats`, `/doctor`, `/setup`, `/clear`, `/help`, `/exit`); Tab completes, Up and Down recall earlier messages, PgUp and PgDn scroll.
 
-<p align="center"><img src="docs/images/palette.svg" alt="The slash-command palette in the chat screen" width="860"></p>
  Full reference: [docs/cli.md](docs/cli.md).
 
 ## Use it as a library
