@@ -820,7 +820,8 @@ std::vector<std::string> slash_cli_argv(const SlashCommand &cmd) {
     std::vector<std::string> argv;
     const std::string &name = cmd.arg;
     if (name == "pull" || name == "fit" || name == "recommend" || name == "search") argv = {"model", name};
-    else if (name == "setup") argv = {"setup", "--yes"}; // no keyboard for the setup questions here: the defaults
+    else if (name == "setup")
+        argv = {"setup"}; // alone, /setup asks its questions in the chat (chat.cpp); with flags it is passed on as typed
     else argv = {name};
     argv.insert(argv.end(), words.begin(), words.end());
     return argv;

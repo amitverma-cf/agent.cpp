@@ -290,7 +290,9 @@ FitResult estimate_fit(const GgufInfo &model, uint64_t file_bytes, const Machine
     }
 
     // Generation reads the active weights once per token: speed is memory bandwidth over those bytes, at about 60 % efficiency.
-    if (!r.on_gpu && machine.mem_bandwidth > 0) {
+    if (!model.has_shape()) {
+        // Not a language model (or a header without the shape): there is no per-token weight read to estimate a speed from.
+    } else if (!r.on_gpu && machine.mem_bandwidth > 0) {
         double active = 1.0;
         if (model.expert_count > 1 && model.expert_used_count > 0)
             active = 0.35 + 0.65 * static_cast<double>(model.expert_used_count) / static_cast<double>(model.expert_count);
@@ -300,6 +302,27 @@ FitResult estimate_fit(const GgufInfo &model, uint64_t file_bytes, const Machine
     }
     if (r.fits && r.need > static_cast<uint64_t>(0.7 * static_cast<double>(r.limit)))
         r.note += (r.note.empty() ? "" : "; ") + std::string("tight: other programs may push it into swap");
+    return r;
+}
+
+FitResult estimate_size_fit(uint64_t file_bytes, const Machine &machine) {
+    FitResult r;
+    r.weights = file_bytes;
+    r.buffers = static_cast<uint64_t>(0.25 * static_cast<double>(file_bytes)) + (256ull << 20);
+    r.need = r.weights + r.buffers;
+    const uint64_t vram_limit = static_cast<uint64_t>(0.9 * static_cast<double>(machine.vram_total));
+    const uint64_t ram_basis = machine.ram_free ? machine.ram_free : static_cast<uint64_t>(0.7 * static_cast<double>(machine.ram_total));
+    const uint64_t ram_limit = static_cast<uint64_t>(0.9 * static_cast<double>(ram_basis));
+    if (machine.vram_total && r.need <= vram_limit) {
+        r.on_gpu = true;
+        r.limit = vram_limit;
+        r.fits = true;
+    } else {
+        r.limit = ram_limit;
+        r.fits = r.need <= ram_limit;
+    }
+    if (!r.fits) r.note = "needs " + format_bytes(r.need) + ", this machine offers " + format_bytes(r.limit);
+    else if (r.need > static_cast<uint64_t>(0.7 * static_cast<double>(r.limit))) r.note = "tight: other programs may push it into swap";
     return r;
 }
 

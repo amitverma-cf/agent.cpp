@@ -63,4 +63,8 @@ struct FitResult {
 // file_bytes: the model file(s). context: tokens of context to reserve KV cache for.
 FitResult estimate_fit(const GgufInfo &model, uint64_t file_bytes, const Machine &machine, int context, KvType kv = KvType::Q8);
 
+// For models that are not language models (speech, image, ONNX, embedding): memory from the file size alone (weights x 1.25 + 256 MiB for
+// activations), no speed estimate.
+FitResult estimate_size_fit(uint64_t file_bytes, const Machine &machine);
+
 } // namespace agent::cli

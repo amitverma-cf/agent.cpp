@@ -11,8 +11,11 @@ Status: under active development. APIs, CLI flags and file formats change withou
 
 ## Why agent.cpp
 
-- **One local CLI for chat, tasks, graphs and voice.** `agent chat` streams replies and runs tools, `agent task`
-  runs one engine capability once, `agent run` executes declarative graphs, and `agent voice` is a spoken loop.
+- **One local CLI for chat, tasks, graphs and voice.** `agent` opens a full-screen chat (markdown answers, tool-permission prompts, slash commands for
+  `/pull`, `/doctor`, `/setup`), `agent task` runs one engine capability once, `agent run` executes declarative graphs, and `agent voice` is a spoken loop.
+- **It tells you what will run on your machine.** `agent model fit` and `agent model recommend` read a model's header, compare it with your RAM and GPU, and
+  estimate the speed from your memory bandwidth. Nothing is downloaded to find out.
+- **Sleep, wake and schedule without a daemon.** A graph `wait` node pauses a run; `agent schedule` registers `agent wake` with cron or Task Scheduler.
 - **Any local engine, one interface.** Text and vision with llama.cpp, speech (recognition, synthesis, VAD and
   diarization) with audio.cpp, images and video with stable-diffusion.cpp, 3D meshes with TRELLIS.2, and generic ONNX models.
   See the [engine matrix](#engines).
@@ -54,6 +57,9 @@ Other commands you will use:
 | Command | What it does |
 |---|---|
 | `agent model search [TEXT]` | the curated registry of tested models, by short name |
+| `agent` (no arguments, in a terminal) | the full-screen chat, same as `agent chat` |
+| `agent model fit SPEC` / `agent model recommend [TEXT]` | will a model run here and about how fast; search Hugging Face for what fits (`--task tts` etc. for the other engines) |
+| `agent schedule add|ls|rm` / `agent wake` | run an agent command on a timer with cron or Task Scheduler; resume graph runs paused at a wait node |
 | `agent doctor` | what is installed, disk use per area, and what is safe to clean |
 | `agent secret set NAME` | store an API key in the OS credential store |
 | `agent mcp` / `agent skill` / `agent sandbox` | MCP servers, skills, and folders that sandboxed tools may use |
@@ -118,7 +124,7 @@ Native Windows (MSVC, Ninja, OpenSSL) and Linux instructions, and the install st
 
 ---
 
-## C++ SDK
+## C++ SDK and C API
 
 `libagent` is a C++20 library with one public header, `#include <agent-cpp/agent.hpp>`. Install it with
 `cmake --install build --prefix <prefix>` and link it from your own project:
@@ -175,6 +181,9 @@ int main() {
 }
 ```
 
+From C, or from any language that can call C, `include/agent-cpp/agent_c.h` offers sessions, streamed chat turns with tools, embeddings and
+one-shot tasks behind opaque handles ([docs/api/c-api.md](docs/api/c-api.md)).
+
 The SDK covers providers, the graph runtime, tools and MCP servers, skills, the permission gate, RAG and the
 model registry. Start with [docs/guides/getting-started-library.md](docs/guides/getting-started-library.md).
 
@@ -218,6 +227,7 @@ Details: [docs/workspace.md](docs/workspace.md).
   [writing a tool](docs/guides/writing-a-tool.md) · [writing a graph](docs/guides/writing-a-graph.md) ·
   [a local voice assistant](docs/guides/voice-assistant.md)
 - Examples, one folder per use case: [`examples/`](examples/README.md)
+- Library: [C++ API](docs/api.md) · [C API](docs/api/c-api.md)
 - Security: [OS sandbox](docs/security-sandbox.md) and [SECURITY.md](SECURITY.md)
 - Status: [benchmarks](docs/benchmarks.md)
 

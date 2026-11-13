@@ -124,6 +124,11 @@ struct Ui {
     // A tool permission question waiting for an answer.
     bool asking = false;
     std::string question;
+    // A free-text question (tui_prompt) waiting for the next line the user enters.
+    bool prompting = false;
+    bool prompt_done = false;
+    std::string prompt_text, prompt_default, prompt_answer;
+    std::condition_variable prompt_cv;
     int answer = 0; // 0 = none yet, 1 = yes, 2 = no, 3 = always
     std::condition_variable answered;
     ScreenInteractive *screen = nullptr;
@@ -160,6 +165,22 @@ void tui_emit(TuiKind kind, std::string_view text) {
         }
     }
     if (ui->screen) ui->screen->PostEvent(Event::Custom);
+}
+
+bool tui_prompt(std::string_view question, std::string_view default_value, std::string &answer) {
+    Ui *ui = g_ui;
+    if (!ui) return false;
+    std::unique_lock<std::mutex> lock(ui->mu);
+    ui->prompting = true;
+    ui->prompt_done = false;
+    ui->prompt_text = std::string(question);
+    ui->prompt_default = std::string(default_value);
+    if (ui->screen) ui->screen->PostEvent(Event::Custom);
+    ui->prompt_cv.wait(lock, [&] { return ui->prompt_done; });
+    ui->prompting = false;
+    answer = ui->prompt_answer;
+    if (ui->screen) ui->screen->PostEvent(Event::Custom);
+    return true;
 }
 
 bool tui_ask(std::string_view question, bool *always) {
@@ -245,8 +266,8 @@ int run_tui(const TuiHost &host) {
 
     Component root = Renderer(input_box, [&] {
         Elements rows;
-        bool busy, asking;
-        std::string question;
+        bool busy, asking, prompting;
+        std::string question, prompt_line;
         int frame;
         {
             std::lock_guard<std::mutex> lock(ui.mu);
@@ -261,6 +282,8 @@ int run_tui(const TuiHost &host) {
             busy = ui.generating;
             asking = ui.asking;
             question = ui.question;
+            prompting = ui.prompting;
+            prompt_line = ui.prompt_text + (ui.prompt_default.empty() ? "" : " [" + ui.prompt_default + "]");
             frame = ui.frame;
         }
         const std::string header = host.header ? host.header(host.user) : std::string();
@@ -274,6 +297,7 @@ int run_tui(const TuiHost &host) {
                                   text("  [y]es / [n]o / [a]lways ") | ftxui::bold) |
                              borderStyled(ROUNDED, Color::Yellow));
         } else {
+            if (prompting) bottom.push_back(paragraph(" ? " + prompt_line) | ftxui::bold | color(Color::Yellow));
             bottom.push_back(hbox(text(busy ? std::string(spin[frame % 4]) + " " : std::string("> ")) | ftxui::bold | color(Color::Green),
                                   input_box->Render() | flex) |
                              borderStyled(ROUNDED));
@@ -339,6 +363,18 @@ int run_tui(const TuiHost &host) {
             scroll = std::min(1.0f, scroll + 0.08f);
             return true;
         }
+        if (e == Event::Return) {
+            std::lock_guard<std::mutex> lock(ui.mu);
+            if (ui.prompting && !ui.prompt_done) {
+                // The line typed is the answer to the question the worker is waiting on; an empty line takes the default.
+                ui.prompt_answer = input.empty() ? ui.prompt_default : input;
+                ui.blocks.push_back({TuiKind::User, ui.prompt_answer.empty() ? std::string("(default)") : ui.prompt_answer});
+                input.clear();
+                ui.prompt_done = true;
+                ui.prompt_cv.notify_all();
+                return true;
+            }
+        }
         if (e == Event::Return && !busy) {
             std::string line = input;
             input.clear();
@@ -362,6 +398,9 @@ int run_tui(const TuiHost &host) {
             std::lock_guard<std::mutex> lock(ui.mu);
             ui.answer = 2; // a pending permission question must not block the exit
             ui.answered.notify_all();
+            ui.prompt_answer.clear(); // nor a free-text question
+            ui.prompt_done = true;
+            ui.prompt_cv.notify_all();
         }
         worker.join();
     }

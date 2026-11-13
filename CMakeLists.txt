@@ -72,6 +72,7 @@ endif()
 
 add_library(agent
     src/agent/agent.cpp
+    src/agent/c_api.cpp
     src/agent/arena.cpp
     src/agent/events.cpp
     src/agent/executor/turn_executor.cpp
@@ -114,6 +115,7 @@ add_library(agent
     src/hal/sandbox.cpp
     vendor/simdjson/singleheader/simdjson.cpp
 )
+target_compile_definitions(agent PRIVATE AGENT_LIB_VERSION="${PROJECT_VERSION}")
 add_library(agent-cpp::agent ALIAS agent)
 # Header-only plugin ABI for engine plugins built against the installed package
 # (find_package(agent-cpp) -> agent-cpp::engine_abi, agent_add_engine(); see examples/08-engine-plugin-template/).
@@ -302,6 +304,7 @@ add_executable(test_agent
     tests/unit/test_permissions.cpp
     tests/unit/test_engines.cpp
     tests/unit/test_mock_all.cpp
+    tests/unit/test_c_api.cpp
     tests/unit/test_engine_host.cpp
     tests/unit/test_engine_sdcpp.cpp
     tests/unit/test_graph.cpp
@@ -431,6 +434,7 @@ if(AGENT_INSTALL)
     install(FILES
         include/agent-cpp/agent.hpp
         include/agent-cpp/engine_abi.h
+        include/agent-cpp/agent_c.h
         apps/store-sqlite/include/agent-cpp/store_sqlite.hpp
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/agent-cpp
     )

@@ -130,7 +130,7 @@ int cmd_model_fit(const CommandLine &cl, Context &ctx) {
     if (fs::is_regular_file(spec, ec)) {
         info = parse_gguf_header(read_prefix(spec, kHeaderBytesMax));
         file_bytes = fs::file_size(spec, ec);
-        if (!info.valid) return report_error(make_error(ErrorCode::DecodeFailed, spec + " is not a GGUF file"));
+        // Not a GGUF (an ONNX or safetensors file, say): the size-based estimate below.
     } else {
         auto ms = agent::hub::parse_spec(spec);
         if (!ms.ok) return report_error(ms.error);
@@ -144,12 +144,25 @@ int cmd_model_fit(const CommandLine &cl, Context &ctx) {
             for (const auto &shard : set.value) file_bytes += shard.size;
         }
         what = ms.value.repo + ":" + file.value.path;
-        auto header = remote_header(resolve_url(http, ms.value.repo, file.value.path), http);
-        if (!header.ok) return report_error(header.error);
-        info = header.value;
+        if (file.value.path.ends_with(".gguf")) {
+            auto header = remote_header(resolve_url(http, ms.value.repo, file.value.path), http);
+            if (!header.ok) return report_error(header.error);
+            info = header.value;
+        }
     }
 
     const Machine machine = probe_machine(true);
+    if (!info.valid) {
+        // Not a language model file: weights plus activations from the file size; no speed.
+        const FitResult sized = estimate_size_fit(file_bytes, machine);
+        std::printf("%s  (%s)\n", what.c_str(), format_bytes(file_bytes).c_str());
+        print_machine(machine);
+        std::printf("memory needed: %s  = weights %s + buffers %s\n", format_bytes(sized.need).c_str(), format_bytes(sized.weights).c_str(),
+                    format_bytes(sized.buffers).c_str());
+        std::printf("verdict: %s%s%s\n", speed_text(sized).c_str(), sized.note.empty() ? "" : "  (",
+                    sized.note.empty() ? "" : (sized.note + ")").c_str());
+        return sized.fits ? 0 : 1;
+    }
     const FitResult r = estimate_fit(info, file_bytes, machine, context, kv);
     std::printf("%s  (%s, %llu layers, %s)\n", what.c_str(), info.architecture.empty() ? "unknown architecture" : info.architecture.c_str(),
                 static_cast<unsigned long long>(info.block_count), format_bytes(file_bytes).c_str());
@@ -166,6 +179,44 @@ int cmd_model_recommend(const CommandLine &cl, Context &ctx) {
     const std::string quant = cl.has("quant") ? std::string(cl.get("quant")) : std::string("Q4_K_M");
     const int context = cl.has("ctx") ? std::max(256, std::atoi(std::string(cl.get("ctx")).c_str())) : ctx.config.context_window;
     const int limit = cl.has("limit") ? std::max(1, std::atoi(std::string(cl.get("limit")).c_str())) : 8;
+
+    // Models that are not language models (speech, images, embeddings, 3D, ONNX): the curated registry, with the size-based fit. There
+    // is no per-token speed to estimate for them, so the answer is "fits" or "does not fit" and the registry's own notes.
+    const std::string task(cl.get("task"));
+    if (!task.empty() && task != "text_gen") {
+        const Machine machine = probe_machine(false);
+        print_machine(machine);
+        struct RegRow {
+            std::string alias, engine, notes;
+            uint32_t mib = 0;
+            FitResult fit;
+        };
+        std::vector<RegRow> rows;
+        for (const auto &e : agent::hub::model_registry()) {
+            if (e.task != task) continue;
+            RegRow row{std::string(e.alias), std::string(e.engine), std::string(e.notes), e.size_mib, {}};
+            row.fit = estimate_size_fit(static_cast<uint64_t>(e.size_mib) << 20, machine);
+            rows.push_back(std::move(row));
+        }
+        if (rows.empty()) {
+            std::printf("the registry has no model for the task \"%s\" (tasks: asr, tts, vad, diarize, image_gen, embed, rerank, mesh_gen, "
+                        "generic, decide)\n",
+                        task.c_str());
+            return 1;
+        }
+        std::stable_sort(rows.begin(), rows.end(), [](const RegRow &a, const RegRow &b) {
+            if (a.fit.fits != b.fit.fits) return a.fit.fits;
+            return a.mib < b.mib;
+        });
+        std::printf("\n%-24s %-9s %10s %10s  %s\n", "MODEL", "ENGINE", "SIZE", "NEEDS", "VERDICT");
+        for (const RegRow &r : rows)
+            std::printf("%-24s %-9s %10s %10s  %s%s%s\n", r.alias.c_str(), r.engine.c_str(),
+                        r.mib ? format_bytes(r.fit.weights).c_str() : "-", format_bytes(r.fit.need).c_str(),
+                        r.fit.fits ? "fits" : "does not fit", r.fit.note.empty() ? "" : "  (",
+                        r.fit.note.empty() ? "" : (r.fit.note + ")").c_str());
+        std::printf("\npull one with: agent model pull <name>\n");
+        return 0;
+    }
 
     const Machine machine = probe_machine(true);
     print_machine(machine);

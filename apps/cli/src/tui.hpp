@@ -39,6 +39,10 @@ void tui_emit(TuiKind kind, std::string_view text);
 // Blocks the calling (worker) thread until the user answers the question: 'y' (true), 'n' (false) or 'a' (true, and *always = true).
 bool tui_ask(std::string_view question, bool *always);
 
+// A free-text question from the worker thread: shows `question` (with the default in brackets) above the input line and blocks until the
+// user presses Enter; an empty answer means `default_value`. Returns false when the interface is closing.
+bool tui_prompt(std::string_view question, std::string_view default_value, std::string &answer);
+
 // The markdown-lite renderer on its own, as plain text laid out for `width` columns (for tests).
 std::string render_markdown_text(std::string_view markdown, int width);
 

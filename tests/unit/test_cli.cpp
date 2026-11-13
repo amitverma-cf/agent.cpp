@@ -670,7 +670,8 @@ TEST_CASE("chat: /doctor /pull /fit and friends map to agent subcommands", "[cli
     CHECK(argv("/fit owner/repo:Q4_K_M --ctx 8192") == std::vector<std::string>{"model", "fit", "owner/repo:Q4_K_M", "--ctx", "8192"});
     CHECK(argv("/recommend coder") == std::vector<std::string>{"model", "recommend", "coder"});
     CHECK(argv("/search") == std::vector<std::string>{"model", "search"});
-    CHECK(argv("/setup") == std::vector<std::string>{"setup", "--yes"});
+    CHECK(argv("/setup") == std::vector<std::string>{"setup"}); // alone it asks its questions in the chat
+    CHECK(argv("/setup --yes --caps llama") == std::vector<std::string>{"setup", "--yes", "--caps", "llama"});
     CHECK(argv("/wake --dry-run") == std::vector<std::string>{"wake", "--dry-run"});
     CHECK(argv("/schedule ls") == std::vector<std::string>{"schedule", "ls"});
     CHECK(argv("/pull \"my repo/x y\"") == std::vector<std::string>{"model", "pull", "my repo/x y"});
@@ -678,4 +679,25 @@ TEST_CASE("chat: /doctor /pull /fit and friends map to agent subcommands", "[cli
     CHECK(argv("/model").empty());
     CHECK(argv("hello").empty());
     CHECK(parse_slash_command("/clear").kind == SlashKind::Clear);
+}
+
+TEST_CASE("fit: models that are not language models are sized from the file alone", "[cli][fit]") {
+    Machine m;
+    m.ram_total = 8ull << 30;
+    m.ram_free = 6ull << 30;
+    m.mem_bandwidth = 30e9;
+    const auto small = estimate_size_fit(400ull << 20, m); // a 400 MiB speech model
+    CHECK(small.fits);
+    CHECK(small.tokens_per_second == 0);
+    CHECK(small.need == small.weights + small.buffers);
+    CHECK(small.buffers > (256ull << 20));
+    CHECK_FALSE(estimate_size_fit(9ull << 30, m).fits);
+    CHECK(estimate_size_fit(9ull << 30, m).note.find("needs") != std::string::npos);
+
+    // A GGUF header without a layer shape (an audio or image model) gets no speed either.
+    GgufInfo no_shape;
+    no_shape.valid = true;
+    const auto r = estimate_fit(no_shape, 400ull << 20, m, 4096);
+    CHECK(r.fits);
+    CHECK(r.tokens_per_second == 0);
 }

@@ -333,7 +333,7 @@ void print_chat_help() {
          "/fit SPEC             will a model run on this machine, and about how fast\n"
          "/recommend [TEXT]     search Hugging Face for models that fit this machine\n"
          "/search [TEXT]        the curated registry of tested models\n"
-         "/setup                set up with the defaults (agent setup --yes)\n"
+         "/setup                ask the setup questions here, then run agent setup with the answers\n"
          "/wake, /schedule ...  resume waiting graph runs; scheduled runs (agent schedule)\n"
          "//text                send a message that starts with '/'\n"
          "Ctrl-C while the model is answering cancels the answer.\n");
@@ -578,6 +578,50 @@ void run_cli_command(ChatState &st, const std::vector<std::string> &argv) {
 #endif
 }
 
+// A free-text question in the chat: the full-screen interface asks above its input line, line mode reads stdin.
+std::string ask_line(const std::string &question, const std::string &fallback) {
+#if defined(AGENT_CLI_HAS_TUI)
+    if (g_tui) {
+        std::string answer;
+        tui_prompt(question, fallback, answer);
+        return answer;
+    }
+#endif
+    out(question + (fallback.empty() ? "" : " [" + fallback + "]") + ": ");
+    std::string line;
+    if (read_line(stdin, line) != ReadStatus::Line) return fallback;
+    g_at_line_start = true;
+    const size_t a = line.find_first_not_of(" \t");
+    return a == std::string::npos ? fallback : line.substr(a);
+}
+
+// /setup with no arguments: the questions of `agent setup`, asked here, then the command runs with the answers.
+void run_setup_wizard(ChatState &st) {
+    out("setup: four questions, Enter keeps the answer in brackets\n");
+    const std::string home_now = st.ctx->has_home ? st.ctx->home.root : std::string();
+    const std::string home = ask_line("1/4 folder for models, engines and settings", home_now);
+    const std::string caps = ask_line("2/4 engines to enable (llama, audiocpp, sdcpp, onnx, trellis)", "llama,audiocpp,sdcpp,onnx");
+    const std::string backend = ask_line("3/4 backend (cpu, cuda or vulkan)", suggest_backend(detect_hardware()));
+    const std::string model = ask_line("4/4 model to download now (a registry name such as qwen2.5-0.5b, or - for none)", "-");
+    std::vector<std::string> argv = {"setup", "--yes"};
+    if (!home.empty()) {
+        argv.push_back("--home");
+        argv.push_back(home);
+    }
+    argv.push_back("--caps");
+    argv.push_back(caps);
+    argv.push_back("--backend");
+    argv.push_back(backend);
+    if (model == "-" || model.empty()) {
+        argv.push_back("--no-models");
+    } else {
+        argv.push_back("--model");
+        argv.push_back(model);
+    }
+    run_cli_command(st, argv);
+    out("setup finished; /model lists what is available\n");
+}
+
 // One input line: a message or a slash command. Returns false when the user asked to exit.
 bool handle_line(ChatState &st, const std::string &line) {
     const SlashCommand cmd = parse_slash_command(line);
@@ -648,7 +692,10 @@ bool handle_line(ChatState &st, const std::string &line) {
     }
     case SlashKind::Stats: print_stats(st); break;
     case SlashKind::Help: print_chat_help(); break;
-    case SlashKind::Cli: run_cli_command(st, slash_cli_argv(cmd)); break;
+    case SlashKind::Cli:
+        if (cmd.arg == "setup" && cmd.rest.empty()) run_setup_wizard(st);
+        else run_cli_command(st, slash_cli_argv(cmd));
+        break;
     case SlashKind::Unknown: out("unknown command /" + cmd.arg + " (try /help)\n"); break;
     default: break;
     }
