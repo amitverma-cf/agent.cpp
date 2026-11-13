@@ -29,7 +29,8 @@ using namespace ftxui;
 // Everything has an explicit color, so a terminal's own (often white) default foreground never shows.
 const Color kBackground = Color::RGB(0, 0, 0);
 const Color kPrimary = Color::RGB(255, 20, 125);     // hot pink: brand, your messages, headings, prompts
-const Color kSecondary = Color::RGB(0, 229, 255);    // neon cyan: answers
+const Color kSecondary = Color::RGB(0, 229, 255);    // neon cyan: prompts and hints
+const Color kText = Color::RGB(240, 240, 240);       // white: normal text, the answers
 const Color kPrimaryDim = Color::RGB(150, 24, 82);   // dark pink: tool calls, separators
 const Color kSecondaryDim = Color::RGB(0, 128, 145); // dark cyan: hints, notes, tool results
 
@@ -212,7 +213,7 @@ Element render_tool(const std::string &t) {
 Element render_block(const Block &b) {
     switch (b.kind) {
     case TuiKind::User: return hbox(text("\xE2\x80\xBA ") | ftxui::bold | color(kPrimary), paragraph(b.text) | color(kPrimary) | flex);
-    case TuiKind::Assistant: return hbox(text("  "), render_markdown(b.text) | color(kSecondary) | flex);
+    case TuiKind::Assistant: return hbox(text("  "), render_markdown(b.text) | color(kText) | flex);
     case TuiKind::Tool: return render_tool(b.text);
     case TuiKind::Error: return hbox(text("! ") | ftxui::bold | color(kPrimary), paragraph(b.text) | color(kPrimary) | flex);
     case TuiKind::Note: return hbox(text("  "), paragraph(b.text) | flex) | color(kSecondaryDim);
@@ -510,7 +511,7 @@ int run_tui(const TuiHost &host) {
 
         const Element title =
             hbox(text(" agent.cpp") | ftxui::bold | color(kPrimary), text("  " + header) | color(kSecondaryDim), filler());
-        return vbox({title, transcript, vbox(bottom), hbox(status)}) | color(kSecondary) | bgcolor(kBackground);
+        return vbox({title, transcript, vbox(bottom), hbox(status)}) | color(kText) | bgcolor(kBackground);
     });
 
     root = CatchEvent(root, [&](Event e) {
