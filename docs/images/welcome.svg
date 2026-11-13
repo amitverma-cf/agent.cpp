@@ -1,31 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1004" height="443" viewBox="0 0 1004 443" role="img" aria-label="agent.cpp chat screen">
-<rect x="1" y="1" width="1002" height="441" rx="10" fill="#000000" stroke="#962452" stroke-width="2"/>
-<text x="31.6" y="37.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#ff147d" font-weight="bold" xml:space="preserve" textLength="86.4" lengthAdjust="spacing">agent.cpp</text>
-<text x="137.2" y="37.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#00e5ff" xml:space="preserve" textLength="566.4" lengthAdjust="spacing">qwen2.5-0.5b-instruct-q4_k_m · llama · chat-20261113-142041</text>
-<text x="22.0" y="58.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#00e5ff" xml:space="preserve" textLength="960.0" lengthAdjust="spacing">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</text>
-<rect x="972.4" y="64.0" width="10.2" height="21.5" fill="#00e5ff"/>
-<rect x="972.4" y="85.0" width="10.2" height="21.5" fill="#00e5ff"/>
-<rect x="972.4" y="106.0" width="10.2" height="21.5" fill="#00e5ff"/>
-<text x="156.4" y="121.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#ff147d" xml:space="preserve" textLength="681.6" lengthAdjust="spacing"> █████╗  ██████╗ ███████╗███╗   ██╗████████╗    ██████╗██████╗ ██████╗ </text>
-<rect x="972.4" y="127.0" width="10.2" height="21.5" fill="#00e5ff"/>
-<text x="156.4" y="142.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#ff147d" xml:space="preserve" textLength="681.6" lengthAdjust="spacing">██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝   ██╔════╝██╔══██╗██╔══██╗</text>
-<rect x="972.4" y="148.0" width="10.2" height="21.5" fill="#00e5ff"/>
-<text x="156.4" y="163.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#ff147d" xml:space="preserve" textLength="681.6" lengthAdjust="spacing">███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║      ██║     ██████╔╝██████╔╝</text>
-<rect x="972.4" y="169.0" width="10.2" height="21.5" fill="#00e5ff"/>
-<text x="156.4" y="184.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#00e5ff" xml:space="preserve" textLength="681.6" lengthAdjust="spacing">██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║      ██║     ██╔═══╝ ██╔═══╝ </text>
-<rect x="972.4" y="190.0" width="10.2" height="21.5" fill="#00e5ff"/>
-<text x="156.4" y="205.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#00e5ff" xml:space="preserve" textLength="681.6" lengthAdjust="spacing">██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ██╗╚██████╗██║     ██║     </text>
-<rect x="972.4" y="211.0" width="10.2" height="21.5" fill="#00e5ff"/>
-<text x="156.4" y="226.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#00e5ff" xml:space="preserve" textLength="681.6" lengthAdjust="spacing">╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝ ╚═════╝╚═╝     ╚═╝     </text>
-<rect x="972.4" y="232.0" width="10.2" height="21.5" fill="#00e5ff"/>
-<text x="396.4" y="247.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#00e5ff" xml:space="preserve" textLength="201.6" lengthAdjust="spacing">/data/home/w/tuifinal</text>
-<rect x="972.4" y="253.0" width="10.2" height="21.5" fill="#00e5ff"/>
-<rect x="972.4" y="274.0" width="10.2" height="21.5" fill="#00e5ff"/>
-<text x="338.8" y="289.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#ffffff" xml:space="preserve" textLength="316.8" lengthAdjust="spacing">type a message, or / for commands</text>
-<rect x="972.4" y="295.0" width="10.2" height="21.5" fill="#00e5ff"/>
-<rect x="972.4" y="316.0" width="10.2" height="21.5" fill="#00e5ff"/>
-<rect x="972.4" y="337.0" width="10.2" height="21.5" fill="#00e5ff"/>
-<rect x="972.4" y="358.0" width="10.2" height="21.5" fill="#00e5ff"/>
-<rect x="972.4" y="379.0" width="10.2" height="21.5" fill="#00e5ff"/>
-<rect x="972.4" y="400.0" width="10.2" height="21.5" fill="#00e5ff"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1004" height="716" viewBox="0 0 1004 716" role="img" aria-label="agent.cpp chat screen">
+<rect x="1" y="1" width="1002" height="714" rx="10" fill="#000000" stroke="#00e5ff" stroke-width="2"/>
+<text x="367.6" y="226.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#ff147d" font-weight="bold" xml:space="preserve" textLength="259.2" lengthAdjust="spacing">┌─┐┌─┐┌─┐┌┐┌┌┬┐   ┌─┐┌─┐┌─┐</text>
+<text x="367.6" y="247.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#ff147d" font-weight="bold" xml:space="preserve" textLength="259.2" lengthAdjust="spacing">├─┤│ ┬├┤ │││ │    │  ├─┘├─┘</text>
+<text x="367.6" y="268.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#00e5ff" xml:space="preserve" textLength="259.2" lengthAdjust="spacing">┴ ┴└─┘└─┘┘└┘ ┴  . └─┘┴  ┴  </text>
+<text x="281.2" y="310.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#ffffff" xml:space="preserve" textLength="441.6" lengthAdjust="spacing">local agents · tools · memory · voice · graphs</text>
+<text x="137.2" y="373.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#00e5ff" xml:space="preserve" textLength="729.6" lengthAdjust="spacing">╭──────────────────────────────────────────────────────────────────────────╮</text>
+<text x="137.2" y="394.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#00e5ff" xml:space="preserve" textLength="9.6" lengthAdjust="spacing">│</text>
+<text x="156.4" y="394.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#ff147d" font-weight="bold" xml:space="preserve" textLength="9.6" lengthAdjust="spacing">›</text>
+<text x="857.2" y="394.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#00e5ff" xml:space="preserve" textLength="9.6" lengthAdjust="spacing">│</text>
+<text x="137.2" y="415.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#00e5ff" xml:space="preserve" textLength="729.6" lengthAdjust="spacing">╰──────────────────────────────────────────────────────────────────────────╯</text>
+<text x="146.8" y="436.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#00e5ff" xml:space="preserve" textLength="566.4" lengthAdjust="spacing">qwen2.5-0.5b-instruct-q4_k_m · llama · chat-20261113-143429</text>
+<text x="146.8" y="478.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#ffffff" xml:space="preserve" textLength="364.8" lengthAdjust="spacing">Tip: End jumps back to the newest line</text>
+<text x="41.2" y="499.0" font-family="SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16" fill="#00e5ff" xml:space="preserve" textLength="374.4" lengthAdjust="spacing">/ commands PgUp/PgDn scroll Ctrl-D quit</text>
 </svg>

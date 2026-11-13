@@ -9,6 +9,7 @@
 #include <chrono>
 #include <climits>
 #include <condition_variable>
+#include <ctime>
 #include <memory>
 #include <mutex>
 #include <rtxui/headless.hpp>
@@ -182,58 +183,28 @@ ChatApp *g_app = nullptr;
 Sync *g_sync = nullptr;
 rtxui::Screen *g_screen = nullptr;
 
+const char *const kTips[] = {"Tip: type / or press Ctrl+P for commands",   "Tip: Esc stops an answer while it is running",
+                             "Tip: select text with the mouse to copy it", "Tip: /image PATH sends a picture with your message",
+                             "Tip: End jumps back to the newest line",     "Tip: Up and Down recall what you typed before"};
+
 const char *const kSpinner[] = {"\xE2\xA0\x8B", "\xE2\xA0\x99", "\xE2\xA0\xB9", "\xE2\xA0\xB8", "\xE2\xA0\xBC",
                                 "\xE2\xA0\xB4", "\xE2\xA0\xA6", "\xE2\xA0\xA7", "\xE2\xA0\x87", "\xE2\xA0\x8F"};
 
-// The big "agent.cpp" on the empty screen: block letters with shadows, 71 columns wide (a narrow terminal shows the plain name).
-const char *const kBanner[6] = {
-    " \xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97  "
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97 "
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88"
-    "\xE2\x95\x97   "
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88"
-    "\xE2\x95\x97    "
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88"
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97 \xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97 ",
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94"
-    "\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D "
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88"
-    "\xE2\x96\x88\xE2\x95\x97  "
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x90\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90"
-    "\xE2\x95\x9D   "
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94"
-    "\xE2\x95\x90\xE2\x95\x90\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90\xE2\x96\x88"
-    "\xE2\x96\x88\xE2\x95\x97",
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91  "
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97  "
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97 \xE2\x96\x88\xE2\x96\x88\xE2\x95\x91   "
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91      \xE2\x96\x88\xE2\x96\x88\xE2\x95\x91     "
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x9D\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88"
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x9D",
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91  "
-    " \xE2\x96\x88\xE2\x96\x88\xE2\x95\x91\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D  "
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91\xE2\x95\x9A\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91   "
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91      \xE2\x96\x88\xE2\x96\x88\xE2\x95\x91     "
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D "
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D ",
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91  "
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91\xE2\x95\x9A\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94"
-    "\xE2\x95\x9D\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x96\x88\xE2\x96\x88"
-    "\xE2\x95\x91 \xE2\x95\x9A\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91   \xE2\x96\x88\xE2\x96\x88\xE2\x95\x91   "
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x95\x9A\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97"
-    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91     \xE2\x96\x88\xE2\x96\x88\xE2\x95\x91     ",
-    "\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x9D  \xE2\x95\x9A\xE2\x95\x90\xE2\x95\x9D "
-    "\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D "
-    "\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x9D  "
-    "\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D   \xE2\x95\x9A\xE2\x95\x90\xE2\x95\x9D   "
-    "\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x9D "
-    "\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x9D     "
-    "\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x9D     "};
+// The big "agent.cpp" on the empty screen: block letters with shadows, 29 columns wide (a narrow terminal shows the plain name).
+const char *const kBanner[3] = {
+    "\xE2\x94\x8C\xE2\x94\x80\xE2\x94\x90\xE2\x94\x8C\xE2\x94\x80\xE2\x94\x90\xE2\x94\x8C\xE2\x94\x80\xE2\x94\x90\xE2\x94\x8C\xE2\x94\x90"
+    "\xE2\x94\x8C\xE2\x94\x8C\xE2\x94\xAC\xE2\x94\x90   "
+    "\xE2\x94\x8C\xE2\x94\x80\xE2\x94\x90\xE2\x94\x8C\xE2\x94\x80\xE2\x94\x90\xE2\x94\x8C\xE2\x94\x80\xE2\x94\x90",
+    "\xE2\x94\x9C\xE2\x94\x80\xE2\x94\xA4\xE2\x94\x82 \xE2\x94\xAC\xE2\x94\x9C\xE2\x94\xA4 \xE2\x94\x82\xE2\x94\x82\xE2\x94\x82 "
+    "\xE2\x94\x82    \xE2\x94\x82  \xE2\x94\x9C\xE2\x94\x80\xE2\x94\x98\xE2\x94\x9C\xE2\x94\x80\xE2\x94\x98",
+    "\xE2\x94\xB4 \xE2\x94\xB4\xE2\x94\x94\xE2\x94\x80\xE2\x94\x98\xE2\x94\x94\xE2\x94\x80\xE2\x94\x98\xE2\x94\x98\xE2\x94\x94\xE2\x94\x98 "
+    "\xE2\x94\xB4  \x2E \xE2\x94\x94\xE2\x94\x80\xE2\x94\x98\xE2\x94\xB4  \xE2\x94\xB4  "};
 
 class ChatApp : public rtxui::Component<ChatApp> {
   public:
     explicit ChatApp(const TuiHost &host_) : host(host_) {
-        for (size_t i = 0; i < 6; ++i) banner.push_back({kBanner[i], i < 3 ? "banner pink" : "banner neon"});
+        for (size_t i = 0; i < 3; ++i) banner.push_back({kBanner[i], i < 2 ? "banner pink" : "banner neon"});
+        tip = kTips[static_cast<size_t>(std::time(nullptr) / 60) % (sizeof kTips / sizeof *kTips)];
         Bind(rows);
         Bind(banner);
         Bind(matches);
@@ -252,6 +223,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
         Bind(prompting);
         Bind(busy);
         Bind(show_welcome);
+        Bind(app_class);
+        Bind(tip);
         Bind(show_palette);
         Refresh();
     }
@@ -265,6 +238,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
     std::string md_css = std::string(kMarkdownCss);
     bool asking = false, prompting = false, busy = false;
     bool show_welcome = true, show_palette = false;
+    std::string app_class = "app home", tip;
     bool follow = true; // the transcript stays at the newest line
     std::string prompt_default;
     size_t selected = 0;
@@ -297,6 +271,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             }
         }
         show_welcome = false;
+        app_class = "app";
         Settle();
     }
 
@@ -342,6 +317,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             const size_t kv = percent >= 0 ? footer.find(" | KV ") : std::string::npos;
             status_left = kv == std::string::npos ? footer : footer.substr(0, kv);
         }
+        app_class = show_welcome ? "app home" : "app";
         caret = busy ? "\xC2\xB7" : "\xE2\x80\xBA";
         UpdateBusyLine();
     }
@@ -449,6 +425,10 @@ class ChatApp : public rtxui::Component<ChatApp> {
             }
             return true;
         }
+        if (e == Event::CtrlP() && !busy) {
+            SetInput("/");
+            return true;
+        }
         if (e == Event::CtrlD() && !busy) {
             if (g_screen) g_screen->Exit();
             return true;
@@ -544,14 +524,12 @@ class ChatApp : public rtxui::Component<ChatApp> {
     }
 
     std::string_view view = R"html(
-    <div class="app">
+    <div class="{app_class}">
       <div class="title"><span class="brand">agent.cpp</span><span class="header">{header}</span></div>
       <div class="transcript" id="t">
         <div if="{show_welcome}" class="welcome">
-          <div class="small-brand">agent.cpp</div>
           <for each="{banner}" as="ln"><div class="{ln.cls}">{ln.text}</div></for>
-          <div class="sub">{subtitle}</div>
-          <div class="hint">type a message, or / for commands</div>
+          <div class="tag">local agents · tools · memory · voice · graphs</div>
         </div>
         <for each="{rows}" as="r">
           <div class="{r.cls}">
@@ -564,68 +542,77 @@ class ChatApp : public rtxui::Component<ChatApp> {
         </for>
         <div class="busy">{busy_line}</div>
       </div>
-      <div if="{asking}" class="ask"><span class="allow">allow</span><span class="q">{question}</span><span class="keys">y once · a always · n deny</span></div>
-      <div if="{show_palette}" class="palette">
-        <for each="{matches}" as="m"><div class="{m.cls}"><span class="pname">{m.name}</span><span class="phelp">{m.help}</span></div></for>
+      <div class="composer">
+        <div if="{asking}" class="ask"><span class="allow">allow</span><span class="q">{question}</span><span class="keys">y once · a always · n deny</span></div>
+        <div if="{show_palette}" class="palette">
+          <for each="{matches}" as="m"><div class="{m.cls}"><span class="pname">{m.name}</span><span class="phelp">{m.help}</span></div></for>
+        </div>
+        <div if="{prompting}" class="promptq">? {prompt_line}</div>
+        <div class="box"><span class="caret">{caret}</span><input value="{input}" autofocus=""/></div>
+        <div class="meta"><span class="model">{header}</span></div>
+        <div class="tip" if="{show_welcome}">{tip}</div>
       </div>
-      <div if="{prompting}" class="promptq">? {prompt_line}</div>
-      <div class="inputrow"><span class="caret">{caret}</span><input value="{input}" autofocus=""/></div>
       <div class="status"><span class="left">{status_left}</span><span class="{gauge_class}">{gauge}</span></div>
     </div>
 
     <style>
       .app { display: flex; flex-direction: column; width: 100%; height: 100%; background-color: #000000; color: #ffffff; }
-      .title { border-bottom: heavy; border-color: #00e5ff; padding-left: 1; }
+      .home { justify-content: center; }
+      .title { border-bottom: solid; border-color: #00e5ff; padding-left: 1; }
+      .home .title { display: none; }
       .brand { color: #ff147d; font-weight: bold; }
       .header { color: #00e5ff; padding-left: 2; }
-      .transcript { flex-grow: 1; overflow-y: scroll; padding-left: 1; padding-right: 1; scrollbar-color: #00e5ff #000000; }
-      .welcome { display: flex; flex-direction: column; margin-top: 2; }
+      .transcript { flex-grow: 1; flex-shrink: 1; flex-basis: 0; min-height: 0; overflow-y: scroll; padding-left: 2; padding-right: 2; scrollbar-color: #00e5ff #000000; }
+      .home .transcript { flex-grow: 0; flex-shrink: 0; flex-basis: auto; overflow-y: visible; }
+      .welcome { display: flex; flex-direction: column; margin-bottom: 1; }
       .welcome > div { width: 100%; text-align: center; }
-      .welcome .small-brand { display: none; color: #ff147d; font-weight: bold; }
       .banner { white-space: pre; }
-      .pink { color: #ff147d; }
+      .pink { color: #ff147d; font-weight: bold; }
       .neon { color: #00e5ff; }
-      .sub { color: #00e5ff; }
-      .hint { color: #ffffff; margin-top: 1; }
-      @media (max-width: 76) {
-        .banner { display: none; }
-        .welcome .small-brand { display: block; }
-      }
+      .tag { color: #ffffff; margin-top: 1; }
       .row { display: flex; flex-direction: row; margin-bottom: 1; }
       .row .mark { width: 2; color: #00e5ff; }
       .row .body { flex-grow: 1; white-space: pre-wrap; }
-      .user .mark { color: #ff147d; font-weight: bold; }
-      .user .body { color: #ffffff; }
-      .turn { border-top: solid; border-color: #00e5ff; padding-top: 1; }
-      .assistant { margin-bottom: 0; }
+      .user { border-left: heavy; border-color: #ff147d; padding-left: 1; }
+      .user .mark { display: none; }
+      .user .body { color: #ffffff; font-weight: bold; }
+      .assistant { margin-bottom: 0; padding-left: 1; }
+      .assistant .mark { display: none; }
       .assistant .body { white-space: normal; }
-      .tool { margin-bottom: 0; }
+      .tool { margin-bottom: 0; padding-left: 1; }
       .tool .body { color: #ffffff; }
-      .result { margin-bottom: 1; }
+      .result { margin-bottom: 1; padding-left: 1; }
       .result .mark { width: 4; }
       .result .body { color: #00e5ff; }
       .result.failed .body { color: #ff147d; }
+      .error { padding-left: 1; }
       .error .mark, .error .body { color: #ff147d; }
+      .note { padding-left: 1; }
       .note .body { color: #ffffff; }
-      .busy { color: #ff147d; }
-      .ask { border-top: solid; border-color: #00e5ff; padding-left: 1; }
+      .busy { color: #ff147d; padding-left: 1; }
+      .composer { padding-left: 2; padding-right: 2; }
+      .home .composer { width: 76%; align-self: center; padding-left: 0; padding-right: 0; }
+      .box { display: flex; flex-direction: row; border: round; border-color: #00e5ff; padding-left: 1; padding-right: 1; }
+      .caret { color: #ff147d; font-weight: bold; width: 2; }
+      .box input { flex-grow: 1; background-color: #000000; color: #ffffff; padding-left: 0; }
+      .box input:focus, .box input:hover { background-color: #000000; color: #ffffff; }
+      .box input::part(cursor), .box input:focus::part(cursor), .box input::part(cursor-focused),
+      .box input:focus::part(cursor-focused) { color: #ffffff; }
+      .box input::part(selection), .box input:focus::part(selection) { background-color: #00e5ff; color: #000000; }
+      .meta { display: flex; flex-direction: row; padding-left: 1; padding-right: 1; }
+      .model { color: #00e5ff; flex-grow: 1; white-space: nowrap; }
+      .tip { color: #ffffff; padding-left: 1; margin-top: 1; }
+      .ask { border-left: heavy; border-color: #ff147d; padding-left: 1; margin-bottom: 1; }
       .allow { color: #ff147d; font-weight: bold; padding-right: 1; }
       .q { flex-grow: 1; }
       .keys { color: #00e5ff; font-weight: bold; padding-left: 2; }
-      .palette { padding-left: 1; }
+      .palette { border: round; border-color: #00e5ff; padding-left: 1; padding-right: 1; margin-bottom: 0; }
       .pitem { display: flex; flex-direction: row; color: #00e5ff; }
       .pitem .pname { width: 14; }
       .pitem .phelp { color: #ffffff; }
       .current .pname { color: #ff147d; font-weight: bold; }
       .promptq { color: #ff147d; font-weight: bold; padding-left: 1; }
-      .inputrow { display: flex; flex-direction: row; border-top: solid; border-color: #00e5ff; padding-left: 1; }
-      .caret { color: #ff147d; font-weight: bold; width: 2; }
-      .inputrow input { flex-grow: 1; background-color: #000000; color: #ffffff; padding-left: 0; }
-      .inputrow input:focus, .inputrow input:hover { background-color: #000000; color: #ffffff; }
-      .inputrow input::part(cursor), .inputrow input:focus::part(cursor), .inputrow input::part(cursor-focused),
-      .inputrow input:focus::part(cursor-focused) { color: #ffffff; }
-      .inputrow input::part(selection), .inputrow input:focus::part(selection) { background-color: #00e5ff; color: #000000; }
-      .status { display: flex; flex-direction: row; padding-left: 1; padding-right: 1; color: #00e5ff; }
+      .status { display: flex; flex-direction: row; padding-left: 2; padding-right: 2; color: #00e5ff; }
       .status .left { flex-grow: 1; }
       .gauge { color: #00e5ff; }
       .gauge.hot { color: #ff147d; }

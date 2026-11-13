@@ -51,7 +51,7 @@ terminal): a title bar with the model and engine, the conversation, an input lin
 Answers are rendered as markdown: headings, lists, quotes, tables and fenced code in a frame. Tool calls appear as cyan lines, and a
 tool that needs permission asks `y` once, `n`, or `a` for the rest of the session. `Esc` (or Ctrl-C while answering) stops an answer;
 Ctrl-C or Ctrl-D at the prompt quits. The mouse wheel, PgUp/PgDn and Home scroll the conversation; `End` jumps back to the newest line
-and follows it again. Select text with the mouse to copy it. The screen uses four colors (black, white, neon cyan, hot pink).
+and follows it again. Select text with the mouse to copy it. The empty screen centers the input box under the name, with a tip; `Ctrl+P` (or typing `/`) opens the command palette. Your messages carry a pink bar, and the footer shows speed and how full the context window is. The screen uses four colors (black, white, neon cyan, hot pink).
 
 | Command | What it does |
 |---|---|

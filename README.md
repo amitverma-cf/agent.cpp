@@ -1,5 +1,7 @@
 # agent.cpp
 
+<p align="center"><img src="docs/images/banner.svg" alt="agent.cpp: the welcome screen of the chat" width="1000"></p>
+
 **Run AI agents on your own machine, from one small C++ library or one command.**
 
 agent.cpp is a local-first agent runtime. Chat with a model that can read your files and run commands, transcribe speech,
