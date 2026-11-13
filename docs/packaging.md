@@ -112,7 +112,7 @@ agent-<version>-linux-<arch>[-<backend>]/
 The tarball also holds `bin/agent-engine-host`: the CLI runs engines in that process by default
 (`EngineIsolation::Process`), so the packaged `agent` needs it next to the binary.
 
-next to a `.sha256` file in `dist/` (`--out-dir`). Headers, static libraries and the CMake package are
+The tarball is written to `dist/` (`--out-dir`) with a `.sha256` file next to it. Headers, static libraries and the CMake package are
 left out: the tarball is the end-user CLI. Before packing it runs `bin/agent version` and fails if
 `ldd` reports an unresolved library for the binary or any plugin.
 

@@ -1,6 +1,6 @@
-# Usage Guide
+# Using the library
 
-This guide covers every major feature of agent.cpp with concrete code examples. For API signatures see [API Reference](api.md). For how things work internally see [Architecture](architecture.md).
+The library features in one place, each with a short example. For API signatures see [API Reference](api.md). For how things work internally see [Architecture](architecture.md).
 
 ---
 
@@ -22,70 +22,54 @@ All relative paths in filesystem and terminal tool calls resolve inside `workspa
 
 ## Session lifecycle
 
-A `Session` is created once, used for the lifetime of a conversation (or many conversations), and destroyed implicitly when it goes out of scope. Sessions are move-only — they cannot be copied.
+A `Session` is created once and used for one conversation or many. It is move-only and cleans up its engine, memory and file handles
+when it goes out of scope.
 
 ```cpp
-agent::AgentRuntime runtime;    // init global backends; must outlive all sessions
+agent::AgentRuntime runtime;    // keep it alive as long as any session
 
-agent::Config cfg;
-cfg.provider      = agent::AiProvider::Engine;
-cfg.engine        = "llama";
-cfg.model         = ".workspace/models/my.gguf";
-cfg.workspace_dir = ".workspace";
-cfg.context_window = 4096;
-cfg.max_tokens    = 512;
-cfg.temperature   = 0.7f;
+agent::Config base;
+base.workspace_dir  = ".workspace";
+base.context_window = 4096;
+base.max_tokens     = 512;
+base.temperature    = 0.7f;
 
-auto res = agent::init(cfg);
-if (!res.ok) {
-    fprintf(stderr, "init: %s\n", res.error.message.c_str());
-    return 1;
-}
+const agent::ModelSlot models[] = {{"model", ".workspace/models/my.gguf"}};
+auto cfg = agent::engine_config(agent::engines::llama, models, {}, base);
+if (!cfg.ok) { fprintf(stderr, "config: %s\n", cfg.error.message.c_str()); return 1; }
+
+auto res = agent::init(cfg.value);
+if (!res.ok) { fprintf(stderr, "init: %s\n", res.error.message.c_str()); return 1; }
 agent::Session session = std::move(res.value);
-
-// use session ...
-
-// session destroyed here -> provider state, file handles, memory cleaned up
 ```
 
 ---
 
-## Providers
+## Choosing an engine
 
-### Mock
+An engine is a plugin that runs one family of models. `engine_config` takes the engine and one path per model role; the plugin
+installed with the library is found for you.
 
-Always available. Returns fixed text. Useful for testing without a model.
-
-```cpp
-cfg.provider = agent::AiProvider::Mock;
-```
-
-### llama.cpp engine
-
-Local on-device inference from GGUF files through the `agent-engine-llama` plugin (built by default; `-DAGENT_ENGINE_LLAMA=OFF` to skip). See [docs/api/engines.md](api/engines.md).
-
-```cpp
-cfg.provider       = agent::AiProvider::Engine;
-cfg.engine         = "llama";
-cfg.model          = ".workspace/models/mistral-7b-q4_k_m.gguf";
-cfg.context_window = 8192;
-cfg.max_tokens     = 1024;
-cfg.temperature    = 0.8f;
-```
-
-### ONNX Runtime
-
-Arbitrary ONNX graphs (classifiers, detectors, embeddings) via the `agent-engine-onnx` plugin
-(build with `-DAGENT_ENGINE_ONNX=ON -DONNXRUNTIME_ROOT=<prebuilt ORT>`). Inputs and outputs are raw
-named tensors (`MessageView::tensors` / `InferResponse::output_tensors`); see
-[api/engines.md](api/engines.md#the-onnx-engine).
+| Engine | Constant | Roles | Needs |
+|---|---|---|---|
+| llama.cpp | `agent::engines::llama` | `model`, `mmproj` | built by default |
+| audio.cpp | `agent::engines::audiocpp` | `tts.model`, `asr.model`, `vad.model`, `diarize.model` | `-DAGENT_ENGINE_AUDIOCPP=ON` |
+| stable-diffusion.cpp | `agent::engines::sdcpp` | `diffusion_model`, `llm`, `vae`, `clip_l`, `t5xxl` | `-DAGENT_ENGINE_SDCPP=ON` |
+| ONNX Runtime | `agent::engines::onnx` | `model` | `-DAGENT_ENGINE_ONNX=ON` |
+| TRELLIS.2 | `agent::engines::trellis` | model folder | `-DAGENT_ENGINE_TRELLIS=ON` |
 
 ```cpp
-cfg.provider       = agent::AiProvider::Engine;
-cfg.engine         = "./engines/onnx/agent-engine-onnx.so";
-cfg.model          = ".workspace/models/clip-vit-b32.onnx";
-cfg.engine_options = R"({"threads": 4})";
+// Speech recognition and synthesis in one session
+const agent::ModelSlot speech[] = {{"asr.model", "parakeet-tdt.gguf"}, {"tts.model", "pocket-tts.gguf"}};
+auto cfg = agent::engine_config(agent::engines::audiocpp, speech, {}, base);
+
+// An ONNX model: inputs and outputs are named tensors (MessageView::tensors, InferResponse::output_tensors)
+const agent::ModelSlot onnx[] = {{"model", ".workspace/models/clip-vit-b32.onnx"}};
+auto cfg2 = agent::engine_config(agent::engines::onnx, onnx, R"({"threads": 4})", base);
 ```
+
+The third argument is a JSON object of engine options (threads, voices, GPU layers). Engine details: [api/engines.md](api/engines.md).
+For tests without a model, `agent::AiProvider::Mock` returns fixed text.
 
 ---
 

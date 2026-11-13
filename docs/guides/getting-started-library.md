@@ -83,7 +83,7 @@ int main(int argc, char **argv) {
 
     agent::Config cfg;
     cfg.provider = agent::AiProvider::Engine;
-    cfg.engine = argv[1]; // a plugin path (loaded on demand) or the name of an already loaded engine
+    cfg.engine = argv[1]; // "llama" (agent::engines::llama), another shipped engine, or the path of a plugin
     cfg.model = argv[2];
     cfg.workspace_dir = argc > 4 ? argv[4] : ".workspace";
     cfg.context_window = 4096;
@@ -127,7 +127,8 @@ int main(int argc, char **argv) {
 }
 ```
 
-(The example file also installs a `Config::logger` that prints warnings; set
+In your own program, `agent::engine_config(agent::engines::llama, ...)` builds the same `Config` in one call; the example takes the
+engine from the command line so the tests can run it on the mock engine. (The example file also installs a `Config::logger` that prints warnings; set
 `cfg.engine_host_path = AGENT_HOST_PATH;` if you used the compile definition above.)
 
 ```sh
