@@ -13,7 +13,7 @@ Embedding, reranking and chat normally use **three different models**, so each r
 ```cpp
 agent::Config base;
 base.provider      = agent::AiProvider::Engine;
-base.engine        = "build/src/engines/llama/agent-engine-llama.so";
+base.engine        = "llama";
 base.workspace_dir = ".workspace";
 
 agent::Config embed_cfg = base;

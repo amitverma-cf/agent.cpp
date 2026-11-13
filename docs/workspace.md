@@ -61,3 +61,32 @@ Many MCP servers are published as npm or Python packages. Instead of asking you 
 `agent runtime install bun` / `uv` downloads `bun` (a drop-in for `npx`) and `uv` (for Python tools, including their own Python) into `runtimes/`
 with a checksum, points their caches at `cache/`, and runs those servers there, sandboxed. Nothing touches your global
 PATH.
+
+## config.json and engines.json
+
+`config.json` is written by `agent setup`:
+
+```json
+{
+  "version": 1,
+  "workspace": "/home/me/.agent.cpp-workspace/workspaces/default",
+  "models_dir": "/home/me/.agent.cpp-workspace/models",
+  "default_model": "qwen2.5-0.5b-instruct-q4_k_m",
+  "capabilities": ["llama", "audiocpp", "sdcpp", "onnx"],
+  "backend": "cpu",
+  "context_window": 4096,
+  "max_tokens": 512,
+  "temperature": 0.7,
+  "memory_budget_mb": 0
+}
+```
+
+`engines.json` is the engine manifest that `agent::load_engine_manifest` reads. The CLI records each engine's name, version,
+capabilities and backend, and an optional `"isolation": "process" | "inprocess"`:
+
+```json
+{ "engines": [ { "name": "llama", "path": "/opt/agent/lib/agent/engines/agent-engine-llama.so", "version": "b12020",
+                 "backend": "local", "caps": ["text_gen", "tool_call", "vision_in", "audio_in"] } ] }
+```
+
+An entry with only `"path"` works too; the name is taken from the file name (`agent-engine-<name>.so`).

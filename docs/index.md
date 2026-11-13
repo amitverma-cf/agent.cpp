@@ -12,7 +12,7 @@ agent.cpp is a local, offline-first AI agent in two parts:
 
 | If you want to | Read |
 |---|---|
-| chat with a local model in five minutes | [Getting started](getting-started.md), then the quickstart in the [README](../README.md#60-second-quickstart) |
+| chat with a local model in five minutes | [Getting started](getting-started.md), then the [README](../README.md) |
 | know every command and flag | [The `agent` CLI](cli.md) |
 | install or package the binaries and the CMake package | [Installing and packaging](packaging.md) |
 | embed the runtime in a C++ program | [Getting started](getting-started.md#track-b-embedding-libagent), [Guide: embedding the library](guides/getting-started-library.md) |
@@ -86,7 +86,7 @@ int main() {
 
     agent::Config cfg;
     cfg.provider     = agent::AiProvider::Engine;
-    cfg.engine       = "build/src/engines/llama/agent-engine-llama.so";
+    cfg.engine       = "llama";
     cfg.model        = ".workspace/models/my-model.gguf";
     cfg.workspace_dir = ".workspace";
     cfg.context_window = 4096;

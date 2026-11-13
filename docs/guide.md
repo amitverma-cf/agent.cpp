@@ -29,7 +29,7 @@ agent::AgentRuntime runtime;    // init global backends; must outlive all sessio
 
 agent::Config cfg;
 cfg.provider      = agent::AiProvider::Engine;
-cfg.engine        = "build/src/engines/llama/agent-engine-llama.so";
+cfg.engine        = "llama";
 cfg.model         = ".workspace/models/my.gguf";
 cfg.workspace_dir = ".workspace";
 cfg.context_window = 4096;
@@ -66,7 +66,7 @@ Local on-device inference from GGUF files through the `agent-engine-llama` plugi
 
 ```cpp
 cfg.provider       = agent::AiProvider::Engine;
-cfg.engine         = "build/src/engines/llama/agent-engine-llama.so";
+cfg.engine         = "llama";
 cfg.model          = ".workspace/models/mistral-7b-q4_k_m.gguf";
 cfg.context_window = 8192;
 cfg.max_tokens     = 1024;

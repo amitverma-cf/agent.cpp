@@ -128,7 +128,7 @@ agent::AgentRuntime runtime;
 
 auto res = agent::init({
     .provider       = agent::AiProvider::Engine,
-    .engine         = "build/src/engines/llama/agent-engine-llama.so",
+    .engine         = "llama",
     .model          = ".workspace/models/llama-3.1-8b-q4.gguf",
     .workspace_dir  = ".workspace",
     .context_window = 8192,
