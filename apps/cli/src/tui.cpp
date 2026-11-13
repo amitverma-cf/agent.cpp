@@ -10,7 +10,9 @@
 #include <ftxui/component/event.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/dom/table.hpp>
 #include <ftxui/screen/screen.hpp>
+#include <ftxui/screen/terminal.hpp>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -32,18 +34,19 @@ const Color kPink = Color::RGB(255, 20, 125);  // hot pink: the rarest: brand, p
 const Color kNeon = Color::RGB(0, 229, 255);   // neon cyan: tool calls, hints, code
 const Color kText = Color::RGB(255, 255, 255); // white: normal text, the answers
 
-// ------------------------------------------------------------------ markdown-lite
+// ------------------------------------------------------------------ markdown
 
-// Inline spans of one line: **bold**, `code`, plain. Words keep their trailing space so hflow wraps them.
+// Inline spans of one line: **bold**, *italic*, `code`, plain. Words keep their trailing space so hflow wraps them.
 Elements inline_words(std::string_view line) {
     Elements words;
-    bool bold = false, code = false;
+    bool bold = false, code = false, italic = false;
     std::string word;
     auto flush = [&] {
         if (word.empty()) return;
         Element e = text(word);
         if (code) e = e | color(kNeon);
         if (bold) e = e | ftxui::bold;
+        if (italic) e = e | ftxui::italic;
         words.push_back(e);
         word.clear();
     };
@@ -56,6 +59,12 @@ Elements inline_words(std::string_view line) {
             flush();
             bold = !bold;
             ++i;
+        } else if (!code && c == '*' && !italic && i + 1 < line.size() && line[i + 1] != ' ' && (i == 0 || line[i - 1] == ' ')) {
+            flush();
+            italic = true;
+        } else if (!code && c == '*' && italic && i > 0 && line[i - 1] != ' ') {
+            flush();
+            italic = false;
         } else if (c == ' ') {
             word += c;
             flush();
@@ -67,13 +76,79 @@ Elements inline_words(std::string_view line) {
     return words;
 }
 
-Element code_block(const Elements &lines) { return vbox(lines) | color(kNeon); }
+std::string trim_both(std::string_view s);
+
+// A fenced code block: a rounded frame in neon with the language (when given) in pink on the top edge.
+Element code_block(const Elements &lines, std::string_view language) {
+    const std::string label = language.empty() ? std::string(" code ") : " " + std::string(language) + " ";
+    return window(text(label) | color(kPink), vbox(lines)) | color(kNeon);
+}
+
+std::vector<std::string> split_cells(std::string_view row) {
+    std::string r = trim_both(row);
+    if (!r.empty() && r.front() == '|') r.erase(0, 1);
+    if (!r.empty() && r.back() == '|') r.pop_back();
+    std::vector<std::string> cells;
+    size_t at = 0;
+    while (true) {
+        const size_t bar = r.find('|', at);
+        cells.push_back(trim_both(std::string_view(r).substr(at, bar == std::string::npos ? std::string::npos : bar - at)));
+        if (bar == std::string::npos) break;
+        at = bar + 1;
+    }
+    return cells;
+}
+
+bool is_table_line(std::string_view line) {
+    const size_t a = line.find_first_not_of(' ');
+    return a != std::string_view::npos && line[a] == '|';
+}
+
+bool is_table_rule(const std::vector<std::string> &cells) {
+    for (const std::string &c : cells) {
+        if (c.find('-') == std::string::npos) return false;
+        if (c.find_first_not_of("-: ") != std::string::npos) return false;
+    }
+    return !cells.empty();
+}
+
+// Markdown tables become a real grid: rounded outer frame, light lines between columns, a heavier line under the header.
+Element render_table(const std::vector<std::vector<std::string>> &rows) {
+    size_t columns = 0;
+    for (const auto &r : rows) columns = std::max(columns, r.size());
+    std::vector<std::vector<std::string>> grid = rows;
+    for (auto &r : grid) {
+        r.resize(columns);
+        for (std::string &cell : r) cell = " " + cell + " ";
+    }
+    Table table(grid);
+    table.SelectAll().DecorateCells(color(kText));
+    table.SelectAll().Border(ROUNDED);
+    table.SelectAll().SeparatorVertical(LIGHT);
+    table.SelectRow(0).DecorateCells(ftxui::bold);
+    table.SelectRow(0).Border(HEAVY);
+    return hbox(table.Render() | color(kNeon), filler());
+}
+
+bool is_rule_line(std::string_view line) {
+    const std::string t = trim_both(line);
+    if (t.size() < 3) return false;
+    for (const char c : t)
+        if (c != t[0]) return false;
+    return t[0] == '-' || t[0] == '*' || t[0] == '_';
+}
 
 Element render_markdown(std::string_view markdown) {
     Elements blocks;
     size_t at = 0;
     bool in_code = false;
+    std::string language;
     Elements code_lines;
+    std::vector<std::vector<std::string>> table_rows;
+    auto flush_table = [&] {
+        if (!table_rows.empty()) blocks.push_back(render_table(table_rows));
+        table_rows.clear();
+    };
     auto next_line = [&](std::string_view &line) {
         if (at > markdown.size()) return false;
         size_t end = markdown.find('\n', at);
@@ -87,8 +162,10 @@ Element render_markdown(std::string_view markdown) {
     while (next_line(line)) {
         if (line.substr(0, 3) == "```") {
             if (in_code) {
-                blocks.push_back(code_block(code_lines));
+                blocks.push_back(code_block(code_lines, language));
                 code_lines.clear();
+            } else {
+                language = trim_both(line.substr(3));
             }
             in_code = !in_code;
             continue;
@@ -97,27 +174,55 @@ Element render_markdown(std::string_view markdown) {
             code_lines.push_back(text(" " + std::string(line)));
             continue;
         }
+        if (is_table_line(line)) {
+            const std::vector<std::string> cells = split_cells(line);
+            if (!is_table_rule(cells)) table_rows.push_back(cells);
+            continue;
+        }
+        flush_table();
         if (line.empty()) {
             blocks.push_back(text(""));
+            continue;
+        }
+        if (is_rule_line(line)) {
+            blocks.push_back(separatorLight() | color(kNeon));
             continue;
         }
         size_t level = 0;
         while (level < line.size() && line[level] == '#') ++level;
         if (level > 0 && level <= 6 && level < line.size() && line[level] == ' ') {
-            blocks.push_back(hflow(inline_words(line.substr(level + 1))) | ftxui::bold | color(kText));
+            Element title = hflow(inline_words(line.substr(level + 1))) | ftxui::bold | color(kText);
+            if (level == 1)
+                blocks.push_back(vbox({hbox(text("\xE2\x96\x8C ") | color(kPink), title | flex), separatorDouble() | color(kNeon)}));
+            else if (level == 2)
+                blocks.push_back(vbox({hbox(text("\xE2\x96\x8C ") | color(kPink), title | flex), separatorLight() | color(kNeon)}));
+            else blocks.push_back(hbox(text("\xE2\x96\xB8 ") | color(kNeon), title | flex));
             continue;
         }
         size_t indent = 0;
         while (indent < line.size() && line[indent] == ' ') ++indent;
         const std::string_view body = line.substr(indent);
+        if (body.size() > 2 && body[0] == '>' && body[1] == ' ') {
+            blocks.push_back(hbox(text("\xE2\x94\x83 ") | color(kNeon), hflow(inline_words(body.substr(2))) | italic | flex));
+            continue;
+        }
         if (body.size() > 2 && (body[0] == '-' || body[0] == '*') && body[1] == ' ') {
-            Elements row = inline_words(body.substr(2));
-            blocks.push_back(hbox(text(std::string(indent, ' ') + " \xE2\x80\xA2 "), hflow(row) | flex));
+            const char *dot = indent >= 2 ? "\xE2\x97\xA6 " : "\xE2\x80\xA2 ";
+            blocks.push_back(
+                hbox(text(std::string(indent, ' ') + " "), text(dot) | color(kNeon), hflow(inline_words(body.substr(2))) | flex));
+            continue;
+        }
+        size_t digits = 0;
+        while (digits < body.size() && body[digits] >= '0' && body[digits] <= '9') ++digits;
+        if (digits > 0 && digits < 4 && digits + 1 < body.size() && body[digits] == '.' && body[digits + 1] == ' ') {
+            blocks.push_back(hbox(text(std::string(indent, ' ') + " "), text(std::string(body.substr(0, digits + 1)) + " ") | color(kNeon),
+                                  hflow(inline_words(body.substr(digits + 2))) | flex));
             continue;
         }
         blocks.push_back(hflow(inline_words(line)));
     }
-    if (in_code && !code_lines.empty()) blocks.push_back(code_block(code_lines));
+    flush_table();
+    if (in_code && !code_lines.empty()) blocks.push_back(code_block(code_lines, language));
     return vbox(blocks);
 }
 
@@ -153,6 +258,76 @@ std::string trim_both(std::string_view s) {
 }
 
 // ------------------------------------------------------------------ transcript
+
+// The big "agent.cpp" on the empty screen: block glyphs in pink, their shadows in neon. Needs 72 columns, else the plain title is used.
+constexpr int kBannerWidth = 71;
+const char *const kBanner[6] = {
+    " \xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97  "
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97 "
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88"
+    "\xE2\x95\x97   "
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88"
+    "\xE2\x95\x97    "
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88"
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97 \xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97 ",
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94"
+    "\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D "
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88"
+    "\xE2\x96\x88\xE2\x95\x97  "
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x90\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90"
+    "\xE2\x95\x9D   "
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94"
+    "\xE2\x95\x90\xE2\x95\x90\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90\xE2\x96\x88"
+    "\xE2\x96\x88\xE2\x95\x97",
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91  "
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97  "
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97 \xE2\x96\x88\xE2\x96\x88\xE2\x95\x91   "
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91      \xE2\x96\x88\xE2\x96\x88\xE2\x95\x91     "
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x9D\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88"
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x9D",
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91  "
+    " \xE2\x96\x88\xE2\x96\x88\xE2\x95\x91\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D  "
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91\xE2\x95\x9A\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91   "
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91      \xE2\x96\x88\xE2\x96\x88\xE2\x95\x91     "
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D "
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D ",
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91  "
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91\xE2\x95\x9A\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x94"
+    "\xE2\x95\x9D\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x96\x88\xE2\x96\x88"
+    "\xE2\x95\x91 \xE2\x95\x9A\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91   \xE2\x96\x88\xE2\x96\x88\xE2\x95\x91   "
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97\xE2\x95\x9A\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x96\x88\xE2\x95\x97"
+    "\xE2\x96\x88\xE2\x96\x88\xE2\x95\x91     \xE2\x96\x88\xE2\x96\x88\xE2\x95\x91     ",
+    "\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x9D  \xE2\x95\x9A\xE2\x95\x90\xE2\x95\x9D "
+    "\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D "
+    "\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x9D  "
+    "\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D   \xE2\x95\x9A\xE2\x95\x90\xE2\x95\x9D   "
+    "\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x9D "
+    "\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x90\xE2\x95\x9D\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x9D     "
+    "\xE2\x95\x9A\xE2\x95\x90\xE2\x95\x9D     "};
+
+Element banner() {
+    Elements lines;
+    for (const char *row : kBanner) {
+        Elements runs;
+        std::string run;
+        bool solid = false;
+        const std::string_view r(row);
+        for (size_t i = 0; i < r.size();) {
+            const size_t len = (static_cast<unsigned char>(r[i]) >= 0xE0) ? 3 : 1;
+            const bool block = r.compare(i, len, "\xE2\x96\x88") == 0;
+            if (!run.empty() && block != solid) {
+                runs.push_back(text(run) | color(solid ? kPink : kNeon));
+                run.clear();
+            }
+            solid = block;
+            run.append(r.substr(i, len));
+            i += len;
+        }
+        if (!run.empty()) runs.push_back(text(run) | color(solid ? kPink : kNeon));
+        lines.push_back(hcenter(hbox(runs)));
+    }
+    return vbox(lines);
+}
 
 struct Block {
     TuiKind kind;
@@ -412,6 +587,7 @@ int run_tui(const TuiHost &host) {
             std::lock_guard<std::mutex> lock(ui.mu);
             for (size_t i = 0; i < ui.blocks.size(); ++i) {
                 const Block &b = ui.blocks[i];
+                if (b.kind == TuiKind::User && i > 0) rows.push_back(separatorLight() | color(kNeon));
                 rows.push_back(render_block(b));
                 // A blank line between blocks, except inside a run of notes or tool lines.
                 const bool quiet = i + 1 < ui.blocks.size() && ((ui.blocks[i + 1].kind == b.kind && b.kind == TuiKind::Note) ||
@@ -448,9 +624,10 @@ int run_tui(const TuiHost &host) {
 
         Element transcript;
         if (empty && !busy) {
-            transcript = vbox({filler(), hcenter(text("agent.cpp") | ftxui::bold | color(kPink)), hcenter(text(header) | color(kNeon)),
-                               subtitle.empty() ? text("") : hcenter(text(subtitle) | color(kNeon)), text(""),
-                               hcenter(text("type a message, or / for commands") | color(kText)), filler()}) |
+            const bool wide = Terminal::Size().dimx >= kBannerWidth + 2;
+            transcript = vbox({filler(), wide ? banner() : hcenter(text("agent.cpp") | ftxui::bold | color(kPink)), text(""),
+                               hcenter(text(header) | color(kNeon)), subtitle.empty() ? text("") : hcenter(text(subtitle) | color(kNeon)),
+                               text(""), hcenter(text("type a message, or / for commands") | color(kText)), filler()}) |
                          flex;
         } else {
             // yframe scrolls so that the focused element is visible, so the focus belongs inside the frame: on a marker row at the end
@@ -504,7 +681,8 @@ int run_tui(const TuiHost &host) {
         if (percent >= 0) status.push_back(context_gauge(percent));
 
         const Element title = hbox(text(" agent.cpp") | ftxui::bold | color(kPink), text("  " + header) | color(kNeon), filler());
-        return vbox({title, transcript, vbox(bottom), hbox(status)}) | color(kText) | bgcolor(kBackground);
+        return vbox({title, separatorHeavy() | color(kNeon), transcript, vbox(bottom), separatorLight() | color(kNeon), hbox(status)}) |
+               color(kText) | bgcolor(kBackground);
     });
 
     root = CatchEvent(root, [&](Event e) {

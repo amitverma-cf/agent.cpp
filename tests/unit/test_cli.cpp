@@ -1,6 +1,8 @@
 #include "cli_core.hpp"
 
 #include <catch_amalgamated.hpp>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -451,6 +453,25 @@ TEST_CASE("tui: markdown-lite layout", "[cli][tui]") {
     size_t lines = 0;
     for (char c : text) lines += c == '\n';
     CHECK(lines >= 8);
+}
+
+TEST_CASE("tui: markdown tables, quotes, numbered lists, rules and code frames", "[cli][tui]") {
+    const std::string md =
+        "# Big title\n## Section\n### Small\n\n1. one\n2. two *soft* words\n\n> a quote\n\n---\n\n| name | size |\n|---|---|\n| "
+        "a.txt | 12 |\n| b.txt | 7 |\n\n```python\nprint(1)\n```\n";
+    const std::string text = render_markdown_text(md, 50);
+    if (std::getenv("AGENT_SHOW_MD")) std::puts(text.c_str());
+    CHECK(text.find("Big title") != std::string::npos);
+    CHECK(text.find("\xE2\x95\x90") != std::string::npos); // the double rule under a level-1 heading
+    CHECK(text.find("2.") != std::string::npos);
+    CHECK(text.find("soft") != std::string::npos);
+    CHECK(text.find("*soft*") == std::string::npos);
+    CHECK(text.find("a quote") != std::string::npos);
+    CHECK(text.find("a.txt") != std::string::npos);
+    CHECK(text.find("|---") == std::string::npos);         // the table's separator row is not shown as text
+    CHECK(text.find("\xE2\x95\xAD") != std::string::npos); // a rounded corner: the table and code frames
+    CHECK(text.find(" python ") != std::string::npos);
+    CHECK(text.find("print(1)") != std::string::npos);
 }
 
 TEST_CASE("tui: tool results are shortened to a few lines", "[cli][tui]") {
