@@ -471,6 +471,55 @@ TEST_CASE("tui: markdown tables, quotes, numbered lists and code", "[cli][tui]")
     CHECK(text.find("print(1)") != std::string::npos);
 }
 
+namespace {
+std::vector<TuiSession> fake_sessions(void *) {
+    return {{"c1", "First question", "/work/alpha", 4, true}, {"c2", "Another one", "/work/beta", 2, false}};
+}
+std::string fake_header(void *) { return "model - engine - chat-1"; }
+std::string fake_subtitle(void *) { return "/work/alpha"; }
+} // namespace
+
+TEST_CASE("tui: the layout follows the terminal width", "[cli][tui]") {
+    TuiHost host;
+    host.header = fake_header;
+    host.subtitle = fake_subtitle;
+    host.sessions = fake_sessions;
+    const auto has = [](const std::string &text, const char *needle) { return text.find(needle) != std::string::npos; };
+
+    // Wide: the sidebar lists the sessions by project, the big logo is drawn.
+    const std::string wide = render_chat_text(host, 120, 30);
+    CHECK(has(wide, "New chat"));
+    CHECK(has(wide, "alpha"));
+    CHECK(has(wide, "beta"));
+    CHECK(has(wide, "\xE2\x94\x8C\xE2\x94\x80\xE2\x94\x90")); // the logo's first glyphs
+
+    // Narrow: the sidebar is a drawer, a menu button takes its place, the conversation keeps the whole width.
+    const std::string narrow = render_chat_text(host, 70, 24);
+    CHECK_FALSE(has(narrow, "First question"));
+    CHECK(has(narrow, "\xE2\x98\xB0"));
+    CHECK(has(narrow, "\xE2\x94\x8C\xE2\x94\x80\xE2\x94\x90"));
+
+    // Tiny: the logo gives way to the name, and the tip line is gone.
+    const std::string tiny = render_chat_text(host, 30, 24);
+    CHECK(has(tiny, "agent.cpp"));
+    CHECK_FALSE(has(tiny, "\xE2\x94\x8C\xE2\x94\x80\xE2\x94\x90"));
+    CHECK_FALSE(has(tiny, "Tip:"));
+
+    // No row is wider than the terminal.
+    for (const std::string *text : {&wide, &narrow, &tiny}) {
+        size_t start = 0;
+        while (start < text->size()) {
+            size_t end = text->find('\n', start);
+            if (end == std::string::npos) end = text->size();
+            size_t glyphs = 0;
+            for (size_t i = start; i < end; ++i)
+                if ((static_cast<unsigned char>((*text)[i]) & 0xC0) != 0x80) ++glyphs;
+            CHECK(glyphs <= 120);
+            start = end + 1;
+        }
+    }
+}
+
 TEST_CASE("tui: tool results are shortened to a few lines", "[cli][tui]") {
     CHECK(summarize_tool_result("one\ntwo\nthree", 4, 80) == "one\ntwo\nthree");
     const std::string cut = summarize_tool_result("1\n2\n3\n4\n5\n6\n", 3, 80);

@@ -58,6 +58,16 @@ In a terminal this opens a full-screen chat laid out like a chat website, built 
 - **Input:** at the bottom, with a command palette (type `/` or press `Ctrl+P`), history on Up/Down, and a footer with the speeds and how
   full the context window is.
 
+**The layout follows the width of the terminal** and changes the moment you resize it (a split pane, a phone over SSH, a tmux window):
+
+| Width | Layout |
+|---|---|
+| 84 columns or more | sidebar on the left, conversation and input on the right |
+| 70 to 83 | the sidebar becomes a drawer: a `☰` button (or `Ctrl+K` / `Ctrl+B`) slides it over the conversation, picking a session closes it |
+| 50 to 69 | tighter margins; the project path leaves the title bar |
+| 36 to 49 | the tip, the model line and the footer text are dropped; the context gauge stays |
+| under 36 | the big logo gives way to the name |
+
 A tool that needs permission asks `y` once, `n`, or `a` for the rest of the session. `Esc` (or Ctrl-C while answering) stops an answer;
 Ctrl-C or Ctrl-D at the prompt quits. The mouse wheel, PgUp/PgDn and Home scroll the conversation; `End` jumps back to the newest line
 and follows it again. Select text with the mouse to copy it. The screen uses four colors (black, white, neon cyan, hot pink).

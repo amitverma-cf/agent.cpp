@@ -254,6 +254,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         Bind(show_palette);
         Bind(Pick);
         Bind(NewChat);
+        Bind(ToggleSide);
         Refresh();
         RefreshSessions();
     }
@@ -270,9 +271,10 @@ class ChatApp : public rtxui::Component<ChatApp> {
     std::string md_css = std::string(kMarkdownCss);
     bool asking = false, prompting = false, busy = false;
     bool show_welcome = true, show_palette = false;
-    bool follow = true;      // the conversation stays at the newest line
-    bool side_open = true;   // Ctrl+B
-    bool side_focus = false; // Ctrl+K: Up/Down pick a session, Enter opens it
+    bool follow = true;       // the conversation stays at the newest line
+    bool side_hide = false;   // Ctrl+B on a wide terminal hides the sidebar
+    bool side_drawer = false; // on a narrow terminal the sidebar is a drawer over the conversation: Ctrl+K, Ctrl+B or the ☰ button
+    bool side_focus = false;  // Ctrl+K: Up/Down pick a session, Enter opens it
     int side_sel = 0;
     std::string prompt_default;
     size_t selected = 0;
@@ -365,8 +367,16 @@ class ChatApp : public rtxui::Component<ChatApp> {
         const int i = index.empty() ? -1 : std::atoi(index.c_str());
         if (i < 0 || i >= static_cast<int>(sessions.size())) return;
         const TuiSession &s = sessions[static_cast<size_t>(i)];
+        side_drawer = false;
         if (s.active) return;
         SwitchTo(s.id, s.workspace);
+    }
+
+    // The ☰ button of a narrow terminal, and Ctrl+B: hides the sidebar when there is room for it, opens it as a drawer when there is not.
+    void ToggleSide() {
+        side_hide = !side_hide;
+        side_drawer = !side_drawer;
+        Refresh();
     }
 
     void NewChat() { SwitchTo("", host.subtitle ? host.subtitle(host.user) : std::string()); }
@@ -387,6 +397,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
                 busy = false;
                 if (opened) Repaint();
                 side_focus = false;
+                side_drawer = false;
                 Refresh();
                 RefreshSessions();
                 Settle();
@@ -424,7 +435,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             status_left = kv == std::string::npos ? footer : footer.substr(0, kv);
         }
         app_class = show_welcome ? "main home" : "main";
-        side_class = side_open ? "side" : "side hidden";
+        side_class = std::string("side") + (side_hide ? " hidden" : "") + (side_drawer ? " drawer" : "");
         caret = busy ? "\xC2\xB7" : "\xE2\x80\xBA";
         UpdateBusyLine();
     }
@@ -540,6 +551,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
                 RebuildSide();
             } else if (e == Event::Escape() || e == Event::CtrlK()) {
                 side_focus = false;
+                side_drawer = false;
                 RebuildSide();
             } else if (e.is<Event::Mouse>()) {
                 return Component<ChatApp>::OnEvent(e);
@@ -550,7 +562,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
         if (e == Event::CtrlK()) {
             if (sessions.empty() || busy) return true;
             side_focus = true;
-            side_open = true;
+            side_hide = false;
+            side_drawer = true;
             side_sel = 0;
             for (size_t i = 0; i < sessions.size(); ++i)
                 if (sessions[i].active) side_sel = static_cast<int>(i);
@@ -563,8 +576,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             return true;
         }
         if (e == Event::CtrlB()) {
-            side_open = !side_open;
-            Refresh();
+            ToggleSide();
             return true;
         }
         if (e == Event::CtrlC() || e == Event::Escape()) {
@@ -686,10 +698,11 @@ class ChatApp : public rtxui::Component<ChatApp> {
         <div class="sfoot"><div class="sproj">{project_line}</div><div class="skeys">Ctrl+K sessions</div><div class="skeys">Ctrl+B hide</div></div>
       </div>
       <div class="{app_class}">
-        <div class="top"><span class="ttitle">{main_title}</span><span class="tproj">{project_line}</span></div>
+        <div class="top"><span class="burger" onclick="ToggleSide">☰ </span><span class="ttitle">{main_title}</span><span class="tproj">{project_line}</span></div>
         <div class="sp1"></div>
         <div class="transcript" id="t">
           <div if="{show_welcome}" class="welcome">
+            <div class="small-brand">agent.cpp</div>
             <for each="{banner}" as="ln"><div class="{ln.cls}">{ln.text}</div></for>
             <div class="tag">local agents · tools · memory · voice · graphs</div>
           </div>
@@ -723,7 +736,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .shell { display: flex; flex-direction: row; width: 100%; height: 100%; background-color: #000000; color: #ffffff; }
       .side { width: 30; flex-shrink: 0; display: flex; flex-direction: column; border-right: solid; border-color: #00e5ff; padding-left: 1; padding-right: 1; }
       .hidden { display: none; }
-      @media (max-width: 83) { .side { display: none; } }
+      .burger, .small-brand { display: none; }
+      .small-brand { color: #ff147d; font-weight: bold; }
       .sbrand { padding-bottom: 1; }
       .brand { color: #ff147d; font-weight: bold; }
       .newchat { display: flex; flex-direction: row; border: round; border-color: #00e5ff; padding-left: 1; padding-right: 1; margin-bottom: 1; }
@@ -796,10 +810,45 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .current .pname { color: #ff147d; font-weight: bold; }
       .promptq { color: #ff147d; font-weight: bold; padding-left: 1; }
       .status { display: flex; flex-direction: row; padding-left: 2; padding-right: 2; color: #00e5ff; }
-      .status .left { flex-grow: 1; white-space: nowrap; overflow-x: hidden; }
-      .gauge { white-space: nowrap; }
+      .status .left { flex-grow: 1; flex-shrink: 1; min-width: 0; white-space: nowrap; overflow-x: hidden; }
+      .gauge { white-space: nowrap; padding-left: 2; flex-shrink: 0; }
       .gauge { color: #00e5ff; }
       .gauge.hot { color: #ff147d; }
+
+      /* Narrow terminals (below 84 columns): the sidebar becomes a drawer over the conversation, opened with Ctrl+K, Ctrl+B or the menu button. */
+      @media (max-width: 83) {
+        .shell { position: relative; }
+        .side { display: none; }
+        .side.drawer { display: flex; position: absolute; left: 0; top: 0; bottom: 0; background-color: #000000; z-index: 5; }
+        .burger { display: inline; color: #ff147d; font-weight: bold; }
+        .home .top { display: flex; border-bottom: none; }
+        .home .ttitle, .home .tproj { display: none; }
+      }
+      /* Phones and split panes (below 70): tighter margins, the project path moves out of the title bar. */
+      @media (max-width: 69) {
+        .tproj { display: none; }
+        .transcript { padding-left: 1; padding-right: 1; }
+        .composer { padding-left: 1; padding-right: 1; }
+        .status { padding-left: 1; padding-right: 1; }
+        .user { padding-left: 3; }
+        .home .composer { width: 100%; padding-left: 1; padding-right: 1; }
+        .metrics { padding-left: 0; }
+      }
+      /* Very narrow (below 50): only what is needed to talk. */
+      @media (max-width: 49) {
+        .tag, .tip, .meta { display: none; }
+        .status .left { display: none; }
+        .status { justify-content: flex-end; }
+        .row .mark { width: 1; }
+        .assistant .mark { display: none; }
+        .side.drawer { width: 100%; }
+      }
+      /* Tiny (below 36): the big logo gives way to the name. */
+      @media (max-width: 35) {
+        .banner { display: none; }
+        .small-brand { display: block; }
+        .gauge { display: none; }
+      }
     </style>
   )html";
 };
@@ -814,6 +863,12 @@ class MarkdownProbe : public rtxui::Component<MarkdownProbe> {
 };
 
 } // namespace
+
+std::string render_chat_text(const TuiHost &host, int width, int height) {
+    auto app = rtxui::Ref<ChatApp>::New(host);
+    rtxui::HeadlessScreen screen(app, width, height);
+    return screen.Text();
+}
 
 std::string render_markdown_text(std::string_view markdown, int width) {
     rtxui::HeadlessScreen screen(rtxui::Ref<MarkdownProbe>::New(markdown), width, 60);

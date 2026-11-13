@@ -79,6 +79,8 @@ bool tui_ask(std::string_view question, bool *always);
 // user presses Enter; an empty answer means `default_value`. Returns false when the interface is closing.
 bool tui_prompt(std::string_view question, std::string_view default_value, std::string &answer);
 
+// The whole chat screen as plain text at a given terminal size, with the host as it is (for tests of the responsive layout).
+std::string render_chat_text(const TuiHost &host, int width, int height);
 // The markdown renderer on its own, as plain text laid out for `width` columns (for tests).
 std::string render_markdown_text(std::string_view markdown, int width);
 
