@@ -14,7 +14,7 @@ one command.
 | add or remove engines | [`agent engine`](#agent-engine) |
 | add skills or MCP servers | [`agent skill`](#agent-skill), [`agent mcp`](#agent-mcp) |
 | control what tools may touch | [`agent sandbox`](#agent-sandbox), [`agent secret`](#agent-secret) |
-| see what is installed, free disk | [`agent doctor`](#agent-doctor), [`agent clean`](#agent-clean) |
+| see what is installed, free disk | [`agent doctor`](#agent-init-doctor-clean), [`agent clean`](#agent-init-doctor-clean) |
 | pause a graph and resume it later | [`agent schedule`](#agent-schedule), [`agent wake`](#agent-wake) |
 
 `--no-sandbox` works with every command and turns the OS sandbox off for engines, tools and commands. `--home DIR` picks the

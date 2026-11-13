@@ -15,7 +15,7 @@ agent.cpp is a local, offline-first AI agent in two parts:
 | chat with a local model in five minutes | [Getting started](getting-started.md), then the [README](../README.md) |
 | know every command and flag | [The `agent` CLI](cli.md) |
 | install or package the binaries and the CMake package | [Installing and packaging](packaging.md) |
-| embed the runtime in a C++ program | [Getting started](getting-started.md#track-b-embedding-libagent), [Guide: embedding the library](guides/getting-started-library.md) |
+| embed the runtime in a C++ program | [Getting started](getting-started.md#use-the-library), [Guide: embedding the library](guides/getting-started-library.md) |
 | add a model engine | [Guide: writing an engine plugin](guides/writing-an-engine.md) |
 | write tools, graphs or workflows | [Guide: writing a tool](guides/writing-a-tool.md), [Guide: writing a graph](guides/writing-a-graph.md) |
 
@@ -108,7 +108,7 @@ int main() {
 
 ## CMake options
 
-The complete table is in the [README](../README.md#cmake-options). The options that change what gets built:
+The complete table is in the [README](getting-started.md#build-options). The options that change what gets built:
 
 | Option | Default | Description |
 |---|---|---|

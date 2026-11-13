@@ -133,7 +133,7 @@ Routing, parallel branches, loops, checkpoints and human-in-the-loop interrupts:
 | `BUILD_SHARED_LIBS` | `OFF` | Build `libagent`, `agent_store_sqlite` and `agent_hub` as shared libraries |
 | `AGENT_INSTALL` | `ON` (top level) | Generate install rules and the `agent-cpp` CMake package |
 | `AGENT_BUILD_EXAMPLES` | `ON` | Build `examples/` (guide code, image critique, RAG over docs) and their smoke tests (`ctest -L examples`) |
-| `AGENT_BUILD_BENCH` | `OFF` | Build `agent_bench`, the benchmark harness (`bench/`); results in [docs/benchmarks.md](docs/benchmarks.md) |
+| `AGENT_BUILD_BENCH` | `OFF` | Build `agent_bench`, the benchmark harness (`bench/`); results in [docs/benchmarks.md](benchmarks.md) |
 | `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UndefinedBehaviorSanitizer on GCC and Clang |
 | `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |
 

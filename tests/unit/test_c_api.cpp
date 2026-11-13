@@ -3,6 +3,7 @@
 #include <agent-cpp/agent_c.h>
 #include <agent-cpp/engine_abi.h>
 #include <catch_amalgamated.hpp>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -112,4 +113,26 @@ TEST_CASE("c api: embeddings and one-shot tasks through the mock engine", "[c_ap
 
     CHECK(agent_c_run_task(session, 0, "x", nullptr, text, sizeof(text), file, sizeof(file), err, sizeof(err)) == AGENT_C_ERROR);
     agent_c_close(session);
+}
+
+TEST_CASE("c api: an engine name is found in AGENT_ENGINES_DIR", "[c_api]") {
+    namespace fs = std::filesystem;
+    const fs::path plugin = AGENT_TEST_MOCK_ENGINE_PATH;
+    const std::string name = plugin.stem().string().substr(std::strlen("agent-engine-"));
+#if defined(_WIN32)
+    _putenv_s("AGENT_ENGINES_DIR", plugin.parent_path().string().c_str());
+#else
+    setenv("AGENT_ENGINES_DIR", plugin.parent_path().string().c_str(), 1);
+#endif
+    char err[256] = {};
+    const std::string ws = workspace("agent_test_c_api_byname");
+    agent_c_session *session = agent_c_open(name.c_str(), "mock.bin", nullptr, ws.c_str(), 0, 0, err, sizeof(err));
+    INFO(err);
+    CHECK(session != nullptr);
+    agent_c_close(session);
+#if defined(_WIN32)
+    _putenv_s("AGENT_ENGINES_DIR", "");
+#else
+    unsetenv("AGENT_ENGINES_DIR");
+#endif
 }

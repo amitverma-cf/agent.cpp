@@ -133,7 +133,7 @@ Not done yet:
 ## Release archives
 
 No release archives are published yet (the version is `dev-v0.0.x`, and there are no GitHub Releases).
-Build from source as described in [getting-started.md](getting-started.md#track-a-the-agent-cli), or use the Linux
+Build from source as described in [getting-started.md](getting-started.md#use-the-command), or use the Linux
 tarball script above. The script is run by hand. No GitHub Action runs automatically: the CI and release
 workflows are manual-dispatch only.
 
@@ -142,5 +142,5 @@ workflows are manual-dispatch only.
 - Plugin DLLs are loaded with `LoadLibraryExW(..., LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)`
   (`src/hal/dylib.cpp`), so a plugin finds the ONNX Runtime DLLs next to it.
 - `agent_hub` needs OpenSSL 3 at build time.
-- Build from source with the steps in [getting-started.md](getting-started.md#track-a-the-agent-cli).
+- Build from source with the steps in [getting-started.md](getting-started.md#use-the-command).
 
