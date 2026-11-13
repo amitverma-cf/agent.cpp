@@ -39,6 +39,8 @@ Result<CommandLine> parse_command_line(std::span<const std::string_view> args);
 
 // The overview (no argument) or the detailed help of one command ("model", "task", ...).
 std::string usage_text(std::string_view command = {});
+// The command whose name is closest to `typed` (a typo such as "modle"), or "" when nothing is close.
+std::string closest_command(std::string_view typed);
 // Every command with every option, in one text.
 std::string usage_all();
 

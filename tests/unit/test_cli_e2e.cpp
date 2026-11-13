@@ -14,7 +14,7 @@ TEST_CASE("cli e2e: version, help and bad commands", "[cli_e2e]") {
     auto bad = h.run("no-such-command");
     CHECK(bad.code == 2);
     CHECK(has(bad, "unknown command"));
-    CHECK(has(bad, "usage: agent"));
+    CHECK(has(bad, "agent --help"));
     auto missing = h.run("model rm");
     CHECK(missing.code != 0);
 }

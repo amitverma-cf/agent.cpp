@@ -73,13 +73,7 @@ engine plugins in `lib/agent/engines/`, `libagent`, the headers and the CMake pa
 int main() {
     agent::AgentRuntime runtime;                       // keep it alive as long as any session
 
-    agent::Config base;
-    base.workspace_dir = ".workspace";
-    const agent::ModelSlot models[] = {{"model", ".workspace/models/my.gguf"}};
-    auto cfg = agent::engine_config(agent::engines::llama, models, {}, base);
-    if (!cfg.ok) return std::fprintf(stderr, "%s\n", cfg.error.message.c_str()), 1;
-
-    auto session = agent::init(cfg.value);
+    auto session = agent::open(agent::engines::llama, ".workspace/models/my.gguf");
     if (!session.ok) return std::fprintf(stderr, "%s\n", session.error.message.c_str()), 1;
 
     agent::Conversation chat;

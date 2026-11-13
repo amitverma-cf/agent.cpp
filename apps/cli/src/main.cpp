@@ -16,7 +16,21 @@ int main(int argc, char **argv) {
 
     auto parsed = parse_command_line(args);
     if (!parsed.ok) {
-        std::fprintf(stderr, "agent: %s\n\n%s", parsed.error.message.c_str(), usage_text().c_str());
+        std::fprintf(stderr, "agent: %s\n", parsed.error.message.c_str());
+        std::string first;
+        for (std::string_view a : args)
+            if (!a.empty() && a[0] != '-') {
+                first = std::string(a);
+                break;
+            }
+        const std::string detail = first.empty() ? std::string() : usage_text(first);
+        if (!detail.empty() && detail != usage_text()) {
+            std::fprintf(stderr, "\n%s", detail.c_str());
+        } else {
+            const std::string guess = closest_command(first);
+            if (!guess.empty()) std::fprintf(stderr, "Did you mean '%s'?\n", guess.c_str());
+            std::fprintf(stderr, "Run 'agent --help' for the list of commands.\n");
+        }
         return 2;
     }
     // `agent` on its own in a terminal opens the chat screen (like other agent CLIs); piped or scripted it still prints the usage.

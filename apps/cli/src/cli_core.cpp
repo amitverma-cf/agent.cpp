@@ -384,6 +384,33 @@ std::string usage_text(std::string_view command) {
     return "usage: agent " + std::string(command) + " ...\n\n" + out + "\nglobal options: -h|--help, --no-sandbox, --home DIR\n";
 }
 
+std::string closest_command(std::string_view typed) {
+    auto distance = [](std::string_view a, std::string_view b) {
+        std::vector<size_t> row(b.size() + 1);
+        for (size_t j = 0; j <= b.size(); ++j) row[j] = j;
+        for (size_t i = 1; i <= a.size(); ++i) {
+            size_t diagonal = row[0];
+            row[0] = i;
+            for (size_t j = 1; j <= b.size(); ++j) {
+                const size_t above = row[j];
+                row[j] = std::min({row[j] + 1, row[j - 1] + 1, diagonal + (a[i - 1] == b[j - 1] ? 0 : 1)});
+                diagonal = above;
+            }
+        }
+        return row[b.size()];
+    };
+    std::string best;
+    size_t best_distance = 3; // at most two edits away
+    for (const auto &b : kOverview) {
+        const size_t d = distance(typed, b.name);
+        if (d < best_distance) {
+            best_distance = d;
+            best = std::string(b.name);
+        }
+    }
+    return best;
+}
+
 // -------------------------- JSON helpers --------------------------
 
 std::string json_escape(std::string_view s) {

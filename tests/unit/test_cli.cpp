@@ -570,3 +570,9 @@ TEST_CASE("chat: /doctor and /setup map to agent subcommands", "[cli][slash]") {
     CHECK(argv("hello").empty());
     CHECK(parse_slash_command("/clear").kind == SlashKind::Clear);
 }
+
+TEST_CASE("cli: a mistyped command gets a suggestion", "[cli]") {
+    CHECK(agent::cli::closest_command("modle") == "model");
+    CHECK(agent::cli::closest_command("chta") == "chat");
+    CHECK(agent::cli::closest_command("zzzzzz").empty());
+}

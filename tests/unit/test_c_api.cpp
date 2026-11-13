@@ -157,3 +157,15 @@ TEST_CASE("engines: a library user adds, lists and removes a plugin by name", "[
     const auto after = agent::engines::list();
     CHECK(std::find(after.begin(), after.end(), "mine") == after.end());
 }
+
+TEST_CASE("open: one engine and one model file give a session", "[c_api][engines]") {
+    agent::Config base;
+    base.workspace_dir = workspace("agent_test_open_short");
+    auto session = agent::open(AGENT_TEST_MOCK_ENGINE_PATH, "mock.bin", base);
+    REQUIRE(session.ok);
+    agent::Conversation chat;
+    auto reply = agent::run_turn(session.value, chat, "hi");
+    REQUIRE(reply.ok);
+    CHECK(reply.value == "echo: hi");
+    CHECK_FALSE(agent::open("", "mock.bin", base).ok);
+}

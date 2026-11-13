@@ -104,13 +104,7 @@ target_link_libraries(my_app PRIVATE agent-cpp::agent)
 int main() {
     agent::AgentRuntime runtime;
 
-    agent::Config base;
-    base.workspace_dir = ".workspace";
-    const agent::ModelSlot models[] = {{"model", "models/qwen2.5-0.5b-instruct-q4_k_m.gguf"}};
-    auto cfg = agent::engine_config(agent::engines::llama, models, {}, base);
-    if (!cfg.ok) return std::fprintf(stderr, "%s\n", cfg.error.message.c_str()), 1;
-
-    auto session = agent::init(cfg.value);
+    auto session = agent::open(agent::engines::llama, "models/qwen2.5-0.5b-instruct-q4_k_m.gguf");
     if (!session.ok) return std::fprintf(stderr, "%s\n", session.error.message.c_str()), 1;
 
     agent::Conversation chat;
@@ -120,7 +114,8 @@ int main() {
 }
 ```
 
-`agent::engines::llama`, `audiocpp`, `sdcpp`, `trellis` and `onnx` name the engines that ship with agent.cpp; the plugin
+`agent::open` is the short path: one engine, one model file, defaults for the rest. For several model files, engine options or
+a full `Config`, use `agent::engine_config` and `agent::init` ([the guide](docs/guide.md)). `agent::engines::llama`, `audiocpp`, `sdcpp`, `trellis` and `onnx` name the engines that ship with agent.cpp; the plugin
 installed with the library is found for you. The library has one header, no exceptions (`Result<T>` everywhere), no virtual
 calls, and works from C through [`agent_c.h`](docs/api/c-api.md).
 

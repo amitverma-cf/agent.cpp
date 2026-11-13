@@ -690,6 +690,11 @@ Result<Config> engine_config(std::string_view engine, std::span<const ModelSlot>
 
 Result<Session> init(const Config &config);
 
+// The shortest way in: one engine, one model file, everything else at its default (workspace ".agent" unless base names one).
+//   auto session = agent::open(agent::engines::llama, "model.gguf");
+// For several model files, engine options or a full Config, use engine_config() and init().
+Result<Session> open(std::string_view engine, std::string_view model_path, const Config &base = {});
+
 Result<InferResponse> infer(Session &session, const InferRequest &request);
 // infer() with InferRequest::task = task (one AGENT_CAP_* bit, non-zero), e.g.
 // run_task(session, AGENT_CAP_TTS, request) on an engine that does both ASR and TTS.

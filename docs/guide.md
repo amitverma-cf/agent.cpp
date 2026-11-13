@@ -45,6 +45,11 @@ agent::Session session = std::move(res.value);
 
 ---
 
+`agent::open(engine, model_path)` does the same in one call when one model file and the defaults are enough. Pass a `Config` as the
+third argument to set the workspace, context window and so on.
+
+---
+
 ## Choosing an engine
 
 An engine is a plugin that runs one family of models. `engine_config` takes the engine and one path per model role; the plugin

@@ -78,3 +78,8 @@ local
 .env
 scripts/sandbox/node_modules/
 scripts/sandbox/.sandbox-id
+
+# Claude Code and other agent setups stay local
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md

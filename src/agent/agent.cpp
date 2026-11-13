@@ -85,6 +85,15 @@ Result<Config> engine_config(std::string_view engine, std::span<const ModelSlot>
     return ok(std::move(cfg));
 }
 
+Result<Session> open(std::string_view engine, std::string_view model_path, const Config &base) {
+    Config seed = base;
+    if (seed.workspace_dir.empty()) seed.workspace_dir = ".agent";
+    const ModelSlot slot[] = {{"model", model_path}};
+    auto cfg = engine_config(engine, slot, {}, seed);
+    if (!cfg.ok) return fail<Session>(cfg.error.code, cfg.error.message);
+    return init(cfg.value);
+}
+
 Result<Session> init(const Config &config) {
     if (config.workspace_dir.empty()) return fail<Session>(ErrorCode::InvalidConfig, "workspace_dir is required.");
 
