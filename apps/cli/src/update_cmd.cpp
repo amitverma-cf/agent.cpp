@@ -5,6 +5,7 @@
 #include "archive.hpp"
 #include "commands.hpp"
 #include "engine_release.hpp"
+#include "release_verify.hpp"
 #include "runtimes.hpp"
 
 #include <agent-cpp/hub.hpp>
@@ -59,6 +60,17 @@ int cmd_update(const CommandLine &cl, Context &ctx) {
             return 0;
         }
         return report_error(make_error(text.error.code, "cannot look for a release of " + repo + ": " + text.error.message));
+    }
+    // The release is signed: manifest.json.sig is an Ed25519 signature of the manifest, made with the project's release key.
+    if (!cl.has("allow-unsigned")) {
+        auto signature = agent::hub::http_get_text(release_manifest_url(repo, tag) + ".sig", http, 4096);
+        if (!signature.ok)
+            return report_error(make_error(ErrorCode::HttpError, "this release has no manifest.json.sig, so it cannot be checked: " +
+                                                                     signature.error.message + " (--allow-unsigned installs it anyway)"));
+        if (!verify_ed25519(text.value, signature.value, kReleasePublicKey))
+            return report_error(
+                make_error(ErrorCode::HttpError,
+                           "the signature of this release's manifest is not valid: it was not made with the project's release key"));
     }
     auto manifest = parse_release_manifest(text.value);
     if (!manifest.ok) return report_error(manifest.error);

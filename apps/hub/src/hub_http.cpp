@@ -396,6 +396,56 @@ Result<std::string> http_get_text(std::string_view url, const HttpOptions &http,
     return ok(std::move(body.text));
 }
 
+Result<PostReply> http_post(std::string_view url, const std::vector<std::pair<std::string, std::string>> &headers, std::string_view body,
+                            const HttpOptions &http, int timeout_sec, size_t max_bytes) {
+    auto parsed = parse_url(apply_url_rewrites(std::string(url)));
+    if (!parsed.ok) return fail<PostReply>(parsed.error.code, parsed.error.message);
+    const Url &u = parsed.value;
+    const bool default_port = (u.scheme == "https" && u.port == 443) || (u.scheme == "http" && u.port == 80);
+    httplib::Client cli(u.scheme + "://" + u.host + (default_port ? std::string() : ":" + std::to_string(u.port)));
+    if (!cli.is_valid()) return fail<PostReply>(ErrorCode::NetworkError, "hub: cannot create HTTP client for " + u.host);
+    cli.set_follow_location(false);
+    cli.set_connection_timeout(http.connect_timeout_sec, 0);
+    cli.set_read_timeout(timeout_sec, 0);
+    cli.set_write_timeout(timeout_sec, 0);
+    if (!host_bypasses_proxy(u.host, http.no_proxy)) {
+        if (u.scheme == "https" && !http.proxy_host.empty()) {
+            cli.set_proxy(http.proxy_host, http.proxy_port);
+            if (!http.proxy_user.empty()) cli.set_proxy_basic_auth(http.proxy_user, http.proxy_pass);
+        } else if (u.scheme == "http" && !http.http_proxy.host.empty()) {
+            cli.set_proxy(http.http_proxy.host, http.http_proxy.port);
+            if (!http.http_proxy.user.empty()) cli.set_proxy_basic_auth(http.http_proxy.user, http.http_proxy.pass);
+        }
+    }
+    if (u.scheme == "https") {
+        cli.enable_server_certificate_verification(true);
+        if (!http.ca_cert_path.empty()) cli.set_ca_cert_path(http.ca_cert_path);
+    }
+    httplib::Headers hs;
+    std::string content_type = "application/json";
+    for (const auto &h : headers) {
+        if (h.first == "Content-Type") content_type = h.second;
+        else hs.emplace(h.first, h.second);
+    }
+    hs.emplace("User-Agent", kUserAgent);
+    auto res = cli.Post(u.target, hs, std::string(body), content_type);
+    if (!res) {
+        std::string msg = "hub: request to " + u.host + " failed: " + httplib::to_string(res.error());
+        if (res.error() == httplib::Error::SSLServerVerification)
+            msg += " (set AGENT_CA_BUNDLE / SSL_CERT_FILE to a CA bundle that signs this host or proxy)";
+        return fail<PostReply>(ErrorCode::NetworkError, msg);
+    }
+    if (res->body.size() > max_bytes)
+        return fail<PostReply>(ErrorCode::HttpError,
+                               "hub: the response from " + u.host + " is larger than " + std::to_string(max_bytes) + " bytes");
+    PostReply out;
+    out.status = res->status;
+    out.content_type = res->get_header_value("Content-Type");
+    out.session_id = res->get_header_value("Mcp-Session-Id");
+    out.body = std::move(res->body);
+    return ok(std::move(out));
+}
+
 Result<std::string> http_get_range(std::string_view url, const HttpOptions &http, uint64_t offset, uint64_t length) {
     struct Body {
         std::string bytes;

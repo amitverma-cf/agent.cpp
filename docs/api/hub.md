@@ -98,6 +98,12 @@ struct PullOptions {
 };
 
 Result<CatalogEntry> pull_model(std::string_view spec, const PullOptions &opts);
+
+// One POST, for services that are not downloads (MCP servers by URL use it): the status, Content-Type and Mcp-Session-Id, the body.
+// Fails only when there is no reply at all (connection, TLS, timeout). No redirects, no retries.
+struct PostReply { int status; std::string content_type, session_id, body; };
+Result<PostReply> http_post(std::string_view url, const std::vector<std::pair<std::string, std::string>> &headers, std::string_view body,
+                            const HttpOptions &http, int timeout_sec = 30, size_t max_bytes = 8u << 20);
 Result<std::vector<CatalogEntry>> list_models(const std::string &catalog_path);
 Result<void> remove_model(std::string_view name, const std::string &catalog_path, bool delete_file = true);
 ```

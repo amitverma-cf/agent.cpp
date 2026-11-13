@@ -87,6 +87,9 @@ struct CliConfig {
     // JavaScript tooling for MCP servers and skills, chosen in `agent setup`: "bun" (bun x / bun install), "node" (a private
     // Node.js with pnpm; npm is never used) or "nub" (the nub toolkit, a pnpm-compatible CLI over Node.js).
     std::string js_runtime = "bun";
+    // The address of a search service for the web_search tool, with {q} where the query goes, for example a SearXNG instance:
+    // "http://localhost:8080/search?format=json&q={q}". Empty = the model has no web_search tool.
+    std::string search_url;
 };
 
 std::string config_to_json(const CliConfig &config);
@@ -127,6 +130,8 @@ void set_no_sandbox(bool value);
 // engine_options with {"<role>": {"model": "<path>"}} added (audio.cpp takes one file per role: tts, asr, vad, diarize), unless the
 // options already name that role. engine_options is "" or a JSON object.
 std::string with_role_model(std::string_view engine_options, std::string_view role, std::string_view model_path);
+// engine_options with "key": value_json added (the value is JSON text: true, 3, "text"), unless the key is already there.
+std::string with_option(std::string_view engine_options, std::string_view key, std::string_view value_json);
 // The subfolder of the models folder a pulled model goes to, so the files of one engine are never mixed with another's:
 // models/llama/owner/repo/file.gguf. `explicit_engine` is --engine, `registry_engine` the engine of a registry name; otherwise it follows the
 // spec ("owner/repo:Q4_K_M" and GGUF repos -> llama, ".onnx" -> onnx, ".safetensors"/".ckpt" -> sdcpp). Empty when it cannot be told.
@@ -177,7 +182,26 @@ std::string mime_for_path(std::string_view path);
 
 // -------------------------- Chat --------------------------
 
-enum class SlashKind { None, Exit, Clear, Model, Image, Open, Stats, Diff, Undo, Help, Cli, Unknown };
+enum class SlashKind {
+    None,
+    Exit,
+    Clear,
+    Model,
+    Image,
+    Open,
+    Stats,
+    Diff,
+    Undo,
+    Compact,
+    Mode,
+    Thinking,
+    Permissions,
+    Rename,
+    Delete,
+    Help,
+    Cli,
+    Unknown
+};
 
 // SlashKind::Cli: a slash command that runs an ordinary `agent` subcommand and shows its output: /doctor, /pull SPEC, /fit SPEC,
 // /recommend [TEXT], /search [TEXT], /setup, /wake, /schedule ... (arg = the name, rest = the arguments as typed).

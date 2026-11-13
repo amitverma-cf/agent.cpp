@@ -583,6 +583,7 @@ struct Instance {
     common_chat_templates_ptr templates;
     std::string tools_input; // Mode::Tools: the model file the operations work on
     std::string ocr_prompt;  // AGENT_CAP_OCR instruction: options.ocr_prompt or the family's
+    std::string grammar;     // options.grammar (GBNF) or the JSON grammar for options.json_output: the default for every request
     std::mutex out_mu;
     std::unordered_map<std::thread::id, CallOutput> outputs;
     std::unordered_map<std::thread::id, std::string> errors;
@@ -611,10 +612,21 @@ bool trace_grammar() {
     return on;
 }
 
+// llama.cpp's grammars/json.gbnf: any valid JSON value, used by options.json_output.
+constexpr const char *kJsonGrammar = R"gbnf(root   ::= object
+value  ::= object | array | string | number | ("true" | "false" | "null") ws
+object ::= "{" ws ( string ":" ws value ("," ws string ":" ws value)* )? "}" ws
+array  ::= "[" ws ( value ("," ws value)* )? "]" ws
+string ::= "\"" ( [^"\\\x7F\x00-\x1F] | "\\" (["\\bfnrt] | "u" [0-9a-fA-F]{4}) )* "\"" ws
+number ::= ("-"? ([0-9] | [1-9] [0-9]{0,15})) ("." [0-9]+)? ([eE] [-+]? [0-9] [1-9]{0,15})? ws
+ws     ::= | " " | "\n" [ \t]{0,20}
+)gbnf";
+
 // Plain greedy / temperature sampling, plus the chat session's tool-call grammar when the request has tools:
 // the model's own tool-call format (lazy: it only constrains the output once the call marker has been
 // produced), so a call is always well formed.
-common_sampler *build_sampler(const llama_model *model, float temperature, const common_chat_session *chat) {
+common_sampler *build_sampler(const llama_model *model, float temperature, const common_chat_session *chat,
+                              const std::string &user_grammar = {}) {
     common_params_sampling params;
     params.temp = temperature;
     if (temperature > 0.0f) { // keep the old behaviour: temperature only, no top-k / top-p / penalties
@@ -630,6 +642,9 @@ common_sampler *build_sampler(const llama_model *model, float temperature, const
         params.top_k = 1;
     }
     if (chat) chat->apply_sampling(params);
+    // A grammar of the user's (options.grammar, params_json "grammar", or JSON only): not together with the tool-call grammar, which a
+    // request with tools needs to stay well formed.
+    if (!user_grammar.empty() && params.grammar.empty()) params.grammar = common_grammar(COMMON_GRAMMAR_TYPE_USER, user_grammar);
     if (trace_grammar())
         std::fprintf(stderr, "llama: tool-call grammar %s (%zu bytes, lazy=%d, %zu triggers)\n",
                      params.grammar.grammar.empty() ? "off" : "on", params.grammar.grammar.size(), params.grammar_lazy ? 1 : 0,
@@ -1661,6 +1676,24 @@ int32_t run_decide(Instance &inst, const agent_request *req, agent_response *res
     return decide_finish(inst, p, logprobs, prompt.n_tokens, completion, resp);
 }
 
+// The grammar a request is sampled under: params_json {"grammar": "<GBNF>"} or {"json": true} for this request, else the instance default
+// (options.grammar / options.json_output), else none.
+std::string requested_grammar(const Instance &inst, const agent_request *req) {
+    if (req->params_json.size) {
+        simdjson::ondemand::parser parser;
+        simdjson::padded_string json(sv(req->params_json));
+        simdjson::ondemand::document doc;
+        simdjson::ondemand::object obj;
+        if (!parser.iterate(json).get(doc) && !doc.get_object().get(obj)) {
+            std::string_view g;
+            if (!obj["grammar"].get_string().get(g) && !g.empty()) return std::string(g);
+            bool want_json = false;
+            if (!obj["json"].get_bool().get(want_json) && want_json) return kJsonGrammar;
+        }
+    }
+    return inst.grammar;
+}
+
 // AGENT_LLAMA_TRACE=1 prints how many prompt tokens each request found already in the KV cache.
 bool trace_prefix_cache() {
     static const bool on = [] {
@@ -1685,7 +1718,7 @@ int32_t generate(Instance &inst, const agent_request *req, const std::vector<lla
     if (trace_prefix_cache())
         std::fprintf(stderr, "llama: prefix cache reused %zu of %zu prompt tokens (slot %d%s)\n", reused, tokens.size(),
                      static_cast<int>(seq), b.use_checkpoints ? ", checkpoint" : "");
-    common_sampler *sampler = build_sampler(b.model, temperature, chat);
+    common_sampler *sampler = build_sampler(b.model, temperature, chat, requested_grammar(inst, req));
     if (!sampler) {
         b.release_seq(seq, false);
         return inst.fail(AGENT_ERR_DECODE_FAILED, "llama: could not create the sampler");
@@ -1926,7 +1959,8 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     // produced garbage while f16 and q8_0 were fine, and LFM3-1.7B was fine at q4_0.
     ggml_type kv_type = GGML_TYPE_Q4_0;
     bool kv_auto = true;
-    std::string chat_template, mmproj, ocr_prompt;
+    std::string chat_template, mmproj, ocr_prompt, user_grammar;
+    bool json_output = false;
     std::vector<std::pair<std::string, float>> loras; // options.lora: adapter file and scale
     bool use_mtp = true;                              // options.mtp: drive the GGUF's MTP head when it has one
     bool speculative = true;                          // options.speculative: prompt-lookup speculation (greedy requests only)
@@ -1941,6 +1975,9 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         if (!options["chat_template"].get_string().get(t)) chat_template = std::string(t);
         if (!options["mmproj"].get_string().get(t)) mmproj = std::string(t);
         if (!options["ocr_prompt"].get_string().get(t)) ocr_prompt = std::string(t);
+        if (!options["grammar"].get_string().get(t)) user_grammar = std::string(t);
+        bool json_flag = false;
+        if (!options["json_output"].get_bool().get(json_flag)) json_output = json_flag;
         simdjson::ondemand::array lora_list;
         if (!options["lora"].get_array().get(lora_list)) {
             for (auto item : lora_list) {
@@ -2177,6 +2214,7 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     inst->mtmd = std::move(mctx);
     const char *family_prompt = ocr_family_prompt(model, model_str, mmproj);
     inst->ocr_prompt = ocr_prompt.empty() ? family_prompt : ocr_prompt;
+    inst->grammar = !user_grammar.empty() ? user_grammar : json_output ? std::string(kJsonGrammar) : std::string();
     // Exception firewall (see start_session): template loading parses Jinja and may throw.
     try {
         inst->templates = common_chat_templates_init(model, chat_template);

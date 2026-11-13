@@ -191,6 +191,18 @@ Result<void> download_file(std::string_view url, const std::string &dest, const 
 // fail instead of being cut.
 Result<std::string> http_get_text(std::string_view url, const HttpOptions &http, size_t max_bytes = 4u << 20);
 
+// What a POST answered: the status (any status is a reply), the Content-Type and Mcp-Session-Id headers, the body.
+struct PostReply {
+    int status = 0;
+    std::string content_type;
+    std::string session_id;
+    std::string body;
+};
+// POSTs `body` (sent as application/json unless a Content-Type header is given) with the headers; no redirects, no retries. Fails only
+// when there is no reply at all (connection, TLS, timeout). Bodies over `max_bytes` fail instead of being cut.
+Result<PostReply> http_post(std::string_view url, const std::vector<std::pair<std::string, std::string>> &headers, std::string_view body,
+                            const HttpOptions &http, int timeout_sec = 30, size_t max_bytes = 8u << 20);
+
 // GET bytes [offset, offset + length) of `url` (following redirects): the first megabytes of a large file, for example a GGUF header.
 // A server that ignores Range and sends the whole file is cut after `length` bytes. Fewer bytes come back when the file is shorter.
 Result<std::string> http_get_range(std::string_view url, const HttpOptions &http, uint64_t offset, uint64_t length);

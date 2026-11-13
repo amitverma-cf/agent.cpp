@@ -62,6 +62,12 @@ struct TuiHost {
     bool (*switch_session)(void *user, const std::string &id, const std::string &workspace) = nullptr;
     // The messages of the open conversation, called after a switch to repaint the transcript.
     std::vector<TuiMessage> (*history)(void *user) = nullptr;
+    // The chat mode shown in the status line ("ask", "plan", "auto"); may be null.
+    std::string (*mode)(void *user) = nullptr;
+    // Deletes a saved conversation of a project. Returns false when it could not.
+    bool (*delete_session)(void *user, const std::string &id, const std::string &workspace) = nullptr;
+    // True once after the open conversation was replaced by a command (/delete), so the transcript is painted again.
+    bool (*take_repaint)(void *user) = nullptr;
     // A line shown on the welcome screen, for a warning that applies to the whole session (the sandbox is off); may be empty.
     std::string (*notice)(void *user) = nullptr;
     // The commands listed in the palette.

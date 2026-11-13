@@ -2,6 +2,8 @@
 
 // MCP servers the user configured, in the common "mcpServers" JSON shape so existing configs can be copied in:
 //
+//   A server reached over HTTP has "url" (and "headers", e.g. {"Authorization": "Bearer ${secret:github}"}) instead of "command".
+//
 //   { "mcpServers": { "github": {
 //        "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"],
 //        "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${secret:github}" },

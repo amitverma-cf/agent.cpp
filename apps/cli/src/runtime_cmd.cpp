@@ -32,7 +32,19 @@ std::string installed_version(const HomeLayout &home, const std::string &name) {
 
 } // namespace
 
+namespace {
+// MCP servers reached by URL: the hub's HTTP client (it has TLS, proxies and CA settings).
+Result<HttpReply> cli_http_post(std::string_view url, const std::vector<std::pair<std::string, std::string>> &headers,
+                                std::string_view body, int timeout_ms, void *) {
+    auto reply = agent::hub::http_post(url, headers, body, agent::hub::http_options_from_env(), std::max(1, timeout_ms / 1000));
+    if (!reply.ok) return fail<HttpReply>(reply.error.code, reply.error.message);
+    return ok(
+        HttpReply{reply.value.status, std::move(reply.value.content_type), std::move(reply.value.session_id), std::move(reply.value.body)});
+}
+} // namespace
+
 void install_cli_hooks(Config &cfg, Context &ctx) {
+    cfg.http_post = cli_http_post;
     cfg.mcp_launcher = [](McpServerConfig &server, void *user) {
         auto *c = static_cast<Context *>(user);
         if (c->has_home) rewrite_launcher(server, c->home, c->config.js_runtime);

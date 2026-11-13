@@ -40,6 +40,7 @@ double ms_since(Clock::time_point t0) { return std::chrono::duration<double, std
 
 struct Options {
     std::string llama, model, mock, audiocpp, tts_model, host, json_out, md_out, engine_options, kv, csv_out;
+    std::string asr_model, vad_model, diar_model, audio; // speech section: models and a WAV to run them on
     std::string workspace = (fs::temp_directory_path() / "agent-bench").string();
     int reps = 3, gen_tokens = 128, prompt_words = 200, branches = 4, threads = 0, turns = 2000;
     int longchat = 0, ctx = 4096; // longchat: number of conversation turns (0 = section off)
@@ -550,6 +551,85 @@ void bench_payload(const Options &o, std::vector<Table> &tables) {
     if (!t.rows.empty()) tables.push_back(std::move(t));
 }
 
+// ---- speech recognition, voice activity detection, diarization ---------------------------------
+
+// Length of a PCM WAV file in seconds (0 when it cannot be read).
+double wav_seconds(const std::string &path) {
+    std::ifstream in(path, std::ios::binary);
+    char head[12];
+    if (!in.read(head, 12) || std::memcmp(head, "RIFF", 4) != 0) return 0;
+    uint32_t rate = 0, bytes_per_second = 0;
+    char id[4];
+    uint32_t size = 0;
+    while (in.read(id, 4) && in.read(reinterpret_cast<char *>(&size), 4)) {
+        if (std::memcmp(id, "fmt ", 4) == 0) {
+            char fmt[16];
+            if (!in.read(fmt, 16)) return 0;
+            std::memcpy(&rate, fmt + 4, 4);
+            std::memcpy(&bytes_per_second, fmt + 8, 4);
+            in.seekg(static_cast<std::streamoff>(size) - 16, std::ios::cur);
+        } else if (std::memcmp(id, "data", 4) == 0) {
+            return bytes_per_second ? static_cast<double>(size) / bytes_per_second : 0;
+        } else {
+            in.seekg(size, std::ios::cur);
+        }
+    }
+    return 0;
+}
+
+void bench_speech(const Options &o, std::vector<Table> &tables) {
+    const double seconds = wav_seconds(o.audio);
+    Table t{.title = "Speech: recognition, voice activity, diarization (audio.cpp engine)",
+            .note =
+                "One WAV of " + fmt(seconds, 1) + " s through `perform()` (process isolation, 4 threads); median of " +
+                std::to_string(o.reps) +
+                " runs after one warm-up. The real-time factor is audio seconds per processing second: above 1 is faster than real time.",
+            .columns = {"task", "model", "ms", "real-time factor", "peak RSS MiB"}};
+    struct Task {
+        const char *role;
+        uint32_t cap;
+        const std::string *model;
+    };
+    const Task tasks[] = {
+        {"asr", AGENT_CAP_ASR, &o.asr_model}, {"vad", AGENT_CAP_VAD, &o.vad_model}, {"diarize", AGENT_CAP_DIARIZE, &o.diar_model}};
+    for (const Task &task : tasks) {
+        if (task.model->empty()) continue;
+        reset_peak_rss();
+        agent::Config cfg;
+        cfg.provider = agent::AiProvider::Engine;
+        cfg.engine = o.audiocpp;
+        cfg.engine_options = std::string("{\"threads\":4,\"") + task.role + "\":{\"model\":\"" + *task.model + "\"}}";
+        cfg.workspace_dir = o.workspace;
+        cfg.auto_default_tools = false;
+        cfg.engine_isolation = agent::EngineIsolation::Process;
+        cfg.engine_host_path = o.host;
+        auto sess = agent::init(cfg);
+        if (!sess.ok) {
+            std::fprintf(stderr, "%s: %s\n", task.role, sess.error.message.c_str());
+            continue;
+        }
+        std::vector<double> ms;
+        for (int r = 0; r < o.reps + 1; ++r) {
+            const auto t0 = Clock::now();
+            auto out = agent::perform(sess.value, task.cap, "", o.audio);
+            const double v = ms_since(t0);
+            if (!out.ok) {
+                std::fprintf(stderr, "%s: %s\n", task.role, out.error.message.c_str());
+                ms.clear();
+                break;
+            }
+            if (r > 0) ms.push_back(v);
+        }
+        if (ms.empty()) continue;
+        std::sort(ms.begin(), ms.end());
+        const double mid = ms[ms.size() / 2];
+        const double host = host_peak_rss_mib();
+        t.rows.push_back({task.role, fs::path(*task.model).filename().string(), fmt(mid, 0),
+                          seconds > 0 ? fmt(seconds / (mid / 1000.0), 1) + "x" : "-", host > 0 ? fmt(host, 0) : fmt(peak_rss_mib(), 0)});
+    }
+    if (!t.rows.empty()) tables.push_back(std::move(t));
+}
+
 // ---- tts ---------------------------------------------------------------------------------------
 
 std::string kokoro_options(const std::string &gguf) {
@@ -693,6 +773,10 @@ bool parse(int argc, char **argv, Options &o) {
                                                     {"--mock", &o.mock},
                                                     {"--audiocpp", &o.audiocpp},
                                                     {"--tts-model", &o.tts_model},
+                                                    {"--asr-model", &o.asr_model},
+                                                    {"--vad-model", &o.vad_model},
+                                                    {"--diar-model", &o.diar_model},
+                                                    {"--audio", &o.audio},
                                                     {"--host", &o.host},
                                                     {"--json", &o.json_out},
                                                     {"--md", &o.md_out},
@@ -720,6 +804,7 @@ int main(int argc, char **argv) {
     if (!parse(argc, argv, o) || (o.llama.empty() && o.mock.empty() && o.audiocpp.empty())) {
         std::fprintf(stderr,
                      "usage: %s [--llama <plugin> --model <gguf>] [--mock <plugin>] [--audiocpp <plugin> --tts-model <kokoro .gguf>]\n"
+                     "          [--audio <wav> --asr-model <gguf> --vad-model <gguf> --diar-model <gguf>]\n"
                      "          [--host <agent-engine-host>] [--reps N] [--gen-tokens N] [--prompt-words N] [--branches N]\n"
                      "          [--threads N] [--turns N] [--payload MIB] [--workspace DIR] [--json FILE] [--md FILE]\n"
                      "          [--longchat N --ctx N [--kv f16|q8_0|q4_0] [--engine-options JSON] [--csv FILE]]\n",
@@ -738,6 +823,8 @@ int main(int argc, char **argv) {
             bench_parallel(o, tables);
         }
     }
+    if (!o.audiocpp.empty() && !o.audio.empty() && (!o.asr_model.empty() || !o.vad_model.empty() || !o.diar_model.empty()))
+        bench_speech(o, tables);
     if (!o.audiocpp.empty() && !o.tts_model.empty()) bench_tts(o, tables);
 
     const std::string md = markdown(tables);

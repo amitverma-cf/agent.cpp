@@ -336,7 +336,7 @@ parses replies into content + tool calls in the model's native format, using lla
 It sets `AGENT_ENGINE_FLAG_NATIVE_TOOLS` (the core only adds the skills list to the system message) and
 `AGENT_ENGINE_FLAG_CONCURRENT` (parallel graph branches share one continuously batched decode).
 
-`Config::engine_options`: `gpu_layers` (default -1), `threads` (default 0, the engine's choice), `chat_template` (overrides the template embedded in the GGUF),
+`Config::engine_options`: `gpu_layers` (default -1), `grammar` (a GBNF grammar every answer is sampled under) and `json_output` (`true`: valid JSON only; no GBNF needed), `threads` (default 0, the engine's choice), `chat_template` (overrides the template embedded in the GGUF),
 `mmproj` (path to a multimodal projector GGUF, enables image / audio input), `ocr_prompt` (see OCR below), `mode` (`"generate"`, the
 default, `"embed"` or `"rerank"`, see below), `pooling` (embed mode: `"mean"`, `"cls"` or `"last"` to
 override the model's pooling), `kv_cache` and `prefix_cache` (below).

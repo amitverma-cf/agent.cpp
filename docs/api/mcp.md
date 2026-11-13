@@ -159,7 +159,48 @@ The host can rewrite `command` there, for example to run `npx` or `uvx` from its
 - **Windows** support (`CreateProcessW`, an environment block merged with the parent's, polled anonymous pipes) is run by the
   Windows test suite on Windows 11 (the project has no Windows CI).
 
+## Servers reached by URL (Streamable HTTP)
+
+A server can be given as an address instead of a program: `McpServerConfig::url` (and `headers`, for example
+`{"Authorization", "Bearer ${secret:github}"}`; the secret is resolved like an env value). Nothing is started: every JSON-RPC message is an
+HTTP POST to the address with `Accept: application/json, text/event-stream`. The reply is either one JSON document or a stream of
+events (`text/event-stream`), and the response with the request's id is read out of it. The `Mcp-Session-Id` the server hands out on
+`initialize` and the negotiated `MCP-Protocol-Version` are sent with every later request; a 404 after a session started ends the session.
+
+The core has no TLS, so the host provides the POST: `Config::http_post` (`HttpPostFn`, returning an `HttpReply` with the status, the
+`Content-Type`, the `Mcp-Session-Id` and the body). The CLI uses `agent::hub::http_post`; a program that links `agent_hub` can do the same:
+
+```cpp
+cfg.http_post = [](std::string_view url, const std::vector<std::pair<std::string, std::string>> &headers, std::string_view body,
+                   int timeout_ms, void *) -> agent::Result<agent::HttpReply> {
+    auto r = agent::hub::http_post(url, headers, body, agent::hub::http_options_from_env(), timeout_ms / 1000);
+    if (!r.ok) return agent::fail<agent::HttpReply>(r.error.code, r.error.message);
+    return agent::ok(agent::HttpReply{r.value.status, r.value.content_type, r.value.session_id, r.value.body});
+};
+agent::McpServerConfig remote;
+remote.name = "docs";
+remote.url = "https://mcp.example.com/mcp";
+remote.headers["Authorization"] = "Bearer ${secret:docs}";
+agent::connect_mcp_server(session, remote);
+```
+
+In the CLI's `mcp.json` a remote server is `"docs": {"url": "https://mcp.example.com/mcp", "headers": {"Authorization": "Bearer ${secret:docs}"}}`.
+The transport follows the 2025-06-18 revision (initialize handshake, session id). The stateless 2026-07-28 revision is not implemented yet;
+servers that still accept the earlier handshake work.
+
+## Resources and prompts
+
+A server that offers resources or prompts gets up to four more tools next to its own: `<server>.list_resources`,
+`<server>.read_resource` (`{"uri": ...}`), `<server>.list_prompts` and `<server>.get_prompt` (`{"name": ..., "arguments": {...}}`). The
+answer is the server's JSON as it came (at most 20,000 characters), so the model reads a document or fetches a prompt on demand.
+
+## The agent as an MCP server
+
+`agent mcp serve [--workspace DIR] [--read-only]` serves the built-in tools (files of the workspace, `run_command`) over stdin and stdout, so
+an editor or another agent can use them (JSON-RPC, one message per line; `initialize`, `ping`, `tools/list`, `tools/call`). The client decides
+what to approve; `--read-only` offers only the tools that change nothing. See [../cli.md](../cli.md#agent-mcp).
+
 ## Not supported yet
 
-Resources, prompts, sampling, roots, elicitation, progress notifications, `notifications/tools/list_changed` (reconnect to
-refresh the tools), and the Streamable HTTP transport.
+Sampling, roots, elicitation, progress notifications, `notifications/tools/list_changed` (reconnect to refresh the tools), paginated
+resource and prompt lists (the first page is shown), and the stateless 2026-07-28 revision of the protocol.

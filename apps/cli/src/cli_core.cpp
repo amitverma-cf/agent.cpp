@@ -54,8 +54,9 @@ constexpr SubSpec kEngineSubs[] = {{"ls", 0, 0}, {"add", 1, 1}, {"rm", 1, 1}, {"
 constexpr std::string_view kEngineValue[] = {"tag", "repo"};
 
 constexpr SubSpec kSecretSubs[] = {{"set", 1, 1}, {"ls", 0, 0}, {"rm", 1, 1}, {"bind", 2, 2}, {"unbind", 2, 2}};
-constexpr SubSpec kMcpSubs[] = {{"ls", 0, 0}, {"search", 1, 1}, {"add", 1, 1}, {"rm", 1, 1}};
-constexpr std::string_view kMcpBool[] = {"project", "yes"};
+constexpr SubSpec kMcpSubs[] = {{"ls", 0, 0}, {"search", 1, 1}, {"add", 1, 1}, {"rm", 1, 1}, {"serve", 0, 0}};
+constexpr std::string_view kMcpValue[] = {"workspace"};
+constexpr std::string_view kMcpBool[] = {"project", "yes", "read-only"};
 constexpr SubSpec kSkillSubs[] = {{"ls", 0, 0}, {"search", 1, 1}, {"add", 1, 1}, {"rm", 1, 1}};
 constexpr std::string_view kSkillBool[] = {"project", "yes"};
 constexpr SubSpec kSandboxSubs[] = {{"ls", 0, 0}, {"grant", 1, 1}, {"revoke", 1, 1}};
@@ -70,7 +71,7 @@ constexpr SubSpec kRuntimeSubs[] = {{"ls", 0, 0}, {"install", 1, 1}, {"rm", 1, 1
 constexpr std::string_view kRuntimeValue[] = {"version"};
 constexpr std::string_view kCleanBool[] = {"downloads", "cache", "logs", "yes"};
 constexpr std::string_view kUpdateValue[] = {"repo", "tag"};
-constexpr std::string_view kUpdateBool[] = {"check", "yes"};
+constexpr std::string_view kUpdateBool[] = {"check", "yes", "allow-unsigned"};
 constexpr std::string_view kSecretValue[] = {"identity"};
 constexpr std::string_view kSecretBool[] = {"stdin"};
 
@@ -78,8 +79,9 @@ constexpr SubSpec kModelSubs[] = {{"ls", 0, 0}, {"search", 0, 1}, {"info", 1, 1}
 constexpr std::string_view kModelValue[] = {"name", "quant", "mmproj", "include", "task", "engine"};
 constexpr std::string_view kModelBool[] = {"allow-restricted", "keep-file", "no-mmproj"};
 
-constexpr std::string_view kChatValue[] = {"model", "engine", "resume", "workspace", "ctx", "max-tokens", "engine-options", "prompt"};
-constexpr std::string_view kChatBool[] = {"yes", "list", "verbose", "inprocess", "plain", "jsonl"};
+constexpr std::string_view kChatValue[] = {"model",      "engine",         "resume", "workspace", "ctx",
+                                           "max-tokens", "engine-options", "prompt", "grammar"};
+constexpr std::string_view kChatBool[] = {"yes", "list", "verbose", "inprocess", "plain", "jsonl", "json"};
 
 constexpr std::string_view kRunValue[] = {"model", "engine", "workspace", "thread", "set", "resume", "input", "engine-options"};
 constexpr std::string_view kRunBool[] = {"yes", "inprocess", "json", "swap-models"};
@@ -97,7 +99,7 @@ constexpr CommandSpec kCommands[] = {
     {"init", {}, 0, 1, {}, {}},
     {"secret", kSecretSubs, 0, 0, kSecretValue, kSecretBool},
     {"doctor", {}, 0, 0, {}, {}},
-    {"mcp", kMcpSubs, 0, 0, {}, kMcpBool},
+    {"mcp", kMcpSubs, 0, 0, kMcpValue, kMcpBool},
     {"skill", kSkillSubs, 0, 0, {}, kSkillBool},
     {"sandbox", kSandboxSubs, 0, 0, kSandboxValue, kSandboxBool},
     {"schedule", kScheduleSubs, 0, 0, kScheduleValue, kScheduleBool},
@@ -303,6 +305,7 @@ std::string usage_all() {
            "        -p|--prompt TEXT    answer once and exit: the answer goes to stdout, tools and notes to stderr (- reads the prompt\n"
            "                            from stdin); tool calls are denied unless -y\n"
            "        --jsonl             editor integration: JSON lines in and out on stdio (see docs/cli.md)\n"
+           "        --json | --grammar FILE   constrain the answer: valid JSON only, or a GBNF grammar (llama engine)\n"
            "  run <graph.json>           run a declarative graph\n"
            "        [-m|--model NAME|PATH] [-e|--engine NAME|PATH] [--workspace DIR] [--thread ID] [--set k=v]\n"
            "        [--resume ID] [--input TEXT] [--engine-options JSON] [-y|--yes] [--inprocess] [--json]\n"
@@ -555,7 +558,8 @@ std::string config_to_json(const CliConfig &c) {
     out += "  \"max_tokens\": " + std::to_string(c.max_tokens) + ",\n";
     out += "  \"temperature\": " + std::string(temp) + ",\n";
     out += "  \"memory_budget_mb\": " + std::to_string(c.memory_budget_mb) + ",\n";
-    out += "  \"js_runtime\": \"" + c.js_runtime + "\"\n";
+    out += "  \"js_runtime\": \"" + c.js_runtime + "\",\n";
+    out += "  \"search_url\": " + json_str(c.search_url) + "\n";
     out += "}\n";
     return out;
 }
@@ -584,6 +588,7 @@ Result<CliConfig> config_from_json(std::string_view json) {
     c.temperature = static_cast<float>(get_num(doc, "temperature", c.temperature));
     c.memory_budget_mb = get_int(doc, "memory_budget_mb", 0);
     if (c.memory_budget_mb < 0) return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: memory_budget_mb must be >= 0");
+    c.search_url = std::string(get_str(doc, "search_url"));
     c.js_runtime = std::string(get_str(doc, "js_runtime", "bun"));
     if (c.js_runtime != "bun" && c.js_runtime != "node" && c.js_runtime != "nub")
         return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: js_runtime must be \"bun\", \"node\" or \"nub\"");
@@ -710,6 +715,20 @@ std::string with_role_model(std::string_view engine_options, std::string_view ro
     const std::string quoted_role = "\"" + std::string(role) + "\"";
     if (model_path.empty() || engine_options.find(quoted_role) != std::string_view::npos) return std::string(engine_options);
     const std::string entry = quoted_role + ":{\"model\":\"" + json_escape(model_path) + "\"}";
+    const size_t open = engine_options.find('{');
+    if (open == std::string_view::npos) return "{" + entry + "}";
+    const size_t close = engine_options.rfind('}');
+    const bool empty_object =
+        engine_options.substr(open + 1, close == std::string_view::npos ? 0 : close - open - 1).find_first_not_of(" \t\r\n") ==
+        std::string_view::npos;
+    return std::string(engine_options.substr(0, open + 1)) + entry + (empty_object ? "" : ",") +
+           std::string(engine_options.substr(open + 1));
+}
+
+std::string with_option(std::string_view engine_options, std::string_view key, std::string_view value_json) {
+    const std::string quoted = "\"" + std::string(key) + "\"";
+    if (engine_options.find(quoted) != std::string_view::npos) return std::string(engine_options);
+    const std::string entry = quoted + ":" + std::string(value_json);
     const size_t open = engine_options.find('{');
     if (open == std::string_view::npos) return "{" + entry + "}";
     const size_t close = engine_options.rfind('}');
@@ -996,6 +1015,12 @@ SlashCommand parse_slash_command(std::string_view line) {
     else if (name == "stats") cmd.kind = SlashKind::Stats;
     else if (name == "diff") cmd.kind = SlashKind::Diff;
     else if (name == "undo") cmd.kind = SlashKind::Undo;
+    else if (name == "compact") cmd.kind = SlashKind::Compact;
+    else if (name == "mode") cmd.kind = SlashKind::Mode;
+    else if (name == "thinking") cmd.kind = SlashKind::Thinking;
+    else if (name == "permissions") cmd.kind = SlashKind::Permissions;
+    else if (name == "rename") cmd.kind = SlashKind::Rename;
+    else if (name == "delete") cmd.kind = SlashKind::Delete;
     else if (name == "help" || name == "?") cmd.kind = SlashKind::Help;
     else {
         cmd.kind = SlashKind::Unknown;

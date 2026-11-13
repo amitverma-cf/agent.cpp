@@ -2,6 +2,7 @@
 // asks before tools the default permission policy rates Ask, persists the conversation in the
 // workspace's SQLite store, and opens generated artifacts with the OS default app.
 
+#include "chat_extras.hpp"
 #include "commands.hpp"
 #include "edit_journal.hpp"
 #include "mcp_config.hpp"
@@ -9,9 +10,11 @@
 #include "secrets.hpp"
 #include "tui.hpp"
 
+#include <agent-cpp/hub.hpp>
 #include <agent-cpp/store_sqlite.hpp>
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <csignal>
 #include <cstdarg>
@@ -32,6 +35,7 @@ namespace {
 namespace fs = std::filesystem;
 
 constexpr std::string_view kIndexKey = "cli:conversations";
+constexpr std::string_view kTitlePrefix = "cli:title:"; // + the conversation id: a name given with /rename
 constexpr std::string_view kSystemPrompt =
     "You are agent, a helpful assistant running locally on the user's computer. Use the available tools when they help; "
     "file paths are relative to the workspace.";
@@ -155,8 +159,13 @@ struct ChatState {
     bool interactive = false;
     bool use_tui = false; // the full-screen interface (a terminal, and not --plain)
 
-    std::shared_ptr<SecretContext> secrets; // names and bindings; values are read only when an MCP server starts
-    std::vector<std::string> always_allowed;
+    std::shared_ptr<SecretContext> secrets;  // names and bindings; values are read only when an MCP server starts
+    std::vector<std::string> always_allowed; // tools the user allowed for good in this project (.agents/permissions.json)
+    ChatMode mode = ChatMode::Ask;
+    ThinkFilter think;
+    bool repaint = false; // the open conversation was replaced by a command
+    bool no_tools =
+        false; // --json / --grammar: the answer is sampled under a grammar, which cannot share the turn with the tool-call grammar
     std::unique_ptr<EditJournal> journal; // what the tools changed in files this session (/diff, /undo)
     std::vector<Media> artifacts;
     size_t streamed_bytes = 0;
@@ -180,7 +189,13 @@ void log_fn(LogLevel level, std::string_view message, void *user_data) {
 void on_token(std::string_view token, void *user_data) {
     auto *st = static_cast<ChatState *>(user_data);
     st->streamed_bytes += token.size();
-    emit_assistant(filter_stream(st->filter, token));
+    emit_assistant(filter_stream(st->filter, filter_think(st->think, token)));
+}
+
+// "always" in a permission question: kept for the rest of the session and in <workspace>/.agents/permissions.json for the next.
+void remember_always(ChatState &st, const std::string &tool) {
+    if (std::find(st.always_allowed.begin(), st.always_allowed.end(), tool) == st.always_allowed.end()) st.always_allowed.push_back(tool);
+    save_always_allowed(st.workspace, st.always_allowed);
 }
 
 PermissionDecision check_tool(std::string_view name, std::string_view arguments, void *user_data) {
@@ -188,7 +203,13 @@ PermissionDecision check_tool(std::string_view name, std::string_view arguments,
     ensure_newline();
     out("[tool] " + std::string(name) + " " + one_line(arguments, 300) + "\n");
     if (st->journal) st->journal->before_tool(name, arguments);
+    if (st->mode == ChatMode::Plan && tool_changes_things(name)) {
+        out("[plan mode] " + std::string(name) + " is not allowed; /mode ask or /mode auto lets the agent make changes\n");
+        return PermissionDecision::Deny;
+    }
+    if (st->mode == ChatMode::Auto) return PermissionDecision::Allow;
     PermissionDecision d = tools::default_permission_policy(name, arguments, nullptr);
+    if ((name == "web_fetch" || name == "web_search") && d == PermissionDecision::Allow) d = PermissionDecision::Ask; // the network
     if (d == PermissionDecision::Ask && std::find(st->always_allowed.begin(), st->always_allowed.end(), name) != st->always_allowed.end())
         return PermissionDecision::Allow;
     return d;
@@ -209,14 +230,14 @@ bool prompt_tool(std::string_view name, std::string_view arguments, void *user_d
         std::string reply;
         if (read_line(stdin, reply) != ReadStatus::Line) return false;
         reply.erase(std::remove(reply.begin(), reply.end(), ' '), reply.end());
-        if (reply.find("\"always\":true") != std::string::npos) st->always_allowed.push_back(n);
+        if (reply.find("\"always\":true") != std::string::npos) remember_always(*st, n);
         return reply.find("\"allow\":true") != std::string::npos;
     }
 #if defined(AGENT_CLI_HAS_TUI)
     if (g_tui) {
         bool always = false;
-        const bool allowed = tui_ask(n + " " + one_line(arguments, 200), &always);
-        if (always) st->always_allowed.push_back(n);
+        const bool allowed = tui_ask(n + "\n" + pretty_arguments(arguments), &always);
+        if (always) remember_always(*st, n);
         return allowed;
     }
 #endif
@@ -235,7 +256,7 @@ bool prompt_tool(std::string_view name, std::string_view arguments, void *user_d
     const size_t i = line.find_first_not_of(" \t");
     const char c = i == std::string::npos ? 'n' : line[i];
     if (c == 'a' || c == 'A') {
-        st->always_allowed.push_back(n);
+        remember_always(*st, n);
         return true;
     }
     return c == 'y' || c == 'Y';
@@ -275,6 +296,66 @@ Result<void> on_model_loaded(Session &session, const ModelSpec &, void *user_dat
     return ok();
 }
 
+// ---- tools of the web: the model asks, the user is asked first (see check_tool)
+
+constexpr std::string_view kWebFetchSchema =
+    R"({"type":"object","properties":{"url":{"type":"string","description":"an http or https address"}},"required":["url"]})";
+constexpr std::string_view kWebSearchSchema =
+    R"({"type":"object","properties":{"query":{"type":"string","description":"what to search for"}},"required":["query"]})";
+
+std::string url_encode(std::string_view s) {
+    static const char *hex = "0123456789ABCDEF";
+    std::string out;
+    for (const unsigned char c : s) {
+        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') out += static_cast<char>(c);
+        else out += {'%', hex[c >> 4], hex[c & 15]};
+    }
+    return out;
+}
+
+std::string cut_text(std::string text, size_t max) {
+    if (text.size() > max) {
+        text.resize(max);
+        text += "\n[cut]";
+    }
+    return text;
+}
+
+Result<std::string> web_fetch_cb(std::string_view args, void *) {
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded(args);
+    simdjson::dom::element doc;
+    std::string_view url;
+    if (parser.parse(padded).get(doc) || doc["url"].get(url)) return fail<std::string>(ErrorCode::InvalidConfig, "web_fetch needs a url");
+    if (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0)
+        return fail<std::string>(ErrorCode::InvalidConfig, "web_fetch takes http and https addresses only");
+    auto page = agent::hub::http_get_text(url, agent::hub::http_options_from_env(), 1u << 20);
+    if (!page.ok) return fail<std::string>(page.error.code, "cannot fetch " + std::string(url) + ": " + page.error.message);
+    const std::string &body = page.value;
+    std::string head = body.substr(0, 2048);
+    for (char &c : head) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const bool html = head.find("<html") != std::string::npos || head.find("<body") != std::string::npos ||
+                      head.find("<!doctype html") != std::string::npos;
+    return ok(cut_text(html ? html_to_text(body) : body, 20000));
+}
+
+Result<std::string> web_search_cb(std::string_view args, void *user) {
+    const auto *tmpl = static_cast<const std::string *>(user);
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded(args);
+    simdjson::dom::element doc;
+    std::string_view query;
+    if (parser.parse(padded).get(doc) || doc["query"].get(query))
+        return fail<std::string>(ErrorCode::InvalidConfig, "web_search needs a query");
+    std::string url = *tmpl;
+    const size_t at = url.find("{q}");
+    if (at == std::string::npos) return fail<std::string>(ErrorCode::InvalidConfig, "search_url has no {q} in config.json");
+    url.replace(at, 3, url_encode(query));
+    auto page = agent::hub::http_get_text(url, agent::hub::http_options_from_env(), 1u << 20);
+    if (!page.ok) return fail<std::string>(page.error.code, "the search failed: " + page.error.message);
+    return ok(cut_text(page.value, 8000));
+}
+
 Result<void> open_session(ChatState &st) {
     const std::string previous = st.lease ? st.lease.name : std::string();
     release_model(st.lease);
@@ -299,6 +380,20 @@ Result<void> open_session(ChatState &st) {
         cfg.lazy_tools = !collect_mcp_servers(*st.ctx, mcp_warnings).empty();
     }
     install_cli_hooks(cfg, *st.ctx);
+    if (st.no_tools) cfg.auto_default_tools = false;
+    if (!st.no_tools)
+        cfg.tools.push_back(Tool{.name = "web_fetch",
+                                 .description = "Fetch a web page and return its text (HTML is reduced to readable text, at most 20000 "
+                                                "characters). The user is asked first.",
+                                 .parameter_schema = kWebFetchSchema,
+                                 .callback = web_fetch_cb});
+    if (!st.no_tools && !st.ctx->config.search_url.empty())
+        cfg.tools.push_back(
+            Tool{.name = "web_search",
+                 .description = "Search the web and return the results as the search service gave them. The user is asked first.",
+                 .parameter_schema = kWebSearchSchema,
+                 .callback = web_search_cb,
+                 .user_data = &st.ctx->config.search_url});
     cfg.secret_resolver = cli_resolve_secrets;
     cfg.secret_user_data = st.secrets.get();
     cfg.context_window = st.context_window;
@@ -382,6 +477,14 @@ void print_chat_help() {
          "/stats                token and tool-call counters\n"
          "/diff                 what the tools changed in files this session\n"
          "/undo                 put back the files of the last tool call\n"
+         "/compact              summarise the oldest messages to free context\n"
+         "/mode [ask|plan|auto] ask before changes (default), only read, or never ask\n"
+         "/thinking [on|off]    show or hide the <think> blocks of reasoning models\n"
+         "/permissions [clear]  tools allowed for good in this project\n"
+         "/rename TITLE         name this conversation in the sidebar\n"
+         "/delete               remove this conversation (asks to confirm)\n"
+         "@path                 in a message: add the file's content\n"
+         "!command              run a shell command in the project folder; the model sees the output\n"
          "/doctor               what is installed and how much disk it uses\n"
          "/setup                ask the setup questions here, then run agent setup with the answers\n"
          "//text                send a message that starts with '/'\n"
@@ -430,6 +533,7 @@ void run_one_turn(ChatState &st, const std::string &text, std::span<const Media>
     } else if (st.streamed_bytes == 0) {
         emit_assistant(r.value); // engine did not stream
     }
+    emit_assistant(filter_stream(st.filter, flush_think(st.think)));
     emit_assistant(flush_stream(st.filter));
     ensure_newline();
     collect_artifacts(st, before);
@@ -444,6 +548,72 @@ void run_one_turn(ChatState &st, const std::string &text, std::span<const Media>
 #endif
     }
     remember_conversation(st);
+}
+
+// ---- "!command": the user's own shell command in the project folder; the output goes into the conversation
+
+std::string shell_capture(const std::string &command, const std::string &workspace) {
+#if defined(_WIN32)
+    const std::string full = "cd /d \"" + workspace + "\" && " + command + " 2>&1";
+    std::FILE *pipe = _popen(full.c_str(), "r");
+#else
+    const std::string full = "cd '" + workspace + "' && " + command + " 2>&1";
+    std::FILE *pipe = popen(full.c_str(), "r");
+#endif
+    if (!pipe) return "cannot start the command\n";
+    std::string output;
+    char buf[4096];
+    while (std::fgets(buf, sizeof(buf), pipe)) {
+        output += buf;
+        if (output.size() > 16 * 1024) {
+            output.resize(16 * 1024);
+            output += "\n[cut]\n";
+            break;
+        }
+    }
+#if defined(_WIN32)
+    _pclose(pipe);
+#else
+    pclose(pipe);
+#endif
+    return output;
+}
+
+void run_shell_line(ChatState &st, std::string command) {
+    const size_t a = command.find_first_not_of(" \t");
+    command = a == std::string::npos ? std::string() : command.substr(a);
+    if (command.empty()) {
+        out("usage: !COMMAND  runs it in the project folder; the model sees the output\n");
+        return;
+    }
+    out("$ " + command + "\n");
+    const std::string output = shell_capture(command, st.workspace);
+    out(output.empty() ? std::string("(no output)\n") : output + (output.back() == '\n' ? "" : "\n"));
+    if (!st.lease) return;
+    st.memory.history.push_back(Message{
+        .role = "user", .content = "I ran this command in the project folder: " + command + "\nIts output:\n```\n" + output + "```"});
+    if (auto r = save_conversation(*st.lease, st.memory); !r.ok) out("[error] " + r.error.message + "\n");
+    remember_conversation(st);
+}
+
+// ---- deleting a saved conversation
+
+bool delete_conversation(ChatState &st, const std::string &id, const std::string &workspace) {
+    const auto update = [&](Session &session) {
+        auto index = retrieve_memory(session, kIndexKey);
+        if (!index.ok) return false;
+        if (!store_memory(session, kIndexKey, remove_conversation_id(index.value, id)).ok) return false;
+        store_memory(session, std::string(kTitlePrefix) + id, "");
+        return true;
+    };
+    if (workspace == st.workspace && st.lease) return update(*st.lease);
+    Config cfg;
+    cfg.provider = AiProvider::Mock;
+    cfg.workspace_dir = workspace;
+    cfg.memory = {.store = store::sqlite_store()};
+    cfg.auto_default_tools = false;
+    auto other = init(cfg);
+    return other.ok && update(other.value);
 }
 
 int list_conversations(const std::string &workspace) {
@@ -573,6 +743,7 @@ void list_workspace_sessions(Session &session, const std::string &workspace, con
         TuiSession s;
         s.id = *it;
         s.title = conversation_title(c);
+        if (auto named = retrieve_memory(session, std::string(kTitlePrefix) + *it); named.ok && !named.value.empty()) s.title = named.value;
         s.workspace = workspace;
         s.messages = static_cast<int>(c.history.size());
         s.active = *it == open_id && workspace == open_workspace;
@@ -631,6 +802,7 @@ bool switch_session(ChatState &st, const std::string &id, const std::string &wor
         unload_model(st.registry, st.model.name);
         st.workspace = workspace;
         st.journal = std::make_unique<EditJournal>(st.workspace);
+        st.always_allowed = load_always_allowed(st.workspace);
         Config store_cfg;
         store_cfg.provider = AiProvider::Mock;
         store_cfg.workspace_dir = st.workspace;
@@ -681,6 +853,7 @@ int cmd_chat(const CommandLine &cl, Context &ctx) {
     st.ctx = &ctx;
     st.workspace = workspace_dir(ctx, cl.get("workspace"));
     st.journal = std::make_unique<EditJournal>(st.workspace);
+    st.always_allowed = load_always_allowed(st.workspace);
     if (cl.has("list")) return list_conversations(st.workspace);
 
     st.verbose = cl.has("verbose");
@@ -699,6 +872,15 @@ int cmd_chat(const CommandLine &cl, Context &ctx) {
     }
     st.engine_flag = std::string(cl.get("engine"));
     st.engine_options = std::string(cl.get("engine-options"));
+    // --json and --grammar FILE become engine options of the llama engine: every answer is sampled under that grammar.
+    if (cl.has("json") || cl.has("grammar")) st.no_tools = true;
+    if (cl.has("json")) st.engine_options = with_option(st.engine_options, "json_output", "true");
+    if (cl.has("grammar")) {
+        std::ifstream gin{std::string(cl.get("grammar")), std::ios::binary};
+        if (!gin) return chat_fail(make_error(ErrorCode::InvalidConfig, "cannot read the grammar file " + std::string(cl.get("grammar"))));
+        const std::string gbnf((std::istreambuf_iterator<char>(gin)), std::istreambuf_iterator<char>());
+        st.engine_options = with_option(st.engine_options, "grammar", "\"" + json_escape(gbnf) + "\"");
+    }
     st.context_window = ctx.config.context_window;
     st.max_tokens = ctx.config.max_tokens;
     if (cl.has("ctx")) {
@@ -847,14 +1029,31 @@ void run_setup_wizard(ChatState &st) {
 
 // One input line: a message or a slash command. Returns false when the user asked to exit.
 bool handle_line(ChatState &st, const std::string &line) {
+    {
+        // "!command" runs a shell command of the user's own.
+        const size_t b = line.find_first_not_of(" \t");
+        if (b != std::string::npos && line[b] == '!' && line.size() > b + 1) {
+            run_shell_line(st, line.substr(b + 1));
+            return true;
+        }
+    }
     const SlashCommand cmd = parse_slash_command(line);
     if (cmd.kind == SlashKind::None) {
         if (cmd.text.empty()) return true;
-        run_one_turn(st, cmd.text, {});
+        // "@path" in the message adds the file's content.
+        std::vector<std::string> attached;
+        const std::string text = expand_mentions(cmd.text, st.workspace, &attached);
+        if (!attached.empty()) {
+            std::string names;
+            for (const std::string &n : attached) names += (names.empty() ? "" : ", ") + n;
+            out("attached: " + names + "\n");
+        }
+        run_one_turn(st, text, {});
         return true;
     }
     if (cmd.kind == SlashKind::Exit) return false;
-    if (!st.lease && (cmd.kind == SlashKind::Clear || cmd.kind == SlashKind::Stats)) {
+    if (!st.lease && (cmd.kind == SlashKind::Clear || cmd.kind == SlashKind::Stats || cmd.kind == SlashKind::Compact ||
+                      cmd.kind == SlashKind::Rename || cmd.kind == SlashKind::Delete)) {
         out("[error] no model is loaded; switch with /model NAME\n");
         return true;
     }
@@ -914,6 +1113,78 @@ bool handle_line(ChatState &st, const std::string &line) {
         break;
     }
     case SlashKind::Stats: print_stats(st); break;
+    case SlashKind::Compact: {
+        const size_t before = st.memory.history.size();
+        if (auto r = compress_context(*st.lease, st.memory, 6); !r.ok) {
+            out("[error] " + r.error.message + "\n");
+            break;
+        }
+        if (auto r = save_conversation(*st.lease, st.memory); !r.ok) out("[error] " + r.error.message + "\n");
+        out("compacted: " + std::to_string(before) + " -> " + std::to_string(st.memory.history.size()) +
+            " messages (the oldest ones are summarised)\n");
+        break;
+    }
+    case SlashKind::Mode: {
+        if (cmd.arg.empty()) {
+            out(std::string("mode: ") + chat_mode_name(st.mode) +
+                "\n  ask   tools that change things ask first (default)\n  plan  only reading: no file changes, no commands\n  auto  "
+                "nothing asks\n");
+            break;
+        }
+        ChatMode mode = ChatMode::Ask;
+        if (!parse_chat_mode(cmd.arg, mode)) {
+            out("[error] /mode ask, plan or auto\n");
+            break;
+        }
+        st.mode = mode;
+        out(std::string("mode: ") + chat_mode_name(mode) + "\n");
+        break;
+    }
+    case SlashKind::Thinking: {
+        if (cmd.arg == "on") st.think.show = true;
+        else if (cmd.arg == "off") st.think.show = false;
+        else st.think.show = !st.think.show;
+        out(std::string("thinking blocks are ") + (st.think.show ? "shown" : "hidden") + "\n");
+        break;
+    }
+    case SlashKind::Permissions: {
+        if (cmd.arg == "clear") {
+            st.always_allowed.clear();
+            save_always_allowed(st.workspace, st.always_allowed);
+            out("no tool is allowed for good in this project any more\n");
+            break;
+        }
+        if (st.always_allowed.empty()) out("no tool is allowed for good in this project (answer 'a' to a question to allow one)\n");
+        for (const std::string &t : st.always_allowed) out("always allowed: " + t + "\n");
+        break;
+    }
+    case SlashKind::Rename: {
+        const std::string title = cmd.rest.empty() ? cmd.arg : cmd.arg + " " + cmd.rest;
+        if (title.empty()) {
+            out("usage: /rename NEW TITLE\n");
+            break;
+        }
+        if (auto r = store_memory(*st.lease, std::string(kTitlePrefix) + st.memory.id, title); !r.ok)
+            out("[error] " + r.error.message + "\n");
+        else out("renamed to: " + title + "\n");
+        remember_conversation(st);
+        break;
+    }
+    case SlashKind::Delete: {
+        if (cmd.arg != "yes") {
+            out("this removes the saved conversation " + st.memory.id + " for good; type /delete yes to do it\n");
+            break;
+        }
+        const std::string id = st.memory.id;
+        if (!delete_conversation(st, id, st.workspace)) {
+            out("[error] could not delete " + id + "\n");
+            break;
+        }
+        switch_session(st, "", st.workspace);
+        st.repaint = true;
+        out("deleted " + id + "; this is a new conversation\n");
+        break;
+    }
     case SlashKind::Diff: out((st.journal ? st.journal->diff() : std::string("no changes to files in this session")) + "\n"); break;
     case SlashKind::Undo: {
         const std::string done = st.journal ? st.journal->undo() : std::string();
@@ -1025,6 +1296,12 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
             {"/stats", "token and tool-call counters"},
             {"/diff", "what the tools changed in files"},
             {"/undo", "put back the last file change"},
+            {"/compact", "summarise old messages"},
+            {"/mode", "ask, plan or auto"},
+            {"/thinking", "show or hide reasoning"},
+            {"/permissions", "tools allowed for good"},
+            {"/rename", "name this conversation"},
+            {"/delete", "remove this conversation"},
             {"/doctor", "what is installed and disk use"},
             {"/setup", "first-time setup questions"},
             {"/clear", "forget the conversation"},
@@ -1041,6 +1318,22 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
             return switch_session(*static_cast<ChatState *>(u), id, workspace);
         };
         host.notice = [](void *) { return sandbox_notice(); };
+        host.mode = [](void *u) { return std::string(chat_mode_name(static_cast<ChatState *>(u)->mode)); };
+        host.delete_session = [](void *u, const std::string &id, const std::string &workspace) {
+            auto &c = *static_cast<ChatState *>(u);
+            if (!delete_conversation(c, id, workspace)) return false;
+            if (id == c.memory.id && workspace == c.workspace) {
+                switch_session(c, "", c.workspace);
+                c.repaint = true;
+            }
+            return true;
+        };
+        host.take_repaint = [](void *u) {
+            auto &c = *static_cast<ChatState *>(u);
+            const bool r = c.repaint;
+            c.repaint = false;
+            return r;
+        };
         host.history = [](void *u) { return tui_history(*static_cast<ChatState *>(u)); };
         host.cancel = [](void *) {
             if (!g_generating.load()) return;

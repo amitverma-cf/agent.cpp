@@ -280,6 +280,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
     bool side_drawer = false; // on a narrow terminal the sidebar is a drawer over the conversation: Ctrl+K, Ctrl+B or the ☰ button
     bool side_focus = false;  // Ctrl+K: Up/Down pick a session, Enter opens it
     int side_sel = 0;
+    std::string side_filter, mode_text;
     std::string prompt_default;
     size_t selected = 0;
     std::vector<std::string> history;
@@ -347,6 +348,17 @@ class ChatApp : public rtxui::Component<ChatApp> {
         RebuildSide();
     }
 
+    // Which sessions the filter lets through (by a part of the title or the project, any case).
+    bool Visible(const TuiSession &s) const {
+        if (side_filter.empty()) return true;
+        auto lower = [](std::string text) {
+            for (char &c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return text;
+        };
+        const std::string needle = lower(side_filter);
+        return lower(s.title).find(needle) != std::string::npos || lower(s.workspace).find(needle) != std::string::npos;
+    }
+
     void RebuildSide() {
         side.clear();
         std::vector<std::string> seen;
@@ -354,16 +366,20 @@ class ChatApp : public rtxui::Component<ChatApp> {
             const std::string &ws = sessions[i].workspace;
             if (std::find(seen.begin(), seen.end(), ws) != seen.end()) continue;
             seen.push_back(ws);
-            side.push_back({"\xE2\x96\xB8 " + base_name(ws), "proj", -1});
+            std::vector<SideRow> group;
             for (size_t j = i; j < sessions.size(); ++j) {
-                if (sessions[j].workspace != ws) continue;
+                if (sessions[j].workspace != ws || !Visible(sessions[j])) continue;
                 const TuiSession &s = sessions[j];
                 std::string cls = s.active ? "sess current" : "sess";
                 if (side_focus && static_cast<int>(j) == side_sel) cls += " hi";
                 const std::string title = s.title.empty() ? "New chat" : s.title;
-                side.push_back({std::string(s.active ? "\xE2\x97\x8F " : "  ") + clip(title, 22), cls, static_cast<int>(j)});
+                group.push_back({std::string(s.active ? "\xE2\x97\x8F " : "  ") + clip(title, 22), cls, static_cast<int>(j)});
             }
+            if (group.empty()) continue;
+            side.push_back({"\xE2\x96\xB8 " + base_name(ws), "proj", -1});
+            side.insert(side.end(), group.begin(), group.end());
         }
+        if (!side_filter.empty()) side.insert(side.begin(), {"find: " + side_filter, "proj", -1});
     }
 
     // A click on a session (the index arrives as text), or Enter in the sidebar.
@@ -423,6 +439,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
 
     void Refresh() {
         header = host.header ? host.header(host.user) : std::string();
+        mode_text = host.mode ? host.mode(host.user) : std::string();
         subtitle = host.subtitle ? host.subtitle(host.user) : std::string();
         project_line = subtitle;
         notice = host.notice ? host.notice(host.user) : std::string();
@@ -431,7 +448,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         const int percent = context_percent(footer);
         gauge = percent >= 0 ? "context " + std::to_string(percent) + "%" : std::string();
         gauge_class = percent >= 85 ? "gauge hot" : "gauge";
-        if (side_focus) status_left = "Up/Down choose \xC2\xB7 Enter open \xC2\xB7 Esc close";
+        if (side_focus) status_left = "type to filter \xC2\xB7 Up/Down \xC2\xB7 Enter open \xC2\xB7 Del delete \xC2\xB7 Esc close";
         else if (!follow) status_left = "scrolled up \xC2\xB7 End follows the newest output";
         else if (busy) status_left = "Esc to stop";
         else if (footer.empty() || prompting) status_left = "Ctrl+K sessions   Ctrl+N new chat   / commands   Ctrl-D quit";
@@ -440,6 +457,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             const size_t kv = percent >= 0 ? footer.find(" | KV ") : std::string::npos;
             status_left = kv == std::string::npos ? footer : footer.substr(0, kv);
         }
+        if (!mode_text.empty() && mode_text != "ask") status_left = "[" + mode_text + " mode]  " + status_left;
         app_class = show_welcome ? "main home" : "main";
         side_class = std::string("side") + (side_hide ? " hidden" : "") + (side_drawer ? " drawer" : "");
         caret = busy ? "\xC2\xB7" : "\xE2\x80\xBA";
@@ -490,6 +508,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             const bool again = host.submit(host.user, line);
             rtxui::PostTask([this, again] {
                 busy = false;
+                if (host.take_repaint && host.take_repaint(host.user)) Repaint();
                 Refresh();
                 RefreshSessions();
                 Settle();
@@ -525,11 +544,31 @@ class ChatApp : public rtxui::Component<ChatApp> {
         return 0;
     }
 
+    // Up and Down walk over the sessions the filter shows.
     void MoveSide(int step) {
-        if (sessions.empty()) return;
-        const int n = static_cast<int>(sessions.size());
-        side_sel = ((side_sel + step) % n + n) % n;
+        std::vector<int> visible;
+        for (size_t i = 0; i < sessions.size(); ++i)
+            if (Visible(sessions[i])) visible.push_back(static_cast<int>(i));
+        if (visible.empty()) return;
+        auto at = std::find(visible.begin(), visible.end(), side_sel);
+        size_t pos = at == visible.end() ? 0 : static_cast<size_t>(at - visible.begin());
+        if (at != visible.end() || step != 0)
+            pos = (pos + visible.size() + static_cast<size_t>(step < 0 ? visible.size() - 1 : step)) % visible.size();
+        side_sel = visible[pos];
         RebuildSide();
+    }
+
+    // Delete in the picker: removes the highlighted conversation.
+    void DeleteSelected() {
+        if (!host.delete_session || side_sel < 0 || side_sel >= static_cast<int>(sessions.size())) return;
+        const TuiSession target = sessions[static_cast<size_t>(side_sel)];
+        if (!host.delete_session(host.user, target.id, target.workspace)) {
+            Emit(TuiKind::Error, "could not delete the conversation");
+            return;
+        }
+        if (host.take_repaint && host.take_repaint(host.user)) Repaint();
+        RefreshSessions();
+        MoveSide(0);
     }
 
     bool OnEvent(Event e) override {
@@ -547,18 +586,30 @@ class ChatApp : public rtxui::Component<ChatApp> {
             }
             return c != 0 || a != 0;
         }
-        // Choosing a session with the keyboard.
+        // Choosing a session with the keyboard: type to filter, Up/Down, Enter opens, Delete removes, Esc closes.
         if (side_focus) {
+            const int letter = Letter(e);
             if (e == Event::ArrowDown()) MoveSide(1);
             else if (e == Event::ArrowUp()) MoveSide(-1);
             else if (e == Event::Return()) {
                 side_focus = false;
+                side_filter.clear();
                 Pick(std::to_string(side_sel));
                 RebuildSide();
             } else if (e == Event::Escape() || e == Event::CtrlK()) {
                 side_focus = false;
                 side_drawer = false;
+                side_filter.clear();
                 RebuildSide();
+            } else if (e == Event::Delete()) {
+                DeleteSelected();
+            } else if (e == Event::Backspace()) {
+                if (!side_filter.empty()) side_filter.pop_back();
+                RebuildSide();
+            } else if (letter >= 32 && letter < 127) {
+                side_filter += static_cast<char>(letter);
+                RebuildSide();
+                MoveSide(0);
             } else if (e.is<Event::Mouse>()) {
                 return Component<ChatApp>::OnEvent(e);
             }
@@ -809,7 +860,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .tip { color: #ffffff; padding-left: 1; margin-top: 1; }
       .ask { border: round; border-color: #ff147d; padding-left: 1; padding-right: 1; margin-bottom: 0; }
       .allow { color: #ff147d; font-weight: bold; padding-right: 1; }
-      .q { flex-grow: 1; }
+      .q { flex-grow: 1; white-space: pre-wrap; }
       .keys { color: #00e5ff; font-weight: bold; padding-left: 2; }
       .palette { border: round; border-color: #00e5ff; padding-left: 1; padding-right: 1; }
       .pitem { display: flex; flex-direction: row; color: #00e5ff; }

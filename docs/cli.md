@@ -121,6 +121,39 @@ stdin closes). Send `{"type":"prompt","text":"..."}` (a `/command` works too) an
 | `permission_request` | `tool`, `arguments` | answer on the next stdin line: `{"type":"permission","allow":true,"always":false}` (not asked with `-y`) |
 | `done` | `session`, `metrics` | the turn is over; `metrics` is the model, speed and token line |
 
+### In the message: `@file`, `!command`
+
+`@path` in a message adds the content of that file (relative to the workspace or absolute; text files up to 32 KiB each, 96 KiB in all) as a
+fenced block after your text, and the chat says which files it attached. A line that starts with `!` runs a shell command of your own in the
+project folder (`!git status`); its output is shown and added to the conversation, so the model can see it. These are your commands, not the
+agent's: they are not sandboxed and do not ask.
+
+### Modes, thinking, permissions
+
+- `/mode plan` lets the agent only read (no file changes, no commands); `/mode auto` never asks; `/mode ask` (default) asks before changes. The
+  status line shows the mode when it is not `ask`.
+- `/thinking [on|off]` shows or hides the `<think>...</think>` blocks of reasoning models (hidden by default).
+- Answering `a` to a permission question allows that tool for good **in this project**: it is kept in `<workspace>/.agents/permissions.json`.
+  `/permissions` lists them and `/permissions clear` forgets them. The question shows the call's arguments, one per line.
+- `/compact` summarises the oldest messages to free context (the last six stay as they are).
+
+### Sessions
+
+`/rename TITLE` names the conversation in the sidebar. `/delete` asks, `/delete yes` removes the saved conversation for good and starts a
+new one. In the session picker (`Ctrl+K`) you can type to filter the list, and `Del` removes the highlighted conversation.
+
+### The web
+
+The model has a `web_fetch` tool (an http or https address; HTML is reduced to readable text, at most 20,000 characters) and, when
+`config.json` has a `search_url`, a `web_search` tool: `"search_url": "http://localhost:8080/search?format=json&q={q}"`, for example a SearXNG
+instance. Both ask first (like `run_command`); `-y` or `/mode auto` approve them. Nothing else on the model's side touches the network.
+
+### Constrained answers
+
+`--json` makes every answer valid JSON; `--grammar FILE` samples under a GBNF grammar (for example `root ::= "yes" | "no"`). Both are for the
+llama engine and switch the tools off for the session (a grammar cannot share a turn with the tool-call grammar). In `task text_gen` the same
+is `--params '{"json": true}'` or `--params '{"grammar": "..."}'`.
+
 ### Seeing and undoing edits
 
 Before a built-in tool changes a file (`write_file`, `append_file`, `delete_path`, `move_path`), the chat remembers the file's
@@ -247,6 +280,14 @@ agent mcp ls
 agent mcp rm files
 ```
 
+```sh
+agent mcp serve [--workspace DIR] [--read-only]     # the agent's tools as an MCP server on stdin/stdout, for an editor or another agent
+```
+
+An entry in `mcp.json` can be a server on the web instead of a program: `"docs": {"url": "https://mcp.example.com/mcp", "headers":
+{"Authorization": "Bearer ${secret:docs}"}}` (MCP Streamable HTTP; see [api/mcp.md](api/mcp.md#servers-reached-by-url-streamable-http)).
+A server that offers resources or prompts gets `list_resources`, `read_resource`, `list_prompts` and `get_prompt` tools next to its own.
+
 `add` turns an npm or PyPI stdio server from the official registry into a config entry (`<home>/mcp/mcp.d/NAME.json`, or
 `<project>/.agents/mcp.d/`). Secret settings become `${secret:NAME}` references and `add` prints the `agent secret` commands to
 run. Hosted-only and container-only servers are listed but not added. Servers published as npm or Python packages run through a
@@ -313,7 +354,8 @@ agent update                # download it (SHA-256 checked) and replace agent an
 agent completion bash       # also: zsh, fish, powershell
 ```
 
-`update` reads the project's GitHub releases (`--repo OWNER/NAME`, `--tag TAG`). While no release is published it says so and
+`update` reads the project's GitHub releases (`--repo OWNER/NAME`, `--tag TAG`). A release must carry `manifest.json.sig`, an Ed25519 signature of the
+manifest made with the project's release key (`scripts/sign-release.sh`); without a valid one `update` stops (`--allow-unsigned` installs anyway). While no release is published it says so and
 changes nothing. Engines are not touched; `agent engine pull NAME` fetches newer ones. Load a completion script in your shell, for
 example `source <(agent completion bash)`, `agent completion fish | source`, or `agent completion powershell | Out-String | Invoke-Expression`.
 

@@ -498,6 +498,18 @@ using SecretResolverFn = Result<std::string> (*)(std::string_view text, const Se
 
 struct McpServerConfig; // defined with the MCP client API below
 
+// The reply to an HTTP POST made through Config::http_post: the status, the Content-Type and Mcp-Session-Id headers, the body.
+struct HttpReply {
+    int status = 0;
+    std::string content_type;
+    std::string session_id;
+    std::string body;
+};
+// POSTs `body` to `url` with the given headers and returns the reply; a failed Result is a transport error (no reply at all). The core has no
+// TLS of its own, so the host provides this for MCP servers that are reached by URL (the CLI uses agent::hub's client).
+using HttpPostFn = Result<HttpReply> (*)(std::string_view url, const std::vector<std::pair<std::string, std::string>> &headers,
+                                         std::string_view body, int timeout_ms, void *user_data);
+
 struct Config {
     AiProvider provider = AiProvider::Mock;
     // AiProvider::Engine only: a registered engine name, or a path to an engine shared library.
@@ -535,6 +547,9 @@ struct Config {
     using McpLauncherFn = void (*)(McpServerConfig &server, void *user_data);
     McpLauncherFn mcp_launcher = nullptr;
     void *mcp_launcher_user_data = nullptr;
+    // Needed to connect MCP servers by URL (McpServerConfig::url): the HTTP POST of the Streamable HTTP transport.
+    HttpPostFn http_post = nullptr;
+    void *http_post_user_data = nullptr;
     // Paths outside the workspace that sandboxed tools may use (file tools, run_command, MCP servers), and the gate that is
     // asked for any other path. AllowAlways answers are added to the session's copy of the grants; persisting them is up to
     // the host. Without a gate, only the grants apply.
@@ -1259,6 +1274,10 @@ namespace agent {
 struct McpServerConfig {
     std::string name;    // tool prefix; letters, digits, '_' and '-' only; unique per Session
     std::string command; // program to start (looked up on PATH; not run through a shell)
+    // A server reached over HTTP instead (MCP Streamable HTTP): its address, and headers sent with every request (an Authorization header
+    // may use ${secret:NAME} like env values). Needs Config::http_post. command and url are alternatives; with a url nothing is started.
+    std::string url;
+    std::map<std::string, std::string> headers;
     std::vector<std::string> args;
     std::map<std::string, std::string> env; // added to / overriding the inherited environment
     int timeout_ms = 30000;                 // per request (initialize, each tools/list page, tools/call)

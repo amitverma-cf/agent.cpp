@@ -137,6 +137,7 @@ int cmd_mcp(const CommandLine &cl, Context &ctx) {
     if (sub == "search") return mcp_search(cl.positionals[0]);
     if (sub == "add") return mcp_add(cl, ctx);
     if (sub == "rm") return mcp_rm(cl, ctx);
+    if (sub == "serve") return mcp_serve(cl, ctx);
     return mcp_ls(ctx);
 }
 

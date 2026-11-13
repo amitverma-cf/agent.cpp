@@ -475,12 +475,41 @@ TEST_CASE("cli: a pulled model goes to a folder of its engine", "[cli]") {
     CHECK(model_engine_folder("owner/repo:Q4_K_M", "../x", "") == "llama");
 }
 
-TEST_CASE("cli: --model becomes the engine option of the task's role", "[cli]") {
+TEST_CASE("cli: engine options get a key added", "[cli]") {
+    CHECK(with_option("", "json_output", "true") == "{\"json_output\":true}");
+    CHECK(with_option("{\"threads\":4}", "grammar", "\"root ::= x\"") == "{\"grammar\":\"root ::= x\",\"threads\":4}");
+    CHECK(with_option("{\"json_output\":false}", "json_output", "true") == "{\"json_output\":false}"); // the user's own value wins
+    auto parsed = parse({"chat", "-p", "hi", "--json", "--grammar", "g.gbnf"});
+    REQUIRE(parsed.ok);
+    CHECK(parsed.value.has("json"));
+    CHECK(parsed.value.get("grammar") == "g.gbnf");
+}
+
+TEST_CASE("cli: --model becomes the engine option of the task\'s role", "[cli]") {
     CHECK(with_role_model("", "asr", "/m/p.gguf") == "{\"asr\":{\"model\":\"/m/p.gguf\"}}");
     CHECK(with_role_model("{}", "tts", "/m/t.gguf") == "{\"tts\":{\"model\":\"/m/t.gguf\"}}");
     CHECK(with_role_model("{\"threads\":4}", "vad", "/m/v.gguf") == "{\"vad\":{\"model\":\"/m/v.gguf\"},\"threads\":4}");
     CHECK(with_role_model("{\"asr\":{\"model\":\"x\"}}", "asr", "/m/p.gguf") == "{\"asr\":{\"model\":\"x\"}}"); // already set
     CHECK(with_role_model("{\"threads\":4}", "asr", "") == "{\"threads\":4}");
+}
+
+TEST_CASE("cli: the chat's newer slash commands parse", "[cli]") {
+    CHECK(parse_slash_command("/compact").kind == SlashKind::Compact);
+    const auto mode = parse_slash_command("/mode plan");
+    CHECK(mode.kind == SlashKind::Mode);
+    CHECK(mode.arg == "plan");
+    CHECK(parse_slash_command("/thinking off").kind == SlashKind::Thinking);
+    CHECK(parse_slash_command("/permissions clear").kind == SlashKind::Permissions);
+    const auto rename = parse_slash_command("/rename My plan for the week");
+    CHECK(rename.kind == SlashKind::Rename);
+    CHECK(rename.arg == "My");
+    CHECK(rename.rest == "plan for the week");
+    CHECK(parse_slash_command("/delete yes").kind == SlashKind::Delete);
+    // search_url is part of config.json.
+    auto config = config_from_json(R"({"search_url":"http://localhost:8080/search?q={q}"})");
+    REQUIRE(config.ok);
+    CHECK(config.value.search_url == "http://localhost:8080/search?q={q}");
+    CHECK(config_from_json(config_to_json(config.value)).value.search_url == config.value.search_url);
 }
 
 TEST_CASE("cli: completion scripts list the commands and flags", "[cli][completion]") {

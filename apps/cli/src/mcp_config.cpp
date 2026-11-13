@@ -56,10 +56,15 @@ Result<McpFile> parse_mcp_config(std::string_view json, const std::string &sourc
         c.name = name;
         std::string_view v;
         if (!o["command"].get(v)) c.command = std::string(v);
-        if (c.command.empty()) {
-            file.warnings.push_back(source + ": skipped server '" + name + "': no \"command\"");
+        if (!o["url"].get(v)) c.url = std::string(v);
+        if (c.command.empty() && c.url.empty()) {
+            file.warnings.push_back(source + ": skipped server '" + name + "': no \"command\" or \"url\"");
             continue;
         }
+        simdjson::dom::object header_object;
+        if (!o["headers"].get(header_object))
+            for (auto h : header_object)
+                if (!h.value.get(v)) c.headers[std::string(h.key)] = std::string(v);
         c.args = string_list(o["args"]);
         if (!o["cwd"].get(v)) c.working_directory = std::string(v);
         int64_t timeout = 0;
