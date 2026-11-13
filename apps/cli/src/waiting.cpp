@@ -12,8 +12,8 @@ std::string waiting_to_json(const std::vector<WaitingRun> &runs) {
     for (size_t i = 0; i < runs.size(); ++i) {
         const WaitingRun &r = runs[i];
         out += i ? ",\n    {" : "\n    {";
-        out += "\"thread\": \"" + json_escape(r.thread) + "\", \"graph\": \"" + json_escape(r.graph) +
-               "\", \"until\": " + std::to_string(r.until) + ", \"flags\": [";
+        out += "\"thread\": \"" + json_escape(r.thread) + "\", \"graph\": \"" + json_escape(r.graph) + "\", \"cwd\": \"" +
+               json_escape(r.cwd) + "\", \"until\": " + std::to_string(r.until) + ", \"flags\": [";
         for (size_t f = 0; f < r.flags.size(); ++f) out += (f ? ", \"" : "\"") + json_escape(r.flags[f]) + "\"";
         out += "]}";
     }
@@ -37,6 +37,8 @@ Result<std::vector<WaitingRun>> waiting_from_json(std::string_view json) {
         if (e["thread"].get_string().get(thread) || e["graph"].get_string().get(graph) || e["until"].get_int64().get(until)) continue;
         r.thread = std::string(thread);
         r.graph = std::string(graph);
+        std::string_view cwd;
+        if (!e["cwd"].get_string().get(cwd)) r.cwd = std::string(cwd);
         r.until = until;
         simdjson::dom::array flags;
         if (!e["flags"].get_array().get(flags))

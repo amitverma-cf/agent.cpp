@@ -14,6 +14,7 @@ namespace agent::cli {
 struct WaitingRun {
     std::string thread;             // graph thread id (agent run --resume THREAD)
     std::string graph;              // absolute path of the graph file
+    std::string cwd;                // working directory of the original run: relative paths in the flags keep their meaning
     int64_t until = 0;              // wake time, epoch seconds
     std::vector<std::string> flags; // the original flags of the run, as words: "--model", "qwen", "--yes", ...
 };

@@ -16,6 +16,10 @@ on:
         description: "Create a GitHub release from the build (not before v1.0.0)"
         type: boolean
         default: false
+      engines:
+        description: "Engines to build and ship, comma separated: llama,onnx,audiocpp,sdcpp,trellis"
+        type: string
+        default: "llama"
 
 
 permissions:
@@ -65,10 +69,12 @@ jobs:
       - name: Configure
         shell: bash
         run: |
+          eng=",${{ inputs.engines || 'llama' }},"
+          on() { case "$eng" in *",$1,"*) echo ON ;; *) echo OFF ;; esac; }
           extra=""
           if [ "${{ matrix.os_name }}" = "windows" ]; then extra="-DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}"; fi
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DAGENT_BUILD_CLI=ON -DAGENT_ENGINE_LLAMA=ON -DAGENT_BUILD_EXAMPLES=OFF \
+            -DAGENT_BUILD_CLI=ON -DAGENT_BUILD_EXAMPLES=OFF             -DAGENT_ENGINE_LLAMA=$(on llama) -DAGENT_ENGINE_ONNX=$(on onnx) -DAGENT_ENGINE_AUDIOCPP=$(on audiocpp)             -DAGENT_ENGINE_SDCPP=$(on sdcpp) -DAGENT_ENGINE_TRELLIS=$(on trellis) \
             ${{ matrix.ggml }} $extra
 
       - name: Build
@@ -91,15 +97,32 @@ jobs:
           for f in build/src/engines/*/agent-engine-*.${{ matrix.lib_ext }} build/agent-engine-*.${{ matrix.lib_ext }}; do
             [ -f "$f" ] || continue
             case "$f" in *mock*) continue ;; esac # test engines are not released
-            cp "$f" "dist/${name}/engines/"
             base="$(basename "$f" .${{ matrix.lib_ext }})"
-            cp "$f" "assets/${base}-${{ matrix.os_name }}-${{ matrix.arch }}.${{ matrix.lib_ext }}"
+            dir="$(dirname "$f")"
+            # Runtime libraries the plugin loads from its own folder (libaudiocpp, ONNX Runtime, ...): shipped next to it.
+            libs=()
+            for l in "$dir"/*.${{ matrix.lib_ext }}*; do
+              [ -f "$l" ] || continue
+              case "$(basename "$l")" in agent-engine-*) continue ;; *mock*) continue ;; esac
+              libs+=("$l")
+            done
+            cp "$f" "dist/${name}/engines/"
+            [ ${#libs[@]} -gt 0 ] && cp "${libs[@]}" "dist/${name}/engines/"
+            if [ ${#libs[@]} -eq 0 ]; then
+              cp "$f" "assets/${base}-${{ matrix.os_name }}-${{ matrix.arch }}.${{ matrix.lib_ext }}"
+            else
+              # An engine with runtime libraries is one archive (plugin + libraries), for `agent engine pull`.
+              pkg="${base}-${{ matrix.os_name }}-${{ matrix.arch }}"
+              mkdir -p "stage/${pkg}"
+              cp "$f" "${libs[@]}" "stage/${pkg}/"
+              if [ "${{ matrix.os_name }}" = "windows" ]; then (cd stage && 7z a -tzip "../assets/${pkg}.zip" "${pkg}"); else tar -C stage -czf "assets/${pkg}.tar.gz" "${pkg}"; fi
+            fi
           done
           if [ "${{ matrix.os_name }}" = "windows" ]; then cp "$VCPKG_INSTALLATION_ROOT"/installed/${{ matrix.triplet }}/bin/{libssl-3-${{ matrix.dll }},libcrypto-3-${{ matrix.dll }}}.dll "dist/${name}/"; fi
           cp LICENSE README.md "dist/${name}/"
           # third-party licences of what is compiled in
           mkdir -p "dist/${name}/licenses"
-          for l in simdjson cpp-httplib miniaudio llama.cpp sqlite-vec; do
+          for l in simdjson cpp-httplib miniaudio llama.cpp sqlite-vec audio.cpp stable-diffusion.cpp trellis2cpp FTXUI; do
             for f in vendor/$l/LICENSE vendor/$l/LICENSE.md vendor/$l/LICENSE.txt; do [ -f "$f" ] && cp "$f" "dist/${name}/licenses/$l.LICENSE" && break; done
           done
           if [ "${{ matrix.os_name }}" = "windows" ]; then

@@ -932,6 +932,7 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
             w.thread = run.thread_id;
             std::error_code ec;
             w.graph = fs::absolute(graph_path, ec).string();
+            w.cwd = fs::current_path(ec).string();
             w.until = std::strtoll(std::string(until_text).c_str(), nullptr, 10);
             bool has_workspace = false;
             for (const Flag &f : cl.flags) {

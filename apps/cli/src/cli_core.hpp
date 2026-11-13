@@ -158,8 +158,10 @@ std::string mime_for_path(std::string_view path);
 
 // -------------------------- Chat --------------------------
 
-enum class SlashKind { None, Exit, Clear, Model, Image, Open, Stats, Help, Unknown };
+enum class SlashKind { None, Exit, Clear, Model, Image, Open, Stats, Help, Cli, Unknown };
 
+// SlashKind::Cli: a slash command that runs an ordinary `agent` subcommand and shows its output: /doctor, /pull SPEC, /fit SPEC,
+// /recommend [TEXT], /search [TEXT], /setup, /wake, /schedule ... (arg = the name, rest = the arguments as typed).
 struct SlashCommand {
     SlashKind kind = SlashKind::None;
     std::string arg;  // first argument (path / name / index); quotes removed
@@ -168,6 +170,8 @@ struct SlashCommand {
 };
 
 SlashCommand parse_slash_command(std::string_view line);
+// The words after `agent` that run a SlashKind::Cli command ({"model", "pull", SPEC}, {"doctor"}, ...); empty for any other command.
+std::vector<std::string> slash_cli_argv(const SlashCommand &cmd);
 
 // Hides tool-call markup (<tool_call>...</tool_call>, the Hermes / Qwen format) from streamed tokens;
 // the chat shows each call as a "[tool] ..." line instead. Tags split across tokens are handled.

@@ -4,6 +4,7 @@
 
 #include "commands.hpp"
 #include "mcp_config.hpp"
+#include "schedule.hpp"
 #include "secrets.hpp"
 #include "tui.hpp"
 
@@ -327,6 +328,13 @@ void print_chat_help() {
          "/image <path> [text]  send an image (or audio) with an optional prompt\n"
          "/open [n]             list generated artifacts, or open the n-th with the default app\n"
          "/stats                token and tool-call counters\n"
+         "/doctor               what is installed and how much disk it uses\n"
+         "/pull SPEC            download a model (owner/repo:QUANT or a registry name)\n"
+         "/fit SPEC             will a model run on this machine, and about how fast\n"
+         "/recommend [TEXT]     search Hugging Face for models that fit this machine\n"
+         "/search [TEXT]        the curated registry of tested models\n"
+         "/setup                set up with the defaults (agent setup --yes)\n"
+         "/wake, /schedule ...  resume waiting graph runs; scheduled runs (agent schedule)\n"
          "//text                send a message that starts with '/'\n"
          "Ctrl-C while the model is answering cancels the answer.\n");
 }
@@ -511,6 +519,65 @@ int cmd_chat(const CommandLine &cl, Context &ctx) {
 
 namespace {
 
+// A subcommand of this binary with its output shown in the chat: it runs as a child process, so what it prints cannot tear the
+// full-screen interface, and it never reads the keyboard. Progress that rewrites a line with a carriage return shows only its last state.
+void run_cli_command(ChatState &st, const std::vector<std::string> &argv) {
+    if (argv.empty()) return;
+    std::string exe = executable_dir();
+#if defined(_WIN32)
+    exe += "\\agent.exe";
+    auto quote = [](const std::string &w) { return quote_windows(w); };
+#else
+    exe += "/agent";
+    auto quote = [](const std::string &w) { return quote_posix(w); };
+#endif
+    std::string command = quote(exe);
+    if (st.ctx->has_home) command += " --home " + quote(st.ctx->home.root);
+    std::string shown;
+    for (const std::string &a : argv) {
+        command += " " + quote(a);
+        shown += (shown.empty() ? "" : " ") + a;
+    }
+#if defined(_WIN32)
+    command += " < nul 2>&1";
+    std::FILE *pipe = _popen(("\"" + command + "\"").c_str(), "r"); // cmd.exe /c wants the whole line in one more pair of quotes
+#else
+    command += " < /dev/null 2>&1";
+    std::FILE *pipe = popen(command.c_str(), "r");
+#endif
+    if (!pipe) {
+        out("[error] could not start: agent " + shown + "\n");
+        return;
+    }
+    out("$ agent " + shown + "\n");
+    std::string line;
+    bool after_cr = false;
+    char buf[4096];
+    size_t n = 0;
+    while ((n = std::fread(buf, 1, sizeof(buf), pipe)) > 0) {
+        for (size_t i = 0; i < n; ++i) {
+            const char c = buf[i];
+            if (c == '\n') {
+                out(line + "\n");
+                line.clear();
+                after_cr = false;
+            } else if (c == '\r') {
+                after_cr = true;
+            } else {
+                if (after_cr) line.clear(); // a progress line was rewritten
+                after_cr = false;
+                line += c;
+            }
+        }
+    }
+    if (!line.empty()) out(line + "\n");
+#if defined(_WIN32)
+    _pclose(pipe);
+#else
+    pclose(pipe);
+#endif
+}
+
 // One input line: a message or a slash command. Returns false when the user asked to exit.
 bool handle_line(ChatState &st, const std::string &line) {
     const SlashCommand cmd = parse_slash_command(line);
@@ -581,6 +648,7 @@ bool handle_line(ChatState &st, const std::string &line) {
     }
     case SlashKind::Stats: print_stats(st); break;
     case SlashKind::Help: print_chat_help(); break;
+    case SlashKind::Cli: run_cli_command(st, slash_cli_argv(cmd)); break;
     case SlashKind::Unknown: out("unknown command /" + cmd.arg + " (try /help)\n"); break;
     default: break;
     }

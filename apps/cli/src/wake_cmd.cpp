@@ -99,6 +99,14 @@ int cmd_wake(const CommandLine &cl, Context &ctx) {
         std::string command = shell_quote(exe);
         if (ctx.has_home) command += " --home " + shell_quote(ctx.home.root);
         for (const std::string &w : waiting_resume_args(r)) command += " " + shell_quote(w);
+        // From the directory the run started in: relative paths among its flags (a model file, say) must still point at the same files.
+        if (!r.cwd.empty()) {
+#if defined(_WIN32)
+            command = "cd /d " + shell_quote(r.cwd) + " && " + command;
+#else
+            command = "cd " + shell_quote(r.cwd) + " && " + command;
+#endif
+        }
         std::printf("resuming %s ...\n", r.thread.c_str());
         std::fflush(stdout);
         if (std::system(command.c_str()) != 0) {

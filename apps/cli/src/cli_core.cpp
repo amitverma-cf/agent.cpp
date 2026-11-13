@@ -750,6 +750,8 @@ SlashCommand parse_slash_command(std::string_view line) {
     const std::string name = lower(t.substr(0, sp));
     std::string_view args = sp == std::string_view::npos ? std::string_view() : trim(t.substr(sp));
 
+    const std::string_view whole_args = args;
+
     // First argument, optionally "quoted" (paths with spaces).
     if (!args.empty() && (args.front() == '"' || args.front() == '\'')) {
         const char q = args.front();
@@ -768,6 +770,15 @@ SlashCommand parse_slash_command(std::string_view line) {
     }
     cmd.rest = std::string(args);
 
+    // Commands that run an `agent` subcommand: everything after the name is passed on as it was typed.
+    for (std::string_view cli_name : {"doctor", "pull", "fit", "recommend", "search", "setup", "wake", "schedule"})
+        if (name == cli_name) {
+            cmd.kind = SlashKind::Cli;
+            cmd.arg = name;
+            cmd.rest = std::string(whole_args);
+            return cmd;
+        }
+
     if (name == "exit" || name == "quit" || name == "q") cmd.kind = SlashKind::Exit;
     else if (name == "clear") cmd.kind = SlashKind::Clear;
     else if (name == "model") cmd.kind = SlashKind::Model;
@@ -780,6 +791,39 @@ SlashCommand parse_slash_command(std::string_view line) {
         cmd.arg = name;
     }
     return cmd;
+}
+
+std::vector<std::string> slash_cli_argv(const SlashCommand &cmd) {
+    if (cmd.kind != SlashKind::Cli) return {};
+    // The arguments as words; "double" and 'single' quotes keep spaces together.
+    std::vector<std::string> words;
+    std::string word;
+    char quote = 0;
+    bool open = false;
+    for (char c : cmd.rest) {
+        if (quote) {
+            if (c == quote) quote = 0;
+            else word += c;
+        } else if (c == '"' || c == '\'') {
+            quote = c;
+            open = true;
+        } else if (c == ' ' || c == '\t') {
+            if (open || !word.empty()) words.push_back(std::move(word));
+            word.clear();
+            open = false;
+        } else {
+            word += c;
+        }
+    }
+    if (open || !word.empty()) words.push_back(std::move(word));
+
+    std::vector<std::string> argv;
+    const std::string &name = cmd.arg;
+    if (name == "pull" || name == "fit" || name == "recommend" || name == "search") argv = {"model", name};
+    else if (name == "setup") argv = {"setup", "--yes"}; // no keyboard for the setup questions here: the defaults
+    else argv = {name};
+    argv.insert(argv.end(), words.begin(), words.end());
+    return argv;
 }
 
 namespace {

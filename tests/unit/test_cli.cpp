@@ -621,10 +621,10 @@ TEST_CASE("schedule: quoting and names", "[cli][schedule]") {
 
 TEST_CASE("wake: the waiting list round-trips, replaces by thread and picks what is due", "[cli][wake]") {
     std::vector<WaitingRun> runs;
-    waiting_upsert(runs, {"nightly-1", "/g/a.json", 2000, {"--model", "qwen", "--yes"}});
-    waiting_upsert(runs, {"morning-7", "/g/b.json", 1000, {"--workspace", "/ws"}});
+    waiting_upsert(runs, {"nightly-1", "/g/a.json", "/work", 2000, {"--model", "qwen", "--yes"}});
+    waiting_upsert(runs, {"morning-7", "/g/b.json", "", 1000, {"--workspace", "/ws"}});
     CHECK(runs.size() == 2);
-    waiting_upsert(runs, {"nightly-1", "/g/a.json", 3000, {"--model", "qwen"}}); // the same thread waits again
+    waiting_upsert(runs, {"nightly-1", "/g/a.json", "/work", 3000, {"--model", "qwen"}}); // the same thread waits again
     REQUIRE(runs.size() == 2);
     CHECK(runs[0].until == 3000);
 
@@ -633,6 +633,7 @@ TEST_CASE("wake: the waiting list round-trips, replaces by thread and picks what
     REQUIRE(parsed.value.size() == 2);
     CHECK(parsed.value[0].thread == "nightly-1");
     CHECK(parsed.value[0].flags == std::vector<std::string>{"--model", "qwen"});
+    CHECK(parsed.value[0].cwd == "/work");
     CHECK(parsed.value[1].graph == "/g/b.json");
 
     CHECK(waiting_due(runs, 999).empty());
@@ -649,11 +650,32 @@ TEST_CASE("wake: the waiting list round-trips, replaces by thread and picks what
 
     // Odd text survives; an empty file and a broken one are not an error to start from.
     std::vector<WaitingRun> odd;
-    waiting_upsert(odd, {"t\"q", "C:\\g dir\\x.json", 5, {"--input", "a \"b\""}});
+    waiting_upsert(odd, {"t\"q", "C:\\g dir\\x.json", "C:\\work dir", 5, {"--input", "a \"b\""}});
     const auto again = waiting_from_json(waiting_to_json(odd));
     REQUIRE(again.ok);
     CHECK(again.value[0].thread == "t\"q");
     CHECK(again.value[0].graph == "C:\\g dir\\x.json");
     CHECK(waiting_from_json("").ok);
     CHECK_FALSE(waiting_from_json("{not json").ok);
+}
+
+// ------------------------------------------------------------------ slash commands that run subcommands
+
+TEST_CASE("chat: /doctor /pull /fit and friends map to agent subcommands", "[cli][slash]") {
+    auto argv = [](const char *line) { return slash_cli_argv(parse_slash_command(line)); };
+    CHECK(parse_slash_command("/doctor").kind == SlashKind::Cli);
+    CHECK(argv("/doctor") == std::vector<std::string>{"doctor"});
+    CHECK(argv("/pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M --name q") ==
+          std::vector<std::string>{"model", "pull", "Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M", "--name", "q"});
+    CHECK(argv("/fit owner/repo:Q4_K_M --ctx 8192") == std::vector<std::string>{"model", "fit", "owner/repo:Q4_K_M", "--ctx", "8192"});
+    CHECK(argv("/recommend coder") == std::vector<std::string>{"model", "recommend", "coder"});
+    CHECK(argv("/search") == std::vector<std::string>{"model", "search"});
+    CHECK(argv("/setup") == std::vector<std::string>{"setup", "--yes"});
+    CHECK(argv("/wake --dry-run") == std::vector<std::string>{"wake", "--dry-run"});
+    CHECK(argv("/schedule ls") == std::vector<std::string>{"schedule", "ls"});
+    CHECK(argv("/pull \"my repo/x y\"") == std::vector<std::string>{"model", "pull", "my repo/x y"});
+    // Other commands are not forwarded.
+    CHECK(argv("/model").empty());
+    CHECK(argv("hello").empty());
+    CHECK(parse_slash_command("/clear").kind == SlashKind::Clear);
 }
