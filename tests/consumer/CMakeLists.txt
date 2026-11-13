@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.21)
 project(agent_cpp_consumer CXX)
 
-find_package(agent-cpp 0.1 REQUIRED)
+find_package(agent-cpp 0.1 REQUIRED COMPONENTS graph rag)
 message(STATUS "agent-cpp ${agent-cpp_VERSION}, engine dir: ${agent-cpp_ENGINE_DIR}")
 
 add_executable(consumer main.cpp)

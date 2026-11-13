@@ -32,6 +32,39 @@ set_property(TARGET agent-cpp::agent APPEND PROPERTY INTERFACE_COMPILE_DEFINITIO
 # $AGENT_ENGINE_HOST).
 set(agent-cpp_ENGINE_HOST "@PACKAGE_CMAKE_INSTALL_BINDIR@/agent-engine-host${CMAKE_EXECUTABLE_SUFFIX}")
 
+# Components: find_package(agent-cpp REQUIRED COMPONENTS graph mcp rag models llama audiocpp sdcpp trellis onnx)
+# The library parts are found when this build of agent.cpp includes them; an engine is found when its plugin is installed.
+set(agent-cpp_graph_FOUND @AGENT_WITH_GRAPH@)
+set(agent-cpp_mcp_FOUND @AGENT_WITH_MCP@)
+set(agent-cpp_rag_FOUND @AGENT_WITH_RAG@)
+set(agent-cpp_models_FOUND @AGENT_WITH_MODELS@)
+foreach(_engine llama audiocpp sdcpp trellis onnx)
+    file(GLOB _plugin "${agent-cpp_ENGINE_DIR}/agent-engine-${_engine}.*")
+    if(_plugin)
+        set(agent-cpp_${_engine}_FOUND TRUE)
+    else()
+        set(agent-cpp_${_engine}_FOUND FALSE)
+    endif()
+endforeach()
+
+# Name what is missing, and how to build it, when a requested component is not part of this install.
+set(_agent_missing "")
+foreach(_c IN LISTS agent-cpp_FIND_COMPONENTS)
+    if(agent-cpp_FIND_REQUIRED_${_c} AND NOT agent-cpp_${_c}_FOUND)
+        string(TOUPPER "${_c}" _u)
+        if(_c MATCHES "^(graph|mcp|rag|models)$")
+            string(APPEND _agent_missing "
+  ${_c}: rebuild agent.cpp with -DAGENT_WITH_${_u}=ON")
+        else()
+            string(APPEND _agent_missing "
+  ${_c}: build agent.cpp with -DAGENT_ENGINE_${_u}=ON and install it")
+        endif()
+    endif()
+endforeach()
+if(_agent_missing)
+    set(agent-cpp_NOT_FOUND_MESSAGE "This agent.cpp install lacks components you asked for:${_agent_missing}")
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/agent-cppEngine.cmake")
 
 check_required_components(agent-cpp)

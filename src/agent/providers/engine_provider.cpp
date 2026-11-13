@@ -219,6 +219,17 @@ Result<void> init_engine(Session &session) {
         }
         engines::RemoteOptions opts;
         opts.host_path = engines::resolve_engine_host_path(cfg.engine_host_path);
+        if (cfg.engine_host_path.empty() && !std::getenv("AGENT_ENGINE_HOST") && !std::filesystem::is_regular_file(opts.host_path, ec)) {
+            // An installed plugin (<prefix>/lib/agent/engines/agent-engine-x.so) has its host in <prefix>/bin.
+            const std::filesystem::path installed =
+                std::filesystem::path(plugin_path).parent_path().parent_path().parent_path().parent_path() / "bin" /
+#if defined(_WIN32)
+                "agent-engine-host.exe";
+#else
+                "agent-engine-host";
+#endif
+            if (std::filesystem::is_regular_file(installed, ec)) opts.host_path = installed.string();
+        }
         opts.plugin_path = plugin_path;
         opts.create_config = std::move(config);
         opts.timeout_ms = cfg.engine_timeout_ms;

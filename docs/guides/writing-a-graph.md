@@ -6,9 +6,9 @@ workflow nodes Sequential, Parallel and Loop. The runtime adds scoped state, che
 node, human-in-the-loop interrupts and time travel. You can build graphs in C++ or write them as
 `agent.json`; both produce the same `agent::Graph`.
 
-All code below is from [`examples/03-graph-workflow/graph.cpp`](../../examples/03-graph-workflow/graph.cpp),
-which runs on the mock engine (every Agent node answers `echo: <input>`) as the `example.guide_graph`
-test, including the two JSON graphs in [`examples/03-graph-workflow/graphs/`](../../examples/03-graph-workflow/graphs).
+A complete small program is [`examples/03-graph-workflow/graph.cpp`](../../examples/03-graph-workflow/graph.cpp); JSON graphs to run with
+`agent run` are in [`examples/03-graph-workflow/graphs/`](../../examples/03-graph-workflow/graphs). The unit tests build and run these graphs
+on the mock engine.
 
 ## 1. Nodes and builders (C++)
 

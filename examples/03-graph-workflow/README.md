@@ -1,10 +1,5 @@
-# 03 - graph workflows
+# 03 graph workflow
 
-Agents as nodes in a graph: sequential pipelines, a router, a review loop, an MCP tool node. `graph.cpp` builds a graph in code
-and runs it with checkpoints; `graphs/*.json` are the same kind of graph as data, run with `agent run`.
-
-```sh
-./build/agent run examples/03-graph-workflow/graphs/review_loop.json --set task="Explain what a KV cache is."
-```
-
-See [the graph guide](../../docs/guides/writing-a-graph.md).
+`graph.cpp`: two agent nodes in a sequence, the second continuing the first one's conversation. `graphs/` has the same kind of workflow as
+JSON (a pipeline, a router, a review loop, an MCP filesystem graph) for `agent run graphs/router.json`. See
+[writing a graph](../../docs/guides/writing-a-graph.md).

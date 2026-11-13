@@ -55,6 +55,8 @@ auto lease = agent::acquire_model(registry, "coder");        // evicts qwen if b
 | `loaded_models(registry)` | `LoadedModelInfo` for each loaded model, most recently used first: name, RAM/VRAM estimate, pinned, outstanding leases, loaded-at and last-used times, load time |
 | `set_budget` / `get_budget` | `set_budget` replaces the budget and evicts idle, unpinned models (LRU first) until the rest fit. |
 | `estimate_model_memory(spec)` | What the registry will charge for the spec (see below) |
+
+`estimate_model_memory` returns a `ModelMemoryEstimate { uint64_t file_bytes, ram_bytes, vram_bytes; }`: `file_bytes` is the model file(s) on disk (a folder is summed, split GGUF shards and files named in `engine_options` such as `mmproj` are included), `ram_bytes` is counted against `ModelBudget::ram_bytes`, and `vram_bytes` against `ModelBudget::vram_bytes` (when `gpu_layers > 0`).
 | `process_rss_bytes()` | Resident set size of this process: `/proc/self/statm` on Linux, `GetProcessMemoryInfo` on Windows. 0 if unavailable. |
 
 ### Leases

@@ -30,6 +30,7 @@ agent.cpp is a local, offline-first AI agent in two parts:
 | [Workspace layout](workspace.md) | The global home `.agent.cpp-workspace`, project `.agents/` folders, SQLite files, runtimes |
 | [Installing and packaging](packaging.md) | `cmake --install`, `find_package(agent-cpp)`, the Linux tarball script |
 | [Examples](../examples/README.md) | Image critique loop, RAG over a folder of docs, graph JSON examples |
+| [Guide: choosing the parts you use](guides/choosing-parts.md) | Build switches for graph, MCP, RAG, models and each engine; `find_package` components |
 | [Guide: a local voice assistant](guides/voice-assistant.md) | `agent voice` with an audio.cpp VAD, ASR and TTS model |
 | [GPU engines](gpu.md) | What is built for GPUs, the sandbox cache folders, and the test checklist (untested so far) |
 

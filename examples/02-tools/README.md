@@ -1,4 +1,4 @@
-# 02 - tools
+# 02 tools
 
-Give the model a tool: a C++ function with a JSON schema, called when the model asks. Also shows a tool from an MCP server.
-Code of [the tools guide](../../docs/guides/writing-a-tool.md); runs on the mock engine.
+`tools.cpp`: a tool of your own, the permission gate that runs before every tool call, and the tool-call counter. More about tools,
+hooks and MCP servers in [writing a tool](../../docs/guides/writing-a-tool.md).

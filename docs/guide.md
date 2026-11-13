@@ -45,7 +45,7 @@ agent::Session session = std::move(res.value);
 
 ---
 
-`agent::open(engine, model_path)` does the same in one call when one model file and the defaults are enough. Pass a `Config` as the
+`agent::open_session(engine, model_path)` does the same in one call when one model file and the defaults are enough. Pass a `Config` as the
 third argument to set the workspace, context window and so on.
 
 ---
@@ -59,7 +59,7 @@ installed with the library is found for you.
 |---|---|---|---|
 | llama.cpp | `agent::engines::llama` | `model`, `mmproj` | built by default |
 | audio.cpp | `agent::engines::audiocpp` | `tts.model`, `asr.model`, `vad.model`, `diarize.model` | `-DAGENT_ENGINE_AUDIOCPP=ON` |
-| stable-diffusion.cpp | `agent::engines::sdcpp` | `diffusion_model`, `llm`, `vae`, `clip_l`, `t5xxl` | `-DAGENT_ENGINE_SDCPP=ON` |
+| stable-diffusion.cpp | `agent::engines::sdcpp` | `model` (one-file checkpoints: SD 1.x, SDXL, SDXS) or `diffusion_model`, `llm`, `vae`, `clip_l`, `t5xxl` (split models: Flux, Wan), plus `vae` | `-DAGENT_ENGINE_SDCPP=ON` |
 | ONNX Runtime | `agent::engines::onnx` | `model` | `-DAGENT_ENGINE_ONNX=ON` |
 | TRELLIS.2 | `agent::engines::trellis` | model folder | `-DAGENT_ENGINE_TRELLIS=ON` |
 

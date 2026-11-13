@@ -114,6 +114,9 @@ void agent_c_cancel(agent_c_session *session) {
 
 int agent_c_embed(agent_c_session *session, const char *text, float *out, size_t out_cap, size_t *dims, char *err, size_t err_cap) {
     if (!session || !text) return fail_text("agent_c_embed: session and text are required", err, err_cap);
+#if !AGENT_WITH_RAG
+    return fail_text("agent_c_embed: this build of agent.cpp was made without AGENT_WITH_RAG", err, err_cap);
+#else
     const std::string_view texts[] = {text};
     auto r = agent::embed(session->session, texts);
     if (!r.ok) return fail_with(r.error, err, err_cap);
@@ -123,6 +126,7 @@ int agent_c_embed(agent_c_session *session, const char *text, float *out, size_t
     if (!out || out_cap < v.size()) return AGENT_C_BUFFER_TOO_SMALL;
     std::memcpy(out, v.data(), v.size() * sizeof(float));
     return AGENT_C_OK;
+#endif
 }
 
 int agent_c_run_task(agent_c_session *session, uint32_t task, const char *text, const char *media_path, char *text_out, size_t text_cap,

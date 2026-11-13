@@ -161,11 +161,29 @@ TEST_CASE("engines: a library user adds, lists and removes a plugin by name", "[
 TEST_CASE("open: one engine and one model file give a session", "[c_api][engines]") {
     agent::Config base;
     base.workspace_dir = workspace("agent_test_open_short");
-    auto session = agent::open(AGENT_TEST_MOCK_ENGINE_PATH, "mock.bin", base);
+    auto session = agent::open_session(AGENT_TEST_MOCK_ENGINE_PATH, "mock.bin", base);
     REQUIRE(session.ok);
     agent::Conversation chat;
     auto reply = agent::run_turn(session.value, chat, "hi");
     REQUIRE(reply.ok);
     CHECK(reply.value == "echo: hi");
-    CHECK_FALSE(agent::open("", "mock.bin", base).ok);
+    CHECK_FALSE(agent::open_session("", "mock.bin", base).ok);
+}
+
+TEST_CASE("tasks: transcribe, speak and the multi-model open_session on the mock engine", "[c_api][engines]") {
+    agent::Config base;
+    base.workspace_dir = workspace("agent_test_task_helpers");
+    auto session = agent::open_session(AGENT_TEST_MOCK_ALL_ENGINE_PATH, {{"model", "mock.bin"}}, base);
+    REQUIRE(session.ok);
+
+    auto spoken = agent::speak(session.value, "say this");
+    REQUIRE(spoken.ok);
+    REQUIRE(spoken.value.files.size() == 1);
+    CHECK(std::filesystem::exists(spoken.value.files[0]));
+
+    auto heard = agent::transcribe(session.value, spoken.value.files[0]);
+    REQUIRE(heard.ok);
+    CHECK(heard.value.text == "mock transcript");
+
+    CHECK_FALSE(agent::open_session("mock", {{"", "x"}}, base).ok);
 }

@@ -79,7 +79,6 @@ local
 scripts/sandbox/node_modules/
 scripts/sandbox/.sandbox-id
 
-# Claude Code and other agent setups stay local
+# Claude Code setups stay local (AGENTS.md is for contributors and is committed)
 CLAUDE.md
 CLAUDE.local.md
-AGENTS.md

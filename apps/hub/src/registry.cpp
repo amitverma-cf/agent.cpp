@@ -30,7 +30,8 @@ constexpr RegistryPart kJina[] = {{"gpustack/jina-reranker-v1-tiny-en-GGUF:Q8_0"
 constexpr RegistryPart kBgeRerank[] = {{"gpustack/bge-reranker-v2-m3-GGUF:Q4_K_M", ""}};
 constexpr RegistryPart kSdxs[] = {{"concedo/sdxs-512-tinySDdistilled-GGUF:Q8_0", ""}};
 constexpr RegistryPart kSdTurbo[] = {{"Green-Sky/SD-Turbo-GGUF:sd_turbo-f16-q8_0.gguf", ""}};
-constexpr RegistryPart kPocketTts[] = {{"audio-cpp/audio.cpp-gguf:PocketTTS-GGUF/english/pocket-tts-english-q8_0.gguf", ""}};
+constexpr RegistryPart kPocketTts[] = {{"audio-cpp/audio.cpp-gguf:PocketTTS-GGUF/english/pocket-tts-english-q8_0.gguf", ""},
+                                       {"audio-cpp/audio.cpp-gguf:PocketTTS-GGUF/english/embeddings/alba.safetensors", ""}};
 constexpr RegistryPart kSupertonic[] = {{"audio-cpp/audio.cpp-gguf:Supertonic-3-GGUF/supertonic-3-q8_0.gguf", ""}};
 constexpr RegistryPart kParakeet[] = {{"audio-cpp/audio.cpp-gguf:Parakeet-TDT-0.6B-v3-GGUF/parakeet-tdt-0.6b-v3-q8_0.gguf", ""}};
 constexpr RegistryPart kMoonshine[] = {{"audio-cpp/audio.cpp-gguf:Moonshine-Streaming-GGUF/moonshine-streaming-tiny-q8_0.gguf", ""}};
@@ -73,7 +74,7 @@ constexpr RegistryEntry kRegistry[] = {
     {"crisperwhisper-large", "asr", "audiocpp", kCrisperWhisper, 937, "",
      "Whisper large based, 99 languages, verbatim; slower than realtime on 4 CPU cores", false},
     {"pocket-tts", "tts", "audiocpp", kPocketTts, 120, "",
-     "small voice model (en fr de it pt es); needs a voice preset or reference audio, see its model card", false},
+     "small English voice model; includes the alba voice (tts.voice = alba), more voices on its model card", false},
     {"supertonic-3", "tts", "audiocpp", kSupertonic, 434, "", "30+ languages, 44.1 kHz; the default speech model, no extra dependencies",
      true},
     {"firered-vad", "vad", "audiocpp", kFireRedVad, 3, "", "voice activity detection", true},

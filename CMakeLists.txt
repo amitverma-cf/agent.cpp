@@ -70,6 +70,11 @@ if(AGENT_ENABLE_COVERAGE)
     endif()
 endif()
 
+# Parts of the library. All are on by default; switch off what your program does not use.
+option(AGENT_WITH_GRAPH "Graph runtime (agent nodes, routing, checkpoints, agent.json)" ON)
+option(AGENT_WITH_MCP "MCP stdio client" ON)
+option(AGENT_WITH_RAG "Embeddings, rerank, chunking, vector stores" ON)
+option(AGENT_WITH_MODELS "ModelRegistry: several models under a memory budget" ON)
 add_library(agent
     src/agent/agent.cpp
     src/agent/c_api.cpp
@@ -77,13 +82,6 @@ add_library(agent
     src/agent/events.cpp
     src/agent/executor/turn_executor.cpp
     src/agent/executor/ambient_turn.cpp
-    src/agent/graph/graph_builders.cpp
-    src/agent/graph/graph_checkpoint.cpp
-    src/agent/graph/graph_checkpointer.cpp
-    src/agent/graph/graph_executor.cpp
-    src/agent/graph/graph_json.cpp
-    src/agent/mcp/mcp_client.cpp
-    src/agent/models/model_registry.cpp
     src/agent/data/data_source_registry.cpp
     src/agent/skills/skills_registry.cpp
     src/agent/providers/provider_ops.cpp
@@ -99,10 +97,6 @@ add_library(agent
     src/agent/tools/path_gate.cpp
     src/agent/tools/context_compressor.cpp
     src/agent/tools/lazy_tools.cpp
-    src/agent/rag/engine_tasks.cpp
-    src/agent/rag/in_memory_vector_store.cpp
-    src/agent/rag/chunker.cpp
-    src/agent/rag/rag_pipeline.cpp
     src/agent/tasks/decide.cpp
     src/agent/tasks/ocr.cpp
     src/agent/sandbox/sandbox_policy.cpp
@@ -116,6 +110,32 @@ add_library(agent
     vendor/simdjson/singleheader/simdjson.cpp
 )
 target_compile_definitions(agent PRIVATE AGENT_LIB_VERSION="${PROJECT_VERSION}")
+
+if(AGENT_WITH_GRAPH)
+    target_sources(agent PRIVATE
+        src/agent/graph/graph_builders.cpp src/agent/graph/graph_checkpoint.cpp
+        src/agent/graph/graph_checkpointer.cpp src/agent/graph/graph_executor.cpp)
+    if(AGENT_WITH_MCP)
+        target_sources(agent PRIVATE src/agent/graph/graph_json.cpp)
+    endif()
+endif()
+if(AGENT_WITH_MCP)
+    target_sources(agent PRIVATE src/agent/mcp/mcp_client.cpp)
+endif()
+if(AGENT_WITH_MODELS)
+    target_sources(agent PRIVATE src/agent/models/model_registry.cpp)
+endif()
+if(AGENT_WITH_RAG)
+    target_sources(agent PRIVATE src/agent/rag/engine_tasks.cpp src/agent/rag/in_memory_vector_store.cpp
+                                 src/agent/rag/chunker.cpp src/agent/rag/rag_pipeline.cpp)
+endif()
+foreach(_part GRAPH MCP RAG MODELS)
+    if(AGENT_WITH_${_part})
+        target_compile_definitions(agent PUBLIC AGENT_WITH_${_part}=1)
+    else()
+        target_compile_definitions(agent PUBLIC AGENT_WITH_${_part}=0)
+    endif()
+endforeach()
 add_library(agent-cpp::agent ALIAS agent)
 # Header-only plugin ABI for engine plugins built against the installed package
 # (find_package(agent-cpp) -> agent-cpp::engine_abi, agent_add_engine(); see examples/08-engine-plugin-template/).
@@ -232,18 +252,6 @@ option(AGENT_ENGINE_AUDIOCPP "Build the audio.cpp speech engine plugin (src/engi
 # ggml's AMX kernels break when another in-process engine touches the AMX tile state; see
 # cmake/ggml_no_amx.cmake. Only matters for GGML_NATIVE builds on AMX CPUs.
 option(AGENT_GGML_AMX "Keep Intel AMX in the engines' ggml (safe only with process-isolated engines)" OFF)
-
-add_executable(basic examples/01-hello-agent/basic.cpp)
-target_link_libraries(basic PRIVATE agent)
-target_compile_options(basic PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
-target_link_options(basic PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
-
-if(AGENT_BUILD_HUB)
-    add_executable(agent_pull examples/07-model-pull/agent_pull.cpp)
-    target_link_libraries(agent_pull PRIVATE agent_hub)
-    target_compile_options(agent_pull PRIVATE ${AGENT_WARNINGS} ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
-    target_link_options(agent_pull PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
-endif()
 
 # Out-of-process engine host (EngineIsolation::Process). Lands next to the agent CLI and the tests,
 # where the core looks for it.
@@ -395,7 +403,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/vendor/catch2/extras/Catch.cmake)
 catch_discover_tests(test_agent ADD_TAGS_AS_LABELS)
 
 # Example programs and the code of docs/guides (smoke tests on the mock engine: ctest -L examples).
-option(AGENT_BUILD_EXAMPLES "Build examples/ (guide code, image critique, RAG over docs) and their smoke tests" ON)
+option(AGENT_BUILD_EXAMPLES "Build the programs in examples/ (they need models to run; see examples/README.md)" ON)
 if(AGENT_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()

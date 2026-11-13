@@ -1,7 +1,7 @@
 // docs/guides/writing-an-engine.md: drives agent-engine-reverse (reverse_engine.cpp) through libagent,
 // in process and under process isolation (agent-engine-host, OS sandbox on).
 //
-//   guide_engine_host <path/to/agent-engine-reverse.so> [workspace]
+//   engine_host            (REVERSE_ENGINE_PATH is the plugin built next to it)
 //
 // Exits non-zero on the first failed check.
 
@@ -43,6 +43,8 @@ void exercise(const std::string &plugin, const std::string &workspace, agent::En
     cfg.engine_options = R"({"step_delay_ms": 1})"; // reaches create() as config_json "options"
     cfg.workspace_dir = workspace;
     cfg.engine_isolation = isolation;
+    cfg.engine_host_path =
+        ENGINE_HOST_PATH; // the agent-engine-host program; plugins installed under <prefix>/lib/agent/engines find it on their own
     cfg.auto_default_tools = false;
 
     auto sess = agent::init(cfg);
@@ -87,13 +89,9 @@ void exercise(const std::string &plugin, const std::string &workspace, agent::En
 
 } // namespace
 
-int main(int argc, char **argv) {
-    if (argc < 2) {
-        std::fprintf(stderr, "usage: %s <path/to/agent-engine-reverse.so> [workspace]\n", argv[0]);
-        return 2;
-    }
-    const std::string plugin = argv[1];
-    const std::string workspace = argc > 2 ? argv[2] : (std::filesystem::temp_directory_path() / "agent-guide-engine").string();
+int main() {
+    const std::string plugin = REVERSE_ENGINE_PATH;
+    const std::string workspace = ".agent-engine-example";
 
     agent::AgentRuntime runtime;
 

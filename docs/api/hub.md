@@ -12,15 +12,15 @@ All functions return `Result<T>`; nothing throws.
 
 ## Command-line example
 
-The `agent` CLI wraps the hub as `agent model pull|ls|rm` (see [../cli.md](../cli.md)). The
-standalone `agent_pull` example works the same way:
+The `agent` CLI wraps the hub as `agent model pull|ls|rm` (see [../cli.md](../cli.md)); the
+[`pull` example](../../examples/07-model-pull/pull.cpp) is the same call in a few lines of C++. The CLI forms:
 
 ```sh
-agent_pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M            # pick the file by quant tag
-agent_pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf
-agent_pull ggml-org/models:tinyllamas/stories260K.gguf --dir ./models --name tiny
-agent_pull --list [--dir DIR]
-agent_pull --rm tiny [--dir DIR] [--keep-file]
+agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M          # pick the file by quant tag
+agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf
+agent model pull ggml-org/models:tinyllamas/stories260K.gguf --name tiny
+agent model ls
+agent model rm tiny [--keep-file]
 ```
 
 Ctrl-C cancels a download and keeps `<file>.part`. Running the same command again resumes it.

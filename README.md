@@ -104,7 +104,7 @@ target_link_libraries(my_app PRIVATE agent-cpp::agent)
 int main() {
     agent::AgentRuntime runtime;
 
-    auto session = agent::open(agent::engines::llama, "models/qwen2.5-0.5b-instruct-q4_k_m.gguf");
+    auto session = agent::open_session(agent::engines::llama, "models/qwen2.5-0.5b-instruct-q4_k_m.gguf");
     if (!session.ok) return std::fprintf(stderr, "%s\n", session.error.message.c_str()), 1;
 
     agent::Conversation chat;
@@ -114,7 +114,7 @@ int main() {
 }
 ```
 
-`agent::open` is the short path: one engine, one model file, defaults for the rest. For several model files, engine options or
+`agent::open_session` is the short path: one engine, one model file, defaults for the rest. For several model files, engine options or
 a full `Config`, use `agent::engine_config` and `agent::init` ([the guide](docs/guide.md)). `agent::engines::llama`, `audiocpp`, `sdcpp`, `trellis` and `onnx` name the engines that ship with agent.cpp; the plugin
 installed with the library is found for you. The library has one header, no exceptions (`Result<T>` everywhere), no virtual
 calls, and works from C through [`agent_c.h`](docs/api/c-api.md).
@@ -133,7 +133,7 @@ you pass `--yes`. `--no-sandbox` turns the sandbox off. See [docs/security-sandb
 [Documentation index](docs/index.md) · [Getting started](docs/getting-started.md) · [CLI reference](docs/cli.md) ·
 [C++ API](docs/api.md) · [C API](docs/api/c-api.md) · [Architecture](docs/architecture.md) ·
 [Writing an engine](docs/guides/writing-an-engine.md) · [Writing a tool](docs/guides/writing-a-tool.md) ·
-[Writing a graph](docs/guides/writing-a-graph.md) · [A voice assistant](docs/guides/voice-assistant.md) ·
+[Writing a graph](docs/guides/writing-a-graph.md) · [A voice assistant](docs/guides/voice-assistant.md) · [Choosing the parts you use](docs/guides/choosing-parts.md) ·
 [Benchmarks](docs/benchmarks.md) · [Examples](examples/README.md)
 
 Build options, packaging and the source layout are in [docs/getting-started.md](docs/getting-started.md) and

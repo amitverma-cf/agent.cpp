@@ -231,6 +231,30 @@ struct Tool {
 
 The `callback` receives raw JSON arguments and returns either a success string or an error. Tool results are inserted back into the conversation history as `role = "tool"` messages.
 
+### Path gate
+
+When a tool wants a path outside the workspace, `Config::path_gate` decides.
+
+```cpp
+struct PathAccessRequest { std::string_view consumer; std::string_view path; bool write; };   // path is absolute
+enum class PathGateDecision { Deny, AllowOnce, AllowAlways };
+using PathGateFn = PathGateDecision (*)(const PathAccessRequest &request, void *user_data);
+```
+
+`consumer` is `files`, `run_command` or `mcp:<server>`. `AllowAlways` adds a `PathGrant` for the rest of the session; the CLI persists it
+(`agent sandbox ls`).
+
+### Secrets
+
+```cpp
+struct SecretRequest { std::string_view consumer; std::span<const std::string> identity_parts; };   // "mcp:github", {command, args...}
+using SecretResolverFn = Result<std::string> (*)(std::string_view text, const SecretRequest &who,
+                                                 std::vector<std::string> &secret_values, void *user_data);
+```
+
+The host calls the resolver when it starts an MCP server: it expands every `${secret:NAME}` in the server's configuration for that consumer and
+appends each inserted value to `secret_values` so it stays out of logs and tool output. The model never calls it.
+
 ### Permission gate
 
 Checked by `execute_tool` immediately before every `Tool::callback` invocation — native tools, `bind_data_source_tool`-backed tools, and the `use_skill` tool alike.
@@ -649,6 +673,38 @@ struct AgentRuntime {
 void init_backend();
 void free_backend();
 ```
+
+### open_session
+
+The shortest way to a session: one engine, the model files, defaults for the rest (the workspace is `.agent` unless `base` names one).
+
+```cpp
+Result<Session> open_session(std::string_view engine, std::string_view model_path, const Config &base = {});
+Result<Session> open_session(std::string_view engine, std::initializer_list<ModelSlot> models, const Config &base = {});
+
+auto chat  = agent::open_session(agent::engines::llama, "model.gguf");
+auto image = agent::open_session(agent::engines::sdcpp, {{"model", "sd.gguf"}, {"vae", "vae.gguf"}});   // split models: diffusion_model, llm, vae, ...
+auto voice = agent::open_session(agent::engines::audiocpp, {{"asr.model", "asr.gguf"}, {"tts.model", "tts.gguf"}, {"tts.voice", "alba"}});
+```
+
+`agent::engines::llama`, `audiocpp`, `sdcpp`, `trellis` and `onnx` are the shipped engines (with the CMake package each is the full path of the
+installed plugin). `agent::engines::add(name, plugin_path, isolation)`, `remove(name)` and `list()` manage your own engines; see
+[api/engines.md](api/engines.md).
+
+### One-shot tasks
+
+```cpp
+struct TaskOutput { std::string text; std::vector<std::string> files; };   // files: paths under <workspace>/artifacts
+
+Result<TaskOutput> transcribe(Session &, std::string_view audio_path);                          // AGENT_CAP_ASR
+Result<TaskOutput> speak(Session &, std::string_view text);                                     // AGENT_CAP_TTS, files[0] is a WAV
+Result<TaskOutput> draw(Session &, std::string_view prompt, std::string_view params_json = {}); // AGENT_CAP_IMAGE_GEN
+Result<TaskOutput> perform(Session &, uint32_t task, std::string_view text,
+                           std::string_view media_path = {}, std::string_view params_json = {});   // any AGENT_CAP_* bit
+```
+
+The session's engine must support the task. `params_json` is a JSON object of engine parameters (`{"steps":1,"cfg_scale":1}`). For streaming,
+progress callbacks or tensors use `run_task` with an `InferRequest` (below).
 
 ### Session
 

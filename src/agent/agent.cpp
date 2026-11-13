@@ -6,6 +6,7 @@
 #include "utils/utils.hpp"
 
 #include <agent-cpp/agent.hpp>
+#include <agent-cpp/engine_abi.h>
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -85,13 +86,47 @@ Result<Config> engine_config(std::string_view engine, std::span<const ModelSlot>
     return ok(std::move(cfg));
 }
 
-Result<Session> open(std::string_view engine, std::string_view model_path, const Config &base) {
+Result<Session> open_session(std::string_view engine, std::string_view model_path, const Config &base) {
     Config seed = base;
     if (seed.workspace_dir.empty()) seed.workspace_dir = ".agent";
     const ModelSlot slot[] = {{"model", model_path}};
     auto cfg = engine_config(engine, slot, {}, seed);
     if (!cfg.ok) return fail<Session>(cfg.error.code, cfg.error.message);
     return init(cfg.value);
+}
+
+Result<Session> open_session(std::string_view engine, std::initializer_list<ModelSlot> models, const Config &base) {
+    Config seed = base;
+    if (seed.workspace_dir.empty()) seed.workspace_dir = ".agent";
+    auto cfg = engine_config(engine, std::span<const ModelSlot>(models.begin(), models.size()), {}, seed);
+    if (!cfg.ok) return fail<Session>(cfg.error.code, cfg.error.message);
+    return init(cfg.value);
+}
+
+Result<TaskOutput> perform(Session &session, uint32_t task, std::string_view text, std::string_view media_path,
+                           std::string_view params_json) {
+    MessageView message{.role = "user", .content = text};
+    MediaView media[1];
+    if (!media_path.empty()) {
+        media[0] = MediaView{media_path, ""};
+        message.media = std::span<const MediaView>(media, 1);
+    }
+    InferRequest request;
+    request.messages = std::span<const MessageView>(&message, 1);
+    request.task = task;
+    request.params_json = params_json;
+    auto r = run_task(session, task, request);
+    if (!r.ok) return fail<TaskOutput>(r.error.code, r.error.message);
+    TaskOutput out;
+    out.text = std::string(r.value.message.content);
+    for (const MediaView &m : r.value.message.media) out.files.emplace_back(m.path);
+    return ok(std::move(out));
+}
+
+Result<TaskOutput> transcribe(Session &session, std::string_view audio_path) { return perform(session, AGENT_CAP_ASR, {}, audio_path); }
+Result<TaskOutput> speak(Session &session, std::string_view text) { return perform(session, AGENT_CAP_TTS, text); }
+Result<TaskOutput> draw(Session &session, std::string_view prompt, std::string_view params_json) {
+    return perform(session, AGENT_CAP_IMAGE_GEN, prompt, {}, params_json);
 }
 
 Result<Session> init(const Config &config) {

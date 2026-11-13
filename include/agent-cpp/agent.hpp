@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <initializer_list>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -10,6 +11,21 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+// Parts of the library that can be left out of the build (CMake options AGENT_WITH_GRAPH / MCP / RAG / MODELS). The CMake target
+// defines them; without it, everything is on.
+#ifndef AGENT_WITH_GRAPH
+#define AGENT_WITH_GRAPH 1
+#endif
+#ifndef AGENT_WITH_MCP
+#define AGENT_WITH_MCP 1
+#endif
+#ifndef AGENT_WITH_RAG
+#define AGENT_WITH_RAG 1
+#endif
+#ifndef AGENT_WITH_MODELS
+#define AGENT_WITH_MODELS 1
+#endif
 
 struct agent_engine_v1; // <agent-cpp/engine_abi.h>
 
@@ -691,9 +707,25 @@ Result<Config> engine_config(std::string_view engine, std::span<const ModelSlot>
 Result<Session> init(const Config &config);
 
 // The shortest way in: one engine, one model file, everything else at its default (workspace ".agent" unless base names one).
-//   auto session = agent::open(agent::engines::llama, "model.gguf");
+//   auto session = agent::open_session(agent::engines::llama, "model.gguf");
 // For several model files, engine options or a full Config, use engine_config() and init().
-Result<Session> open(std::string_view engine, std::string_view model_path, const Config &base = {});
+Result<Session> open_session(std::string_view engine, std::string_view model_path, const Config &base = {});
+// The same for engines that take several model files, named by role (see engine_config):
+//   agent::open_session(agent::engines::sdcpp, {{"model", "sd.gguf"}, {"vae", "vae.gguf"}});
+Result<Session> open_session(std::string_view engine, std::initializer_list<ModelSlot> models, const Config &base = {});
+
+// One-shot tasks on a session whose engine supports them. A result holds the text the engine produced and the files it wrote
+// (audio, images, meshes; paths under <workspace>/artifacts).
+struct TaskOutput {
+    std::string text;
+    std::vector<std::string> files;
+};
+Result<TaskOutput> transcribe(Session &session, std::string_view audio_path);                          // speech recognition
+Result<TaskOutput> speak(Session &session, std::string_view text);                                     // text to speech: files[0] is a WAV
+Result<TaskOutput> draw(Session &session, std::string_view prompt, std::string_view params_json = {}); // image generation
+// Any capability: task is one AGENT_CAP_* bit of <agent-cpp/engine_abi.h>; media_path and params_json are optional.
+Result<TaskOutput> perform(Session &session, uint32_t task, std::string_view text, std::string_view media_path = {},
+                           std::string_view params_json = {});
 
 Result<InferResponse> infer(Session &session, const InferRequest &request);
 // infer() with InferRequest::task = task (one AGENT_CAP_* bit, non-zero), e.g.
@@ -770,6 +802,7 @@ Result<void> clear_provider_kv_cache(Session &session);
 
 } // namespace agent
 
+#if AGENT_WITH_GRAPH
 // ============================================================================================
 // -------------------------- Graph runtime (Phase 3, v1) --------------------------
 // LangGraph / Google ADK style workflows: named nodes (Agent, Function, Tool) joined by static or
@@ -1083,6 +1116,8 @@ Result<void> fork_graph_run(Session &session, const Graph &graph, std::string_vi
 
 } // namespace agent
 
+#endif // AGENT_WITH_GRAPH
+#if AGENT_WITH_RAG
 // ============================================================================================
 // -------------------------- RAG: embeddings, rerank, vector stores --------------------------
 // Non-chat engine tasks (AGENT_CAP_EMBED / AGENT_CAP_RERANK), a pluggable VectorStoreOps table with an
@@ -1210,6 +1245,8 @@ Tool make_rag_tool(Session &chat_session, Session &embed_session, RagIndex &inde
 
 } // namespace agent
 
+#endif // AGENT_WITH_RAG
+#if AGENT_WITH_MCP
 // ============================================================================================
 // -------------------------- MCP stdio client (Phase 3) --------------------------
 // Model Context Protocol servers run as child processes speaking newline-delimited JSON-RPC 2.0 on
@@ -1245,6 +1282,8 @@ std::vector<std::string> list_mcp_servers(const Session &session);
 
 } // namespace agent
 
+#endif // AGENT_WITH_MCP
+#if AGENT_WITH_GRAPH && AGENT_WITH_MCP
 // ============================================================================================
 // -------------------------- agent.json graph loader (Phase 3) --------------------------
 // Declarative graphs for CLI users: nodes, edges (static or routed on a state value), workflow
@@ -1285,6 +1324,10 @@ Result<LoadedGraph> load_graph_json(Session &session, std::string_view path_or_j
 
 } // namespace agent
 
+#endif // AGENT_WITH_GRAPH && AGENT_WITH_MCP
+namespace agent {
+
+#if AGENT_WITH_MODELS
 // ============================================================================================
 // -------------------------- Model registry (Phase 2) --------------------------
 // Named model templates loaded lazily into Sessions under a RAM/VRAM budget. acquire_model returns
@@ -1292,8 +1335,6 @@ Result<LoadedGraph> load_graph_json(Session &session, std::string_view path_or_j
 // unpinned models first) when needed. A leased or pinned model is never evicted. Thread-safe. Layered
 // on top of Session creation: a loaded model is an ordinary Session. See docs/api/models.md.
 // ============================================================================================
-
-namespace agent {
 
 struct ModelSpec;
 
@@ -1392,6 +1433,7 @@ std::vector<LoadedModelInfo> loaded_models(const ModelRegistry &registry);
 void set_budget(ModelRegistry &registry, const ModelBudget &budget);
 ModelBudget get_budget(const ModelRegistry &registry);
 
+#endif // AGENT_WITH_MODELS
 // ============================================================================================
 // -------------------------- Decisions: choice / score / yes-no --------------------------
 // Typed answers from a model's log-probabilities instead of generated text (AGENT_CAP_DECIDE): every
