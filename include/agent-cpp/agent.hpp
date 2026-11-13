@@ -653,6 +653,15 @@ void free_backend();
 // section of the engine options ("tts.model" -> {"tts":{"model":...}}). "model" sets Config::model, the rest go to
 // Config::engine_options. extra_options_json: a JSON object whose members are merged into the engine options (voices,
 // threads, ...). base supplies everything else (workspace_dir, sandbox, ...); the result is ready for init().
+// The engines that ship with agent.cpp. Pass one to engine_config(); the plugin installed with the library is found for you.
+namespace engines {
+inline constexpr std::string_view llama = "llama";       // text, vision, embeddings, rerank, decision models
+inline constexpr std::string_view audiocpp = "audiocpp"; // speech recognition, text to speech, VAD, diarization
+inline constexpr std::string_view sdcpp = "sdcpp";       // images and video
+inline constexpr std::string_view trellis = "trellis";   // image to 3D mesh
+inline constexpr std::string_view onnx = "onnx";         // any ONNX model
+} // namespace engines
+
 struct ModelSlot {
     std::string_view role;
     std::string_view path;

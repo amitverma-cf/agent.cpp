@@ -64,7 +64,7 @@ std::string find_named_plugin(const std::string &name) {
     const std::filesystem::path exe = hal::current_executable_path();
     if (!exe.empty()) {
         const auto dir = exe.parent_path();
-        dirs.insert(dirs.end(), {dir, dir / "engines", dir.parent_path() / "lib", dir.parent_path() / "lib" / "agent-cpp"});
+        dirs.insert(dirs.end(), {dir, dir / "engines", dir.parent_path() / "lib" / "agent" / "engines", dir.parent_path() / "lib"});
     }
     dirs.emplace_back(std::filesystem::current_path());
     std::error_code ec;

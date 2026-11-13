@@ -76,7 +76,7 @@ int main() {
     agent::Config base;
     base.workspace_dir = ".workspace";
     const agent::ModelSlot models[] = {{"model", ".workspace/models/my.gguf"}};
-    auto cfg = agent::engine_config("llama", models, {}, base);
+    auto cfg = agent::engine_config(agent::engines::llama, models, {}, base);
     if (!cfg.ok) return std::fprintf(stderr, "%s\n", cfg.error.message.c_str()), 1;
 
     auto session = agent::init(cfg.value);
@@ -91,9 +91,8 @@ int main() {
 }
 ```
 
-`"llama"` is the engine's name. It is found in `engines.json` (written by `agent setup`), next to your executable, in `engines/`, in
-`../lib` or in `$AGENT_ENGINES_DIR`; a full path to a plugin works too. A different engine takes different model roles, for example
-`{"tts.model", ...}` and `{"asr.model", ...}` for audio.cpp. See [api/engines.md](api/engines.md).
+`agent::engines::llama` is the engine; `audiocpp`, `sdcpp`, `trellis` and `onnx` are next to it. A different engine takes different
+model roles, for example `{"tts.model", ...}` and `{"asr.model", ...}` for audio.cpp. See [api/engines.md](api/engines.md).
 
 ### A graph
 

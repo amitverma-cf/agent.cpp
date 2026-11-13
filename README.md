@@ -107,7 +107,7 @@ int main() {
     agent::Config base;
     base.workspace_dir = ".workspace";
     const agent::ModelSlot models[] = {{"model", "models/qwen2.5-0.5b-instruct-q4_k_m.gguf"}};
-    auto cfg = agent::engine_config("llama", models, {}, base);   // "llama" is found next to your program
+    auto cfg = agent::engine_config(agent::engines::llama, models, {}, base);
     if (!cfg.ok) return std::fprintf(stderr, "%s\n", cfg.error.message.c_str()), 1;
 
     auto session = agent::init(cfg.value);
@@ -120,9 +120,9 @@ int main() {
 }
 ```
 
-An engine name is looked up in `engines.json` (written by `agent setup`), then next to your executable, in `engines/`,
-in `../lib`, and in `$AGENT_ENGINES_DIR`. A full path to a plugin also works. The library has one header, no exceptions
-(`Result<T>` everywhere), no virtual calls, and works from C through [`agent_c.h`](docs/api/c-api.md).
+`agent::engines::llama`, `audiocpp`, `sdcpp`, `trellis` and `onnx` name the engines that ship with agent.cpp; the plugin
+installed with the library is found for you. The library has one header, no exceptions (`Result<T>` everywhere), no virtual
+calls, and works from C through [`agent_c.h`](docs/api/c-api.md).
 
 It covers chat turns with tools, graphs, MCP servers, skills, RAG, memory stores and the permission gate. Start with
 [the library guide](docs/guides/getting-started-library.md).

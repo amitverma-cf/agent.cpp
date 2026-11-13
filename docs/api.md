@@ -670,7 +670,7 @@ Result<Config> engine_config(std::string_view engine, std::span<const ModelSlot>
                              std::string_view extra_options_json = {}, const Config &base = {});
 ```
 
-- `engine` is the engine name or the plugin path.
+- `engine` is `agent::engines::llama` (or `audiocpp`, `sdcpp`, `trellis`, `onnx`), another engine's name, or a plugin path.
 - Roles: llama `model` and `mmproj`; sdcpp `diffusion_model`, `llm`, `vae`, `clip_l`, `t5xxl`; audiocpp `tts.model`,
   `asr.model`, `vad.model`, `diarize.model`. A `model` role sets `Config::model`; the others go to `engine_options`
   (`"tts.model"` becomes `{"tts":{"model":...}}`).

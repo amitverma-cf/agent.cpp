@@ -11,7 +11,7 @@ compiled in. Each plugin carries its own copy of ggml or ONNX Runtime.
 ```cpp
 agent::Config cfg;
 cfg.provider       = agent::AiProvider::Engine;
-cfg.engine         = "llama";                              // an engine name, or the path of a plugin file
+cfg.engine         = std::string(agent::engines::llama);  // or the path of a plugin file
 cfg.model          = ".workspace/models/model.gguf";
 cfg.engine_options = R"({"gpu_layers": 99})";            // engine-specific, optional
 cfg.workspace_dir  = ".workspace";
@@ -19,9 +19,9 @@ cfg.workspace_dir  = ".workspace";
 auto session = agent::init(cfg);
 ```
 
-**Finding an engine by name.** A name such as `"llama"` is looked up in this order: engines registered with `register_engine` or
-listed in a loaded `engines.json`; then the file `agent-engine-<name>.so` (`.dll`, `.dylib`) in `$AGENT_ENGINES_DIR`, next to the
-running executable, in its `engines/` folder, in `../lib` and `../lib/agent-cpp`, and in the working directory. A value that looks
+**Finding an engine by name.** `agent::engines::llama` (and `audiocpp`, `sdcpp`, `trellis`, `onnx`) are the names of the shipped
+engines. A name is resolved in this order: an engine registered with `register_engine` or listed in a loaded `engines.json`; then the file `agent-engine-<name>.so` (`.dll`, `.dylib`) in `$AGENT_ENGINES_DIR`, next to the
+running executable, in its `engines/` folder, in `../lib/agent/engines` and `../lib`, and in the working directory. A value that looks
 like a path is loaded as given.
 
 `init()` loads the plugin if `Config::engine` is a path, then calls the engine's `create()` with:
