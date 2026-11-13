@@ -75,6 +75,11 @@ option(AGENT_WITH_GRAPH "Graph runtime (agent nodes, routing, checkpoints, agent
 option(AGENT_WITH_MCP "MCP stdio client" ON)
 option(AGENT_WITH_RAG "Embeddings, rerank, chunking, vector stores" ON)
 option(AGENT_WITH_MODELS "ModelRegistry: several models under a memory budget" ON)
+if(AGENT_WITH_GRAPH AND NOT AGENT_WITH_MODELS)
+    # Agent nodes can name their own model, which the graph runtime loads through the model registry.
+    message(STATUS "AGENT_WITH_GRAPH needs AGENT_WITH_MODELS: enabling it")
+    set(AGENT_WITH_MODELS ON CACHE BOOL "ModelRegistry: several models under a memory budget" FORCE)
+endif()
 add_library(agent
     src/agent/agent.cpp
     src/agent/c_api.cpp
@@ -417,7 +422,7 @@ target_link_options(test_agent PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 include(${CMAKE_CURRENT_SOURCE_DIR}/vendor/catch2/extras/Catch.cmake)
 catch_discover_tests(test_agent ADD_TAGS_AS_LABELS)
 
-# Example programs and the code of docs/guides (smoke tests on the mock engine: ctest -L examples).
+# Example programs (they take no arguments and use real models; see examples/README.md). They are compiled here, run from an installed prefix.
 option(AGENT_BUILD_EXAMPLES "Build the programs in examples/ (they need models to run; see examples/README.md)" ON)
 if(AGENT_BUILD_EXAMPLES)
     add_subdirectory(examples)

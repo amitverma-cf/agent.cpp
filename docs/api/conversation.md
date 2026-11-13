@@ -2,53 +2,55 @@
 
 `#include <agent-cpp/agent.hpp>`
 
-agent.cpp separates inference into two levels: a **stateless layer** (`infer`) for raw LLM calls, and a **stateful layer** (`run_turn`) that manages history, tool calls, pruning, compression, and memory persistence.
+Inference has two layers:
+
+- **`infer`** is stateless. It takes the messages you pass and returns one model reply. It does not keep history and does not update the session statistics.
+- **`run_turn`** is the one you normally use. It keeps a `Conversation`, runs the tool-call loop, prunes and compresses history to fit the context window, and saves the history to the memory store.
 
 ---
 
 ## Conversation
 
-Holds the full history and stats for one logical conversation thread. You own this object and can pre-populate it before the first turn.
+A `Conversation` is one chat thread: its history, its statistics and the tools loaded for it. You own it and can fill its history before the first turn.
 
 ```cpp
 struct Conversation {
-    std::string          id;       // used as memory key "history:<id>"
-    std::vector<Message> history;  // ordered list of messages
-    TurnStats             stats;    // per-conversation telemetry (auto-updated)
+    std::string                id;            // names the saved history: "history:<id>"
+    std::vector<Message>       history;       // the messages, oldest first
+    TurnStats                  stats;         // telemetry for this conversation (updated by run_turn)
+    std::vector<std::string>   active_tools;  // tools loaded with load_tool (Config::lazy_tools); not part of history
 };
 ```
 
-`save_conversation`/`load_conversation` persist/restore a `Conversation` (history + stats) via the memory backend — see [History persistence](#history-persistence) below.
-
-Typical setup:
+Start a conversation with an id, and optionally a system message:
 
 ```cpp
 agent::Conversation conv;
-conv.id = "my_chat_1";
+conv.id = "support-42";
 
-// Optional: inject a system message before the first turn
 agent::Message sys;
 sys.role    = "system";
 sys.content = "You are a helpful assistant with access to filesystem tools.";
 conv.history.push_back(std::move(sys));
 ```
 
-The `id` is used as the key when persisting history to the memory backend (`"history:my_chat_1"`). Multiple conversations can coexist in the same session by using distinct IDs.
+Use a different `id` for each thread. The id is required to save history (see [History persistence](#history-persistence)).
 
 ---
 
 ## Message
 
-Owned, heap-allocated message stored in `Conversation::history`.
+An owned message in `Conversation::history`.
 
 ```cpp
 struct Message {
-    std::string             role;           // "system" | "user" | "assistant" | "tool"
+    std::string             role;           // "system", "user", "assistant" or "tool"
     std::string             content;
-    std::vector<ToolCall>   tool_calls;     // non-empty when role="assistant" with tool use
-    std::string             tool_call_id;   // non-empty when role="tool"
-    std::vector<TensorData> tensors;        // raw named tensors (e.g. the onnx engine)
-    mutable int             token_count = -1; // -1 = not yet counted; cached lazily
+    std::vector<ToolCall>   tool_calls;     // set on an assistant message that calls tools
+    std::string             tool_call_id;   // set on a tool message: the call it answers
+    std::vector<TensorData> tensors;        // raw tensors (see core.md)
+    std::vector<Media>      media;          // images, audio and other files (see core.md)
+    mutable int             token_count = -1; // cached by the library; -1 = not counted yet
 };
 ```
 
@@ -56,16 +58,26 @@ struct Message {
 
 | Role | Meaning |
 |---|---|
-| `"system"` | Persistent instruction; always preserved at `history[0]` during pruning |
-| `"user"` | Human turn; added by `run_turn` |
-| `"assistant"` | Model reply; added after each `infer` call |
-| `"tool"` | Tool result; added after each tool execution; paired with an `assistant` message |
+| `system` | Instructions. Leading system messages are kept when history is pruned. |
+| `user` | A user turn. `run_turn` adds it from `user_prompt`. |
+| `assistant` | A model reply. `run_turn` adds it after each model call. |
+| `tool` | The result of one tool call. Follows the assistant message that made the call. |
+
+Tool messages always stay with the assistant message that requested them. Pruning and compression never separate the two.
 
 ---
 
-## MessageView
+## infer
 
-Zero-copy view into arena memory. Valid only until the next `session.arena.reset()`.
+Runs one model call on the messages you give it. It does not change a `Conversation`, does not run tools, and does not fire the `OnInferenceSubmit` and `OnInferenceComplete` events. Use it for one-off prompts where history does not matter.
+
+```cpp
+Result<InferResponse> infer(Session &session, const InferRequest &request);
+```
+
+### MessageView
+
+Input to `infer`. It does not own its data, so the strings must outlive the call.
 
 ```cpp
 struct MessageView {
@@ -74,19 +86,8 @@ struct MessageView {
     std::span<const ToolCallView> tool_calls;
     std::string_view              tool_call_id;
     std::span<const TensorView>   tensors;
+    std::span<const MediaView>    media;
 };
-```
-
-`MessageView` is used only in `InferRequest` for the low-level `infer`. You never construct or store these manually when using the high-level API.
-
----
-
-## infer
-
-Stateless, single-shot inference. Takes a span of `MessageView`s, returns an `InferResponse`. Does not touch `Conversation`.
-
-```cpp
-Result<InferResponse> infer(Session &session, const InferRequest &request);
 ```
 
 ### InferRequest
@@ -94,30 +95,35 @@ Result<InferResponse> infer(Session &session, const InferRequest &request);
 ```cpp
 struct InferRequest {
     std::span<const MessageView> messages;
-    int           max_tokens      = 0;       // 0 -> Config::max_tokens
-    float         temperature     = -1.0f;   // <0 -> Config::temperature
-    bool          stream          = false;
-    TokenStreamFn on_token        = nullptr;
-    void         *token_user_data = nullptr;
-    // ... on_progress, cancel, task (see engines.md)
-    std::string_view params_json;            // extra engine parameters, a JSON object merged into
-                                             // agent_request::params_json (e.g. {"mode":"yesno"})
+    int           max_tokens       = 0;      // 0 = Config::max_tokens
+    float         temperature      = -1.0f;  // negative = Config::temperature
+    bool          stream           = false;
+    TokenStreamFn on_token         = nullptr;
+    void         *token_user_data  = nullptr;
+    ProgressFn    on_progress      = nullptr;
+    void         *progress_user_data = nullptr;
+    const volatile int32_t *cancel = nullptr; // non-zero stops the call with Cancelled
+    uint32_t      task             = 0;      // one AGENT_CAP_* bit; 0 = Config::default_task, then automatic
+    std::string_view params_json;            // extra engine parameters, a JSON object; empty = none
 };
 ```
+
+`task` and `params_json` are for engines that do more than text, such as `decide` and speech. See [engines.md](engines.md).
 
 ### InferResponse
 
 ```cpp
 struct InferResponse {
-    MessageView                 message;
-    TokenUsage                  usage;
-    std::span<const TensorView> output_tensors;   // tensor outputs (e.g. the onnx engine)
+    MessageView                 message;        // the reply
+    TokenUsage                  usage;          // token counts and timings (core.md)
+    std::span<const TensorView> output_tensors; // tensors the engine produced, if any
+    std::shared_ptr<Arena>      storage;        // owns everything the views point to
 };
 ```
 
-Response views are arena-backed. They become invalid after the next call to any function that calls `session.arena.reset()`, including subsequent `run_turn` calls.
+The views point into `storage`, so a response stays valid after later calls for as long as you keep it.
 
-**Example — direct low-level inference:**
+### Example: one reply
 
 ```cpp
 agent::MessageView msg;
@@ -128,156 +134,199 @@ agent::InferRequest req;
 req.messages = std::span<const agent::MessageView>(&msg, 1);
 
 auto r = agent::infer(session, req);
-if (r.ok)
-    printf("%s\n", std::string(r.value.message.content).c_str());
+if (r.ok) printf("%.*s\n", (int)r.value.message.content.size(), r.value.message.content.data());
 ```
 
-**Example — streaming:**
+### Example: streaming
 
 ```cpp
-req.stream          = true;
-req.on_token        = [](std::string_view tok, void *) {
+void print_token(std::string_view tok, void *) {
     fwrite(tok.data(), 1, tok.size(), stdout);
-};
-agent::infer(session, req);
+}
+
+req.stream      = true;
+req.on_token    = print_token;
+auto r = agent::infer(session, req);
 printf("\n");
 ```
+
+### run_task
+
+`infer` with `InferRequest::task` set to one `AGENT_CAP_*` bit, for engines that do more than text (see [session.md](session.md#one-shot-tasks) for the one-shot functions):
+
+```cpp
+Result<InferResponse> run_task(Session &session, uint32_t task, const InferRequest &request);
+```
+
+```cpp
+#include <agent-cpp/engine_abi.h>   // AGENT_CAP_* values
+
+auto r = agent::run_task(session, AGENT_CAP_TTS, req);   // same as setting req.task = AGENT_CAP_TTS and calling infer
+```
+
+`task` must be exactly one bit; `0` fails with `InvalidConfig`. The engine must declare the task, or the call fails with `UnsupportedProvider`.
 
 ---
 
 ## run_turn
 
-The main high-level API. Manages history, tool call loops, pruning, compression, and memory persistence.
+The main high-level call. It adds the user message to the conversation, runs the model, runs any tools it asks for, and returns the final reply.
 
 ```cpp
-Result<std::string> run_turn(
-    Session           &session,
-    Conversation        &memory,
-    std::string_view   user_prompt,
-    bool               stream          = false,
-    TokenStreamFn      on_token        = nullptr,
-    void              *token_user_data = nullptr);
-```
+Result<std::string> run_turn(Session &session, Conversation &memory, std::string_view user_prompt,
+                             bool stream = false, TokenStreamFn on_token = nullptr, void *token_user_data = nullptr);
 
-**Parameters:**
+Result<std::string> run_turn_with_media(Session &session, Conversation &memory, std::string_view user_prompt,
+                                        std::span<const Media> media, bool stream = false,
+                                        TokenStreamFn on_token = nullptr, void *token_user_data = nullptr);
+```
 
 | Parameter | Description |
 |---|---|
-| `session` | The active session |
-| `memory` | Conversation history + stats; modified in place |
-| `user_prompt` | User input; appended as a `"user"` message. Pass `""` to run without a user message (useful when the system prompt sets the context, or to continue after tool results were appended) |
-| `stream` | If `true`, tokens are delivered via `on_token` as they arrive |
-| `on_token` | Streaming callback; called once per token when `stream = true` |
-| `token_user_data` | Passed through to `on_token` |
+| `session` | The session to run on |
+| `memory` | The conversation. Its history and stats are updated in place. |
+| `user_prompt` | Added as a `user` message. Pass `""` to add no user message: useful after you have appended tool results yourself, or when the system prompt sets the task. |
+| `media` | (`run_turn_with_media` only) Files attached to the user message, for engines that accept them. |
+| `stream` | When true, tokens are passed to `on_token` as they arrive. |
+| `on_token` | Called for each token when `stream` is true. |
+| `token_user_data` | Passed to `on_token`. |
 
-**Returns:** `Result<std::string>` containing the assistant's final reply text (owned, always valid regardless of arena state). On error, `.ok` is `false` and `.error` describes what went wrong.
+**Returns** the final assistant text as an owned `std::string`. It is valid after later calls.
 
-### Internal sequence
+### Example: a conversation with two turns
 
-1. If `user_prompt` is non-empty, push a `"user"` message to `memory.history`.
-2. Count total tokens. If > 70% of `context_window` and history is long enough, call `compress_context`.
-3. Loop:
-   a. `prune_history_state` — drop oldest non-system messages to fit the context budget.
-   b. `arena.reset()`.
-   c. Build `MessageView[]` from `memory.history` (zero-copy projections).
-   d. `infer` — submit to provider.
-   e. Append assistant `Message` to history.
-   f. If the response contains tool calls, dispatch each one (see below), append results, continue loop.
-   g. If no tool calls, exit loop.
-4. `save_conversation` — serialise `memory.history` (and `memory.stats`) to JSON and store under `"history:<memory.id>"` / `"history_stats:<memory.id>"`. This is a write-only step — `run_turn` never reads history back; call `load_conversation` explicitly to resume a conversation after a process restart (see [History persistence](#history-persistence)).
-5. Return assistant text as owned `std::string`.
+```cpp
+agent::Conversation conv;
+conv.id = "demo";
 
-### Tool call loop
+auto a = agent::run_turn(session, conv, "What files are in my workspace?");
+auto b = agent::run_turn(session, conv, "Which of them is largest?");   // sees the first turn
+if (!b.ok) fprintf(stderr, "turn failed: %s\n", b.error.message.c_str());
+```
 
-Each tool call in the assistant's response is processed in order:
+### What one turn does
 
-- `trigger_event(OnToolCall)` fires with the tool name as payload.
-- All active `ToolHook::Pre` callbacks for this tool fire (a graph Agent node's `hooks`).
-- `execute_tool` dispatches the call via `Session::tool_by_name` (O(1)).
-- All active `ToolHook::Post` callbacks fire with the result.
-- `trigger_event(OnToolResult)` fires with the result as payload.
-- A `"tool"` message is appended to history.
+1. Fires `OnTurnStart`.
+2. Adds the user message if `user_prompt` or `media` is not empty.
+3. Compresses the history if it is too large (see [Compression](#compression)).
+4. Loop, once per model call:
+   - Prunes the history to the context budget (see [Pruning](#pruning)).
+   - Fires `OnInferenceSubmit`, calls the model, fires `OnInferenceComplete`.
+   - Adds the assistant message and updates `Conversation::stats` and `SessionStats`.
+   - If the model asked for tools, runs each one in order and adds a `tool` message per call, then loops. Otherwise the loop ends.
+5. Saves the history (see [History persistence](#history-persistence)).
+6. Returns the final assistant text.
 
-If the number of tool-call rounds reaches `Config::max_tool_call_rounds` (default 10), the loop halts and `ToolCallLimitExceeded` is returned.
+### Tool calls inside a turn
 
-### Error conditions
+For each tool call in an assistant message, in order:
+
+1. `OnToolCall` fires with the tool name.
+2. `ToolHook::Pre` callbacks run (set on a graph Agent node; see [graph.md](graph.md)).
+3. The tool runs through the permission gate and the sandbox.
+4. `ToolHook::Post` callbacks run with the result.
+5. `OnToolResult` fires with the result text.
+6. A `tool` message holding the result is added to the history.
+
+The number of tool-call rounds is limited by `Config::max_tool_call_rounds` (default 10). When the model asks for a round beyond that limit, the turn fails with `ToolCallLimitExceeded`. The assistant message that asked is already in the history at that point.
+
+### Cancellation
+
+If `request_cancel` was called on the session, the turn fails with `Cancelled` before the next model call. The same happens for a model call that is running when the cancel arrives. See [session.md](session.md#cancellation).
+
+### Errors
 
 | Error | Meaning |
 |---|---|
-| `ToolCallLimitExceeded` | Model called tools more than `max_tool_call_rounds` times in one turn |
-| `DecodeFailed` | out of memory while the per-turn Arena grew (the Arena no longer has a size limit) |
-| Provider errors | Any error from `infer` is propagated unchanged |
+| `ToolCallLimitExceeded` | The model asked for more tool-call rounds than `max_tool_call_rounds` |
+| `Cancelled` | `request_cancel` was called |
+| `DecodeFailed` | The per-turn arena could not hold the request's message views |
+| `PermissionDenied`, `SandboxViolation`, ... | Not returned from `run_turn` directly. A failed tool is reported to the model as a `tool` message, and the turn goes on. |
+| Engine errors | Any error from the model call is returned unchanged, for example `EngineCrashed` |
+
+A failed turn does not save its history. Messages added before the failure stay in `conv.history`.
 
 ---
 
-## compress_context
+## Compression
 
 ```cpp
-Result<void> compress_context(
-    Session           &session,
-    Conversation        &memory,
-    size_t             keep_recent = 6);
+Result<void> compress_context(Session &session, Conversation &memory, size_t keep_recent = 6);
 ```
 
-Summarises the oldest messages using the active LLM and replaces them with a single `[Compressed history]: <summary>` message, preserving the system message (if any) and the most recent `keep_recent` messages verbatim.
+Replaces the older messages with one summary, made by the model. The summary becomes a `system` message that starts with `[Compressed history]: `. The leading system message and the `keep_recent` most recent messages are kept as they are.
 
-Called automatically by `run_turn` when total tokens exceed 70% of `context_window`. You can also call it manually to trigger compression early.
-
-**Behaviour:**
-
-1. If `history.size() <= start + keep_recent + 2`, returns `ok()` immediately (nothing to compress).
-2. Builds a summary prompt from messages `[start ... size - keep_recent)`.
-3. Calls `infer` with a short summarization instruction. Uses stack-local `MessageView`s — does **not** touch the arena.
-4. On success, erases old messages and inserts the summary.
-5. On failure (network error, provider error), logs a warning and returns `ok()` — the pruner handles overflow as a fallback.
-
-**Example:**
+`run_turn` calls it by itself when the history is longer than six messages and its token count is above 70% of `context_window`. It also checks again during a long tool loop, using the prompt size the engine last reported. Call it yourself to shrink the history early:
 
 ```cpp
-// Force compression before a new topic begins
-agent::compress_context(session, conv, 4);   // keep 4 most recent messages
+agent::compress_context(session, conv, 4);   // keep the 4 most recent messages
 ```
+
+Behaviour:
+
+- Does nothing when there is too little history to compress.
+- Never separates a tool result from the assistant message that asked for it.
+- If the summary call fails, it logs a warning and returns `ok`. The pruner then handles the overflow.
+- On success it increases `stats.compressions` and fires `OnCompression`.
+
+---
+
+## Pruning
+
+Before each model call, the history is cut to fit the context budget:
+
+```
+budget = max(200, context_window - max_tokens - 100 - tokens of the injected tool list)
+```
+
+The pruner removes the oldest messages after the leading system messages until the history fits:
+
+- Leading system messages are never removed.
+- An assistant message that made tool calls and the tool messages after it are removed together.
+- At least one message after the leading system messages is always kept.
+
+Each pass that removes something increases `stats.prune_cycles` and fires `OnPrune`. Token counts are cached per message (`Message::token_count`). When the provider cannot count tokens, the library estimates `(characters + 3) / 4`.
 
 ---
 
 ## History persistence
 
-After every successful `run_turn`, the conversation history and stats are serialised to JSON and stored in the memory backend via `save_conversation`, under `"history:<conv.id>"` (history) and `"history_stats:<conv.id>"` (`Conversation::stats`). This is best-effort — if the memory write fails, the function does not propagate the error (the in-memory history is still correct).
+At the end of every successful `run_turn`, the conversation is saved to the memory store under two keys:
 
-`run_turn` only ever *writes* history — it never reads it back. To resume a conversation after a process restart, load it explicitly:
+| Key | Contents |
+|---|---|
+| `history:<id>` | The messages as a JSON array |
+| `history_stats:<id>` | `prompt_tokens`, `completion_tokens`, `tool_calls`, `compressions`, `prune_cycles`, `turns` |
+
+Saving is best effort: if it fails, `run_turn` logs a warning and still returns its reply. A conversation with an empty `id` cannot be saved.
+
+`run_turn` never reads these keys back. To resume a conversation after a restart, load it:
+
+```cpp
+agent::Conversation conv;
+conv.id = "support-42";
+
+auto loaded = agent::load_conversation(session, conv);   // fills conv.history and the saved stats
+if (!loaded.ok) {
+    // nothing saved yet, or the saved data could not be read: start fresh
+}
+```
+
+`save_conversation` and `load_conversation` can also be called directly, to snapshot or restore a conversation outside `run_turn`:
 
 ```cpp
 Result<void> save_conversation(Session &session, const Conversation &memory);
 Result<void> load_conversation(Session &session, Conversation &memory);
 ```
 
-```cpp
-agent::Conversation conv;
-conv.id = "my_chat_1";
-auto load_res = agent::load_conversation(session, conv);   // fills conv.history + conv.stats
-if (!load_res.ok) {
-    // no saved history yet (or it failed to parse) -- start fresh
-}
-```
-
-`save_conversation`/`load_conversation` can also be called directly to snapshot or restore a `Conversation` outside the normal `run_turn` flow. You can still read the raw stored JSON manually if needed:
-
-```cpp
-auto r = agent::retrieve_memory(session, "history:my_chat_1");
-if (r.ok) printf("stored: %s\n", r.value.c_str());
-```
+What is kept: messages, including their tool calls, tool call ids and media. Not kept: tensors, `TurnStats::cached_tokens`, `TurnStats::last` and `active_tools`. `load_conversation` replaces `history` and sets the six saved statistics. The persistence store is covered in [memory.md](memory.md).
 
 ---
 
-## Context pruning details
+## Related pages
 
-Pruning enforces the budget: `context_window - max_tokens - 100` tokens.
-
-The algorithm is O(n) — one forward pass to compute token totals, followed by a single `vector::erase` call:
-
-1. Always preserves `history[0]` if it is a system message.
-2. Drops messages starting from the oldest non-system message.
-3. Never breaks a tool call pair — an `assistant` message with `tool_calls` and its immediately following `tool` messages are always dropped atomically.
-4. Stops if fewer than `min_keep = fixed_start + 1` messages would remain.
-
-Token counts are cached per `Message::token_count`. The first time a message is counted, the result is cached (mutable field). Subsequent prune cycles use the cached value at no cost. If the provider does not implement `count_tokens`, the fallback is `(chars + 3) / 4`.
+- [session.md](session.md): creating sessions, `Config`, cancellation
+- [stats.md](stats.md): what the statistics count
+- [events.md](events.md): the events fired during a turn
+- [tools.md](tools.md): writing tools and the default tool set
+- [memory.md](memory.md): the store behind history persistence

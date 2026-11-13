@@ -177,6 +177,10 @@ static Result<void> prune_history_state(Session &session, Conversation &state) {
         auto beg = state.history.begin() + static_cast<ptrdiff_t>(drop_from);
         state.history.erase(beg, beg + static_cast<ptrdiff_t>(drop_to - drop_from));
         state.stats.prune_cycles++;
+        {
+            std::lock_guard<std::mutex> lock(*session.stats_mutex);
+            session.stats.total_prune_cycles++;
+        }
 
         trigger_event(session, EventType::OnPrune, std::span<const uint8_t>());
         utils::log(session, LogLevel::Debug, "Pruned " + std::to_string(drop_to - drop_from) + " messages from history.");

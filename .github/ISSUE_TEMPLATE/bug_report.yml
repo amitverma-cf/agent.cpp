@@ -1,0 +1,98 @@
+name: Bug report
+description: Something does not work the way the docs say it should
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please write the report yourself, as CONTRIBUTING.md asks.
+        Before you paste logs, remove API keys, tokens, and private file names or paths.
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened
+      description: What you saw. Include the error message, if there was one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps or command to reproduce
+      description: The exact command, or the code and steps, that show the problem.
+      placeholder: |
+        1. agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M
+        2. agent
+        3. type "hello"
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: version
+    attributes:
+      label: Output of `agent version`
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Windows 11 or Linux, with the version (for example, Ubuntu 24.04). macOS is not supported.
+      placeholder: Windows 11 Pro 26200
+    validations:
+      required: true
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Engine
+      description: The engine plugin the problem happens with. Choose "Not sure" if you do not know.
+      options:
+        - llama (llama.cpp)
+        - audiocpp (audio.cpp)
+        - sdcpp (stable-diffusion.cpp)
+        - onnx (ONNX Runtime)
+        - trellis (TRELLIS.2)
+        - Not sure
+        - Not an engine problem
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: The model name or Hugging Face repo, with the quantization (for example, Qwen2.5-0.5B-Instruct Q4_K_M).
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The relevant output, or the files under the workspace `logs/` folder. Remove secrets and private paths.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched the existing issues and did not find this problem.
+          required: true
+        - label: I wrote this report myself. AI tools were not used to write it, as CONTRIBUTING.md asks.
+          required: true
+        - label: I removed API keys, tokens and private data from the logs above.
+          required: true

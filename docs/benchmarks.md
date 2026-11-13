@@ -28,8 +28,10 @@ build/agent_bench --llama build/src/engines/llama/agent-engine-llama.so \
                   --json results.json --md results.md
 ```
 
-`agent_bench --help` lists every option. Sections run when their inputs are given: `llm` and
-`parallel` need `--llama` and `--model`, `overhead` needs `--mock`, `tts` needs `--audiocpp` and
+The engine options are paths to plugin files. Each plugin is in the build tree under `src/engines/<name>/`, named
+`agent-engine-<name>` with the platform's extension (`.so` on Linux, `.dylib` on macOS, `.dll` on Windows); the paths above
+are for Linux. Running `agent_bench` with no arguments prints the list of options. Sections run when their inputs are
+given: `llm` and `parallel` need `--llama` and `--model`, `overhead` needs `--mock`, `tts` needs `--audiocpp` and
 `--tts-model`.
 
 ## Core overhead per turn (mock engine)

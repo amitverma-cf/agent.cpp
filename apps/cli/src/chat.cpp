@@ -245,7 +245,12 @@ Result<void> open_session(ChatState &st) {
     cfg.engine_options = st.engine_options;
     cfg.model = st.model.path;
     cfg.workspace_dir = st.workspace;
-    cfg.lazy_tools = true; // the model sees tool_search / load_tool, not every tool, until it needs one
+    {
+        // With MCP servers configured the tool list gets long, so the model sees tool_search / load_tool and loads tools on demand. Without
+        // them the handful of built-in tools stay directly visible: small models do much better when they can just call list_dir.
+        std::vector<std::string> mcp_warnings;
+        cfg.lazy_tools = !collect_mcp_servers(*st.ctx, mcp_warnings).empty();
+    }
     install_cli_hooks(cfg, *st.ctx);
     cfg.secret_resolver = cli_resolve_secrets;
     cfg.secret_user_data = st.secrets.get();

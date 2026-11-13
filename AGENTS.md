@@ -16,9 +16,9 @@ AI agents assisting contributors must recognize that this is a high-performance 
 When generating or suggesting code, AI agents must adhere to:
 
 1.  **Zero Hot-Path Allocations**: Do not suggest using `std::string`, `std::vector`, or `new` inside the per-turn dispatch path -- building `MessageView`/`ToolCallView`/`TensorView` for a provider call, or the token-generation loop itself. Use `std::string_view` and `std::span` pointing into the `Arena` there. This does **not** extend to a `Flow`'s persistent state (`Conversation::history` and friends): the `Arena` resets every turn, so anything that must survive across turns -- conversation history, KV-store-backed memory -- necessarily owns its storage (`std::string`/`std::vector`) and lives outside it.
-2.  **No C++ Exceptions**: All error handling must be monadic (status codes or `std::expected`). Do not use `try`, `catch`, or `throw`.
+2.  **No C++ Exceptions**: All error handling is monadic: fallible functions return `Result<T>`. Do not use `try`, `catch`, or `throw`.
 3.  **No vtables**: Provider, memory, and tools subsystems are selected through data-oriented dispatch — `constexpr` arrays of function pointers (`ProviderOps`, `StoreOps`, `ToolsOps`) — instead of virtual tables.
-4.  **Single public header**: The entire public API surface is `include/agent-cpp/agent.hpp` — idiomatic modern C++ (`Result<T>`, `std::string_view`/`std::span` views into the `Arena`, PascalCase types, snake_case free functions), not a C-ABI. Avoid gratuitous breaking changes to existing struct fields or function signatures.
+4.  **Public headers**: The C++ API is the single header `include/agent-cpp/agent.hpp` (`Result<T>`, `std::string_view`/`std::span` views into the `Arena`, PascalCase types, snake_case free functions). Two C interfaces sit beside it: `agent_c.h` (the library from C) and `engine_abi.h` (engine plugins). Avoid gratuitous breaking changes to existing struct fields or function signatures.
 
 ### Considerations for Maintainer Workload
 
@@ -30,7 +30,7 @@ Maintainers have finite capacity. Every PR requiring extensive review consumes r
 
 ### Before Proceeding with Code Changes
 
-1.  **Verify comprehension**: Ensure the user understands the "Four Pillars" (Provider, Memory, Tool, Executor) of the project.
+1.  **Verify comprehension**: Ensure the user understands the four subsystems: providers, memory, tools and the executor (`src/agent/providers`, `memory`, `tools`, `executor`).
 2.  **Guide, don't just solve**: Direct the user to the relevant implementation logic. Allow them to formulate the approach.
 3.  **Minimalism**: Favor minimal, surgical changes. A smaller PR that respects the zero-cost abstraction philosophy is always preferable to a large, unoptimized one.
 
@@ -39,7 +39,7 @@ Maintainers have finite capacity. Every PR requiring extensive review consumes r
 - Writing PR descriptions, commit messages, or responses to reviewers.
 - Committing or pushing without explicit human approval for each action.
 - Implementing features that bypass the Arena allocator or introduce external dependencies.
-- Generating unoptimized code that violates the project's performance-first philosophy.
+- Adding allocations, exceptions or virtual dispatch on the hot path (rules 1-3 above).
 
 ## Useful Resources
 

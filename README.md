@@ -8,11 +8,20 @@ computer, and you do not need Python, Node or a cloud account.
 
 ```text
 $ agent
-╭─ qwen2.5-0.5b-instruct · llama · ~/work ─────────────────────────╮
-│ > summarise the TODO comments in src/ and write them to todo.md  │
-│ [tool] run_command grep -rn TODO src/        allow? y / n / a    │
-╰───────────────────────────────────────────────────────────────────╯
+agent  qwen2.5-0.5b-instruct-q4_k_m  ·  llama  ·  chat-20261113-091709
+> Run the command ls and tell me which files are in this folder.
+[tool] run_command {"command": "ls", "timeout_seconds": 0}
+[result]
+{"exit_code":0,"timed_out":false,"cancelled":false,"output":"artifacts\ncache\ndata.csv\nlogs\nmemo
+The command ls has been executed successfully. The output shows that there are several files in
+this folder: artifacts, cache, data.csv, logs, memory, models, notes.txt, tmp, todo.md, and tmp.
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│> Message, /help for commands                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ prompt 1145 tok (1082 cached) 276 tok/s | gen 46 tok 69 tok/s | KV 1191/4096 q8_0 102.0 MiB
 ```
+
+That is the real chat screen, captured from Qwen2.5-0.5B on a 4-core CPU: the model asked to run `ls` (the chat asks before it runs a command), got the result and answered.
 
 > Status: pre-1.0. Flags, APIs and file formats can still change. Targets Windows 11 and Linux.
 
@@ -88,15 +97,12 @@ Inside the chat: `/model`, `/image`, `/open`, `/stats`, `/clear`, `/help`, `/exi
 
 ## Use it as a library
 
-Install it and link it from CMake:
-
-```sh
-cmake --install build --prefix ~/agent-cpp
-```
+Install it (see above), then link it from CMake:
 
 ```cmake
-find_package(agent-cpp REQUIRED)
+find_package(agent-cpp REQUIRED COMPONENTS llama)
 target_link_libraries(my_app PRIVATE agent-cpp::agent)
+agent_deploy_engines(my_app llama)     # copies the llama engine next to my_app after each build, and into install()
 ```
 
 ```cpp
@@ -116,25 +122,24 @@ int main() {
 }
 ```
 
-`agent::open_session` is the short path: one engine, one model file, defaults for the rest. For several model files, engine options or
-a full `Config`, use `agent::engine_config` and `agent::init` ([the guide](docs/guide.md)). `agent::engines::llama`, `audiocpp`, `sdcpp`, `trellis` and `onnx` name the engines that ship with agent.cpp. The plugin is found next to
-your program (in `engines/`), which one CMake line fills with just the engines you use:
+- **Choosing engines.** `agent::engines::llama`, `audiocpp`, `sdcpp`, `trellis` and `onnx` name the engines that ship with agent.cpp. The
+  program finds the plugin in its own `engines/` folder at run time. `agent_deploy_engines` fills that folder with just the engines you
+  name, so engines you do not use never ship with your app.
+- **More than one model file.** `agent::open_session(agent::engines::audiocpp, {{"asr.model", "asr.gguf"}, {"tts.model", "tts.gguf"}})`.
+- **One-shot tasks.** `agent::transcribe`, `agent::speak` and `agent::draw` for speech and images.
+- **Full control.** `agent::engine_config` and `agent::init` take a complete `Config`: tools, the permission gate, sandbox settings,
+  memory, process isolation ([the guide](docs/guide.md)).
+- **Leave out what you do not use.** Graphs, MCP, RAG and the model registry are build options
+  ([choosing the parts you use](docs/guides/choosing-parts.md)).
 
-```cmake
-find_package(agent-cpp REQUIRED COMPONENTS llama)
-target_link_libraries(my_app PRIVATE agent-cpp::agent)
-agent_deploy_engines(my_app llama)        # copies engines/agent-engine-llama.* next to my_app after each build, and into install()
-```
- The library has one header, no exceptions (`Result<T>` everywhere), no virtual
-calls, and works from C through [`agent_c.h`](docs/api/c-api.md).
-
-It covers chat turns with tools, graphs, MCP servers, skills, RAG, memory stores and the permission gate. Start with
-[the library guide](docs/guides/getting-started-library.md).
+The library has one header, no exceptions (`Result<T>` everywhere), no virtual calls, and works from C through
+[`agent_c.h`](docs/api/c-api.md). Start with [the library guide](docs/guides/getting-started-library.md); runnable programs for chat,
+tools, graphs, RAG, images and speech are in [examples/](examples/README.md).
 
 ## Safety
 
 Tools and engines run in an OS sandbox: Landlock and seccomp on Linux, an AppContainer on Windows 11. Engines run in their
-own process, so a crash fails one turn, not your program. Tool calls that touch files or run commands ask first, unless
+own process, so a crash fails one turn, not your program. Running a command, deleting or moving a file asks you first, unless
 you pass `--yes`. `--no-sandbox` turns the sandbox off. See [docs/security-sandbox.md](docs/security-sandbox.md).
 
 ## Documentation
@@ -143,7 +148,7 @@ you pass `--yes`. `--no-sandbox` turns the sandbox off. See [docs/security-sandb
 [C++ API](docs/api.md) · [C API](docs/api/c-api.md) · [Architecture](docs/architecture.md) ·
 [Writing an engine](docs/guides/writing-an-engine.md) · [Writing a tool](docs/guides/writing-a-tool.md) ·
 [Writing a graph](docs/guides/writing-a-graph.md) · [A voice assistant](docs/guides/voice-assistant.md) · [Choosing the parts you use](docs/guides/choosing-parts.md) ·
-[Benchmarks](docs/benchmarks.md) · [Examples](examples/README.md)
+[Benchmarks](docs/benchmarks.md) · [How it compares](docs/comparison.md) · [Examples](examples/README.md)
 
 Build options, packaging and the source layout are in [docs/getting-started.md](docs/getting-started.md) and
 [docs/packaging.md](docs/packaging.md). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md). Security reports: [SECURITY.md](SECURITY.md).

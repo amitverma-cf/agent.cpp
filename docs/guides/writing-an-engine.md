@@ -10,13 +10,14 @@ it by capability. This guide walks through ABI 2 with a complete plugin,
 - `AGENT_CAP_IMAGE_GEN`: writes a small PPM image to the artifacts directory, with progress and cancel.
 
 [`examples/04-custom-engine/host.cpp`](../../examples/04-custom-engine/host.cpp) drives it
-through libagent in process and under process isolation; both run as the `example.guide_engine` test.
+through libagent in process and under process isolation. It is built as the `engine_host` example (see [examples/README.md](../../examples/README.md)) and takes no arguments.
 To start a new engine outside this tree, copy [`examples/08-engine-plugin-template/`](../../examples/08-engine-plugin-template)
 (a standalone CMake project against the installed package, see [Packaging](#7-building-and-packaging)).
 
 ## 1. The one exported symbol
 
-A plugin is a shared library named `agent-engine-<name>.so` (`.dll`, `.dylib`) exporting one C function:
+A plugin is a shared library named `agent-engine-<name>` with the platform's extension (`.so` on Linux, `.dylib` on macOS,
+`.dll` on Windows) that exports one C function:
 
 ```c
 AGENT_ENGINE_EXPORT const agent_engine_v1 *agent_engine_get_v1(void);
@@ -82,7 +83,7 @@ int32_t reverse_create(agent_str config_json, void **out_instance, char *err, si
 ```
 
 `create()` loads the model. The core sends `{"model", "context_window", "max_tokens", "temperature",
-"parallel", "options"}`, where `options` is `Config::engine_options` verbatim (engine-defined JSON; the
+"parallel", "scratch_dir", "options"}`, where `scratch_dir` is `<workspace>/tmp` and `options` is `Config::engine_options` verbatim (engine-defined JSON; the
 example's `"step_delay_ms"` arrives there). On failure write a NUL-terminated message into `err` and
 return an `AGENT_ERR_*` code: `init()` reports it as `ErrorCode::ModelLoadFailed`. `destroy()` frees
 the instance. One plugin may have many instances (one per Session).
@@ -154,8 +155,8 @@ text, FILE parts to `Media` entries on the assistant message, TENSOR parts to `o
     return AGENT_OK;
 ```
 
-Write generated files into `req->output_dir` (`<workspace>/artifacts`); it is the one directory a
-sandboxed host may write to. On failure return a non-zero `AGENT_ERR_*` status and make `last_error()`
+Write generated files into `req->output_dir` (`<workspace>/artifacts`). A sandboxed host may write there and
+in the scratch folder (`<workspace>/tmp`, given to `create()`), and nowhere else. On failure return a non-zero `AGENT_ERR_*` status and make `last_error()`
 describe it; the core turns it into an `agent::Error`. `AGENT_ERR_CANCELLED` becomes
 `ErrorCode::Cancelled`.
 
@@ -234,7 +235,7 @@ The same plugin runs in two places, chosen per Session (`Config::engine_isolatio
 
 | Under process isolation | What it means for the engine |
 |---|---|
-| OS sandbox (`Config::engine_sandbox`, on by default; enforced on Linux with Landlock + seccomp) | Readable: the plugin's directory, the model's directory, the directory of every path-like string in `engine_options`, system directories, the workspace. Writable: `output_dir` (`<workspace>/artifacts`) and `/dev/shm` only. No `/tmp`, no `$HOME` caches, no network: download nothing at `create()` time, and ask users to name extra files in `engine_options` or `engine_sandbox.read_only_paths` |
+| OS sandbox (`Config::engine_sandbox`, on by default; enforced on Linux with Landlock + seccomp) | Readable: the plugin's directory, the model's directory, the directory of every path-like string in `engine_options`, system directories, the workspace. Writable: `output_dir` (`<workspace>/artifacts`), `scratch_dir` (`<workspace>/tmp`, for unpacking files and caches) and `/dev/shm`. No `/tmp`, no `$HOME` caches, no network: download nothing at `create()` time, and ask users to name extra files in `engine_options` or `engine_sandbox.read_only_paths` |
 | `engine_sandbox.memory_limit_bytes` | becomes the host's `RLIMIT_AS`; reserve virtual memory accordingly (mmap'ed weights count) |
 | crash, `abort()`, `exit()`, OOM kill | the call fails with `ErrorCode::EngineCrashed` (message quotes the host's last stderr lines); the next call restarts the host and calls `create()` again with the same config. Keep `create()` idempotent |
 | `engine_timeout_ms` watchdog | a `run()` that takes longer gets the host killed |
@@ -274,6 +275,9 @@ agent_add_engine(agent-engine-echo src/echo_engine.c)   # SHARED, no "lib" prefi
 agent_install_engine(agent-engine-echo)                 # -> <prefix>/lib/agent/engines/
 ```
 
+An application that ships the installed plugin lists it in `agent_deploy_engines(<app> echo)`, after `find_package(agent-cpp)`
+(see [packaging.md](../packaging.md#shipping-an-application-with-engines)).
+
 `agent_install_engine(<target> <libs>...)` also copies the runtime libraries a plugin loads through an
 `$ORIGIN` RPATH (ONNX Runtime, ...), keeping symlinks whose targets are listed too. Prefer
 linking your inference library statically (llama and sdcpp do), so the plugin is one file.
@@ -282,7 +286,7 @@ Then register it with the CLI, which loads it once to validate the ABI and print
 
 ```sh
 cmake --install build --prefix /opt/agent
-/opt/agent/bin/agent engine add /opt/agent/lib/agent/engines/agent-engine-echo.so
+/opt/agent/bin/agent engine add /opt/agent/lib/agent/engines/agent-engine-echo.so   # .dylib on macOS, .dll on Windows
 ```
 
 ## Checklist
@@ -291,7 +295,7 @@ cmake --install build --prefix /opt/agent
 - [ ] Hidden visibility; only `agent_engine_get_v1` exported; no exceptions across the boundary.
 - [ ] `run()` switches on `req->task` and returns `AGENT_ERR_UNSUPPORTED` for anything else.
 - [ ] `agent_response_reset()` in `run()` and `free_response()`; output memory owned until then.
-- [ ] Files only in `output_dir`; nothing written elsewhere, no network at runtime.
+- [ ] Files only in `output_dir` and `scratch_dir`; nothing written elsewhere, no network at runtime.
 - [ ] Streams through `on_chunk`, reports long jobs through `on_progress`, polls `cancel`.
 - [ ] `AGENT_ENGINE_FLAG_CONCURRENT` only if `run()` really is thread-safe per instance.
 - [ ] Tested in process and under process isolation.

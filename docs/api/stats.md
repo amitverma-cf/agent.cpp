@@ -2,26 +2,32 @@
 
 `#include <agent-cpp/agent.hpp>`
 
-agent.cpp tracks token usage, tool calls, context management operations, and turn counts at two granularities: per-conversation and session-wide.
+The library counts tokens, turns, tool calls and context operations at two levels: each `Conversation` has `TurnStats`, and each `Session` has `SessionStats`. `run_turn` updates both. Direct calls to `infer` update neither.
 
 ---
 
 ## TurnStats
 
-Tracks usage for a single `Conversation`. Updated automatically by `run_turn`.
+Statistics for one `Conversation`, in `Conversation::stats`.
 
 ```cpp
 struct TurnStats {
-    int prompt_tokens     = 0;   // total prompt tokens submitted across all turns
-    int completion_tokens = 0;   // total completion tokens received across all turns
-    int tool_calls        = 0;   // total tool calls dispatched
-    int compressions      = 0;   // number of times compress_context succeeded
-    int prune_cycles      = 0;   // number of sliding-window prune operations
-    int turns             = 0;   // number of infer calls (including tool-call loops)
+    int        prompt_tokens     = 0;  // prompt tokens sent, summed over all model calls
+    int        completion_tokens = 0;  // tokens generated, summed over all model calls
+    int        tool_calls        = 0;  // tool calls run
+    int        compressions      = 0;  // successful compress_context calls
+    int        prune_cycles      = 0;  // prune passes that removed messages
+    int        turns             = 0;  // model calls (including the calls that follow tool results)
+    int        cached_tokens     = 0;  // prompt tokens the engine reused from its KV cache, summed
+    TokenUsage last;                   // usage of the most recent model call (core.md)
 };
 ```
 
-Access via `Conversation::stats`:
+### What counts as a turn
+
+Each model call counts as one turn. A `run_turn` in which the model makes three tool calls and then answers makes four model calls, so `turns` goes up by 4.
+
+### Example
 
 ```cpp
 agent::Conversation conv;
@@ -32,19 +38,20 @@ agent::run_turn(session, conv, "What files are in my workspace?");
 
 const auto &s = conv.stats;
 printf("prompt tokens:  %d\n", s.prompt_tokens);
+printf("cached tokens:  %d\n", s.cached_tokens);
 printf("tool calls:     %d\n", s.tool_calls);
 printf("turns:          %d\n", s.turns);
+printf("last call:      prompt %.1f ms, generation %.1f ms\n",
+       s.last.prefill_ms, s.last.decode_ms);
 ```
 
-### What counts as a "turn"
-
-Each call to `infer` inside `run_turn` increments `turns` by 1. In a single `run_turn` call, if the model makes 3 sequential tool calls before giving a final answer, `turns` increments by 4 (1 initial + 3 tool-loop iterations).
+`TurnStats` is saved with the history and restored by `load_conversation`, except for `cached_tokens` and `last` (see [conversation.md](conversation.md#history-persistence)).
 
 ---
 
 ## SessionStats
 
-Session-wide totals accumulated across all conversations driven through the session. Updated after each `infer` call inside `run_turn`.
+Totals for every conversation on a session, in `Session::stats`.
 
 ```cpp
 struct SessionStats {
@@ -57,6 +64,15 @@ struct SessionStats {
 };
 ```
 
+| Field | Updated by |
+|---|---|
+| `total_prompt_tokens`, `total_completion_tokens`, `total_turns` | Each model call in `run_turn` |
+| `total_tool_calls` | Each tool call in `run_turn` |
+| `total_compressions` | Each successful `compress_context` |
+| `total_prune_cycles` | Times old messages were dropped from a history to fit the context window, across all conversations. |
+
+`cached_tokens` is kept per conversation only; there is no session-wide total.
+
 ---
 
 ## get_stats
@@ -65,7 +81,7 @@ struct SessionStats {
 SessionStats get_stats(const Session &session);
 ```
 
-Returns a copy of the current session-wide stats. Thread-safe to read; do not call concurrently with `run_turn` on the same session.
+Returns a copy of the session totals, read under the session's stats lock.
 
 ```cpp
 auto stats = agent::get_stats(session);
@@ -75,7 +91,6 @@ printf("  completion tokens: %d\n", stats.total_completion_tokens);
 printf("  tool calls:        %d\n", stats.total_tool_calls);
 printf("  turns:             %d\n", stats.total_turns);
 printf("  compressions:      %d\n", stats.total_compressions);
-printf("  prune cycles:      %d\n", stats.total_prune_cycles);
 ```
 
 ---
@@ -86,64 +101,78 @@ printf("  prune cycles:      %d\n", stats.total_prune_cycles);
 void reset_stats(Session &session);
 ```
 
-Zeroes all fields in `session.stats`. Does not affect individual `Conversation::stats`.
+Sets all `SessionStats` fields to 0. It does not change any `Conversation::stats`.
 
-Use this to measure stats for a specific time window:
+To measure one period, reset first and read afterwards:
 
 ```cpp
 agent::reset_stats(session);
 
-// run some conversations...
 agent::run_turn(session, conv_a, "task A");
 agent::run_turn(session, conv_b, "task B");
 
 auto delta = agent::get_stats(session);
-printf("task A+B used %d tokens\n",
+printf("tasks A and B used %d tokens\n",
        delta.total_prompt_tokens + delta.total_completion_tokens);
 ```
 
 ---
 
-## Cost estimation
+## Estimating cost
 
-Use token counts to estimate API costs. For example, with per-token prices (approximate):
+The library counts tokens, not money. Multiply by your provider's prices yourself. The prices below are placeholders:
 
 ```cpp
+const double price_in_per_million  = 0.0;   // your input price, per million tokens
+const double price_out_per_million = 0.0;   // your output price, per million tokens
+
 auto st = agent::get_stats(session);
-double input_cost  = st.total_prompt_tokens     / 1e6 * 2.50;   // gpt-4o input  ~$2.50/M tokens
-double output_cost = st.total_completion_tokens / 1e6 * 10.0;   // gpt-4o output ~$10/M tokens
-printf("estimated cost: $%.4f\n", input_cost + output_cost);
+double cost = st.total_prompt_tokens     / 1e6 * price_in_per_million
+            + st.total_completion_tokens / 1e6 * price_out_per_million;
+printf("estimated cost: %.4f\n", cost);
 ```
+
+For a local engine the cost is zero, but the token counts still show how much work a workload does.
 
 ---
 
-## Graph Agent node stats
+## Graph Agent node statistics
 
-After `run_graph`, each Agent conversation in `run.state.histories` (keyed by node name, or by `history_key`) carries the `TurnStats` of its turns in this call (per-node stats are not checkpointed). For parallel subagents, that is one entry per branch:
+Graph builds only (`AGENT_WITH_GRAPH`, on by default).
+
+After `run_graph`, each Agent conversation in `run.state.histories` holds the `TurnStats` for the turns of that call. Keys are the node name, or `GraphNode::history_key` when set. Parallel branches each have their own entry. Per-node statistics are not saved in checkpoints.
 
 ```cpp
 for (const auto &[name, memory] : run.state.histories) {
-    printf("agent '%s':\n", name.c_str());
-    printf("  turns:             %d\n", memory.stats.turns);
-    printf("  tool calls:        %d\n", memory.stats.tool_calls);
-    printf("  compressions:      %d\n", memory.stats.compressions);
-    printf("  prompt tokens:     %d\n", memory.stats.prompt_tokens);
-    printf("  completion tokens: %d\n", memory.stats.completion_tokens);
+    printf("agent '%s': turns=%d tool_calls=%d prompt=%d completion=%d\n",
+           name.c_str(), memory.stats.turns, memory.stats.tool_calls,
+           memory.stats.prompt_tokens, memory.stats.completion_tokens);
 }
 ```
 
+See [graph.md](graph.md) for the graph runtime.
+
 ---
 
-## Observability with event hooks
+## Live numbers during a turn
 
-For real-time per-turn stats, combine stats reading with event hooks:
+Read the session totals from an event hook to see progress while a turn is still running:
 
 ```cpp
 agent::register_event_hook(session, agent::EventType::OnInferenceComplete,
     [](const agent::Event &, void *ud) {
-        auto &session = *static_cast<agent::Session*>(ud);
-        auto s = agent::get_stats(session);
-        printf("[inference complete] total turns so far: %d\n", s.total_turns);
+        auto &s = *static_cast<agent::Session *>(ud);
+        printf("[model call done] session turns so far: %d\n", agent::get_stats(s).total_turns);
     },
     &session);
 ```
+
+Hooks are described in [events.md](events.md).
+
+---
+
+## Related pages
+
+- [conversation.md](conversation.md): where `run_turn` updates these counters
+- [session.md](session.md): sessions and `reset_stats` in context
+- [events.md](events.md): hooks for live values

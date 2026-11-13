@@ -29,3 +29,54 @@ jobs:
 
       - name: Coverage report
         run: gcovr -r . --object-directory build --exclude 'vendor/.*' --exclude 'tests/.*' --exclude 'examples/.*' --gcov-ignore-parse-errors=negative_hits.warn
+
+  # Each optional part of libagent can be switched off on its own and all together: the library must still build and a program
+  # that uses only the core must still link.
+  optional-parts:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        off: ["GRAPH", "MCP", "RAG", "GRAPH MODELS", "GRAPH MCP RAG MODELS"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libssl-dev
+
+      - name: Configure with the part(s) off
+        run: |
+          flags=""
+          for part in ${{ matrix.off }}; do flags="$flags -DAGENT_WITH_$part=OFF"; done
+          cmake -B build -G Ninja -DAGENT_BUILD_CLI=OFF -DAGENT_BUILD_HUB=OFF -DAGENT_BUILD_EXAMPLES=OFF -DAGENT_ENGINE_LLAMA=OFF \
+                -DAGENT_ENGINE_ONNX=OFF -DAGENT_ENGINE_SDCPP=OFF -DAGENT_ENGINE_AUDIOCPP=OFF -DAGENT_ENGINE_TRELLIS=OFF $flags
+
+      - name: Build the library
+        run: cmake --build build --target agent
+
+      - name: A core-only program links and runs
+        run: |
+          cat > core_only.cpp <<'EOF'
+          #include <agent-cpp/agent.hpp>
+          #include <cstdio>
+          int main() {
+              agent::AgentRuntime runtime;
+              agent::Config config;
+              config.provider = agent::AiProvider::Mock;
+              config.workspace_dir = ".core-only";
+              auto session = agent::init(config);
+              if (!session.ok) return 1;
+              agent::Conversation chat;
+              auto reply = agent::run_turn(session.value, chat, "hi");
+              std::printf("%s\n", reply.ok ? reply.value.c_str() : reply.error.message.c_str());
+              return reply.ok ? 0 : 1;
+          }
+          EOF
+          off_flags=""
+          for part in ${{ matrix.off }}; do off_flags="$off_flags -DAGENT_WITH_$part=0"; done
+          g++ -std=c++20 $off_flags -Iinclude core_only.cpp build/libagent.a -lpthread -ldl -o core_only
+          ./core_only

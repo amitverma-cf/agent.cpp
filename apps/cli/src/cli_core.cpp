@@ -767,8 +767,8 @@ Result<ModelRef> resolve_model(std::string_view spec, std::string_view default_m
     if (want.empty()) {
         for (const auto &m : catalog)
             if (engine_for_model(m.path) == "llama") return ok(m);
-        return fail<ModelRef>(ErrorCode::InvalidConfig,
-                              "no model given and none downloaded; pass --model PATH or run `agent model pull <owner/repo:QUANT>`");
+        return fail<ModelRef>(ErrorCode::InvalidConfig, "no model yet. Run `agent setup` (it suggests models that fit this machine and "
+                                                        "downloads one), or `agent model pull <name>`, or pass --model PATH");
     }
     for (const auto &m : catalog)
         if (m.name == want) {

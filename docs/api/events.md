@@ -2,7 +2,9 @@
 
 `#include <agent-cpp/agent.hpp>`
 
-The event hook bus provides a decoupled way to observe lifecycle events in agent.cpp without modifying inference logic. Events fire synchronously within the calling thread.
+Event hooks let you observe what a session does (turns, model calls, tool calls, compression, pruning, graph steps) without changing the code that does it. Register a C function pointer on a session; it is called on the thread that triggered the event.
+
+For per-tool auditing inside one graph node, use `ToolHook` instead. See [Event hooks or tool hooks](#event-hooks-or-tool-hooks) below.
 
 ---
 
@@ -10,44 +12,42 @@ The event hook bus provides a decoupled way to observe lifecycle events in agent
 
 ```cpp
 enum class EventType {
-    OnTurnStart,           // fired at the start of run_turn
-    OnInferenceSubmit,     // fired immediately before infer is called
-    OnInferenceComplete,   // fired immediately after infer returns
-    OnToolCall,            // fired when a tool is about to be dispatched
-    OnToolResult,          // fired after a tool returns its result
-    OnStateTransition,     // fired when a graph node starts (payload = node name)
-    OnCompression,         // fired after context compression completes
-    OnPrune,               // fired after a sliding-window prune operation
-    OnSubAgentComplete,    // fired per finished branch of a graph Parallel node (payload = branch entry node name)
+    OnTurnStart,           // run_turn / run_turn_with_media began
+    OnInferenceSubmit,     // a model call in run_turn is about to start
+    OnInferenceComplete,   // a model call in run_turn returned successfully
+    OnToolCall,            // a tool is about to run (run_turn or a graph Tool / Agent node)
+    OnToolResult,          // a tool returned its result
+    OnStateTransition,     // a graph node is starting
+    OnCompression,         // compress_context replaced part of the history
+    OnPrune,               // the pruner removed messages from the history
+    OnSubAgentComplete,    // a graph Parallel branch finished (after the join)
 };
 ```
+
+| EventType | Fired | Payload |
+|---|---|---|
+| `OnTurnStart` | At the start of each `run_turn` | empty |
+| `OnInferenceSubmit` | Before each model call made by `run_turn` | empty |
+| `OnInferenceComplete` | After each successful model call made by `run_turn` | empty |
+| `OnToolCall` | Before each tool call | the tool name (UTF-8) |
+| `OnToolResult` | After each tool call | the tool's result text (UTF-8) |
+| `OnStateTransition` | When a graph node starts (graph builds, `AGENT_WITH_GRAPH`) | the node name (UTF-8) |
+| `OnCompression` | After `compress_context` succeeds | empty |
+| `OnPrune` | After the pruner removes messages | empty |
+| `OnSubAgentComplete` | Once per finished branch of a graph `Parallel` node (graph builds) | the branch's entry node name (UTF-8) |
+
+`OnInferenceSubmit` and `OnInferenceComplete` fire only around the model calls that `run_turn` makes. A direct call to `infer` fires neither.
 
 ---
 
 ## Event
 
-The event object passed to every hook callback.
-
 ```cpp
 struct Event {
     EventType                type;
-    std::span<const uint8_t> payload;   // meaning depends on type (see table below)
+    std::span<const uint8_t> payload;   // valid only during the callback
 };
 ```
-
-### Payload meanings
-
-| EventType | Payload |
-|---|---|
-| `OnTurnStart` | empty |
-| `OnInferenceSubmit` | empty |
-| `OnInferenceComplete` | empty |
-| `OnToolCall` | UTF-8 bytes of the tool name |
-| `OnToolResult` | UTF-8 bytes of the tool result string |
-| `OnStateTransition` | UTF-8 bytes of the new state_id |
-| `OnCompression` | empty |
-| `OnPrune` | empty |
-| `OnSubAgentComplete` | empty |
 
 ---
 
@@ -58,160 +58,163 @@ using EventHookFn = void (*)(const Event &event, void *user_data);
 
 struct EventHook {
     EventType   type;
-    EventHookFn callback;
-    void       *user_data;
+    EventHookFn callback  = nullptr;
+    void       *user_data = nullptr;
 };
 ```
+
+`EventHook` is the record the session stores. You do not create one yourself; use `register_event_hook`.
 
 ---
 
 ## register_event_hook
 
 ```cpp
-void register_event_hook(
-    Session    &session,
-    EventType   type,
-    EventHookFn callback,
-    void       *user_data = nullptr);
+void register_event_hook(Session &session, EventType type, EventHookFn callback, void *user_data = nullptr);
 ```
 
-Registers a callback for a specific event type. Multiple callbacks can be registered for the same type — they fire in registration order. Hooks are stored in `session.event_hooks` and fire for the lifetime of the session.
+Adds a hook for one event type. Hooks for the same type are called in the order they were added. They stay for the life of the session; there is no way to remove one.
 
-**Callbacks must not throw** and must not modify the `session.event_hooks` vector (doing so invalidates the iteration).
+A hook is called with `(event, user_data)`. `user_data` is the pointer you gave, so it must stay valid for as long as the session can fire events.
 
 ---
 
 ## trigger_event
 
 ```cpp
-void trigger_event(
-    Session                  &session,
-    EventType                 type,
-    std::span<const uint8_t>  payload);
+void trigger_event(Session &session, EventType type, std::span<const uint8_t> payload);
 ```
 
-Fires all hooks registered for `type` with the given payload. Called internally by the library; exposed publicly for use in tests or custom extensions.
+Calls every hook registered for `type` with `payload`. The library calls it itself; it is public so that custom code and tests can fire events too.
+
+---
+
+## Rules for callbacks
+
+- Do not throw. Hooks are C function pointers.
+- Keep them fast. They run inside the turn, before the next model call.
+- Hooks registered while an event is firing take effect from the next event.
+- Inside a graph `Parallel` node, branches run on worker threads, so events can come from several threads at once. Make the hook and its `user_data` thread-safe.
 
 ---
 
 ## Examples
 
-### Log all inference boundaries
+### Log the turn and model-call boundaries
 
 ```cpp
 agent::register_event_hook(session, agent::EventType::OnTurnStart,
-    [](const agent::Event &, void *) {
-        printf("-- turn start --\n");
-    });
+    [](const agent::Event &, void *) { printf("-- turn start --\n"); });
 
 agent::register_event_hook(session, agent::EventType::OnInferenceSubmit,
-    [](const agent::Event &, void *) {
-        printf("  [inference] submitting...\n");
-    });
+    [](const agent::Event &, void *) { printf("  [model] calling...\n"); });
 
 agent::register_event_hook(session, agent::EventType::OnInferenceComplete,
-    [](const agent::Event &, void *) {
-        printf("  [inference] done.\n");
-    });
+    [](const agent::Event &, void *) { printf("  [model] done\n"); });
 ```
 
-### Log every tool call
+### Log every tool call and its result
 
 ```cpp
 agent::register_event_hook(session, agent::EventType::OnToolCall,
     [](const agent::Event &ev, void *) {
-        std::string name(reinterpret_cast<const char*>(ev.payload.data()), ev.payload.size());
-        printf("  [tool] called: %s\n", name.c_str());
+        printf("  [tool] %.*s\n", (int)ev.payload.size(), (const char *)ev.payload.data());
     });
 
 agent::register_event_hook(session, agent::EventType::OnToolResult,
     [](const agent::Event &ev, void *) {
-        std::string result(reinterpret_cast<const char*>(ev.payload.data()), ev.payload.size());
-        printf("  [tool] result: %.80s...\n", result.c_str());
+        auto text = std::string_view(reinterpret_cast<const char *>(ev.payload.data()), ev.payload.size());
+        printf("  [result] %.*s\n", (int)std::min<size_t>(text.size(), 80), text.data());
     });
 ```
+
+### Count model calls with user data
+
+The hook receives the pointer you pass to `register_event_hook`, so state can live in your own struct:
+
+```cpp
+struct Counter {
+    int submitted = 0;
+    int completed = 0;
+};
+Counter counter;
+
+agent::register_event_hook(session, agent::EventType::OnInferenceSubmit,
+    [](const agent::Event &, void *ud) { static_cast<Counter *>(ud)->submitted++; }, &counter);
+
+agent::register_event_hook(session, agent::EventType::OnInferenceComplete,
+    [](const agent::Event &, void *ud) { static_cast<Counter *>(ud)->completed++; }, &counter);
+```
+
+For token counts, read `Conversation::stats` or `get_stats` (see [stats.md](stats.md)) rather than the payload, which is empty for these events.
 
 ### Track graph node transitions
 
 ```cpp
 agent::register_event_hook(session, agent::EventType::OnStateTransition,
     [](const agent::Event &ev, void *) {
-        std::string node(reinterpret_cast<const char*>(ev.payload.data()), ev.payload.size());
-        printf("graph entered node: %s\n", node.c_str());
+        printf("graph entered node: %.*s\n", (int)ev.payload.size(), (const char *)ev.payload.data());
     });
 ```
 
-For a full per-run record (node start/end, state writes, tool calls, checkpoints) use `GraphRun::events` instead; see [graph.md](graph.md#event-log).
-
-### Measure token usage with a custom accumulator
-
-```cpp
-struct TokenStats { int prompt = 0; int completion = 0; };
-TokenStats my_stats;
-
-agent::register_event_hook(session, agent::EventType::OnInferenceComplete,
-    [](const agent::Event &, void *ud) {
-        auto *st = static_cast<TokenStats*>(ud);
-        // get_stats gives session-wide totals; subtract to get this turn's delta
-        // (or use Conversation::stats directly after run_turn)
-    },
-    &my_stats);
-```
-
-### Detect when a subagent finishes
-
-Fired once per successful branch of a graph `Parallel` node, on the calling thread after the branches have joined:
-
-```cpp
-agent::register_event_hook(session, agent::EventType::OnSubAgentComplete,
-    [](const agent::Event &ev, void *) {
-        std::string branch(reinterpret_cast<const char*>(ev.payload.data()), ev.payload.size());
-        printf("Subagent branch '%s' completed.\n", branch.c_str());
-    });
-```
+For a full record of a graph run (node starts and ends, state writes, tool calls, checkpoints), use `GraphRun::events` instead. See [graph.md](graph.md#event-log).
 
 ### Observe context management
 
 ```cpp
 agent::register_event_hook(session, agent::EventType::OnPrune,
-    [](const agent::Event &, void *) {
-        printf("Context pruned.\n");
-    });
+    [](const agent::Event &, void *) { printf("context pruned\n"); });
 
 agent::register_event_hook(session, agent::EventType::OnCompression,
-    [](const agent::Event &, void *) {
-        printf("Context compressed.\n");
+    [](const agent::Event &, void *) { printf("context compressed\n"); });
+```
+
+### Detect a finished parallel branch
+
+```cpp
+agent::register_event_hook(session, agent::EventType::OnSubAgentComplete,
+    [](const agent::Event &ev, void *) {
+        printf("branch '%.*s' completed\n", (int)ev.payload.size(), (const char *)ev.payload.data());
     });
 ```
 
 ---
 
-## Combining with ToolHooks
+## Event hooks or tool hooks
 
-`EventHook` and `ToolHook` (set per graph Agent node in `GraphNode::hooks`) serve different purposes:
+`EventHook` (this page) and `ToolHook` (set on a graph Agent node through `GraphNode::hooks`) serve different purposes:
 
 | | `EventHook` | `ToolHook` |
 |---|---|---|
-| Scope | Session-wide; fires for all conversations | Node-specific; fires only while that Agent node runs |
-| Tool visibility | `OnToolCall` fires for all tools | Can be narrowed to a specific `tool_name` |
-| Result access | `OnToolResult` provides result bytes | `ToolHook::Post` receives `std::string_view result` and the node's `Conversation` |
-| Use case | Telemetry, logging, dashboards | Node-scoped auditing and logging |
+| Scope | Whole session; every conversation and every graph node | Only while its Agent node runs |
+| Tools | `OnToolCall` / `OnToolResult` fire for every tool | Can be limited to one `tool_name` |
+| Tool result | Payload bytes (`OnToolResult`) | `result` string in `Post`, plus the node's `Conversation` |
+| Typical use | Telemetry, logs, dashboards | Auditing one part of a graph |
 
-Use both together for comprehensive observability:
+A typical pairing: an event hook for session-wide timing, and a tool hook on the one node that must log a specific tool:
 
 ```cpp
-// Session-wide latency measurement
+// Session-wide: time each model call
 agent::register_event_hook(session, agent::EventType::OnInferenceSubmit, start_timer, &timer);
 agent::register_event_hook(session, agent::EventType::OnInferenceComplete, stop_timer, &timer);
 
-// Node-scoped warning (via ToolHook, not EventHook)
+// Node-scoped: warn before an agent deletes a path
 worker_node.hooks = {
-    { .when = agent::ToolHook::When::Pre,
+    { .when      = agent::ToolHook::When::Pre,
       .tool_name = "delete_path",
-      .callback = [](agent::Session &, agent::Conversation &, std::string_view, std::string_view args,
-                     std::string_view, void *) {
-          printf("[WARN] agent is about to delete: %s\n", std::string(args).c_str());
-      }
-    },
+      .callback  = [](agent::Session &, agent::Conversation &, std::string_view, std::string_view args,
+                      std::string_view, void *) {
+          printf("[warn] deleting: %.*s\n", (int)args.size(), args.data());
+      } },
 };
 ```
+
+Tool hooks are described in [graph.md](graph.md#tool-hooks).
+
+---
+
+## Related pages
+
+- [conversation.md](conversation.md): the turn that fires most of these events
+- [stats.md](stats.md): counts that do not need hooks
+- [graph.md](graph.md): graph nodes, `GraphRun::events` and tool hooks

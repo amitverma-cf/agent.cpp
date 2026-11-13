@@ -1,62 +1,64 @@
 # Guide: embedding the library
 
-This guide installs agent.cpp, links it into your own CMake project and runs a first chat turn on a
-local GGUF model through the llama engine plugin, with the engine in its own sandboxed process.
+This guide builds a small C++ program on top of agent.cpp: a local chat model answers a question, calls a tool of
+yours through a permission gate, and runs the engine in its own sandboxed process. It walks through the three
+entry points you will use:
 
-The shortest version of this program is [`examples/01-hello-agent/hello.cpp`](../../examples/01-hello-agent/hello.cpp) (four lines
-of setup with `agent::open_session`); this guide spells out the configuration behind it so you can change any of it. Build and run the
-examples as described in [examples/README.md](../../examples/README.md).
+- `agent::open_session(engine, model)`: one call for the common case, all defaults.
+- `agent::engine_config(engine, models, options, base)`: builds a `Config` for an engine and its model files.
+- `agent::init(config)`: starts the session from that `Config`.
+
+The examples in [`examples/`](../../examples/README.md) take no arguments and name their model files at the top of
+`main()`. The program below combines [`hello`](../../examples/01-hello-agent/hello.cpp) and
+[`tools`](../../examples/02-tools/tools.cpp) and adds the isolation settings.
 
 ## 1. Build and install agent.cpp
 
+Follow [getting-started.md](../getting-started.md#build) for the prerequisites, then install the library, the CLI, the
+engine host and the engine plugins into a prefix:
+
 ```sh
-git clone https://github.com/amitverma-cf/agent.cpp && cd agent.cpp
-git submodule update --init --depth 1 vendor/simdjson vendor/llama.cpp
+git clone --recurse-submodules https://github.com/amitverma-cf/agent.cpp && cd agent.cpp
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-cmake --install build --prefix $HOME/.local/agent
+cmake --install build --prefix $HOME/agent-cpp
 ```
 
-The prefix now holds the library and headers, the `agent` CLI, the out-of-process engine host and the
-engine plugins (layout in [packaging.md](../packaging.md)):
-
-```
-bin/agent  bin/agent-engine-host
-include/agent-cpp/agent.hpp  engine_abi.h  store_sqlite.hpp  hub.hpp
-lib/libagent.a  libagent_store_sqlite.a  libagent_hub.a
-lib/agent/engines/agent-engine-llama.so
-lib/cmake/agent-cpp/
-```
-
-Get a model: any chat GGUF works, for example
-[Qwen2.5-0.5B-Instruct Q4_K_M](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF) (~400 MB), or
-`agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M` with the CLI.
+The prefix holds the library and headers, the engine host, and the plugins (layout in [packaging.md](../packaging.md)).
 
 ## 2. Your project
 
 ```cmake
 cmake_minimum_required(VERSION 3.21)
 project(my_agent CXX)
+include(GNUInstallDirs)
 
-find_package(agent-cpp 0.1 REQUIRED)
+# Ask for the llama engine. CMake fails here, with a message, if the install does not have it.
+find_package(agent-cpp 0.1 REQUIRED COMPONENTS llama)
 
 add_executable(my_agent main.cpp)
 target_link_libraries(my_agent PRIVATE agent-cpp::agent)
-# The engine host is found next to the executable, in ../bin, on PATH or through $AGENT_ENGINE_HOST.
-# For a program that lives elsewhere, bake in the installed one:
-target_compile_definitions(my_agent PRIVATE AGENT_HOST_PATH="${agent-cpp_ENGINE_HOST}")
+
+# Copies the llama plugin and agent-engine-host next to my_agent (in engines/ and in the build folder),
+# and installs them with the program. Engines you do not name are not copied.
+agent_deploy_engines(my_agent llama)
+
+install(TARGETS my_agent RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 ```
 
+Configure with the prefix from step 1:
+
 ```sh
-cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/.local/agent
+cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/agent-cpp
 cmake --build build
 ```
 
-`agent-cpp::store_sqlite` (SQLite memory store, checkpointer, sqlite-vec) and `agent-cpp::hub`
-(Hugging Face downloads) are optional extra targets. The package also sets `agent-cpp_ENGINE_DIR`
-(`<prefix>/lib/agent/engines`) and `agent-cpp_ENGINE_HOST` (`<prefix>/bin/agent-engine-host`).
+`agent-cpp::store_sqlite` (SQLite memory store, checkpointer, sqlite-vec) and `agent-cpp::hub` (Hugging Face downloads)
+are optional extra targets; link them only if you use them.
 
-## 3. The first program
+## 3. The program
+
+Save this as `main.cpp`:
 
 ```cpp
 #include <agent-cpp/agent.hpp>
@@ -66,108 +68,125 @@ cmake --build build
 
 namespace {
 
+// A tool is a function from a JSON argument string to a JSON result. The model decides when to call it.
+agent::Result<std::string> get_weather(std::string_view arguments, void *) {
+    std::printf("[tool] get_weather(%.*s)\n", static_cast<int>(arguments.size()), arguments.data());
+    return agent::ok(std::string(R"({"city":"Paris","temperature_c":18,"sky":"light rain"})"));
+}
+
+// The permission gate runs before every tool call: Allow, Deny, or Ask (Ask needs Config::permission_prompt).
+agent::PermissionDecision gate(std::string_view tool, std::string_view, void *) {
+    return tool == "run_command" ? agent::PermissionDecision::Deny : agent::PermissionDecision::Allow;
+}
+
 void print_token(std::string_view token, void *) {
     std::fwrite(token.data(), 1, token.size(), stdout);
-    std::fflush(stdout);
 }
 
 } // namespace
 
-int main(int argc, char **argv) {
-    if (argc < 3) {
-        std::fprintf(stderr, "usage: %s <engine plugin or name> <model> [prompt] [workspace]\n", argv[0]);
-        return 2;
-    }
+int main() {
+    agent::AgentRuntime runtime; // starts the process-wide backends; frees them at exit
 
-    agent::AgentRuntime runtime; // process-wide backend init/teardown
+    // The settings every session needs. base is passed to engine_config, which fills in the engine and its model.
+    agent::Config base;
+    base.workspace_dir = ".agent"; // init() creates it; file tools stay inside it
+    base.context_window = 4096;
+    base.max_tokens = 256;
+    base.permission_check = gate;
+    base.tools.push_back(agent::Tool{
+        .name = "get_weather",
+        .description = "Current weather in a city.",
+        .parameter_schema = R"({"type":"object","properties":{"city":{"type":"string"}},"required":["city"]})",
+        .callback = get_weather,
+    });
 
-    agent::Config cfg;
-    cfg.provider = agent::AiProvider::Engine;
-    cfg.engine = argv[1]; // "llama" (agent::engines::llama), another shipped engine, or the path of a plugin
-    cfg.model = argv[2];
-    cfg.workspace_dir = argc > 4 ? argv[4] : ".workspace";
-    cfg.context_window = 4096;
-    cfg.max_tokens = 256;
+    // Run the engine in an agent-engine-host child. A crash there fails the call (EngineCrashed); this process survives.
+    base.engine_isolation = agent::EngineIsolation::Process;
+    base.engine_timeout_ms = 5 * 60 * 1000;               // watchdog per request
+    base.engine_sandbox.memory_limit_bytes = 8ull << 30;  // address-space cap for the host
+    base.tool_sandbox.network = agent::SandboxNetwork::Deny; // run_command gets no network
 
-    // Run the engine in an agent-engine-host child: a crash or abort() in the engine fails the call with
-    // ErrorCode::EngineCrashed and the next call restarts the host; this process survives.
-    cfg.engine_isolation = agent::EngineIsolation::Process;
-    cfg.engine_timeout_ms = 5 * 60 * 1000; // watchdog per request
+    // Name the engine and each model file by role. "model" is the chat model; other engines take other roles.
+    const agent::ModelSlot models[] = {{"model", "models/qwen2.5-0.5b-instruct-q4_k_m.gguf"}};
+    auto cfg = agent::engine_config(agent::engines::llama, models, /*extra_options_json=*/{}, base);
+    if (!cfg.ok) return std::fprintf(stderr, "config: %s\n", cfg.error.message.c_str()), 1;
 
-    // The host's OS sandbox (Config::engine_sandbox) is on by default: plugin dir + model read-only,
-    // workspace read-only, workspace/artifacts read-write, no network, no /tmp. Add a memory cap:
-    cfg.engine_sandbox.memory_limit_bytes = 8ull << 30; // RLIMIT_AS of the host
+    auto session = agent::init(cfg.value);
+    if (!session.ok) return std::fprintf(stderr, "init: %s\n", session.error.message.c_str()), 1;
 
-    // run_command (a default tool) runs in its own sandbox (Config::tool_sandbox, on by default): the
-    // workspace read-write, system dirs read-only. The network is allowed by default; turn it off:
-    cfg.tool_sandbox.network = agent::SandboxNetwork::Deny;
-
-    auto sess = agent::init(cfg);
-    if (!sess.ok) {
-        std::fprintf(stderr, "init failed: %s\n", sess.error.message.c_str());
-        return 1;
-    }
-    agent::Session session = std::move(sess.value);
-
-    agent::Conversation conversation;
-    conversation.id = "getting-started";
-    const char *prompt = argc > 3 ? argv[3] : "Say hello in one short sentence.";
-
-    auto reply = agent::run_turn(session, conversation, prompt, /*stream=*/true, print_token);
+    agent::Conversation chat;
+    auto reply = agent::run_turn(session.value, chat,
+                                 "What is the weather in Paris right now? Use the get_weather tool.",
+                                 /*stream=*/true, print_token);
     std::printf("\n");
-    if (!reply.ok) {
-        std::fprintf(stderr, "turn failed (%d): %s\n", static_cast<int>(reply.error.code), reply.error.message.c_str());
-        return 1;
-    }
+    if (!reply.ok) return std::fprintf(stderr, "turn: %s\n", reply.error.message.c_str()), 1;
 
-    const agent::SessionStats stats = agent::get_stats(session);
-    std::printf("turns=%d prompt_tokens=%d completion_tokens=%d\n", stats.total_turns, stats.total_prompt_tokens,
-                stats.total_completion_tokens);
+    std::printf("tool calls: %d\n", agent::get_stats(session.value).total_tool_calls);
     return 0;
 }
 ```
 
-In your own program, `agent::engine_config(agent::engines::llama, ...)` builds the same `Config` in one call; the example takes the
-engine from the command line so the tests can run it on the mock engine. (The example file also installs a `Config::logger` that prints warnings; set
-`cfg.engine_host_path = AGENT_HOST_PATH;` if you used the compile definition above.)
+The rest of the API follows the same pattern:
 
-```sh
-./build/my_agent $HOME/.local/agent/lib/agent/engines/agent-engine-llama.so \
-                 ~/models/qwen2.5-0.5b-instruct-q4_k_m.gguf "What is a KV cache?"
-```
+- `engine_config` copies `base` and adds the engine name, the model files and (optionally) the engine's own options as a
+  JSON object in `extra_options_json`. The engine options are engine-specific; see [api/engines.md](../api/engines.md).
+- `init` returns a `Result<Session>`. `run_turn` takes the session and a `Conversation`; keep as many conversations as you
+  like per session. Keep one `run_turn` in flight per session.
+- A model that takes several files is opened the same way, with one `ModelSlot` per role, for example
+  `{{"model", "sd.gguf"}, {"vae", "vae.gguf"}}` for the sdcpp engine.
+- The shortest form is `agent::open_session(agent::engines::llama, "models/qwen2.5-0.5b-instruct-q4_k_m.gguf")`. It
+  uses `.agent` as the workspace and the library defaults for everything else. Pass a `Config` as the third argument to
+  change any of them.
 
 Things to know:
 
-- **Errors are values.** Every fallible call returns `agent::Result<T>`: check `.ok`, then use
-  `.value` or `.error.code` / `.error.message`. Nothing throws.
-- **`AgentRuntime`** initialises and frees process-wide backends; create one in `main`.
-- **`Session`** owns the engine instance, the tools, the memory store and the per-turn `Arena`.
-  It is move-only. One `run_turn` at a time per Session.
-- **`Conversation`** is one conversation (its history and stats). Keep as many as you like per Session;
-  `save_conversation` / `load_conversation` persist them through the memory store.
-- **The workspace** (`workspace_dir`) is created by `init()`. Filesystem tools are confined to it
-  (`sandbox_filesystem`, default true) and generated media lands in `<workspace>/artifacts/`.
+- **Errors are values.** Every fallible call returns `agent::Result<T>`: check `.ok`, then use `.value` or
+  `.error.code` / `.error.message`. Nothing throws.
+- **`AgentRuntime`** starts and frees the process-wide backends. Create one in `main`, before any session.
+- **`Session`** owns the engine instance, the tools, the memory store and the turn arena. It is move-only.
+- **`Conversation`** is one conversation: its history and stats. `save_conversation` and `load_conversation` store it
+  through the session's memory store.
+- **The workspace** (`workspace_dir`) must be set, because `init()` does not guess it (`open_session` does). It is created
+  with `models/`, `memory/`, `logs/` and `tmp/` folders. Generated files go to `<workspace>/artifacts/`.
 
-## 4. Isolation and sandbox defaults
+## 4. Run it
 
-| Setting | Default | In this program |
-|---|---|---|
-| `engine_isolation` | `Default` = in process (unless an engines.json entry says otherwise) | `Process` |
-| `engine_sandbox` | on: plugin + model read-only, workspace read-only, `artifacts/` read-write, no network, no `/tmp` | + 8 GiB `RLIMIT_AS` |
-| `tool_sandbox` (`run_command`) | on: workspace read-write, system dirs read-only, `/tmp` read-write, network allowed | network denied |
-| `sandbox_filesystem` (file tools) | on: paths must resolve inside the workspace | default |
-| `permission_check` | none: every tool call is allowed | default ([writing-a-tool.md](writing-a-tool.md) adds one) |
+The model path and the workspace are relative to the working directory. Put the model at
+`models/qwen2.5-0.5b-instruct-q4_k_m.gguf` in the folder you run the program from. The repository's download script
+fetches this file (and the others the examples use) into `./models` when it is run from that folder:
 
-In process is the fastest (a turn costs about 1 µs of overhead instead of 10 to 90 µs through the host,
-see [benchmarks](../benchmarks.md)), but a crash in the engine takes your process with it. Process
-isolation is what the `agent` CLI uses. If the engine needs files outside the model's directory (a
-projector, voices, a LoRA), name them in `engine_options`: the directory of every string value that looks
-like a path is added to the sandbox read-only; anything else goes in `engine_sandbox.read_only_paths`.
-Details: [security-sandbox.md](../security-sandbox.md), [api/engines.md](../api/engines.md#isolation).
+```sh
+cd ~/my_agent_run                                # any folder you like
+~/agent.cpp/examples/download-models.sh          # writes ./models (about 2.7 GB for all examples)
+~/my_agent/build/my_agent                        # the program; the engine is found in build/engines/
+```
+
+The first run creates `.agent/` in that folder. The output is the streamed answer, one `[tool] get_weather(...)` line for the tool call,
+and the number of tool calls.
+
+## 5. Isolation and sandbox settings
+
+| Setting | Library default | This program | What it does |
+|---|---|---|---|
+| `engine_isolation` | `Default`, which means in process (the CLI uses process) | `Process` | Runs the engine in `agent-engine-host`; a crash fails the call instead of the program. |
+| `engine_sandbox` | on, applies only under `Process` | on, `memory_limit_bytes` = 8 GiB | The host can read the plugin, the model and the workspace; it can write only `artifacts/`, the workspace `tmp/` and `/dev/shm`; no network, no `/tmp`. |
+| `engine_timeout_ms` | `0` (none) | 5 minutes | The host is killed if one request takes longer. |
+| `tool_sandbox` (for `run_command`) | on, network allowed | network `Deny` | `run_command` runs with the workspace writable and system folders read-only. |
+| `sandbox_filesystem` (file tools) | on | default | File tools accept only paths that resolve inside the workspace, symlinks included. |
+| `permission_check` | none (every call allowed) | `gate` | Decides each tool call before its callback runs. |
+
+Process isolation costs about 40 microseconds per turn on the measurement machine (under 1 microsecond in process), which is
+small next to a model call. Details: [benchmarks.md](../benchmarks.md), [security-sandbox.md](../security-sandbox.md),
+[api/engines.md](../api/engines.md#isolation).
+
+If the engine needs files outside the model's folder (a projector, voices, a LoRA), name them in `engine_options` (the folder
+of each path-like string is added read-only), or list them in `engine_sandbox.read_only_paths`.
 
 ## Next
 
 - [Writing a tool](writing-a-tool.md): custom tools, the permission gate, hooks, MCP servers.
 - [Writing a graph](writing-a-graph.md): multi-step workflows in C++ or `agent.json`.
 - [Writing an engine](writing-an-engine.md): wrap another inference library as a plugin.
+- [Examples](../../examples/README.md): the ten example programs and the models they use.
 - [API reference](../index.md#documentation-map).

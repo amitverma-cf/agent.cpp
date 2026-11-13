@@ -2,111 +2,136 @@
 
 `#include <agent-cpp/agent.hpp>`
 
-`libagent` has a pluggable key-value store, selected through `MemoryConfig::store` (a `StoreOps` function-pointer table). It persists conversation history after every turn, and you can use it directly to store any application data. (For RAG/vector search, see [data-sources.md](data-sources.md); that's a separate mechanism, not part of this KV store.)
+Memory is the session's key-value store. The library uses it to save conversation history after each turn, and you can use it for your own data. Memory is a plain string-to-string store; it is not vector search (for that, see [rag.md](rag.md)).
 
-The core library ships only an **in-memory** store, which is the default and has no dependencies; nothing persists past the `Session`. Durable storage comes from the optional **`agent_store_sqlite`** library (used by the agent CLI), or from your own `StoreOps`.
+Two backends exist:
+
+- **In-memory** (the default): built into the library, no dependencies, nothing survives the session.
+- **SQLite**: durable, from the optional `agent_store_sqlite` library. The agent CLI uses it.
+
+You can also supply your own backend with a `StoreOps` table.
 
 ---
 
 ## MemoryConfig
 
+Set on `Config::memory` before `init` (or passed through `open_session`'s `base` argument).
+
 ```cpp
 struct MemoryConfig {
-    const StoreOps *store = nullptr;   // nullptr = built-in in-memory store
-    std::string     db_path;           // backend-specific; empty = backend default
+    const StoreOps *store = nullptr;   // nullptr = the built-in in-memory store
+    std::string     db_path;           // backend-specific location; empty = the backend's default
 
-    // Write-back cache tuning (used by the SQLite store)
-    size_t max_cache_bytes             = 16 * 1024 * 1024;  // 16 MiB
-    size_t flush_dirty_threshold_bytes = 4 * 1024 * 1024;   // 4 MiB
+    // Write-back cache tuning (used by the SQLite store; ignored by the in-memory store)
+    size_t max_cache_bytes             = 16 * 1024 * 1024;   // 16 MiB
+    size_t flush_dirty_threshold_bytes = 4 * 1024 * 1024;    // 4 MiB
     int    flush_interval_ms           = 500;
 };
 ```
 
+---
+
 ## StoreOps
+
+A backend is a table of four functions. The library does not check the implementation; `init` fails with `InvalidConfig` when one of them is missing.
 
 ```cpp
 struct StoreOps {
     using OpenFn  = Result<std::shared_ptr<void>> (*)(const MemoryConfig &config, std::string_view workspace_dir);
     using PutFn   = Result<void> (*)(void *state, std::string_view key, std::string_view value);
-    using GetFn   = Result<std::string> (*)(void *state, std::string_view key);   // KeyNotFound if missing
+    using GetFn   = Result<std::string> (*)(void *state, std::string_view key);   // KeyNotFound if the key is missing
     using ClearFn = Result<void> (*)(void *state);
 
-    OpenFn open; PutFn put; GetFn get; ClearFn clear;
+    OpenFn  open  = nullptr;
+    PutFn   put   = nullptr;
+    GetFn   get   = nullptr;
+    ClearFn clear = nullptr;
 };
 ```
 
-`open` runs once from `init()`. The state it returns is kept in `Session::memory_state` and passed to every other call. All four functions must be set, and they must be safe to call from multiple threads (parallel graph branches run turns concurrently).
+- `open` runs once, from `init`. The state it returns is kept in `Session::memory_state` and passed to the other three functions.
+- All four must be safe to call from several threads. Parallel graph branches run turns at the same time, and each turn writes history.
 
 ---
 
-## SQLite store (`agent_store_sqlite`)
+## In-memory store
 
-```cpp
-#include <agent-cpp/store_sqlite.hpp>   // link agent_store_sqlite
+The default when `MemoryConfig::store` is `nullptr`. It is a hash map behind a mutex. Everything is lost when the session is destroyed. It needs no configuration.
 
-cfg.memory = {
-    .store   = agent::store::sqlite_store(),
-    .db_path = ".workspace/memory/db.sqlite3",   // empty = <workspace>/memory/db.sqlite3
-};
+---
+
+## SQLite store
+
+Link the `agent-cpp::store_sqlite` target. With the installed package:
+
+```cmake
+find_package(agent-cpp 0.1 REQUIRED)
+target_link_libraries(my_app PRIVATE agent-cpp::agent agent-cpp::store_sqlite)
 ```
 
-`db_path = ":memory:"` gives an ephemeral SQLite database through the same code path.
-
-### How it works: a bounded write-back cache in front of SQLite
-
-`store_memory`/`retrieve_memory` never talk to SQLite directly on the calling thread. Instead:
-
-- **All reads and writes hit an in-memory cache first.** The cache is the single source of truth from the caller's perspective — a `store_memory` immediately followed by a `retrieve_memory` for the same key always sees the value you just stored, with no round-trip to disk in between.
-- **Writes mark entries dirty.** A single background writer thread flushes dirty entries to SQLite whenever `flush_dirty_threshold_bytes` of dirty data has accumulated, or every `flush_interval_ms`, whichever comes first — batching many pending writes into one SQLite transaction instead of committing on every single `store_memory` call, which is the actual throughput win here.
-- **On a cache miss**, `retrieve_memory` reads through to SQLite and populates the cache with the result.
-- **Once the cache exceeds `max_cache_bytes`**, least-recently-used *clean* (already-flushed) entries are evicted to bring it back under budget. Dirty entries are never evicted — eviction can't drop data that hasn't been durably written yet.
-- **On `Session` destruction**, the writer thread performs one final flush of everything still dirty and joins before the connections close, so a `store_memory` followed immediately by process exit doesn't lose that write.
-
-The durability guarantee underneath all of this is standard SQLite: the database is opened in WAL journal mode with `synchronous=NORMAL`, which is the standard safe-and-fast combination — once a flush commits, that data survives a crash. The cache is a performance layer in front of that guarantee, not a replacement for it.
+Then include its header:
 
 ```cpp
-cfg.memory = {
-    .store   = agent::store::sqlite_store(),
-    .db_path = ".workspace/memory/db.sqlite3",   // parent directory created automatically
-    .max_cache_bytes = 32 * 1024 * 1024,         // tune for your working-set size
-};
+#include <agent-cpp/store_sqlite.hpp>
+
+agent::Config base;
+base.workspace_dir = "work";
+base.memory.store   = agent::store::sqlite_store();
+base.memory.db_path = "work/memory/db.sqlite3";   // empty = <workspace>/memory/db.sqlite3
+
+auto session = agent::open_session(agent::engines::llama, "model.gguf", base);
 ```
 
-**Concurrency**: the cache is protected by a single mutex, so `store_memory`/`retrieve_memory` are safe to call concurrently from multiple threads — including from parallel graph branches (see [graph.md](graph.md#parallel-execution)), whose turns already call `store_memory` after every turn via the conversation-history auto-persist below. This is built thread-safe uniformly rather than assuming a particular access pattern. That single mutex is also a shared serialization point across every concurrent `store_memory`/`retrieve_memory` call — fine at the default `Config::max_parallel_subagents = 4`, but worth keeping in mind as a scaling ceiling if that value is raised substantially for a larger deployment.
+`db_path` can be a file path, `":memory:"` (an ephemeral database that goes through the same code path), or empty. The parent folder of a file path is created when needed.
+
+### How it works
+
+Reads and writes go through an in-memory cache, and SQLite is updated in the background:
+
+- **The cache is the source of truth for the caller.** A `store_memory` followed by `retrieve_memory` on the same key returns the new value at once, without touching the disk.
+- **Writes are marked dirty and flushed in batches.** A background thread writes them in one transaction when `flush_dirty_threshold_bytes` of dirty data has built up, or every `flush_interval_ms`, whichever comes first.
+- **A read miss loads the value from SQLite** and puts it in the cache.
+- **The cache stays within `max_cache_bytes`.** Least recently used clean entries are evicted when it grows past that. Dirty entries are never evicted before they are written.
+- **Closing the session flushes everything** that is still dirty before the connections close, so a write just before exit is kept.
+- **Durability** comes from SQLite itself: the database uses WAL journal mode with `synchronous=NORMAL`. Once a flush has committed, the data survives a crash.
+
+`clear_memory` clears the cache at once and runs `DELETE FROM kv` on the writer thread. It returns after the delete has finished.
+
+A single mutex guards the cache. It is safe to call from several threads, but every call takes that lock. For large numbers of parallel graph branches this can become a bottleneck.
+
+### Tuning
+
+```cpp
+base.memory.max_cache_bytes             = 32 * 1024 * 1024;  // a larger working set
+base.memory.flush_dirty_threshold_bytes = 1 * 1024 * 1024;   // flush sooner
+base.memory.flush_interval_ms           = 200;
+```
 
 ---
 
 ## API
 
-### init_memory
+These work on a `Session`. The store is initialised by `init`, so you do not call `init_memory` yourself.
 
 ```cpp
-Result<void> init_memory(Session &session);
+Result<void>        init_memory(Session &session);                                       // called by init
+Result<void>        store_memory(Session &session, std::string_view key, std::string_view value);
+Result<std::string> retrieve_memory(Session &session, std::string_view key);
+Result<void>        clear_memory(Session &session);
 ```
-
-Initialises the memory backend. Called automatically by `init()`. You do not need to call this manually.
 
 ### store_memory
 
-```cpp
-Result<void> store_memory(Session &session, std::string_view key, std::string_view value);
-```
-
-Write (upsert) a key-value pair. Keys and values are arbitrary UTF-8 strings.
+Writes a key, replacing any previous value. Keys and values are UTF-8 strings of any length the backend accepts.
 
 ```cpp
-agent::store_memory(session, "user:theme",       "dark");
-agent::store_memory(session, "agent:last_task",  "fibonacci computation");
-agent::store_memory(session, "cache:fib_result", "0,1,1,2,3,5,8,13,21,34");
+agent::store_memory(session, "user:theme",      "dark");
+agent::store_memory(session, "agent:last_task", "fibonacci computation");
 ```
 
 ### retrieve_memory
 
-```cpp
-Result<std::string> retrieve_memory(Session &session, std::string_view key);
-```
-
-Read a value by key. Returns `ErrorCode::KeyNotFound` if the key does not exist.
+Reads a key. A missing key returns `ErrorCode::KeyNotFound`.
 
 ```cpp
 auto r = agent::retrieve_memory(session, "user:theme");
@@ -118,21 +143,20 @@ else if (r.error.code == agent::ErrorCode::KeyNotFound)
 
 ### clear_memory
 
-```cpp
-Result<void> clear_memory(Session &session);
-```
-
-Delete all key-value pairs — clears the in-memory cache immediately, and hands the actual `DELETE FROM kv` off to the background writer thread, blocking until it completes. When `clear_memory` returns, the data is actually gone (not "eventually will be").
+Deletes every key in the store, including conversation history. With the SQLite store the data is gone from the database when the call returns.
 
 ---
 
-## Conversation history storage
+## Conversation history keys
 
-After every successful `run_turn`, the conversation history and stats are serialised to JSON via `save_conversation` and stored under `"history:<Conversation::id>"` (history) and `"history_stats:<Conversation::id>"` (`Conversation::stats`). This allows histories to be inspected, exported, or resumed.
+After each successful `run_turn`, the conversation is saved as JSON under two keys (see [conversation.md](conversation.md#history-persistence)):
 
-`run_turn` only ever writes these keys — it never reads them back. To resume a conversation after a process restart, call `load_conversation(session, memory)` explicitly (see [conversation.md](conversation.md#history-persistence)); `save_conversation`/`load_conversation` can also be called directly outside `run_turn`.
+| Key | Value |
+|---|---|
+| `history:<Conversation::id>` | The messages as a JSON array |
+| `history_stats:<Conversation::id>` | The saved statistics (a JSON object) |
 
-The serialised format is a JSON array of objects:
+The messages look like this:
 
 ```json
 [
@@ -142,32 +166,38 @@ The serialised format is a JSON array of objects:
 ]
 ```
 
-You can read it back at any time:
+Tool calls appear as objects with `id`, `name` and `arguments`, and media appears as `media` entries with `path` and `mime`. Tensors are not saved.
+
+You can read the raw JSON at any time:
 
 ```cpp
 auto r = agent::retrieve_memory(session, "history:" + conv.id);
-if (r.ok) printf("history JSON: %s\n", r.value.c_str());
+if (r.ok) printf("history: %s\n", r.value.c_str());
 ```
 
-This persisted JSON is separate from the in-memory `Conversation::history`. The live history is the authoritative source for what the model sees; the persisted JSON (now durable via the write-back cache + SQLite above) is a snapshot for observability and recovery.
+The live `Conversation::history` is what the model sees. The stored JSON is a copy, kept for inspection and recovery. `run_turn` writes it but never reads it back. To resume a conversation, call `load_conversation`.
 
 ---
 
-## Custom storage keys
+## Your own keys
 
-Use any string key that does not start with `"history:"` or `"history_stats:"` (reserved for auto-persist):
+Any other key is yours. Do not use keys that start with `history:` or `history_stats:`; those belong to the conversation saves.
 
 ```cpp
-// Store agent configuration
 agent::store_memory(session, "cfg:max_depth", "5");
-
-// Store computed results
 agent::store_memory(session, "result:plan_v3", plan_text);
-
-// Tag a completed milestone
 agent::store_memory(session, "milestone:research_done", "1");
 
-// Read back
-auto cfg_r = agent::retrieve_memory(session, "cfg:max_depth");
-auto plan_r = agent::retrieve_memory(session, "result:plan_v3");
+auto depth = agent::retrieve_memory(session, "cfg:max_depth");
 ```
+
+Values are plain strings. Store JSON text yourself if you need structure.
+
+---
+
+## Related pages
+
+- [session.md](session.md): `Config::memory` and session setup
+- [conversation.md](conversation.md): history persistence and `load_conversation`
+- [rag.md](rag.md): vector search, a separate mechanism from this store
+- [data-sources.md](data-sources.md): other sources of data for the model

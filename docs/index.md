@@ -18,6 +18,7 @@ agent.cpp is a local, offline-first AI agent in two parts:
 | embed the runtime in a C++ program | [Getting started](getting-started.md#use-the-library), [Guide: embedding the library](guides/getting-started-library.md) |
 | add a model engine | [Guide: writing an engine plugin](guides/writing-an-engine.md) |
 | write tools, graphs or workflows | [Guide: writing a tool](guides/writing-a-tool.md), [Guide: writing a graph](guides/writing-a-graph.md) |
+| see how it compares with llama.cpp, Ollama, LangChain or hosted APIs | [How agent.cpp compares](comparison.md) |
 
 ## Documentation map
 
@@ -67,6 +68,12 @@ agent.cpp is a local, offline-first AI agent in two parts:
 | [API — Stats](api/stats.md) | `TurnStats`, `SessionStats`, `get_stats` |
 | [API — Model registry](api/models.md) | `ModelRegistry`: lazy loading under a RAM/VRAM budget, LRU unload, leases |
 | [API — Model hub](api/hub.md) | `agent_hub`: Hugging Face downloads, `models.json`, licence policy |
+
+### Background
+
+| Document | What it covers |
+|---|---|
+| [How agent.cpp compares](comparison.md) | agent.cpp next to llama.cpp, Ollama and LM Studio, LangChain and LlamaIndex, and hosted APIs; what it is good at and what it is not |
 
 ### Operations and status
 

@@ -3,7 +3,8 @@
 #   agent-cpp::store_sqlite  optional SQLite KV store + sqlite-vec vector store (<agent-cpp/store_sqlite.hpp>)
 #   agent-cpp::hub           optional Hugging Face model downloader (<agent-cpp/hub.hpp>), if it was built
 #   agent-cpp::engine_abi    header-only plugin ABI (<agent-cpp/engine_abi.h>) for engine plugins
-# Functions (agent-cppEngine.cmake): agent_add_engine(), agent_install_engine().
+# Functions (agent-cppEngine.cmake): agent_add_engine(), agent_install_engine(), agent_deploy_engines().
+# Components: graph mcp rag models (library parts) and llama audiocpp sdcpp trellis onnx (installed engines).
 # Variables: agent-cpp_ENGINE_DIR (installed plugins), agent-cpp_ENGINE_HOST (agent-engine-host).
 @PACKAGE_INIT@
 

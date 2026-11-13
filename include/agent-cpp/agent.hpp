@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <initializer_list>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -802,8 +803,6 @@ Result<void> clear_provider_kv_cache(Session &session);
 // approval. See docs/api/graph.md. Graphs are built once at setup (owning strings are fine there);
 // the per-turn inference path inside Agent nodes is the ordinary arena-backed run_turn.
 // ============================================================================================
-
-#include <map>
 
 namespace agent {
 

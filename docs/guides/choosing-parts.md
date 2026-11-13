@@ -16,6 +16,8 @@ larger parts are switches in CMake, and every engine is its own plugin you build
 | ONNX Runtime engine | `AGENT_ENGINE_ONNX` (ON) | generic ONNX models |
 | `agent` command | `AGENT_BUILD_CLI` (ON) | the CLI (it needs every library part above) |
 
+The graph runtime uses the model registry (agent nodes can name their own model), so `AGENT_WITH_GRAPH=ON` turns `AGENT_WITH_MODELS` on by itself.
+
 A small embedded build, with a chat engine and nothing else:
 
 ```sh

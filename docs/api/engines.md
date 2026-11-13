@@ -6,30 +6,97 @@ An **engine** is a shared library wrapping an inference project (llama.cpp, audi
 stable-diffusion.cpp, TRELLIS.2, ...). The core loads engines at runtime, so nothing is
 compiled in. Each plugin carries its own copy of ggml or ONNX Runtime.
 
-## Using an engine
+This page covers how to choose an engine, how the core finds and runs one, and the option reference for each shipped
+engine. Writing your own engine is in [Writing an engine](#writing-an-engine).
 
-Your own engine (see [writing an engine](../guides/writing-an-engine.md)) is a name away:
+## Choosing an engine
 
-```cpp
-agent::engines::add("echo", "/opt/myapp/plugins/agent-engine-echo.so");     // optionally: , agent::EngineIsolation::Process
-auto cfg = agent::engine_config("echo", models, {}, base);                  // use it like the shipped ones
-agent::engines::remove("echo");
-```
-
-`agent::engines::add` gives a plugin file a name, `list()` returns every name known, and `remove()` forgets one. The plugin is loaded
-when a session first uses it. `load_engine_manifest` does the same for a whole `engines.json`.
-
+The shortest way to a session is one engine and one model file. Everything else takes its default, and the workspace is
+`.agent`:
 
 ```cpp
-agent::Config cfg;
-cfg.provider       = agent::AiProvider::Engine;
-cfg.engine         = std::string(agent::engines::llama);  // or the path of a plugin file
-cfg.model          = ".workspace/models/model.gguf";
-cfg.engine_options = R"({"gpu_layers": 99})";            // engine-specific, optional
-cfg.workspace_dir  = ".workspace";
-
-auto session = agent::init(cfg);
+auto session = agent::open_session(agent::engines::llama, "model.gguf");
 ```
+
+An engine that takes several model files gets them by role:
+
+```cpp
+auto session = agent::open_session(agent::engines::sdcpp, {{"model", "sd.gguf"}, {"vae", "vae.gguf"}});
+```
+
+The roles belong to the engine; each engine's section below lists them. `"model"` sets `Config::model`. A dotted role such as
+`tts.model` goes inside a section of the engine options (`{"tts": {"model": ...}}`). The other roles go to
+`Config::engine_options`. Pass a `Config` as the last argument to change the workspace, the sandbox or any other setting.
+
+For full control, build the config with `engine_config` and pass it to `init`:
+
+```cpp
+agent::Config base;
+base.workspace_dir  = "my-workspace";
+base.context_window = 4096;
+
+const agent::ModelSlot models[] = {{"model", "models/model.gguf"}};
+auto cfg     = agent::engine_config(agent::engines::llama, models, R"({"gpu_layers": 99})", base);
+auto session = agent::init(cfg.value);
+```
+
+`engine_config` returns a `Result<Config>`. Change any field of `cfg.value` before calling `init()` if you need to.
+
+## One-shot tasks
+
+```cpp
+auto text  = agent::transcribe(session.value, "meeting.wav");                       // speech to text
+auto voice = agent::speak(session.value, "Hello there");                            // text to speech; files[0] is a WAV
+auto image = agent::draw(session.value, "a red bicycle", R"({"steps": 30})");       // image generation
+auto other = agent::perform(session.value, AGENT_CAP_DIARIZE, {}, "meeting.wav");   // any capability
+```
+
+Each call returns a `TaskOutput`. Its `text` is the text the engine produced, and its `files` are the files it wrote, under
+`<workspace>/artifacts/`. `draw` takes the engine's generation keys in `params_json`. `perform` takes one `AGENT_CAP_*` bit
+(from `<agent-cpp/engine_abi.h>`), an optional media path, and optional `params_json`. A task the engine does not declare
+fails with `UnsupportedProvider`.
+
+## Capabilities
+
+Every request carries one task, an `AGENT_CAP_*` bit. An engine declares the tasks it supports as a bit set in its
+`agent_engine_v1::caps`:
+
+| Bit | Task |
+|---|---|
+| `AGENT_CAP_TEXT_GEN` | chat and completion, with tool calls where the engine supports them |
+| `AGENT_CAP_TOOL_CALL` | the engine emits structured tool calls |
+| `AGENT_CAP_VISION_IN` | image parts in input |
+| `AGENT_CAP_AUDIO_IN` | audio parts in input |
+| `AGENT_CAP_VIDEO_IN` | video parts in input |
+| `AGENT_CAP_OCR` | text from an image |
+| `AGENT_CAP_ASR` | speech to text |
+| `AGENT_CAP_TTS` | text to speech |
+| `AGENT_CAP_VAD` | voice activity detection |
+| `AGENT_CAP_DIARIZE` | speaker diarization |
+| `AGENT_CAP_IMAGE_GEN` | image generation |
+| `AGENT_CAP_IMAGE_EDIT` | image to image |
+| `AGENT_CAP_VIDEO_GEN` | video generation |
+| `AGENT_CAP_MESH_GEN` | 3D mesh generation |
+| `AGENT_CAP_EMBED` | embeddings |
+| `AGENT_CAP_RERANK` | reranking |
+| `AGENT_CAP_DECIDE` | choice, score and yes/no decisions |
+| `AGENT_CAP_CLASSIFY` | classification |
+| `AGENT_CAP_GENERIC` | raw named tensors in and out |
+
+## Your own engines
+
+`agent::engines::add(name, plugin_path)` gives a plugin file a name. Use that name in `engine_config()` or `open_session()`
+like a shipped engine. The plugin is loaded when a session first uses it. The optional third argument sets its isolation
+(`EngineIsolation::Process` runs it out of process).
+
+```cpp
+agent::engines::add("echo", plugin_path);                  // plugin_path: the file your build produced
+auto session = agent::open_session("echo", "model.gguf");
+agent::engines::remove("echo");                            // forgets the name; a loaded plugin stays loaded until exit
+```
+
+`agent::engines::list()` returns every name that was added or loaded. `agent::engines::search_path(dir)` adds a folder to
+search for plugins; call it before the first session. `load_engine_manifest` does the same for a whole `engines.json`.
 
 **Finding an engine.** `agent::engines::llama` (and `audiocpp`, `sdcpp`, `trellis`, `onnx`) are the names of the shipped engines. A name is
 resolved at run time, relative to your program, so an installed or moved application keeps working:
@@ -49,7 +116,7 @@ Engines you do not name never reach your release.
 
 ```json
 {"model": "...", "context_window": 2048, "max_tokens": 512, "temperature": 0.7,
- "parallel": 4, "options": { ...Config::engine_options... }}
+ "parallel": 4, "scratch_dir": "<workspace>/tmp", "options": { ...Config::engine_options... }}
 ```
 
 Each request carries one task (`agent_request::task`, one `AGENT_CAP_*` bit from `engine_abi.h`).
@@ -98,7 +165,7 @@ Engines are process-wide and stay loaded until exit. Loading the same plugin twi
 `load_engine_manifest("engines.json")` loads every plugin listed in a manifest and returns their names:
 
 ```json
-{"engines": [{"path": "agent-engine-llama.so"}, {"path": "/opt/agent/engines/agent-engine-sdcpp.so"}]}
+{"engines": [{"path": "<plugin file>"}, {"path": "<plugin file>", "isolation": "process"}]}   // placeholders for your plugin files
 ```
 
 Relative paths resolve against the manifest's directory. Loading stops at the first plugin that fails.
@@ -128,13 +195,13 @@ cfg.engine_max_restarts    = 3;     // automatic restarts per rolling minute
   `infer()`, `count_tokens` and the KV-cache reset go over the pipe; name, version, caps and flags come
   from the host at startup.
 - **Default** (the `Config` default): the engines.json `"isolation"` of the engine if it was loaded with
-  `load_engine_manifest`, otherwise InProcess, so library users and the test suite keep the old
-  behaviour. The `agent` CLI defaults to Process (`--inprocess` or `"isolation": "inprocess"` in its
+  `load_engine_manifest`, otherwise InProcess, so that a library call loads the engine into this
+  process unless the session asks for process isolation. The `agent` CLI defaults to Process (`--inprocess` or `"isolation": "inprocess"` in its
   engines.json opts out).
 
 Under Process isolation the host also runs in an **OS sandbox** (`Config::engine_sandbox`, on by
 default; Linux enforces it): the plugin, the model's directory and paths named in `engine_options`
-are read-only, the workspace is read-only, `workspace/artifacts` is read-write, the network and
+are read-only, the workspace is read-only, `workspace/artifacts` and `workspace/tmp` are read-write, the network and
 `/tmp` and the GPU device nodes are off, and `engine_sandbox.memory_limit_bytes` becomes the host's
 `RLIMIT_AS`. Every engine in this repository (llama, onnx, sdcpp, trellis) has been run under
 this default policy without extra paths. GPU builds need `engine_sandbox.gpu = true`; an engine that
@@ -270,7 +337,7 @@ parses replies into content + tool calls in the model's native format, using lla
 It sets `AGENT_ENGINE_FLAG_NATIVE_TOOLS` (the core only adds the skills list to the system message) and
 `AGENT_ENGINE_FLAG_CONCURRENT` (parallel graph branches share one continuously batched decode).
 
-`Config::engine_options`: `gpu_layers`, `threads`, `chat_template` (overrides the template embedded in the GGUF),
+`Config::engine_options`: `gpu_layers` (default -1), `threads` (default 0, the engine's choice), `chat_template` (overrides the template embedded in the GGUF),
 `mmproj` (path to a multimodal projector GGUF, enables image / audio input), `ocr_prompt` (see OCR below), `mode` (`"generate"`, the
 default, `"embed"` or `"rerank"`, see below), `pooling` (embed mode: `"mean"`, `"cls"` or `"last"` to
 override the model's pooling), `kv_cache` and `prefix_cache` (below).
@@ -466,10 +533,7 @@ Every model output comes back as a tensor part. Supported dtypes are those of `a
 (f32, f16, i8, i32, i64, u8).
 
 ```cpp
-cfg.provider = agent::AiProvider::Engine;
-cfg.engine   = "./engines/onnx/agent-engine-onnx.so";
-cfg.model    = "add.onnx";                       // sum = a + b
-auto session = agent::init(cfg);
+auto session = agent::open_session(agent::engines::onnx, "add.onnx");   // sum = a + b
 
 const int64_t shape[] = {2, 2};
 const float a[4] = {1, 2, 3, 4}, b[4] = {10, 20, 30, 40};
@@ -491,7 +555,7 @@ IoBinding / device-resident outputs, and non-tensor (sequence/map) outputs.
 (`vendor/stable-diffusion.cpp`, pinned to a release tag) for image generation: SD 1.x/2.x/XL, SD3,
 FLUX, Qwen-Image, Z-Image and whatever else that sd.cpp release loads.
 
-It is opt-in because it builds a second copy of ggml:
+It builds a second copy of ggml, so CMake turns it on only when the submodule is checked out. `-DAGENT_ENGINE_SDCPP=ON` or `OFF` overrides that:
 
 ```sh
 git submodule update --init vendor/stable-diffusion.cpp
@@ -504,10 +568,13 @@ sd.cpp's ggml uses the same CMake target names as llama.cpp's, so it is built as
 also `-Wl,--exclude-libs,ALL`). The llama and sdcpp plugins can be loaded into one process.
 `AGENT_SDCPP_BUILD_JOBS` caps the nested build's parallelism.
 
-- Name `sdcpp`, caps `AGENT_CAP_IMAGE_GEN | AGENT_CAP_IMAGE_EDIT`, flags `0`.
+- Name `sdcpp`, caps `AGENT_CAP_IMAGE_GEN | AGENT_CAP_IMAGE_EDIT | AGENT_CAP_VIDEO_GEN`, flags `0`.
 - `IMAGE_GEN` (txt2img): the prompt is the text of the last user message.
 - `IMAGE_EDIT` (img2img): the same, plus the last image `FILE` (or `BYTES`) part of that message as the
   init image.
+- `VIDEO_GEN`: the prompt is the text of the last user message. An image `FILE` part of that message, if there is one, is
+  the start frame of an image-to-video model. The video is an MJPEG AVI (`video/x-msvideo`), or one PNG per frame when
+  `video_format` is `png`.
 - The image is written as `<output_dir>/sdcpp-<unix ms>-<n>.png` and returned as a `FILE` part
   (`image/png`) followed by a text part `generated image: <path>`.
 - Other tasks fail with `AGENT_ERR_UNSUPPORTED`.
@@ -521,6 +588,7 @@ also `-Wl,--exclude-libs,ALL`). The llama and sdcpp plugins can be loaded into o
 | `threads` | CPU threads (default: physical cores) |
 | `flash_attn`, `eager_load`, `verbose` | booleans; `verbose` forwards sd.cpp info logs to stderr (warnings and errors always are) |
 | `prediction` | override the prediction type (`eps`, `v`, `edm_v`, `sd3_flow`, `flux_flow`, ...) |
+| `high_noise_diffusion_model` | second diffusion model, for models that use one for each stage |
 | `width`, `height`, `steps`, `cfg_scale`, `guidance`, `sampler`, `scheduler`, `seed`, `negative_prompt`, `strength`, `clip_skip`, `vae_tiling` | generation defaults |
 
 `params_json` per request accepts the same generation keys (`width`, `height`, `steps`, `seed`,
@@ -528,6 +596,9 @@ also `-Wl,--exclude-libs,ALL`). The llama and sdcpp plugins can be loaded into o
 `vae_tiling`). Defaults: 512x512 (img2img: the input image size, rounded down to a multiple of 8), 20 steps, `cfg_scale` 7, random seed (`-1`), and the model's own
 default sampler and scheduler. Sampler and scheduler names are sd.cpp's (`euler`, `euler_a`, `lcm`, ...;
 `discrete`, `karras`, ...).
+
+Video keys in `params_json` (VIDEO_GEN): `video_frames` (default 17, from 1 to 1024), `fps` (default 16, from 1 to 240),
+`flow_shift` (default: the model's), `video_format` (`avi` or `png`) and `jpeg_quality` (default 90, from 1 to 100).
 
 Progress goes to `on_progress(step, total)`; the counter restarts per phase (sampling, VAE decode, and
 lazy weight loading on the first run unless `eager_load` is set). `cancel` is checked before starting
@@ -547,7 +618,8 @@ declared bit, `IMAGE_GEN`).
 tags) for [TRELLIS.2](https://github.com/microsoft/TRELLIS.2) image-to-3D. It goes through the port's
 flat C API (`trellis2_capi.h`), so none of the port's C++ crosses the plugin boundary.
 
-It is opt-in because it builds a third copy of ggml (the port's own fork):
+It builds a third copy of ggml (the port's own fork), so CMake turns it on only when a CUDA compiler is found and the
+submodule is checked out. `-DAGENT_ENGINE_TRELLIS=ON` or `OFF` overrides that:
 
 ```sh
 git submodule update --init vendor/trellis2cpp
@@ -644,7 +716,8 @@ Each model is a single GGUF file, and the family is read from the file. Each com
 | Option | Meaning |
 |--------|---------|
 | `tts.model`, `asr.model`, `vad.model`, `diarize.model` | GGUF file of that component |
-| `tts.model`, `tts.language`, `tts.speed`, `tts.voice` | language (`en`), speed (`1.0`), and an optional voice preset if the model has one (`tts.voice`) |
+| `tts.language`, `tts.speed`, `tts.voice` | language code, speech speed, and an optional voice preset (when the model has one). Unset values use the model's defaults. |
+| `tts.family`, `asr.family`, `vad.family`, `diarize.family` | optional model family hint, for example `pocket_tts`. The family is normally read from the GGUF file. |
 | `asr.language` | language code, for example `en` |
 | `vad.streaming` | keep the audio between calls, see "Streaming VAD" below. Default `false` |
 | `threads` | CPU threads, default 4 |

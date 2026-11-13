@@ -1,0 +1,60 @@
+name: Feature request
+description: Suggest a change or a new capability
+title: "feature: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please write the request yourself, as CONTRIBUTING.md asks. Describe the problem first; the solution can come second.
+        agent.cpp is pre-1.0, and the scope is small on purpose. Requests that fit the existing design are the easiest to accept.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What do you want to do that you cannot do now, or do only with difficulty?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What you would like to see. A short example command or C++ call is helpful.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Other ways to do it today, or other designs you thought about.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - CLI
+        - C++ library API
+        - C API
+        - Engine plugins
+        - Tools, skills or MCP
+        - Graphs (agent.json or C++ builders)
+        - Memory or RAG
+        - OS sandbox
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched the existing issues and did not find this request.
+          required: true
+        - label: I wrote this request myself. AI tools were not used to write it, as CONTRIBUTING.md asks.
+          required: true
