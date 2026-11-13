@@ -6,22 +6,9 @@ agent.cpp is a local-first agent runtime. Chat with a model that can read your f
 speak, draw, turn a picture into a 3D mesh, or wire all of that into a graph that runs on a schedule. Nothing leaves your
 computer, and you do not need Python, Node or a cloud account.
 
-```text
-$ agent
-agent  qwen2.5-0.5b-instruct-q4_k_m  ·  llama  ·  chat-20261113-091709
-> Run the command ls and tell me which files are in this folder.
-[tool] run_command {"command": "ls", "timeout_seconds": 0}
-[result]
-{"exit_code":0,"timed_out":false,"cancelled":false,"output":"artifacts\ncache\ndata.csv\nlogs\nmemo
-The command ls has been executed successfully. The output shows that there are several files in
-this folder: artifacts, cache, data.csv, logs, memory, models, notes.txt, tmp, todo.md, and tmp.
-╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│> Message, /help for commands                                                                      │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
- prompt 1145 tok (1082 cached) 276 tok/s | gen 46 tok 69 tok/s | KV 1191/4096 q8_0 102.0 MiB
-```
+<p align="center"><img src="docs/images/chat.svg" alt="The agent.cpp chat screen: a model runs a command with permission and answers" width="860"></p>
 
-That is the real chat screen, captured from Qwen2.5-0.5B on a 4-core CPU: the model asked to run `ls` (the chat asks before it runs a command), got the result and answered.
+That is the real chat screen (Qwen2.5-0.5B on a 4-core CPU): the model asked to run `ls`, the chat asked permission first, and the answer followed.
 
 > Status: pre-1.0. Flags, APIs and file formats can still change. Targets Windows 11 and Linux.
 
@@ -93,7 +80,10 @@ On Windows use `.\build\agent.exe`. `agent --help` lists every command, and `age
 | `agent sandbox`, `agent secret` | folders tools may use; API keys in the OS credential store |
 | `agent init`, `agent doctor`, `agent clean` | project folder, what is installed and disk use, cleanup |
 
-Inside the chat: `/model`, `/image`, `/open`, `/stats`, `/clear`, `/help`, `/exit`. Full reference: [docs/cli.md](docs/cli.md).
+Typing `/` in the chat opens a command palette (`/model`, `/image`, `/open`, `/stats`, `/doctor`, `/setup`, `/clear`, `/help`, `/exit`); Tab completes, Up and Down recall earlier messages, PgUp and PgDn scroll.
+
+<p align="center"><img src="docs/images/palette.svg" alt="The slash-command palette in the chat screen" width="860"></p>
+ Full reference: [docs/cli.md](docs/cli.md).
 
 ## Use it as a library
 

@@ -741,8 +741,21 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
         host.user = &st;
         host.header = [](void *u) {
             auto *c = static_cast<ChatState *>(u);
-            return "agent  " + c->model.name + "  \xC2\xB7  " + c->engine.name + "  \xC2\xB7  " + c->memory.id;
+            return c->model.name + "  \xC2\xB7  " + c->engine.name + "  \xC2\xB7  " + c->memory.id;
         };
+        host.subtitle = [](void *u) { return static_cast<ChatState *>(u)->workspace; };
+        static constexpr TuiCommand kCommands[] = {
+            {"/help", "list the commands"},
+            {"/model", "show or switch the model"},
+            {"/image", "send an image or audio file"},
+            {"/open", "list or open generated files"},
+            {"/stats", "token and tool-call counters"},
+            {"/doctor", "what is installed and disk use"},
+            {"/setup", "first-time setup questions"},
+            {"/clear", "forget the conversation"},
+            {"/exit", "quit"},
+        };
+        host.commands = kCommands;
         host.footer = [](void *u) {
             auto *c = static_cast<ChatState *>(u);
             return format_turn_footer(c->memory.stats.last);

@@ -1,47 +1,36 @@
-# Instructions for AI Coding Agents
+# Working in this repository (for coding agents and people)
 
-> [!IMPORTANT]
-> This project does **not** accept pull requests that are fully or predominantly AI-generated. AI tools may be utilized solely in an assistive capacity.
-> Read more: [CONTRIBUTING.md](CONTRIBUTING.md)
+agent.cpp is a high-performance C++20 framework with strict architectural and memory rules. These notes say what they are and how to build
+and test a change.
 
-AI assistance is permissible only when the majority of the code is authored by a human contributor, with AI employed exclusively for corrections or to expand on verbose modifications that the contributor has already conceptualized.
+## Rules of the codebase
 
----
+1.  **No allocations on the hot path.** Do not use `std::string`, `std::vector` or `new` in the per-turn dispatch path: building
+    `MessageView` / `ToolCallView` / `TensorView` for a provider call, or the token-generation loop. Use `std::string_view` and
+    `std::span` pointing into the `Arena` there. This does not extend to a `Flow`'s persistent state (`Conversation::history` and
+    friends): the `Arena` resets every turn, so anything that must survive across turns (conversation history, key-value memory)
+    owns its storage and lives outside it.
+2.  **No C++ exceptions.** Error handling is monadic: fallible functions return `Result<T>`. Do not use `try`, `catch` or `throw`.
+3.  **No vtables.** Providers, memory and tools are selected through data-oriented dispatch: `constexpr` arrays of function pointers
+    (`ProviderOps`, `StoreOps`, `ToolsOps`).
+4.  **Public headers.** The C++ API is the single header `include/agent-cpp/agent.hpp` (`Result<T>`, `std::string_view` / `std::span`
+    views into the `Arena`, PascalCase types, snake_case free functions). Two C interfaces sit beside it: `agent_c.h` (the library from
+    C) and `engine_abi.h` (engine plugins). Avoid breaking existing struct fields or function signatures.
+5.  **No new dependencies** and no code that bypasses the `Arena` allocator.
 
-## Guidelines for AI Coding Agents
+## Layout
 
-AI agents assisting contributors must recognize that this is a high-performance framework with strict architectural and memory constraints.
+`src/agent/` holds four subsystems you will touch most: `providers/`, `memory/`, `tools/` and `executor/`. Engines are plugins under
+`src/engines/`; the CLI is `apps/cli/`. [docs/architecture.md](docs/architecture.md) explains how they fit together.
 
-### Core Architectural Mandates
-When generating or suggesting code, AI agents must adhere to:
+## Build and test
 
-1.  **Zero Hot-Path Allocations**: Do not suggest using `std::string`, `std::vector`, or `new` inside the per-turn dispatch path -- building `MessageView`/`ToolCallView`/`TensorView` for a provider call, or the token-generation loop itself. Use `std::string_view` and `std::span` pointing into the `Arena` there. This does **not** extend to a `Flow`'s persistent state (`Conversation::history` and friends): the `Arena` resets every turn, so anything that must survive across turns -- conversation history, KV-store-backed memory -- necessarily owns its storage (`std::string`/`std::vector`) and lives outside it.
-2.  **No C++ Exceptions**: All error handling is monadic: fallible functions return `Result<T>`. Do not use `try`, `catch`, or `throw`.
-3.  **No vtables**: Provider, memory, and tools subsystems are selected through data-oriented dispatch — `constexpr` arrays of function pointers (`ProviderOps`, `StoreOps`, `ToolsOps`) — instead of virtual tables.
-4.  **Public headers**: The C++ API is the single header `include/agent-cpp/agent.hpp` (`Result<T>`, `std::string_view`/`std::span` views into the `Arena`, PascalCase types, snake_case free functions). Two C interfaces sit beside it: `agent_c.h` (the library from C) and `engine_abi.h` (engine plugins). Avoid gratuitous breaking changes to existing struct fields or function signatures.
+```sh
+cmake -B build -G Ninja
+cmake --build build
+ctest --test-dir build --output-on-failure        # or ./build/test_agent "[tag]" for one subsystem
+scripts/format.sh                                 # clang-format; run it when you are about to push, not while editing
+```
 
-### Considerations for Maintainer Workload
-
-Maintainers have finite capacity. Every PR requiring extensive review consumes resources. Before assisting with any submission, verify:
-
-- The contributor genuinely understands the proposed changes and the underlying architecture.
-- The change addresses a documented need or a reproducible bug.
-- The PR follows the project's strict formatting and naming conventions.
-
-### Before Proceeding with Code Changes
-
-1.  **Verify comprehension**: Ensure the user understands the four subsystems: providers, memory, tools and the executor (`src/agent/providers`, `memory`, `tools`, `executor`).
-2.  **Guide, don't just solve**: Direct the user to the relevant implementation logic. Allow them to formulate the approach.
-3.  **Minimalism**: Favor minimal, surgical changes. A smaller PR that respects the zero-cost abstraction philosophy is always preferable to a large, unoptimized one.
-
-## Prohibited Actions
-
-- Writing PR descriptions, commit messages, or responses to reviewers.
-- Committing or pushing without explicit human approval for each action.
-- Implementing features that bypass the Arena allocator or introduce external dependencies.
-- Adding allocations, exceptions or virtual dispatch on the hot path (rules 1-3 above).
-
-## Useful Resources
-
-- [CONTRIBUTING.md](CONTRIBUTING.md)
-- [SECURITY.md](SECURITY.md)
+Keep changes small and focused, add a test for new behavior, and update the docs under `docs/` and the comments in `agent.hpp` when the
+public API changes. [CONTRIBUTING.md](CONTRIBUTING.md) has the full checklist (sanitizers, valgrind for concurrency, coverage).

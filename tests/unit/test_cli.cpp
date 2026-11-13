@@ -452,6 +452,32 @@ TEST_CASE("tui: markdown-lite layout", "[cli][tui]") {
     for (char c : text) lines += c == '\n';
     CHECK(lines >= 8);
 }
+
+TEST_CASE("tui: tool results are shortened to a few lines", "[cli][tui]") {
+    CHECK(summarize_tool_result("one\ntwo\nthree", 4, 80) == "one\ntwo\nthree");
+    const std::string cut = summarize_tool_result("1\n2\n3\n4\n5\n6\n", 3, 80);
+    CHECK(cut == "1\n2\n3\n\xE2\x80\xA6 3 more lines");
+    const std::string wide = summarize_tool_result(std::string(300, 'x'), 2, 20);
+    CHECK(wide.size() == 19 + 3); // 19 glyphs and the ellipsis
+    CHECK(summarize_tool_result("", 3, 80).empty());
+}
+
+TEST_CASE("tui: the context gauge reads the footer", "[cli][tui]") {
+    CHECK(context_percent("prompt 100 tok 500 tok/s | gen 11 tok 100 tok/s | KV 1024/4096 q8_0 3.1 MiB") == 25);
+    CHECK(context_percent("KV 5000/4096") == 100);
+    CHECK(context_percent("no cache information") == -1);
+    CHECK(context_percent("KV 10/0") == -1);
+}
+
+TEST_CASE("tui: the palette lists commands by prefix", "[cli][tui]") {
+    static constexpr TuiCommand commands[] = {{"/help", ""}, {"/model", ""}, {"/image", ""}, {"/stats", ""}, {"/setup", ""}};
+    CHECK(filter_commands(commands, "/").size() == 5);
+    CHECK(filter_commands(commands, "/s").size() == 2);
+    const auto model = filter_commands(commands, "/mo");
+    REQUIRE(model.size() == 1);
+    CHECK(std::string(commands[model[0]].name) == "/model");
+    CHECK(filter_commands(commands, "/zzz").empty());
+}
 #endif
 
 // ------------------------------------------------------------------ schedule: cron text

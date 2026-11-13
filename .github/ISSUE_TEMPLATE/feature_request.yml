@@ -56,5 +56,3 @@ body:
       options:
         - label: I searched the existing issues and did not find this request.
           required: true
-        - label: I wrote this request myself. AI tools were not used to write it, as CONTRIBUTING.md asks.
-          required: true

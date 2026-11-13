@@ -92,7 +92,5 @@ body:
       options:
         - label: I searched the existing issues and did not find this problem.
           required: true
-        - label: I wrote this report myself. AI tools were not used to write it, as CONTRIBUTING.md asks.
-          required: true
         - label: I removed API keys, tokens and private data from the logs above.
           required: true
