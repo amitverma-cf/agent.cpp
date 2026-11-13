@@ -1,11 +1,12 @@
 # Overlay port of the agent.cpp library: the core (agent-cpp::agent), the SQLite store (agent-cpp::store_sqlite) and, with the "hub"
 # feature, the downloader (agent-cpp::hub). Engines, the CLI, the tests and the examples are not built. REF is the commit the port
-# builds; bump REF and both SHA512 values together (the simdjson commit is the one vendor/simdjson points at in that agent.cpp commit).
+# builds. Bump it with scripts/update-vcpkg-port.sh [COMMIT]: it writes REF and both SHA512 values (the simdjson commit is the one
+# vendor/simdjson points at in that agent.cpp commit).
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO amitverma-cf/agent.cpp
-    REF 63f86d79e0a19fcdef6ba368087444fb25f074de
-    SHA512 7f0570156f91d2573f7e5be8c9ea087715bd4952b4cbb461ae3fd69d76746105cf016dcc287ac86e37277f327f27df2e2640ec82fb488a69640c13ac5c40084b
+    REF 19186a09318a0389610f337ca45a0c2c4f33941f
+    SHA512 4d126593c4029fc222d378e956c7f8c6e644fe59ff725903be9726e73148a5a2dd70c2283218aa4675176a62c54a9ed7bb15d6af20d888862770cc4386de18db
     HEAD_REF main
 )
 

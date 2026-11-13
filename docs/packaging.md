@@ -150,7 +150,8 @@ run a program from the build tree, `agent_deploy_engines(my_app)` (from `cmake/a
 ## vcpkg
 
 `ports/agent-cpp` is an overlay port of the library (core, SQLite store, optionally the downloader): engines are not part of it, they are
-plugins you build or download separately.
+plugins you build or download separately. It builds the commit named in its portfile; `scripts/update-vcpkg-port.sh [COMMIT]` pins it to
+another one (it computes both SHA512 values).
 
 ```sh
 vcpkg install agent-cpp --overlay-ports=path/to/agent.cpp/ports            # core + store
