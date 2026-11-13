@@ -122,7 +122,7 @@ jobs:
           cp LICENSE README.md "dist/${name}/"
           # third-party licences of what is compiled in
           mkdir -p "dist/${name}/licenses"
-          for l in simdjson cpp-httplib miniaudio llama.cpp sqlite-vec audio.cpp stable-diffusion.cpp trellis2cpp FTXUI; do
+          for l in simdjson cpp-httplib miniaudio llama.cpp sqlite-vec audio.cpp stable-diffusion.cpp trellis2cpp RTXUI; do
             for f in vendor/$l/LICENSE vendor/$l/LICENSE.md vendor/$l/LICENSE.txt; do [ -f "$f" ] && cp "$f" "dist/${name}/licenses/$l.LICENSE" && break; done
           done
           if [ "${{ matrix.os_name }}" = "windows" ]; then

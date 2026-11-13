@@ -46,10 +46,12 @@ agent chat --list                 # saved conversations
 agent chat --plain                # line mode, for pipes
 ```
 
-In a terminal this opens a full-screen chat: a title bar with the model and engine, the conversation (markdown is rendered), an
-input line and a footer with speed and token counts. Tool calls appear as dim lines, and a tool that needs permission asks
-`y` once, `n`, or `a` for the rest of the session. `Esc` (or Ctrl-C while answering) stops an answer; Ctrl-C or Ctrl-D at the prompt
-quits; PgUp/PgDn and the mouse wheel scroll.
+In a terminal this opens a full-screen chat, built with [RTXUI](https://github.com/ArthurSonzogni/RTXUI) (HTML and CSS for the
+terminal): a title bar with the model and engine, the conversation, an input line and a footer with speed and token counts.
+Answers are rendered as markdown: headings, lists, quotes, tables and fenced code in a frame. Tool calls appear as cyan lines, and a
+tool that needs permission asks `y` once, `n`, or `a` for the rest of the session. `Esc` (or Ctrl-C while answering) stops an answer;
+Ctrl-C or Ctrl-D at the prompt quits. The mouse wheel, PgUp/PgDn and Home scroll the conversation; `End` jumps back to the newest line
+and follows it again. Select text with the mouse to copy it. The screen uses four colors (black, white, neon cyan, hot pink).
 
 | Command | What it does |
 |---|---|

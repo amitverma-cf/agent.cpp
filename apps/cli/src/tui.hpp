@@ -1,6 +1,6 @@
 #pragma once
 
-// The full-screen chat interface (FTXUI): a welcome screen, a scrolling transcript with markdown-lite rendering and compact tool cards,
+// The full-screen chat interface (RTXUI): a welcome screen, a scrolling transcript with markdown rendering and compact tool cards,
 // a slash-command palette, an input line with history, a status bar with a context gauge, and a modal for tool permissions. It knows
 // nothing about models or sessions: chat.cpp hands it a TuiHost, a table of function pointers (the project avoids virtual calls), and
 // the host does the work on a worker thread.
@@ -56,7 +56,7 @@ bool tui_ask(std::string_view question, bool *always);
 // user presses Enter; an empty answer means `default_value`. Returns false when the interface is closing.
 bool tui_prompt(std::string_view question, std::string_view default_value, std::string &answer);
 
-// The markdown-lite renderer on its own, as plain text laid out for `width` columns (for tests).
+// The markdown renderer on its own, as plain text laid out for `width` columns (for tests).
 std::string render_markdown_text(std::string_view markdown, int width);
 
 // Helpers with no screen behind them (for tests).
