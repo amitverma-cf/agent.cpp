@@ -25,14 +25,12 @@ using namespace ftxui;
 
 // ------------------------------------------------------------------ colors
 
-// Black, and two neon colors: hot pink is the primary, cyan the secondary. The muted tones are darker shades of the same two hues.
-// Everything has an explicit color, so a terminal's own (often white) default foreground never shows.
+// Four colors, most used first: black (the background), white (text), neon cyan (tool calls, hints, code) and hot pink (the rarest: the
+// brand, prompts, the spinner, errors). Everything has an explicit color, so a terminal's own default foreground never shows.
 const Color kBackground = Color::RGB(0, 0, 0);
-const Color kPrimary = Color::RGB(255, 20, 125);     // hot pink: brand, your messages, headings, prompts
-const Color kSecondary = Color::RGB(0, 229, 255);    // neon cyan: prompts and hints
-const Color kText = Color::RGB(240, 240, 240);       // white: normal text, the answers
-const Color kPrimaryDim = Color::RGB(150, 24, 82);   // dark pink: tool calls, separators
-const Color kSecondaryDim = Color::RGB(0, 128, 145); // dark cyan: hints, notes, tool results
+const Color kPink = Color::RGB(255, 20, 125);  // hot pink: the rarest: brand, prompts, spinner, errors
+const Color kNeon = Color::RGB(0, 229, 255);   // neon cyan: tool calls, hints, code
+const Color kText = Color::RGB(255, 255, 255); // white: normal text, the answers
 
 // ------------------------------------------------------------------ markdown-lite
 
@@ -44,7 +42,7 @@ Elements inline_words(std::string_view line) {
     auto flush = [&] {
         if (word.empty()) return;
         Element e = text(word);
-        if (code) e = e | color(kPrimary);
+        if (code) e = e | color(kNeon);
         if (bold) e = e | ftxui::bold;
         words.push_back(e);
         word.clear();
@@ -69,7 +67,7 @@ Elements inline_words(std::string_view line) {
     return words;
 }
 
-Element code_block(const Elements &lines) { return vbox(lines) | color(kPrimary); }
+Element code_block(const Elements &lines) { return vbox(lines) | color(kNeon); }
 
 Element render_markdown(std::string_view markdown) {
     Elements blocks;
@@ -106,7 +104,7 @@ Element render_markdown(std::string_view markdown) {
         size_t level = 0;
         while (level < line.size() && line[level] == '#') ++level;
         if (level > 0 && level <= 6 && level < line.size() && line[level] == ' ') {
-            blocks.push_back(hflow(inline_words(line.substr(level + 1))) | ftxui::bold | color(kPrimary));
+            blocks.push_back(hflow(inline_words(line.substr(level + 1))) | ftxui::bold | color(kText));
             continue;
         }
         size_t indent = 0;
@@ -190,8 +188,7 @@ Element render_tool(const std::string &t) {
         const size_t space = rest.find(' ');
         const std::string name = rest.substr(0, space);
         const std::string args = space == std::string::npos ? std::string() : trim_both(std::string_view(rest).substr(space + 1));
-        return hbox(text("  \xE2\x86\x92 ") | color(kPrimaryDim), text(name) | color(kPrimaryDim), text("  "),
-                    text(args) | color(kSecondaryDim));
+        return hbox(text("  \xE2\x86\x92 ") | color(kNeon), text(name) | color(kNeon), text("  "), text(args) | color(kText));
     }
     if (t.compare(0, result.size(), result) == 0) {
         const std::string body = summarize_tool_result(trim_both(std::string_view(t).substr(result.size())), 4, 200);
@@ -202,21 +199,21 @@ Element render_tool(const std::string &t) {
         while (at <= body.size()) {
             size_t end = body.find('\n', at);
             if (end == std::string::npos) end = body.size();
-            lines.push_back(hbox(text("    "), text(body.substr(at, end - at)) | color(failed ? kPrimary : kSecondaryDim)));
+            lines.push_back(hbox(text("    "), text(body.substr(at, end - at)) | color(failed ? kPink : kNeon)));
             at = end + 1;
         }
         return vbox(lines);
     }
-    return paragraph(t) | color(kSecondaryDim);
+    return paragraph(t) | color(kText);
 }
 
 Element render_block(const Block &b) {
     switch (b.kind) {
-    case TuiKind::User: return hbox(text("\xE2\x80\xBA ") | ftxui::bold | color(kPrimary), paragraph(b.text) | color(kPrimary) | flex);
+    case TuiKind::User: return hbox(text("\xE2\x80\xBA ") | ftxui::bold | color(kPink), paragraph(b.text) | color(kText) | flex);
     case TuiKind::Assistant: return hbox(text("  "), render_markdown(b.text) | color(kText) | flex);
     case TuiKind::Tool: return render_tool(b.text);
-    case TuiKind::Error: return hbox(text("! ") | ftxui::bold | color(kPrimary), paragraph(b.text) | color(kPrimary) | flex);
-    case TuiKind::Note: return hbox(text("  "), paragraph(b.text) | flex) | color(kSecondaryDim);
+    case TuiKind::Error: return hbox(text("! ") | ftxui::bold | color(kPink), paragraph(b.text) | color(kPink) | flex);
+    case TuiKind::Note: return hbox(text("  "), paragraph(b.text) | flex) | color(kText);
     }
     return text("");
 }
@@ -224,9 +221,7 @@ Element render_block(const Block &b) {
 const char *const kSpinner[] = {"\xE2\xA0\x8B", "\xE2\xA0\x99", "\xE2\xA0\xB9", "\xE2\xA0\xB8", "\xE2\xA0\xBC",
                                 "\xE2\xA0\xB4", "\xE2\xA0\xA6", "\xE2\xA0\xA7", "\xE2\xA0\x87", "\xE2\xA0\x8F"};
 
-Element context_gauge(int percent) {
-    return text("ctx " + std::to_string(percent) + "% ") | color(percent >= 85 ? kPrimary : kSecondaryDim);
-}
+Element context_gauge(int percent) { return text("ctx " + std::to_string(percent) + "% ") | color(percent >= 85 ? kPink : kNeon); }
 
 } // namespace
 
@@ -448,16 +443,15 @@ int run_tui(const TuiHost &host) {
             if (last_kind == TuiKind::Assistant) label = "writing";
             else if (last_kind == TuiKind::Tool && last_text.compare(0, 6, "[tool]") == 0) label = "running a tool";
             rows.push_back(text("  " + std::string(kSpinner[frame % 10]) + " " + label + "  " + std::to_string(seconds) + "s") |
-                           color(kPrimary));
+                           color(kPink));
         }
 
         Element transcript;
         if (empty && !busy) {
-            transcript =
-                vbox({filler(), hcenter(text("agent.cpp") | ftxui::bold | color(kPrimary)), hcenter(text(header) | color(kSecondaryDim)),
-                      subtitle.empty() ? text("") : hcenter(text(subtitle) | color(kSecondaryDim)), text(""),
-                      hcenter(text("type a message, or / for commands") | color(kSecondary)), filler()}) |
-                flex;
+            transcript = vbox({filler(), hcenter(text("agent.cpp") | ftxui::bold | color(kPink)), hcenter(text(header) | color(kNeon)),
+                               subtitle.empty() ? text("") : hcenter(text(subtitle) | color(kNeon)), text(""),
+                               hcenter(text("type a message, or / for commands") | color(kText)), filler()}) |
+                         flex;
         } else {
             // yframe scrolls so that the focused element is visible, so the focus belongs inside the frame: on a marker row at the end
             // while following the bottom, on a relative position while the user has scrolled up.
@@ -471,9 +465,9 @@ int run_tui(const TuiHost &host) {
 
         Elements bottom;
         if (asking) {
-            bottom.push_back(separatorLight() | color(kPrimaryDim));
-            bottom.push_back(hbox(text(" allow ") | ftxui::bold | color(kPrimary), paragraph(question) | color(kSecondary) | flex,
-                                  text("  y once \xC2\xB7 a always \xC2\xB7 n deny ") | ftxui::bold | color(kPrimary)));
+            bottom.push_back(separatorLight() | color(kNeon));
+            bottom.push_back(hbox(text(" allow ") | ftxui::bold | color(kPink), paragraph(question) | color(kText) | flex,
+                                  text("  y once \xC2\xB7 a always \xC2\xB7 n deny ") | ftxui::bold | color(kNeon)));
         } else {
             // The command palette: names that match what has been typed, the highlighted one completes with Tab.
             const std::vector<size_t> matches = palette_matches();
@@ -484,33 +478,32 @@ int run_tui(const TuiHost &host) {
                     std::string name = c.name;
                     name.resize(std::max<size_t>(name.size() + 2, 12), ' ');
                     const bool selected = i == palette_selected % matches.size();
-                    bottom.push_back(hbox(text(selected ? " \xE2\x80\xBA " : "   ") | color(kPrimary),
-                                          text(name) | (selected ? ftxui::bold : nothing) | color(selected ? kPrimary : kSecondary),
-                                          text(c.help) | color(kSecondaryDim)));
+                    bottom.push_back(hbox(text(selected ? " \xE2\x80\xBA " : "   ") | color(kPink),
+                                          text(name) | (selected ? ftxui::bold : nothing) | color(selected ? kPink : kNeon),
+                                          text(c.help) | color(kText)));
                 }
             }
-            if (prompting) bottom.push_back(paragraph(" ? " + prompt_line) | ftxui::bold | color(kPrimary));
-            bottom.push_back(separatorLight() | color(kPrimaryDim));
-            bottom.push_back(hbox(text(busy ? " \xC2\xB7 " : " \xE2\x80\xBA ") | ftxui::bold | color(kPrimary),
-                                  input_box->Render() | color(kPrimary) | flex));
+            if (prompting) bottom.push_back(paragraph(" ? " + prompt_line) | ftxui::bold | color(kPink));
+            bottom.push_back(separatorLight() | color(kNeon));
+            bottom.push_back(
+                hbox(text(busy ? " \xC2\xB7 " : " \xE2\x80\xBA ") | ftxui::bold | color(kPink), input_box->Render() | color(kText) | flex));
         }
 
         // Left: key hints (or the speeds of the last answer); right: how full the context window is.
         const int percent = context_percent(footer);
         Elements status;
-        if (scroll < 1.0f) status.push_back(text(" scrolled up \xC2\xB7 End or PgDn to follow the newest output") | color(kPrimary));
-        else if (busy) status.push_back(text(" Esc to stop") | color(kSecondaryDim));
-        else if (footer.empty() || prompting) status.push_back(text(" / commands   PgUp/PgDn scroll   Ctrl-D quit") | color(kSecondaryDim));
+        if (scroll < 1.0f) status.push_back(text(" scrolled up \xC2\xB7 End or PgDn to follow the newest output") | color(kPink));
+        else if (busy) status.push_back(text(" Esc to stop") | color(kNeon));
+        else if (footer.empty() || prompting) status.push_back(text(" / commands   PgUp/PgDn scroll   Ctrl-D quit") | color(kNeon));
         else {
             // The gauge already shows the KV cache, so the footer keeps only the speeds.
             const size_t kv = percent >= 0 ? footer.find(" | KV ") : std::string::npos;
-            status.push_back(text(" " + (kv == std::string::npos ? footer : footer.substr(0, kv))) | color(kSecondaryDim));
+            status.push_back(text(" " + (kv == std::string::npos ? footer : footer.substr(0, kv))) | color(kNeon));
         }
         status.push_back(filler());
         if (percent >= 0) status.push_back(context_gauge(percent));
 
-        const Element title =
-            hbox(text(" agent.cpp") | ftxui::bold | color(kPrimary), text("  " + header) | color(kSecondaryDim), filler());
+        const Element title = hbox(text(" agent.cpp") | ftxui::bold | color(kPink), text("  " + header) | color(kNeon), filler());
         return vbox({title, transcript, vbox(bottom), hbox(status)}) | color(kText) | bgcolor(kBackground);
     });
 
