@@ -706,6 +706,20 @@ std::string command_words(const CommandSpec &c) {
 }
 } // namespace
 
+std::string with_role_model(std::string_view engine_options, std::string_view role, std::string_view model_path) {
+    const std::string quoted_role = "\"" + std::string(role) + "\"";
+    if (model_path.empty() || engine_options.find(quoted_role) != std::string_view::npos) return std::string(engine_options);
+    const std::string entry = quoted_role + ":{\"model\":\"" + json_escape(model_path) + "\"}";
+    const size_t open = engine_options.find('{');
+    if (open == std::string_view::npos) return "{" + entry + "}";
+    const size_t close = engine_options.rfind('}');
+    const bool empty_object =
+        engine_options.substr(open + 1, close == std::string_view::npos ? 0 : close - open - 1).find_first_not_of(" \t\r\n") ==
+        std::string_view::npos;
+    return std::string(engine_options.substr(0, open + 1)) + entry + (empty_object ? "" : ",") +
+           std::string(engine_options.substr(open + 1));
+}
+
 std::string model_engine_folder(std::string_view spec, std::string_view explicit_engine, std::string_view registry_engine) {
     const auto valid = [](std::string_view name) { return !name.empty() && name.find_first_of("/\\.") == std::string_view::npos; };
     if (valid(explicit_engine)) return std::string(explicit_engine);
@@ -717,6 +731,8 @@ std::string model_engine_folder(std::string_view spec, std::string_view explicit
     const auto ends = [&](std::string_view e) {
         return suffix.size() >= e.size() && suffix.compare(suffix.size() - e.size(), e.size(), e) == 0;
     };
+    // The audio.cpp repository holds GGUF files too, but they are not llama.cpp's.
+    if (lower.find("audio.cpp") != std::string::npos || lower.find("audio-cpp") != std::string::npos) return "audiocpp";
     if (ends(".onnx")) return "onnx";
     if (ends(".safetensors") || ends(".ckpt")) return "sdcpp";
     if (ends(".gguf")) return "llama";

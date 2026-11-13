@@ -1,0 +1,9 @@
+agent-cpp provides CMake targets:
+
+    find_package(agent-cpp CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE agent-cpp::agent)
+    target_link_libraries(main PRIVATE agent-cpp::store_sqlite)   # SQLite memory store, checkpoints, vector search
+    target_link_libraries(main PRIVATE agent-cpp::hub)            # only with the "hub" feature
+
+Engines (llama.cpp, stable-diffusion.cpp, ...) are plugins: build them from the agent.cpp sources or download them, and point
+Config::engine at the plugin file. See https://github.com/amitverma-cf/agent.cpp/blob/main/docs/packaging.md

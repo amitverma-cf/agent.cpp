@@ -48,6 +48,23 @@ the pipe round trip to `agent-engine-host`.
 The core adds under a microsecond per turn; process isolation adds roughly 40 us, which is
 negligible next to any real inference.
 
+## Large payloads through the engine host (mock engine, process isolation)
+
+One f32 tensor of the given size goes to `agent-engine-host` and the mock engine echoes it back, so the same number of bytes travels in both
+directions. Median of 9 calls after 2 warm-up calls, 4 vCPUs. `pipe` is `AGENT_ENGINE_SHM=0` (everything through the pipe); `shared memory`
+is the default for payloads of 64 KiB and more ([engines.md](api/engines.md#isolation)).
+
+| payload | pipe ms | shared memory ms | speed-up |
+|---|---|---|---|
+| 1 MiB | 0.7 | 0.3 | 2.4x |
+| 8 MiB | 11.6 | 6.6 | 1.8x |
+| 32 MiB | 63.7 | 44.3 | 1.4x |
+| 128 MiB | 256.1 | 167.5 | 1.5x |
+
+Shared memory removes the copies through the pipe, not the copies the engine itself makes, so the gain levels off at about 1.5x for large
+tensors. Images and audio for the llama and audio.cpp engines are passed as file paths and are not copied at all. Reproduce with
+`agent_bench --mock <plugin> --host <agent-engine-host> --payload 128`.
+
 ## LLM: prefill, generation, time to first token
 
 `infer()` with streaming, temperature 0, KV cache cleared before every repetition, medians of 3

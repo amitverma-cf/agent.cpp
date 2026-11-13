@@ -43,6 +43,7 @@ struct Options {
     std::string workspace = (fs::temp_directory_path() / "agent-bench").string();
     int reps = 3, gen_tokens = 128, prompt_words = 200, branches = 4, threads = 0, turns = 2000;
     int longchat = 0, ctx = 4096; // longchat: number of conversation turns (0 = section off)
+    int payload = 0;              // payload: largest tensor in MiB for the shared-memory section (0 = section off)
 };
 
 // ---- memory ------------------------------------------------------------------------------------
@@ -473,6 +474,82 @@ void bench_overhead(const Options &o, std::vector<Table> &tables) {
     tables.push_back(std::move(t));
 }
 
+// ---- payload -----------------------------------------------------------------------------------
+
+// A tensor of N MiB goes to agent-engine-host and the mock engine sends the same tensor back: the cost of moving a large payload through
+// the pipe (AGENT_ENGINE_SHM=0) and through shared memory.
+void bench_payload(const Options &o, std::vector<Table> &tables) {
+    Table t{.title = "Large payloads through the engine host (mock engine, process isolation)",
+            .note =
+                "One f32 tensor of the given size is sent to agent-engine-host and echoed back by the mock engine (so the same number of "
+                "bytes travels in both directions); median of " +
+                std::to_string(o.reps + 4) +
+                " calls after 2 warm-up calls. `pipe` is AGENT_ENGINE_SHM=0, `shared memory` the default for payloads of 64 KiB or more.",
+            .columns = {"payload", "pipe ms", "shared memory ms", "speed-up"}};
+    for (const int mib : {1, 8, 32, 128}) {
+        if (mib > o.payload) break;
+        double ms[2] = {0, 0};
+        for (const bool shm : {false, true}) {
+#if defined(_WIN32)
+            _putenv_s("AGENT_ENGINE_SHM", shm ? "" : "0");
+#else
+            if (shm) unsetenv("AGENT_ENGINE_SHM");
+            else setenv("AGENT_ENGINE_SHM", "0", 1);
+#endif
+            agent::Config cfg;
+            cfg.provider = agent::AiProvider::Engine;
+            cfg.engine = o.mock;
+            cfg.workspace_dir = o.workspace;
+            cfg.auto_default_tools = false;
+            cfg.engine_isolation = agent::EngineIsolation::Process;
+            cfg.engine_host_path = o.host;
+            cfg.arena_capacity = static_cast<size_t>(mib + 8) * 2u << 20;
+            auto sess = agent::init(cfg);
+            if (!sess.ok) {
+                std::fprintf(stderr, "payload: %s\n", sess.error.message.c_str());
+                break;
+            }
+            const size_t floats = static_cast<size_t>(mib) * (1u << 20) / sizeof(float);
+            std::vector<float> values(floats, 1.5f);
+            const int64_t shape[] = {static_cast<int64_t>(floats)};
+            std::vector<double> samples;
+            for (int i = 0; i < o.reps + 6; ++i) {
+                const agent::TensorView tensors[] = {{.name = "big",
+                                                      .dtype = agent::DType::Float32,
+                                                      .shape = shape,
+                                                      .data = {reinterpret_cast<const uint8_t *>(values.data()), floats * sizeof(float)}}};
+                agent::MessageView msg{};
+                msg.role = "user";
+                msg.content = "tensors";
+                msg.tensors = tensors;
+                agent::InferRequest req;
+                req.messages = std::span<const agent::MessageView>(&msg, 1);
+                sess.value.arena.reset();
+                const auto t0 = Clock::now();
+                auto r = agent::infer(sess.value, req);
+                const double v = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+                if (!r.ok) {
+                    std::fprintf(stderr, "payload %d MiB: %s\n", mib, r.error.message.c_str());
+                    break;
+                }
+                if (i >= 2) samples.push_back(v);
+            }
+            if (!samples.empty()) {
+                std::sort(samples.begin(), samples.end());
+                ms[shm ? 1 : 0] = samples[samples.size() / 2];
+            }
+        }
+#if defined(_WIN32)
+        _putenv_s("AGENT_ENGINE_SHM", "");
+#else
+        unsetenv("AGENT_ENGINE_SHM");
+#endif
+        if (ms[0] > 0 && ms[1] > 0)
+            t.rows.push_back({std::to_string(mib) + " MiB", fmt(ms[0], 1), fmt(ms[1], 1), fmt(ms[0] / ms[1], 1) + "x"});
+    }
+    if (!t.rows.empty()) tables.push_back(std::move(t));
+}
+
 // ---- tts ---------------------------------------------------------------------------------------
 
 std::string kokoro_options(const std::string &gguf) {
@@ -625,7 +702,8 @@ bool parse(int argc, char **argv, Options &o) {
                                                     {"--csv", &o.csv_out}};
     std::map<std::string, int *> ints = {
         {"--reps", &o.reps},       {"--gen-tokens", &o.gen_tokens}, {"--prompt-words", &o.prompt_words}, {"--branches", &o.branches},
-        {"--threads", &o.threads}, {"--turns", &o.turns},           {"--longchat", &o.longchat},         {"--ctx", &o.ctx}};
+        {"--threads", &o.threads}, {"--turns", &o.turns},           {"--longchat", &o.longchat},         {"--ctx", &o.ctx},
+        {"--payload", &o.payload}};
     for (int i = 1; i < argc; i += 2) {
         if (i + 1 >= argc) return false;
         if (auto s = strings.find(argv[i]); s != strings.end()) *s->second = argv[i + 1];
@@ -643,7 +721,7 @@ int main(int argc, char **argv) {
         std::fprintf(stderr,
                      "usage: %s [--llama <plugin> --model <gguf>] [--mock <plugin>] [--audiocpp <plugin> --tts-model <kokoro .gguf>]\n"
                      "          [--host <agent-engine-host>] [--reps N] [--gen-tokens N] [--prompt-words N] [--branches N]\n"
-                     "          [--threads N] [--turns N] [--workspace DIR] [--json FILE] [--md FILE]\n"
+                     "          [--threads N] [--turns N] [--payload MIB] [--workspace DIR] [--json FILE] [--md FILE]\n"
                      "          [--longchat N --ctx N [--kv f16|q8_0|q4_0] [--engine-options JSON] [--csv FILE]]\n",
                      argv[0]);
         return 2;
@@ -651,6 +729,7 @@ int main(int argc, char **argv) {
     agent::AgentRuntime runtime;
     std::vector<Table> tables;
     if (!o.mock.empty()) bench_overhead(o, tables);
+    if (!o.mock.empty() && o.payload > 0) bench_payload(o, tables);
     if (!o.llama.empty() && !o.model.empty()) {
         if (o.longchat > 0) {
             bench_longchat(o, tables);

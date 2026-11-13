@@ -721,7 +721,7 @@ Each model is a single GGUF file, and the family is read from the file. Each com
 Hub aliases for the GGUF files: `parakeet-tdt`, `moonshine-tiny`, `crisperwhisper-large` (asr), `pocket-tts`
 (tts; English, about 100M parameters, GGUF q8; its model family also covers fr, de, it, pt and es),
 `supertonic-3` (tts; 434 MiB, 30+ languages), `firered-vad` (vad) and `nemotron-diar` (diarize; 102 MiB). The files
-come from the Hugging Face repository `audio-cpp/audio.cpp-gguf`.
+come from the Hugging Face repository `audio-cpp/audio.cpp-gguf` (`nemotron-diar`: `audio-cpp/Nemotron-3-Diarization-GGUF`).
 
 Requests are routed by task, and by content when the task was not chosen explicitly. Pick it with
 `run_task(session, AGENT_CAP_TTS, req)` / `InferRequest::task`, or `Config::default_task` for `run_turn`:

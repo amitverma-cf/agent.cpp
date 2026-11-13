@@ -150,6 +150,9 @@ int32_t create_component(Instance &inst, Component &c, simdjson::dom::object cfg
         return AGENT_ERR_INIT_FAILED;
     }
     c.voice = json_str(cfg, "voice");
+    // PocketTTS has no default voice, but its model ships one: without a voice the first request would fail.
+    if (c.voice.empty() && std::strcmp(task, "tts") == 0 && std::strcmp(audiocpp_model_family(c.model), "pocket_tts") == 0)
+        c.voice = "alba";
     c.language = json_str(cfg, "language");
     c.speed = json_num(cfg, "speed", 0);
     return AGENT_OK;

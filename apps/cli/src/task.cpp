@@ -219,6 +219,9 @@ int cmd_task(const CommandLine &cl, Context &ctx) {
     cfg.engine_sandbox.gpu = cli_engine_gpu(engine.value.backend);
     apply_sandbox_choice(cfg);
     cfg.engine_options = catalog_engine_options(ctx, model_path, std::string(cl.get("engine-options")));
+    // audio.cpp takes one model file per role (tts, asr, vad, diarize): --model is the file of the role this task needs.
+    if (engine.value.name == "audiocpp" && (cap_name == "tts" || cap_name == "asr" || cap_name == "vad" || cap_name == "diarize"))
+        cfg.engine_options = with_role_model(cfg.engine_options, cap_name, model_path);
     cfg.model = model_path;
     cfg.auto_default_tools = false; // a task is not a chat turn: keep the tool instructions out of the prompt
     cfg.workspace_dir = workspace_dir(ctx, cl.get("workspace"));

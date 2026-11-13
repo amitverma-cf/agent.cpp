@@ -1,0 +1,26 @@
+{
+  "name": "agent-cpp",
+  "version-string": "0.1.2",
+  "description": "Local-first agent runtime: inference engine plugins, tools, memory and graphs (C++20). This port is the library; engines are plugins you build or download separately.",
+  "homepage": "https://github.com/amitverma-cf/agent.cpp",
+  "license": "MIT",
+  "supports": "!osx & !uwp",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ],
+  "features": {
+    "hub": {
+      "description": "agent::hub, the Hugging Face model downloader with progress and sha256 checks (agent-cpp::hub)",
+      "dependencies": [
+        "openssl"
+      ]
+    }
+  }
+}

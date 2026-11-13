@@ -165,6 +165,31 @@ cd ~/my_agent_run                                # any folder you like
 The first run creates `.agent/` in that folder. The output is the streamed answer, one `[tool] get_weather(...)` line for the tool call,
 and the number of tool calls.
 
+### Downloading the model from your program, with progress
+
+Link `agent-cpp::hub` (build with the downloader on, which needs OpenSSL) and let the program fetch what it needs. The download resumes
+after an interruption, is checked against the published sha256, and can be cancelled from another thread:
+
+```cpp
+#include <agent-cpp/hub.hpp>
+
+static bool show(uint64_t done, uint64_t total, void *) {       // return false to cancel
+    if (total) std::fprintf(stderr, "%3d%%", int(done * 100 / total));
+    return true;
+}
+
+agent::hub::PullOptions pull;                                    // pull.http is filled from the environment (HF_TOKEN, proxy, ...)
+pull.models_dir = "models";
+pull.on_progress = show;
+auto model = agent::hub::pull_model("Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M", pull);
+if (!model.ok) { std::fprintf(stderr, "%s
+", model.error.message.c_str()); return 1; }
+// model.value.path is the local GGUF file; hand it to agent::open_session(agent::engines::llama, model.value.path)
+```
+
+See [api/hub.md](../api/hub.md) for the registry names, licence policy and the catalogue. Messages from the library itself (warnings,
+engine start-up) go to `Config::logger`; see [api/core.md](../api/core.md#callbacks).
+
 ## 5. Isolation and sandbox settings
 
 | Setting | Library default | This program | What it does |

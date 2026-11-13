@@ -124,6 +124,9 @@ bool cli_engine_gpu(std::string_view backend);
 // --no-sandbox (a global flag): turns the sandboxes of this run off. The default is on; where the OS cannot provide one, it is
 // off anyway and a warning says so.
 void set_no_sandbox(bool value);
+// engine_options with {"<role>": {"model": "<path>"}} added (audio.cpp takes one file per role: tts, asr, vad, diarize), unless the
+// options already name that role. engine_options is "" or a JSON object.
+std::string with_role_model(std::string_view engine_options, std::string_view role, std::string_view model_path);
 // The subfolder of the models folder a pulled model goes to, so the files of one engine are never mixed with another's:
 // models/llama/owner/repo/file.gguf. `explicit_engine` is --engine, `registry_engine` the engine of a registry name; otherwise it follows the
 // spec ("owner/repo:Q4_K_M" and GGUF repos -> llama, ".onnx" -> onnx, ".safetensors"/".ckpt" -> sdcpp). Empty when it cannot be told.

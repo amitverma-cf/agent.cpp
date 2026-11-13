@@ -468,10 +468,19 @@ TEST_CASE("cli: a pulled model goes to a folder of its engine", "[cli]") {
     CHECK(model_engine_folder("owner/repo:unet.safetensors", "", "") == "sdcpp");
     CHECK(model_engine_folder("owner/Thing-GGUF", "", "") == "llama");
     CHECK(model_engine_folder("owner/repo", "", "").empty());
+    CHECK(model_engine_folder("audio-cpp/audio.cpp-gguf:Sortformer-GGUF/model-q8_0.gguf", "", "") == "audiocpp");
     CHECK(model_engine_folder("owner/repo:Q4_K_M", "audiocpp", "") == "audiocpp"); // --engine wins
     CHECK(model_engine_folder("owner/repo", "", "sdcpp") == "sdcpp");              // a registry name knows its engine
     CHECK(model_engine_folder("owner/repo:Q4_K_M", "../x", "").empty() == false);  // an unsafe --engine is ignored
     CHECK(model_engine_folder("owner/repo:Q4_K_M", "../x", "") == "llama");
+}
+
+TEST_CASE("cli: --model becomes the engine option of the task's role", "[cli]") {
+    CHECK(with_role_model("", "asr", "/m/p.gguf") == "{\"asr\":{\"model\":\"/m/p.gguf\"}}");
+    CHECK(with_role_model("{}", "tts", "/m/t.gguf") == "{\"tts\":{\"model\":\"/m/t.gguf\"}}");
+    CHECK(with_role_model("{\"threads\":4}", "vad", "/m/v.gguf") == "{\"vad\":{\"model\":\"/m/v.gguf\"},\"threads\":4}");
+    CHECK(with_role_model("{\"asr\":{\"model\":\"x\"}}", "asr", "/m/p.gguf") == "{\"asr\":{\"model\":\"x\"}}"); // already set
+    CHECK(with_role_model("{\"threads\":4}", "asr", "") == "{\"threads\":4}");
 }
 
 TEST_CASE("cli: completion scripts list the commands and flags", "[cli][completion]") {

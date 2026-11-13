@@ -37,7 +37,7 @@ constexpr RegistryPart kParakeet[] = {{"audio-cpp/audio.cpp-gguf:Parakeet-TDT-0.
 constexpr RegistryPart kMoonshine[] = {{"audio-cpp/audio.cpp-gguf:Moonshine-Streaming-GGUF/moonshine-streaming-tiny-q8_0.gguf", ""}};
 constexpr RegistryPart kCrisperWhisper[] = {{"audio-cpp/audio.cpp-gguf:CrisperWhisper2.0-GGUF/crisperwhisper-2-large-q4_k.gguf", ""}};
 constexpr RegistryPart kFireRedVad[] = {{"audio-cpp/audio.cpp-gguf:FireRedVAD-GGUF/firered-vad-f32.gguf", ""}};
-constexpr RegistryPart kNemotronDiar[] = {{"audio-cpp/audio.cpp-gguf:Nemotron-3-Diarization-GGUF/nemotron-3-diarization-q8_0.gguf", ""}};
+constexpr RegistryPart kNemotronDiar[] = {{"audio-cpp/Nemotron-3-Diarization-GGUF:nemotron-3-diarization-q8_0.gguf", ""}};
 constexpr RegistryPart kMiniLm[] = {{"Xenova/all-MiniLM-L6-v2:onnx/model_quantized.onnx", ""}};
 constexpr RegistryPart kTrellis[] = {{"LocalAI-io/TRELLIS.2-4B-GGUF:ss_flow_f16.gguf", ""},
                                      {"LocalAI-io/dinov3-vitl16-pretrain-lvd1689m-GGUF:dino_f16.gguf", ""},
@@ -74,12 +74,12 @@ constexpr RegistryEntry kRegistry[] = {
     {"crisperwhisper-large", "asr", "audiocpp", kCrisperWhisper, 937, "",
      "Whisper large based, 99 languages, verbatim; slower than realtime on 4 CPU cores", false},
     {"pocket-tts", "tts", "audiocpp", kPocketTts, 120, "",
-     "small English voice model; includes the alba voice (tts.voice = alba), more voices on its model card", false},
+     "small English voice model; speaks with the alba voice unless tts.voice names another, more voices on its model card", true},
     {"supertonic-3", "tts", "audiocpp", kSupertonic, 434, "", "30+ languages, 44.1 kHz; the default speech model, no extra dependencies",
      true},
     {"firered-vad", "vad", "audiocpp", kFireRedVad, 3, "", "voice activity detection", true},
     {"nemotron-diar", "diarize", "audiocpp", kNemotronDiar, 102, "",
-     "speaker diarization; separated two synthetic voices correctly in testing (Sortformer v1 did not)", true},
+     "speaker diarization; separated two different voices (speaker 0, 1, 0) with the right turn times in testing", true},
     {"minilm-onnx", "generic", "onnx", kMiniLm, 22, "", "feed input_ids / attention_mask / token_type_ids tensors", true},
     {"trellis-coarse", "mesh_gen", "trellis", kTrellis, 3300, "", "image to 3D, coarse path; ~6 min and 3.5 GB RAM on 4 CPU cores", true},
     {"julia-1", "decide", "llama", kJulia, 160, "", "native System One decision model; runs in process through llama.cpp's own handler",
