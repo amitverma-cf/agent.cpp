@@ -104,7 +104,7 @@ should not be trusted.
 
 - **Time to first audio chunk (TTS):** the harness implements it (`--audiocpp`, `--tts-model`), but
   no TTS model was available on the machine used, so it has not been run.
-- **Speech recognition, VAD and diarization** with the audio.cpp engine: not benchmarked yet.
+- **Speech recognition, VAD and diarization** with the audio.cpp engine: `agent_bench --audio` is built in, but a measured run is not published yet.
 - GPU backends and larger models.
 
 ## Graph evaluation, speculation and memory pressure (4 vCPU, 8 GB, CPU only)
