@@ -66,9 +66,6 @@ std::string find_named_plugin(const std::string &name) {
         const auto dir = exe.parent_path();
         dirs.insert(dirs.end(), {dir, dir / "engines", dir.parent_path() / "lib" / "agent" / "engines", dir.parent_path() / "lib"});
     }
-#ifdef AGENT_DEFAULT_ENGINE_DIR
-    dirs.emplace_back(AGENT_DEFAULT_ENGINE_DIR); // the install prefix this library was built for
-#endif
     dirs.emplace_back(std::filesystem::current_path());
     std::error_code ec;
     for (const auto &d : dirs)

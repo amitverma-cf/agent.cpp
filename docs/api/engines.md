@@ -19,9 +19,10 @@ cfg.workspace_dir  = ".workspace";
 auto session = agent::init(cfg);
 ```
 
-**Finding an engine by name.** `agent::engines::llama` (and `audiocpp`, `sdcpp`, `trellis`, `onnx`) are the names of the shipped
-engines. A name is resolved in this order: an engine registered with `register_engine` or listed in a loaded `engines.json`; then the file `agent-engine-<name>.so` (`.dll`, `.dylib`) in `$AGENT_ENGINES_DIR`, next to the
-running executable, in its `engines/` folder, in `../lib/agent/engines` and `../lib`, in the install prefix the library was built for (`<prefix>/lib/agent/engines`), and in the working directory. A value that looks
+**Finding an engine.** `agent::engines::llama` (and `audiocpp`, `sdcpp`, `trellis`, `onnx`) are the shipped engines. A program that
+uses `find_package(agent-cpp)` gets the full path of the installed plugin in each constant (CMake defines `AGENT_ENGINES_DIR` for it), so it
+runs from any folder. Without the package they are bare names, resolved as follows. A name is resolved in this order: an engine registered with `register_engine` or listed in a loaded `engines.json`; then the file `agent-engine-<name>.so` (`.dll`, `.dylib`) in `$AGENT_ENGINES_DIR`, next to the
+running executable, in its `engines/` folder, in `../lib/agent/engines` and `../lib`, and in the working directory. A value that looks
 like a path is loaded as given.
 
 `init()` loads the plugin if `Config::engine` is a path, then calls the engine's `create()` with:

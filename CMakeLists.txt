@@ -116,8 +116,6 @@ add_library(agent
     vendor/simdjson/singleheader/simdjson.cpp
 )
 target_compile_definitions(agent PRIVATE AGENT_LIB_VERSION="${PROJECT_VERSION}")
-# Where "agent install" puts the engine plugins: a program linked against this library finds them there by name.
-target_compile_definitions(agent PRIVATE AGENT_DEFAULT_ENGINE_DIR="${CMAKE_INSTALL_PREFIX}/lib/agent/engines")
 add_library(agent-cpp::agent ALIAS agent)
 # Header-only plugin ABI for engine plugins built against the installed package
 # (find_package(agent-cpp) -> agent-cpp::engine_abi, agent_add_engine(); see examples/08-engine-plugin-template/).

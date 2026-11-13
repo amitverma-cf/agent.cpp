@@ -654,12 +654,25 @@ void free_backend();
 // Config::engine_options. extra_options_json: a JSON object whose members are merged into the engine options (voices,
 // threads, ...). base supplies everything else (workspace_dir, sandbox, ...); the result is ready for init().
 // The engines that ship with agent.cpp. Pass one to engine_config(); the plugin installed with the library is found for you.
+// With the CMake package (find_package(agent-cpp)) each constant is the full path of the installed plugin; otherwise it is the
+// bare name, which is looked up next to the executable and in the usual install folders.
+#if defined(AGENT_ENGINES_DIR)
+#if defined(_WIN32)
+#define AGENT_ENGINE_FILE_(name) AGENT_ENGINES_DIR "/agent-engine-" name ".dll"
+#elif defined(__APPLE__)
+#define AGENT_ENGINE_FILE_(name) AGENT_ENGINES_DIR "/agent-engine-" name ".dylib"
+#else
+#define AGENT_ENGINE_FILE_(name) AGENT_ENGINES_DIR "/agent-engine-" name ".so"
+#endif
+#else
+#define AGENT_ENGINE_FILE_(name) name
+#endif
 namespace engines {
-inline constexpr std::string_view llama = "llama";       // text, vision, embeddings, rerank, decision models
-inline constexpr std::string_view audiocpp = "audiocpp"; // speech recognition, text to speech, VAD, diarization
-inline constexpr std::string_view sdcpp = "sdcpp";       // images and video
-inline constexpr std::string_view trellis = "trellis";   // image to 3D mesh
-inline constexpr std::string_view onnx = "onnx";         // any ONNX model
+static constexpr std::string_view llama = AGENT_ENGINE_FILE_("llama");       // text, vision, embeddings, rerank, decision models
+static constexpr std::string_view audiocpp = AGENT_ENGINE_FILE_("audiocpp"); // speech recognition, text to speech, VAD, diarization
+static constexpr std::string_view sdcpp = AGENT_ENGINE_FILE_("sdcpp");       // images and video
+static constexpr std::string_view trellis = AGENT_ENGINE_FILE_("trellis");   // image to 3D mesh
+static constexpr std::string_view onnx = AGENT_ENGINE_FILE_("onnx");         // any ONNX model
 } // namespace engines
 
 struct ModelSlot {
