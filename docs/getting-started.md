@@ -156,11 +156,25 @@ returns, because the terminal tool interpolates it into shell commands.
 
 ## Build options
 
-| Option | Effect |
-|---|---|
-| `-DAGENT_ENGINE_ONNX=ON` | Builds the ONNX Runtime engine and copies `libonnxruntime` next to it. CMake downloads the pinned upstream ONNX Runtime release (never built from source); pass `-DONNXRUNTIME_ROOT=<dir>` only where upstream publishes no archive. Ship the two together; the plugin finds ONNX Runtime through its RPATH (`$ORIGIN` on Linux). |
-| `-DAGENT_ENGINE_AUDIOCPP=ON` (after `git submodule update --init vendor/audio.cpp`) | Builds the audio.cpp speech engine used by `agent voice`. |
-| `-DAGENT_ENABLE_SANITIZERS=ON` | AddressSanitizer + UndefinedBehaviorSanitizer on GCC and Clang. |
-| `-DBUILD_SHARED_LIBS=ON` | Shared `libagent`, `agent_store_sqlite` and `agent_hub`. |
+| Option | Default | Description |
+|---|---|---|
+| `AGENT_BUILD_CLI` | `ON` | Build the `agent` CLI (`apps/cli`); needs `AGENT_BUILD_HUB` |
+| `AGENT_BUILD_HUB` | `ON` | Build `agent_hub`, the Hugging Face and GitHub downloader (needs OpenSSL) |
+| `AGENT_CLI_AUDIO_DEVICE` | `ON` | Build microphone and speaker support (miniaudio) into the CLI; `OFF` leaves it out |
+| `AGENT_ENGINE_LLAMA` | `ON` | Build the llama.cpp engine plugin (`src/engines/llama`) |
+| `AGENT_LLAMA_UPSTREAM` | `ON` | Link llama.cpp's own server handlers in process (MTP models and native System One decision models) |
+| `AGENT_ENGINE_ONNX` | `OFF` | Build the ONNX Runtime engine (`src/engines/onnx`). CMake downloads the pinned ONNX Runtime release; `-DONNXRUNTIME_ROOT=<dir>` is needed only where upstream publishes no archive |
+| `AGENT_ENGINE_SDCPP` | `OFF` | Build the stable-diffusion.cpp engine for images and video (`src/engines/sdcpp`) |
+| `AGENT_ENGINE_AUDIOCPP` | `OFF` | Build the audio.cpp speech engine (`src/engines/audiocpp`: TTS, ASR, VAD, diarization); needs the `vendor/audio.cpp` submodule |
+| `AGENT_AUDIOCPP_MODEL_SET` | `custom` | audio.cpp model families compiled in: `custom` builds the families in `AGENT_AUDIOCPP_MODELS`, `full` builds all of them |
+| `AGENT_AUDIOCPP_MODELS` | (list in `src/engines/audiocpp/CMakeLists.txt`) | Model families built when `AGENT_AUDIOCPP_MODEL_SET=custom` |
+| `AGENT_ENGINE_TRELLIS` | `OFF` | Build the TRELLIS.2 image-to-3D engine (`src/engines/trellis`); needs the `vendor/trellis2cpp` submodule |
+| `AGENT_TRELLIS_BUILD_JOBS`, `AGENT_AUDIOCPP_BUILD_JOBS` | (empty) | Parallel jobs for the nested build of the TRELLIS and audio.cpp engines; empty uses the build tool's default |
+| `AGENT_GGML_AMX` | `OFF` | Keep Intel AMX kernels in the engines' ggml; only safe when every engine runs out of process |
+| `BUILD_SHARED_LIBS` | `OFF` | Build `libagent`, `agent_store_sqlite` and `agent_hub` as shared libraries |
+| `AGENT_INSTALL` | `ON` (top level) | Generate install rules and the `agent-cpp` CMake package |
+| `AGENT_BUILD_EXAMPLES` | `ON` | Build `examples/` (guide code, image critique, RAG over docs) and their smoke tests (`ctest -L examples`) |
+| `AGENT_BUILD_BENCH` | `OFF` | Build `agent_bench`, the benchmark harness (`bench/`); results in [docs/benchmarks.md](docs/benchmarks.md) |
+| `AGENT_ENABLE_SANITIZERS` | `OFF` | AddressSanitizer + UndefinedBehaviorSanitizer on GCC and Clang |
+| `AGENT_ENABLE_COVERAGE` | `OFF` | gcov coverage instrumentation |
 
-The full list is in the [README](../README.md#cmake-options).

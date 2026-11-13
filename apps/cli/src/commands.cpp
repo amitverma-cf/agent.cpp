@@ -586,9 +586,6 @@ int cmd_model(const CommandLine &cl, Context &ctx) {
         return 0;
     }
 
-    if (cl.subcommand == "fit") return cmd_model_fit(cl, ctx);
-    if (cl.subcommand == "recommend") return cmd_model_recommend(cl, ctx);
-
     if (cl.subcommand == "info") {
         // What a repo offers, so a person (or an agent) can choose a quant before pulling.
         auto info = agent::hub::fetch_repo_info(cl.positionals[0], agent::hub::http_options_from_env());

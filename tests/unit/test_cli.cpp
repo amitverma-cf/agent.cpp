@@ -405,7 +405,7 @@ TEST_CASE("cli: turn footer shows prompt speed, generation speed and KV size", "
 }
 
 TEST_CASE("cli: the usage text names every command main() dispatches", "[cli]") {
-    const std::string usage = agent::cli::usage_text();
+    const std::string usage = agent::cli::usage_all();
     for (const char *command : {"init", "doctor", "clean", "secret", "setup", "engine", "model", "chat", "run", "voice", "task", "version",
                                 "runtime", "skill", "mcp", "sandbox"}) {
         INFO(command);
@@ -453,109 +453,6 @@ TEST_CASE("tui: markdown-lite layout", "[cli][tui]") {
     CHECK(lines >= 8);
 }
 #endif
-
-// ------------------------------------------------------------------ fit: GGUF header and the estimate
-
-#include "fit.hpp"
-
-namespace {
-
-void put_u32(std::string &s, uint32_t v) { s.append(reinterpret_cast<const char *>(&v), 4); }
-void put_u64(std::string &s, uint64_t v) { s.append(reinterpret_cast<const char *>(&v), 8); }
-void put_str(std::string &s, std::string_view v) {
-    put_u64(s, v.size());
-    s.append(v);
-}
-void kv_u32(std::string &s, std::string_view key, uint32_t v) {
-    put_str(s, key);
-    put_u32(s, 4);
-    put_u32(s, v);
-}
-
-// A tiny GGUF header: a 24-layer, 16-head, 8-kv-head, 2048-wide model, then a tokenizer array that may be cut short.
-std::string fake_gguf(bool cut_in_tokens) {
-    std::string s = "GGUF";
-    put_u32(s, 3);
-    put_u64(s, 0); // tensors
-    put_u64(s, 8); // metadata entries
-    put_str(s, "general.architecture");
-    put_u32(s, 8);
-    put_str(s, "llama");
-    kv_u32(s, "llama.block_count", 24);
-    kv_u32(s, "llama.embedding_length", 2048);
-    kv_u32(s, "llama.attention.head_count", 16);
-    kv_u32(s, "llama.attention.head_count_kv", 8);
-    kv_u32(s, "llama.context_length", 32768);
-    kv_u32(s, "llama.expert_count", 0);
-    put_str(s, "tokenizer.ggml.tokens");
-    put_u32(s, 9);
-    put_u32(s, 8);
-    put_u64(s, 3);
-    for (const char *t : {"a", "bb", "ccc"}) put_str(s, t);
-    if (cut_in_tokens) s.resize(s.size() - 5);
-    return s;
-}
-
-} // namespace
-
-TEST_CASE("fit: the GGUF header gives the layer shape", "[cli][fit]") {
-    auto info = parse_gguf_header(fake_gguf(false));
-    REQUIRE(info.valid);
-    CHECK(info.complete);
-    CHECK(info.architecture == "llama");
-    CHECK(info.block_count == 24);
-    CHECK(info.embedding_length == 2048);
-    CHECK(info.head_count == 16);
-    CHECK(info.head_count_kv == 8);
-    CHECK(info.context_length == 32768);
-    CHECK(info.has_shape());
-
-    // Cut short inside the tokenizer: the hyper-parameters read so far are kept.
-    auto cut = parse_gguf_header(fake_gguf(true));
-    REQUIRE(cut.valid);
-    CHECK_FALSE(cut.complete);
-    CHECK(cut.has_shape());
-
-    CHECK_FALSE(parse_gguf_header("not a gguf file at all, really").valid);
-    CHECK_FALSE(parse_gguf_header("").valid);
-}
-
-TEST_CASE("fit: memory needed and speed", "[cli][fit]") {
-    auto info = parse_gguf_header(fake_gguf(false));
-    Machine m;
-    m.ram_total = 16ull << 30;
-    m.ram_free = 10ull << 30;
-    m.mem_bandwidth = 20e9; // 20 GB/s
-    const uint64_t file = 2ull << 30;
-
-    auto small = estimate_fit(info, file, m, 4096, KvType::Q8);
-    CHECK(small.fits);
-    CHECK_FALSE(small.on_gpu);
-    // KV: 2 * 24 layers * 8 kv heads * 128 head dim * 4096 tokens * 1.0625 bytes = 214 MB
-    CHECK(small.kv_cache > 200'000'000);
-    CHECK(small.kv_cache < 230'000'000);
-    CHECK(small.need == small.weights + small.kv_cache + small.buffers);
-    // 0.6 * 20 GB/s over a 2 GiB model: about 5.6 tokens per second.
-    CHECK(small.tokens_per_second > 5.0);
-    CHECK(small.tokens_per_second < 6.5);
-
-    // The same model with a quarter of the KV bytes per element needs less.
-    CHECK(estimate_fit(info, file, m, 4096, KvType::Q4).kv_cache < small.kv_cache);
-    // A bigger context needs more.
-    CHECK(estimate_fit(info, file, m, 32768, KvType::Q8).kv_cache > small.kv_cache);
-
-    // Does not fit: a 12 GiB model against 10 GiB free.
-    auto big = estimate_fit(info, 12ull << 30, m, 4096);
-    CHECK_FALSE(big.fits);
-    CHECK(big.tokens_per_second == 0);
-    CHECK(big.note.find("needs") != std::string::npos);
-
-    // A GPU with enough memory takes it.
-    m.vram_total = 8ull << 30;
-    auto gpu = estimate_fit(info, file, m, 4096);
-    CHECK(gpu.fits);
-    CHECK(gpu.on_gpu);
-}
 
 // ------------------------------------------------------------------ schedule: cron text
 
@@ -661,43 +558,15 @@ TEST_CASE("wake: the waiting list round-trips, replaces by thread and picks what
 
 // ------------------------------------------------------------------ slash commands that run subcommands
 
-TEST_CASE("chat: /doctor /pull /fit and friends map to agent subcommands", "[cli][slash]") {
+TEST_CASE("chat: /doctor and /setup map to agent subcommands", "[cli][slash]") {
     auto argv = [](const char *line) { return slash_cli_argv(parse_slash_command(line)); };
     CHECK(parse_slash_command("/doctor").kind == SlashKind::Cli);
     CHECK(argv("/doctor") == std::vector<std::string>{"doctor"});
-    CHECK(argv("/pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M --name q") ==
-          std::vector<std::string>{"model", "pull", "Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M", "--name", "q"});
-    CHECK(argv("/fit owner/repo:Q4_K_M --ctx 8192") == std::vector<std::string>{"model", "fit", "owner/repo:Q4_K_M", "--ctx", "8192"});
-    CHECK(argv("/recommend coder") == std::vector<std::string>{"model", "recommend", "coder"});
-    CHECK(argv("/search") == std::vector<std::string>{"model", "search"});
     CHECK(argv("/setup") == std::vector<std::string>{"setup"}); // alone it asks its questions in the chat
     CHECK(argv("/setup --yes --caps llama") == std::vector<std::string>{"setup", "--yes", "--caps", "llama"});
-    CHECK(argv("/wake --dry-run") == std::vector<std::string>{"wake", "--dry-run"});
-    CHECK(argv("/schedule ls") == std::vector<std::string>{"schedule", "ls"});
-    CHECK(argv("/pull \"my repo/x y\"") == std::vector<std::string>{"model", "pull", "my repo/x y"});
+    CHECK(argv("/setup --home \"my repo/x y\"") == std::vector<std::string>{"setup", "--home", "my repo/x y"});
     // Other commands are not forwarded.
     CHECK(argv("/model").empty());
     CHECK(argv("hello").empty());
     CHECK(parse_slash_command("/clear").kind == SlashKind::Clear);
-}
-
-TEST_CASE("fit: models that are not language models are sized from the file alone", "[cli][fit]") {
-    Machine m;
-    m.ram_total = 8ull << 30;
-    m.ram_free = 6ull << 30;
-    m.mem_bandwidth = 30e9;
-    const auto small = estimate_size_fit(400ull << 20, m); // a 400 MiB speech model
-    CHECK(small.fits);
-    CHECK(small.tokens_per_second == 0);
-    CHECK(small.need == small.weights + small.buffers);
-    CHECK(small.buffers > (256ull << 20));
-    CHECK_FALSE(estimate_size_fit(9ull << 30, m).fits);
-    CHECK(estimate_size_fit(9ull << 30, m).note.find("needs") != std::string::npos);
-
-    // A GGUF header without a layer shape (an audio or image model) gets no speed either.
-    GgufInfo no_shape;
-    no_shape.valid = true;
-    const auto r = estimate_fit(no_shape, 400ull << 20, m, 4096);
-    CHECK(r.fits);
-    CHECK(r.tokens_per_second == 0);
 }

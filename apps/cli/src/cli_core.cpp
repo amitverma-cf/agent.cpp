@@ -72,9 +72,8 @@ constexpr std::string_view kCleanBool[] = {"downloads", "cache", "logs", "yes"};
 constexpr std::string_view kSecretValue[] = {"identity"};
 constexpr std::string_view kSecretBool[] = {"stdin"};
 
-constexpr SubSpec kModelSubs[] = {{"ls", 0, 0},        {"search", 0, 1}, {"info", 1, 1}, {"fit", 1, 1},
-                                  {"recommend", 0, 1}, {"pull", 1, 1},   {"rm", 1, 1}};
-constexpr std::string_view kModelValue[] = {"name", "quant", "mmproj", "include", "task", "ctx", "kv", "limit"};
+constexpr SubSpec kModelSubs[] = {{"ls", 0, 0}, {"search", 0, 1}, {"info", 1, 1}, {"pull", 1, 1}, {"rm", 1, 1}};
+constexpr std::string_view kModelValue[] = {"name", "quant", "mmproj", "include", "task"};
 constexpr std::string_view kModelBool[] = {"allow-restricted", "keep-file", "no-mmproj"};
 
 constexpr std::string_view kChatValue[] = {"model", "engine", "resume", "workspace", "ctx", "max-tokens", "engine-options"};
@@ -254,7 +253,7 @@ std::string format_turn_footer(const TokenUsage &u) {
     return out;
 }
 
-std::string usage_text() {
+std::string usage_all() {
     return "usage: agent <command> [options]   (agent alone, in a terminal, opens the chat screen)\n"
            "\n"
            "commands:\n"
@@ -289,9 +288,6 @@ std::string usage_text() {
            "        (vision / audio / OCR repos: the projector is fetched too, recorded, and used automatically)\n"
            "  model search [TEXT] [--task T]  curated registry: short names for tested models (pull by name)\n"
            "  model info <repo>          list a Hugging Face repo: quants with sizes, projectors, licence\n"
-           "  model fit <repo[:quant]|file.gguf>  will it run here, and about how fast ([--ctx N] [--kv f16|q8|q4])\n"
-           "  model recommend [TEXT]     search Hugging Face and list what fits this machine, fastest first ([--quant Q4_K_M] [--limit "
-           "N])\n"
            "        (pick a file, then: model pull owner/repo:QUANT)\n"
            "  model ls                   list downloaded models (models.json)\n"
            "  model rm <name> [--keep-file]\n"
@@ -321,6 +317,71 @@ std::string usage_text() {
            "engines run in a separate agent-engine-host process (a crash fails the turn, not the CLI);\n"
            "--inprocess, or \"isolation\": \"inprocess\" in engines.json, loads them into the CLI instead\n"
            "chat commands: /exit /clear /model [NAME] /image <path> [prompt] /open [n] /stats /help\n";
+}
+
+namespace {
+struct CommandBlurb {
+    std::string_view name, summary;
+};
+constexpr CommandBlurb kOverview[] = {
+    {"chat", "talk to a model in a full-screen chat with tools (also: just run `agent`)"},
+    {"setup", "first-time setup: home folder, hardware, engines, a first model"},
+    {"model", "download, list, search and remove models"},
+    {"task", "run one engine capability once: asr, tts, image_gen, embed, ..."},
+    {"run", "run a declarative agent graph"},
+    {"voice", "talk to the agent with a microphone and speakers"},
+    {"engine", "list, add, download and remove engine plugins"},
+    {"skill", "search and install skills"},
+    {"mcp", "search and install MCP servers"},
+    {"sandbox", "folders that tools may use outside the workspace"},
+    {"secret", "API keys in the OS credential store"},
+    {"runtime", "the private bun / node / uv runtimes"},
+    {"init", "create a .agents/ folder in a project"},
+    {"doctor", "what is installed, disk use, what is safe to clean"},
+    {"clean", "remove partial downloads, caches or old logs"},
+    {"wake", "resume graph runs that are waiting for a time (see schedule)"},
+    {"schedule", "run an agent command on a schedule (cron / Task Scheduler)"},
+    {"version", "print the version"},
+};
+} // namespace
+
+std::string usage_text(std::string_view command) {
+    if (command.empty()) {
+        std::string out = "usage: agent <command> [options]     (agent alone, in a terminal, opens the chat)\n\n";
+        for (const auto &b : kOverview) {
+            out += "  ";
+            out += b.name;
+            out.append(b.name.size() < 10 ? 10 - b.name.size() : 1, ' ');
+            out += b.summary;
+            out += '\n';
+        }
+        out += "\nagent <command> --help shows the options of one command.\n"
+               "global options: -h|--help, --no-sandbox (run without the OS sandbox), --home DIR (default $AGENT_HOME or the folder "
+               "chosen at setup)\n";
+        return out;
+    }
+    // The detailed lines of one command: its first line starts with two spaces and the name, the lines under it are indented deeper.
+    const std::string all = usage_all();
+    std::string out, current;
+    size_t pos = all.find("commands:\n");
+    pos = pos == std::string::npos ? 0 : pos + 10;
+    while (pos < all.size()) {
+        size_t end = all.find('\n', pos);
+        if (end == std::string::npos) end = all.size();
+        const std::string_view line(all.data() + pos, end - pos);
+        if (line.empty()) break;
+        if (line.size() > 2 && line[0] == ' ' && line[1] == ' ' && line[2] != ' ') {
+            const size_t e = line.find_first_of(" \t", 2);
+            current = std::string(line.substr(2, e == std::string_view::npos ? std::string_view::npos : e - 2));
+        }
+        if (current == command) {
+            out.append(line);
+            out += '\n';
+        }
+        pos = end + 1;
+    }
+    if (out.empty()) return usage_text();
+    return "usage: agent " + std::string(command) + " ...\n\n" + out + "\nglobal options: -h|--help, --no-sandbox, --home DIR\n";
 }
 
 // -------------------------- JSON helpers --------------------------
@@ -771,7 +832,7 @@ SlashCommand parse_slash_command(std::string_view line) {
     cmd.rest = std::string(args);
 
     // Commands that run an `agent` subcommand: everything after the name is passed on as it was typed.
-    for (std::string_view cli_name : {"doctor", "pull", "fit", "recommend", "search", "setup", "wake", "schedule"})
+    for (std::string_view cli_name : {"doctor", "setup"})
         if (name == cli_name) {
             cmd.kind = SlashKind::Cli;
             cmd.arg = name;
@@ -819,9 +880,7 @@ std::vector<std::string> slash_cli_argv(const SlashCommand &cmd) {
 
     std::vector<std::string> argv;
     const std::string &name = cmd.arg;
-    if (name == "pull" || name == "fit" || name == "recommend" || name == "search") argv = {"model", name};
-    else if (name == "setup")
-        argv = {"setup"}; // alone, /setup asks its questions in the chat (chat.cpp); with flags it is passed on as typed
+    if (name == "setup") argv = {"setup"}; // alone, /setup asks its questions in the chat (chat.cpp); with flags it is passed on as typed
     else argv = {name};
     argv.insert(argv.end(), words.begin(), words.end());
     return argv;

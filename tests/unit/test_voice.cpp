@@ -458,7 +458,7 @@ TEST_CASE("agent voice flags parse and validate", "[voice][cli]") {
     CHECK_FALSE(parse_command_line(unknown).ok);
     const std::vector<std::string_view> positional = {"voice", "extra"};
     CHECK_FALSE(parse_command_line(positional).ok);
-    CHECK(usage_text().find("  voice ") != std::string::npos);
+    CHECK(usage_all().find("  voice ") != std::string::npos);
 }
 
 TEST_CASE("audiocpp options come from GGUF files", "[voice][cli]") {

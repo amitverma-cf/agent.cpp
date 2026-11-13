@@ -12,7 +12,6 @@ add_library(agent_cli_core STATIC
     src/registries.cpp
     src/doctor.cpp
     src/status_view.cpp
-    src/fit.cpp
     src/schedule.cpp
     src/waiting.cpp
     src/audio.cpp
@@ -84,7 +83,6 @@ add_executable(agent_cli_bin
     src/runtime_cmd.cpp
     src/skill_cmd.cpp
     src/sandbox_cmd.cpp
-    src/model_fit_cmd.cpp
     src/schedule_cmd.cpp
     src/wake_cmd.cpp
 )

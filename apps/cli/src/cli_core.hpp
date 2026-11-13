@@ -37,7 +37,10 @@ struct CommandLine {
 // Global flags (any command): --help/-h, --config-dir DIR.
 Result<CommandLine> parse_command_line(std::span<const std::string_view> args);
 
-std::string usage_text();
+// The overview (no argument) or the detailed help of one command ("model", "task", ...).
+std::string usage_text(std::string_view command = {});
+// Every command with every option, in one text.
+std::string usage_all();
 
 // The one-line summary printed after every chat turn from the last model call: prompt speed, generation
 // speed and KV cache size, e.g. "prompt 412 tok (380 cached) 548 tok/s | gen 63 tok 91 tok/s | KV 475/2048 q4_0 3.1 MiB".

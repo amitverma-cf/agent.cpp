@@ -259,24 +259,12 @@ agent model pull qwen3-4b                    # a registry name (pulls every part
 agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M [--name qwen] [--allow-restricted]
 agent model pull owner/repo --quant Q4_K_M [--mmproj auto|none|QUANT] [--no-mmproj]
 agent model pull owner/repo:* [--include int8,tokens]     # every file of a folder model (TRELLIS)
-agent model fit owner/repo:Q4_K_M           # will it run on this machine, and about how fast
-agent model recommend [TEXT] [--limit 8]     # search Hugging Face, keep what fits, fastest first
 agent model ls
 agent model rm qwen [--keep-file]
 ```
 
 A vision, audio or OCR repo also gets its multimodal projector (`mmproj-*.gguf`) in the same pull: the one with the
 model's quant, else Q8_0, else F16. It is recorded in `models.json` and used automatically by `chat`, `task` and `run`.
-
-**Will it run here?** `agent model fit` reads the model's own header (the first few megabytes of the GGUF, fetched with an HTTP
-range request, or from a file on disk), works out the memory it needs (weights, KV cache for `--ctx` tokens at `--kv f16|q8|q4`,
-buffers) and compares it with the RAM that is free now, or the GPU memory when an NVIDIA GPU is found. It also measures the
-machine's memory bandwidth for a third of a second and estimates generation speed from it: about 60 % of the bandwidth divided
-by the bytes read per token (for a mixture-of-experts model, only the active experts). The estimate is "about": on the 4-core
-test machine it said 57 to 61 tokens per second for Qwen2.5-0.5B Q4_K_M, which measured 50 to 62. A model that does not fit
-says so and exits with 1. `agent model recommend` runs the same check over the most downloaded GGUF repos that match your text
-(default "instruct") and lists those that fit, fastest first. Nothing is downloaded but the headers; there is no catalogue to
-keep up to date.
 
 `pull` uses the hub (see [api/hub.md](api/hub.md)) for spec resolution, resumable downloads, sha256
 checks and the licence policy. Progress is drawn on stderr. Ctrl-C cancels the download and keeps the

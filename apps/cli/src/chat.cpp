@@ -329,12 +329,7 @@ void print_chat_help() {
          "/open [n]             list generated artifacts, or open the n-th with the default app\n"
          "/stats                token and tool-call counters\n"
          "/doctor               what is installed and how much disk it uses\n"
-         "/pull SPEC            download a model (owner/repo:QUANT or a registry name)\n"
-         "/fit SPEC             will a model run on this machine, and about how fast\n"
-         "/recommend [TEXT]     search Hugging Face for models that fit this machine\n"
-         "/search [TEXT]        the curated registry of tested models\n"
          "/setup                ask the setup questions here, then run agent setup with the answers\n"
-         "/wake, /schedule ...  resume waiting graph runs; scheduled runs (agent schedule)\n"
          "//text                send a message that starts with '/'\n"
          "Ctrl-C while the model is answering cancels the answer.\n");
 }

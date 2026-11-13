@@ -30,7 +30,8 @@ int main(int argc, char **argv) {
     const CommandLine &cl = parsed.value;
     set_no_sandbox(cl.has("no-sandbox"));
     if (cl.command.empty() || cl.command == "help" || cl.help) {
-        std::printf("%s", usage_text().c_str());
+        std::string topic = cl.command == "help" ? (cl.positionals.empty() ? std::string() : cl.positionals[0]) : cl.command;
+        std::printf("%s", usage_text(topic).c_str());
         return cl.command.empty() && !cl.help ? 2 : 0;
     }
     if (cl.command == "version") {

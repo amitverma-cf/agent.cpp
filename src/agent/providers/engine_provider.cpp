@@ -4,6 +4,7 @@
 #include "../sandbox/sandbox_policy.hpp"
 #include "../tools/tools_ops.hpp"
 #include "../utils/utils.hpp"
+#include "hal/path.hpp"
 #include "provider_ops.hpp"
 
 #include <agent-cpp/agent.hpp>
@@ -12,10 +13,12 @@
 #include <atomic>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace agent::providers {
 
@@ -45,6 +48,30 @@ struct EngineState {
 
 agent_str to_c(std::string_view s) { return agent_str{s.data(), s.size()}; }
 std::string_view from_c(agent_str s) { return s.data ? std::string_view(s.data, s.size) : std::string_view(); }
+
+// A bare engine name that no manifest lists ("llama"): look for agent-engine-<name> where engines are normally installed, so library
+// users can write Config::engine = "llama" without a path.
+std::string find_named_plugin(const std::string &name) {
+#if defined(_WIN32)
+    const std::string file = "agent-engine-" + name + ".dll";
+#elif defined(__APPLE__)
+    const std::string file = "agent-engine-" + name + ".dylib";
+#else
+    const std::string file = "agent-engine-" + name + ".so";
+#endif
+    std::vector<std::filesystem::path> dirs;
+    if (const char *env = std::getenv("AGENT_ENGINES_DIR"); env && *env) dirs.emplace_back(env);
+    const std::filesystem::path exe = hal::current_executable_path();
+    if (!exe.empty()) {
+        const auto dir = exe.parent_path();
+        dirs.insert(dirs.end(), {dir, dir / "engines", dir.parent_path() / "lib", dir.parent_path() / "lib" / "agent-cpp"});
+    }
+    dirs.emplace_back(std::filesystem::current_path());
+    std::error_code ec;
+    for (const auto &d : dirs)
+        if (std::filesystem::is_regular_file(d / file, ec)) return (d / file).string();
+    return {};
+}
 
 bool looks_like_path(std::string_view s) {
     return s.find('/') != std::string_view::npos || s.find('\\') != std::string_view::npos || s.ends_with(".so") || s.ends_with(".dll") ||
@@ -153,7 +180,8 @@ Result<void> init_engine(Session &session) {
     const bool spec_is_path = looks_like_path(spec);
     std::string plugin_path = spec_is_path ? spec : std::string();
     EngineIsolation manifest_isolation = EngineIsolation::Default;
-    if (!spec_is_path) engines::find_plugin_record(spec, plugin_path, manifest_isolation);
+    if (!spec_is_path && !engines::find_plugin_record(spec, plugin_path, manifest_isolation) && !find_engine(spec))
+        plugin_path = find_named_plugin(spec);
     const EngineIsolation isolation = cfg.engine_isolation != EngineIsolation::Default ? cfg.engine_isolation
                                       : manifest_isolation == EngineIsolation::Process ? EngineIsolation::Process
                                                                                        : EngineIsolation::InProcess;
