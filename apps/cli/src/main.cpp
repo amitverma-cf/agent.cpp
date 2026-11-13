@@ -43,10 +43,24 @@ int main(int argc, char **argv) {
     }
     const CommandLine &cl = parsed.value;
     set_no_sandbox(cl.has("no-sandbox"));
+    // Commands that run models, tools or engines say once when nothing is confined (the chat screen shows it on its welcome screen).
+    if (cl.command == "task" || cl.command == "run" || cl.command == "voice" || (cl.command == "chat" && !stdin_is_tty())) {
+        const std::string notice = sandbox_notice();
+        if (!notice.empty()) std::fprintf(stderr, "%s\n", notice.c_str());
+    }
     if (cl.command.empty() || cl.command == "help" || cl.help) {
         std::string topic = cl.command == "help" ? (cl.positionals.empty() ? std::string() : cl.positionals[0]) : cl.command;
         std::printf("%s", usage_text(topic).c_str());
         return cl.command.empty() && !cl.help ? 2 : 0;
+    }
+    if (cl.command == "completion") {
+        const std::string script = completion_script(cl.positionals.empty() ? std::string_view() : std::string_view(cl.positionals[0]));
+        if (script.empty()) {
+            std::fprintf(stderr, "agent: completion SHELL: bash, zsh, fish or powershell\n");
+            return 2;
+        }
+        std::printf("%s", script.c_str());
+        return 0;
     }
     if (cl.command == "version") {
         std::printf("agent %.*s\n", static_cast<int>(kCliVersion.size()), kCliVersion.data());
@@ -95,6 +109,7 @@ int main(int argc, char **argv) {
     if (cl.command == "init") return cmd_init(cl, ctx);
     if (cl.command == "secret") return cmd_secret(cl, ctx);
     if (cl.command == "doctor") return cmd_doctor(cl, ctx);
+    if (cl.command == "update") return cmd_update(cl, ctx);
     if (cl.command == "mcp") return cmd_mcp(cl, ctx);
     if (cl.command == "runtime") return cmd_runtime(cl, ctx);
     if (cl.command == "skill") return cmd_skill(cl, ctx);

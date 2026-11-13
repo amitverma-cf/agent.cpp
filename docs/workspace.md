@@ -14,7 +14,7 @@ override it for a single run.
 |---|---|
 | `config.json`, `engines.json` | settings; the engine plugins in use |
 | `engines/` | engine plugins, one folder per engine and version |
-| `models/` | model files, `models.json`, projectors |
+| `models/` | `models.json` and the model files, one folder per engine (`llama/`, `sdcpp/`, `onnx/`, `audiocpp/`): `models/llama/owner/repo/file.gguf`; projectors sit beside their model. Models pulled earlier stay where they are |
 | `skills/` | skills available in every project |
 | `mcp/` | MCP server definitions. Keys are never stored here: they are referenced by name |
 | `plugins/` | third-party plugins, each with its own data folder |

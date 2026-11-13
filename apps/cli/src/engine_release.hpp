@@ -32,6 +32,11 @@ Result<ReleaseManifest> parse_release_manifest(std::string_view json);
 // "agent-engine-llama-linux-x86_64.so" ("windows" -> .dll, "macos" -> .dylib)
 std::string engine_asset_name(std::string_view engine, std::string_view os, std::string_view arch);
 
+// "v0.2.0" is newer than "0.1.9" and "0.2.0" is not newer than "v0.2.0". Anything that is not a dotted number ("build-12") is never newer.
+bool version_is_newer(std::string_view candidate, std::string_view current);
+// "agent-cpp-<version>-<os>-<arch>.tar.gz" ("windows" -> .zip): the CLI archive of a release (see release.yml).
+std::string cli_archive_name(std::string_view version, std::string_view os, std::string_view arch);
+
 // tag: "latest" or a release tag such as "v0.2.0".
 std::string release_manifest_url(std::string_view repo, std::string_view tag);
 std::string release_asset_url(std::string_view repo, std::string_view tag, std::string_view file);

@@ -632,6 +632,7 @@ int cmd_model(const CommandLine &cl, Context &ctx) {
             part.positionals = {std::string(entry->parts[i].spec)};
             if (i == 0 && !cl.has("name")) part.flags.push_back(Flag{"name", std::string(entry->alias)});
             if (!entry->parts[i].include.empty()) part.flags.push_back(Flag{"include", std::string(entry->parts[i].include)});
+            if (!part.has("engine") && !entry->engine.empty()) part.flags.push_back(Flag{"engine", std::string(entry->engine)});
             if (const int rc = cmd_model(part, ctx); rc != 0) return rc;
         }
         if (!entry->engine_options.empty())
@@ -652,7 +653,9 @@ int cmd_model(const CommandLine &cl, Context &ctx) {
     std::signal(SIGINT, on_pull_signal);
     PullProgress progress;
     agent::hub::PullOptions opts;
-    opts.models_dir = dir;
+    // The files of each engine live in a folder of their own (models/llama/..., models/sdcpp/...); the catalogue stays in models/.
+    const std::string engine_folder = model_engine_folder(spec, cl.get("engine"), {});
+    opts.models_dir = engine_folder.empty() ? dir : (fs::path(dir) / engine_folder).string();
     opts.catalog_path = catalog;
     opts.name = std::string(cl.get("name"));
     opts.allow_restricted_license = cl.has("allow-restricted");

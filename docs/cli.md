@@ -79,6 +79,8 @@ and follows it again. Select text with the mouse to copy it. The screen uses fou
 | `/open [n]` | list files the model generated, or open the n-th |
 | `/stats` | token, tool-call and cache counters, loaded models |
 | `/clear` | forget the conversation (the system prompt stays) |
+| `/diff` | what the tools changed in files this session, as a unified diff |
+| `/undo` | put back the files of the last tool call (a file it created is removed) |
 | `/doctor`, `/setup` | the commands of the same name, run inside the chat |
 | `/exit`, `//text` | quit; send a message that starts with `/` |
 
@@ -90,6 +92,40 @@ you pass `--engine`. Engines run in a separate `agent-engine-host` process, so a
 it ([isolation](api/engines.md#isolation)). Conversations are saved after every turn and the id is printed on exit. Tools that
 change files or run commands (`run_command`, `delete_path`, `move_path`) ask first; without a terminal they are denied unless you
 pass `--yes`.
+
+### Rules for a project
+
+The rules you write for a project become part of the system prompt of every new conversation: `AGENTS.md` in the workspace, then
+`.agents/AGENTS.md`, then every `.agents/rules/*.md` in name order, then your own `AGENTS.md` in the agent home. At most 16 KiB are
+used; a file that does not fit is cut and says so. Nothing is read from outside these places.
+
+### Without a terminal: `-p` and `--jsonl`
+
+```sh
+agent chat -p "Summarise README.md in one line" -y      # answer once and exit
+git diff | agent chat -p - -y                           # - reads the prompt from stdin
+```
+
+`-p` (`--prompt`) prints only the answer on stdout; tool lines, permission lines and notes go to stderr, so the output can be piped.
+The exit code is 1 when the turn failed. Tool calls that need permission are denied unless you pass `-y`. The conversation is saved
+like any other (`--resume ID` continues it).
+
+`--jsonl` is the editor integration: one JSON object per line on stdin and on stdout, no terminal, no daemon (the program ends when
+stdin closes). Send `{"type":"prompt","text":"..."}` (a `/command` works too) and `{"type":"exit"}`. The program writes:
+
+| `type` | other fields | meaning |
+|---|---|---|
+| `ready` | `session`, `model`, `engine`, `workspace` | once, when the model is loaded |
+| `token` | `text` | a piece of the answer |
+| `tool`, `note`, `error` | `text` | a tool call or result, a notice, an error |
+| `permission_request` | `tool`, `arguments` | answer on the next stdin line: `{"type":"permission","allow":true,"always":false}` (not asked with `-y`) |
+| `done` | `session`, `metrics` | the turn is over; `metrics` is the model, speed and token line |
+
+### Seeing and undoing edits
+
+Before a built-in tool changes a file (`write_file`, `append_file`, `delete_path`, `move_path`), the chat remembers the file's
+content (files up to 1 MiB; folders are not remembered). `/diff` shows every change of the session against the files as they are
+now, and `/undo` puts back the files of the last tool call, newest first.
 
 ## agent model
 
@@ -107,6 +143,11 @@ agent model rm qwen [--keep-file]
 (the `.part` file is kept), are checked against the published hash, and refuse models with restrictive licences unless you pass
 `--allow-restricted` (on a terminal you are asked). Vision, audio and OCR repos also fetch their multimodal projector, record it
 and use it automatically. The first chat model you pull becomes the default.
+
+Pulled files go to a folder of their engine, so the files of two engines are never mixed: `models/llama/owner/repo/file.gguf`,
+`models/sdcpp/...`, `models/onnx/...`. A registry name knows its engine; for `owner/repo` the engine follows the quant or file
+(`:Q4_K_M` and GGUF repos are `llama`, `.onnx` is `onnx`, `.safetensors` is `sdcpp`); `--engine NAME` overrides it. Models pulled before
+this stay where they are (`models.json` records absolute paths).
 
 ## agent task
 
@@ -258,7 +299,23 @@ agent doctor                         # engines, runtimes, models and disk use pe
 agent clean --downloads|--cache|--logs [--yes]
 ```
 
+`doctor` also prints the sandbox line: `on (Landlock ABI 6, seccomp)` or `AppContainer and Job Object`, `off (--no-sandbox)`, or
+`not supported on this system (...): running unsandboxed`. The same warning is shown when a chat, task or run starts and the sandbox
+cannot confine anything; nothing is refused and nothing is faked.
+
 `clean` removes one area per flag (partial downloads, rebuildable caches, old logs). Models, memory and conversations are never removed.
+
+## agent update, completion
+
+```sh
+agent update --check        # is there a newer release? changes nothing
+agent update                # download it (SHA-256 checked) and replace agent and agent-engine-host next to the running program
+agent completion bash       # also: zsh, fish, powershell
+```
+
+`update` reads the project's GitHub releases (`--repo OWNER/NAME`, `--tag TAG`). While no release is published it says so and
+changes nothing. Engines are not touched; `agent engine pull NAME` fetches newer ones. Load a completion script in your shell, for
+example `source <(agent completion bash)`, `agent completion fish | source`, or `agent completion powershell | Out-String | Invoke-Expression`.
 
 ## agent schedule
 

@@ -78,6 +78,7 @@ PathGateDecision cli_path_gate(const PathAccessRequest &request, void *context);
 // chosen js_runtime (Config::mcp_launcher). `ctx` must outlive the session.
 void install_cli_hooks(Config &cfg, Context &ctx);
 int cmd_skill(const CommandLine &cl, Context &ctx);  // skill_cmd.cpp
+int cmd_update(const CommandLine &cl, Context &ctx); // update_cmd.cpp
 int cmd_doctor(const CommandLine &cl, Context &ctx); // doctor_cmd.cpp
 int cmd_clean(const CommandLine &cl, Context &ctx);  // doctor_cmd.cpp
 int cmd_init(const CommandLine &cl, Context &ctx);   // creates .agents/ in a project

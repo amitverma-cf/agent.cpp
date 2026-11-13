@@ -241,7 +241,7 @@ the same way (the request that triggered it gets `Cancelled` / the watchdog mess
 `EngineCrashed`).
 
 **Shared memory.** Tensor and BYTES payloads of at least 64 KiB travel in shared memory (POSIX
-`shm_open` + `mmap`; on Windows a named `CreateFileMapping`, written but untested) instead of through
+`shm_open` + `mmap`; on Windows a named `CreateFileMapping`, run by the Windows test suite on Windows 11) instead of through
 the pipe, in both directions. Segments are mapped once and reused: each core call slot has a request
 segment and the host keeps a pool of response segments, handed back with a `Release` frame once the
 core has copied the response out, so steady-state calls make no shm syscalls. Names are removed as
@@ -264,8 +264,7 @@ Limits:
 
 - Engines linked in with `register_engine` have no plugin file and can't run out of process
   (`InvalidConfig`).
-- Windows: written (CreateProcess + pipes via `src/hal/child_process`, file mappings), not yet compiled
-  or tested.
+- Windows: `CreateProcess` + pipes via `src/hal/child_process` and file mappings; the engine-host tests run on Windows 11.
 
 Cost (`test_agent "Process isolation per-turn overhead"`, mock engine, Linux, Release build on 4
 shared and busy cores): a whole turn takes ~1 µs in process and 10-90 µs out of process (a pipe round trip
@@ -473,11 +472,7 @@ family matches when its keywords all occur in the GGUF's `general.architecture` 
 
 | Family | Keywords | Prompt | Status |
 |---|---|---|---|
-| PaddleOCR-VL | `paddleocr` | `OCR:` | not tested here |
 | GLM-OCR | `glm` + `ocr` | `Text Recognition:` | tested (`ggml-org/GLM-OCR-GGUF` Q8_0, MIT) |
-| DeepSeek-OCR | `deepseek` + `ocr` | `Free OCR.` | not tested; llama.cpp recommends its `deepseek-ocr` chat template |
-| dots.ocr | `dots` + `ocr` | `Extract the text content from this image.` | not tested |
-| HunyuanOCR | `hunyuan` + `ocr` | `OCR` | not tested |
 | anything else | | `Transcribe all the text in this image exactly as written, line by line. Output only the text, nothing else.` | tested with SmolVLM-256M (weak: single words) |
 
 GLM-OCR's GGUF has no `general.name`, so its file name must contain "glm" and "ocr" (the ggml-org

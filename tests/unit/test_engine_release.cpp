@@ -32,3 +32,16 @@ TEST_CASE("engine release: reading the manifest", "[engine_release]") {
     CHECK_FALSE(parse_release_manifest("nope").ok);
     CHECK_FALSE(pull_engine("x", "../evil", "o/r", "latest", {}).ok);
 }
+
+TEST_CASE("update: versions and the CLI archive name", "[update]") {
+    using namespace agent::cli;
+    CHECK(version_is_newer("v0.2.0", "0.1.9"));
+    CHECK(version_is_newer("0.10.0", "0.9.0"));
+    CHECK(version_is_newer("1.0.0", "0.9.9"));
+    CHECK_FALSE(version_is_newer("0.2.0", "v0.2.0"));
+    CHECK_FALSE(version_is_newer("0.1.0", "0.2.0"));
+    CHECK_FALSE(version_is_newer("build-12", "0.1.0")); // not a dotted number: never newer
+    CHECK_FALSE(version_is_newer("0.2.0", "dev"));
+    CHECK(cli_archive_name("v0.2.0", "linux", "x86_64") == "agent-cpp-v0.2.0-linux-x86_64.tar.gz");
+    CHECK(cli_archive_name("v0.2.0", "windows", "aarch64") == "agent-cpp-v0.2.0-windows-aarch64.zip");
+}

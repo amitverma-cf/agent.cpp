@@ -30,7 +30,7 @@ set(agent-cpp_ENGINE_DIR "@PACKAGE_AGENT_INSTALL_ENGINEDIR@")
 # $AGENT_ENGINE_HOST).
 set(agent-cpp_ENGINE_HOST "@PACKAGE_CMAKE_INSTALL_BINDIR@/agent-engine-host${CMAKE_EXECUTABLE_SUFFIX}")
 
-# Components: find_package(agent-cpp REQUIRED COMPONENTS graph mcp rag models llama audiocpp sdcpp trellis onnx)
+# Components: find_package(agent-cpp REQUIRED COMPONENTS graph mcp rag models testing llama audiocpp sdcpp trellis onnx)
 # The library parts are found when this build of agent.cpp includes them; an engine is found when its plugin is installed.
 set(agent-cpp_graph_FOUND @AGENT_WITH_GRAPH@)
 set(agent-cpp_mcp_FOUND @AGENT_WITH_MCP@)
@@ -45,12 +45,33 @@ foreach(_engine llama audiocpp sdcpp trellis onnx)
     endif()
 endforeach()
 
+# testing: the mock engine plugins, installed with -DAGENT_INSTALL_MOCK_ENGINE=ON. agent-cpp::testing defines AGENT_CPP_MOCK_ENGINE and
+# AGENT_CPP_MOCK_ALL_ENGINE as the paths of the plugins, for tests that run without a model.
+set(agent-cpp_TESTING_DIR "@PACKAGE_AGENT_INSTALL_TESTINGDIR@")
+file(GLOB _mock_plugin "${agent-cpp_TESTING_DIR}/agent-engine-mock.*")
+file(GLOB _mock_all_plugin "${agent-cpp_TESTING_DIR}/agent-engine-mock-all.*")
+if(_mock_plugin AND _mock_all_plugin)
+    set(agent-cpp_testing_FOUND TRUE)
+    if(NOT TARGET agent-cpp::testing)
+        list(GET _mock_plugin 0 _mock_plugin)
+        list(GET _mock_all_plugin 0 _mock_all_plugin)
+        add_library(agent-cpp::testing INTERFACE IMPORTED)
+        set_target_properties(agent-cpp::testing PROPERTIES
+            INTERFACE_COMPILE_DEFINITIONS "AGENT_CPP_MOCK_ENGINE=\"${_mock_plugin}\";AGENT_CPP_MOCK_ALL_ENGINE=\"${_mock_all_plugin}\"")
+    endif()
+else()
+    set(agent-cpp_testing_FOUND FALSE)
+endif()
+
 # Name what is missing, and how to build it, when a requested component is not part of this install.
 set(_agent_missing "")
 foreach(_c IN LISTS agent-cpp_FIND_COMPONENTS)
     if(agent-cpp_FIND_REQUIRED_${_c} AND NOT agent-cpp_${_c}_FOUND)
         string(TOUPPER "${_c}" _u)
-        if(_c MATCHES "^(graph|mcp|rag|models)$")
+        if(_c STREQUAL "testing")
+            string(APPEND _agent_missing "
+  testing: build and install agent.cpp with -DAGENT_INSTALL_MOCK_ENGINE=ON")
+        elseif(_c MATCHES "^(graph|mcp|rag|models)$")
             string(APPEND _agent_missing "
   ${_c}: rebuild agent.cpp with -DAGENT_WITH_${_u}=ON")
         else()

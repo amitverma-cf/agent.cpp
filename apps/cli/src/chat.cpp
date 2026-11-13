@@ -3,6 +3,7 @@
 // workspace's SQLite store, and opens generated artifacts with the OS default app.
 
 #include "commands.hpp"
+#include "edit_journal.hpp"
 #include "mcp_config.hpp"
 #include "schedule.hpp"
 #include "secrets.hpp"
@@ -18,6 +19,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <simdjson.h>
 
 #if !defined(_WIN32)
 #include <signal.h>
@@ -58,7 +60,15 @@ void install_sigint() {
 #endif
 }
 
-bool g_tui = false; // the full-screen interface is running: output goes to it, not to stdout
+bool g_tui = false;      // the full-screen interface is running: output goes to it, not to stdout
+bool g_headless = false; // -p: the answer alone goes to stdout; tool lines and notes go to stderr
+bool g_jsonl = false;    // --jsonl: every piece of output is one JSON line on stdout
+bool g_last_turn_failed = false;
+
+void json_event(const char *type, std::string_view text) {
+    std::printf("{\"type\":\"%s\",\"text\":\"%s\"}\n", type, json_escape(text).c_str());
+    std::fflush(stdout);
+}
 
 TuiKind classify(std::string_view s) {
     if (s.starts_with("[tool]") || s.starts_with("[result]")) return TuiKind::Tool;
@@ -68,6 +78,15 @@ TuiKind classify(std::string_view s) {
 
 void out(std::string_view s) {
     if (s.empty()) return;
+    if (g_jsonl) {
+        const TuiKind kind = classify(s);
+        json_event(kind == TuiKind::Tool ? "tool" : kind == TuiKind::Error ? "error" : "note", s);
+        return;
+    }
+    if (g_headless) {
+        std::fwrite(s.data(), 1, s.size(), stderr);
+        return;
+    }
 #if defined(AGENT_CLI_HAS_TUI)
     if (g_tui) {
         tui_emit(classify(s), s);
@@ -80,12 +99,21 @@ void out(std::string_view s) {
 }
 
 void ensure_newline() {
-    if (!g_tui && !g_at_line_start) out("\n");
+    if (!g_tui && !g_headless && !g_jsonl && !g_at_line_start) out("\n");
 }
 
 // Streamed answer text: the transcript's assistant block in the full-screen interface, stdout otherwise.
 void emit_assistant(std::string_view s) {
     if (s.empty()) return;
+    if (g_jsonl) {
+        json_event("token", s);
+        return;
+    }
+    if (g_headless) {
+        std::fwrite(s.data(), 1, s.size(), stdout);
+        std::fflush(stdout);
+        return;
+    }
 #if defined(AGENT_CLI_HAS_TUI)
     if (g_tui) {
         tui_emit(TuiKind::Assistant, s);
@@ -129,11 +157,17 @@ struct ChatState {
 
     std::shared_ptr<SecretContext> secrets; // names and bindings; values are read only when an MCP server starts
     std::vector<std::string> always_allowed;
+    std::unique_ptr<EditJournal> journal; // what the tools changed in files this session (/diff, /undo)
     std::vector<Media> artifacts;
     size_t streamed_bytes = 0;
     StreamFilter filter;
     bool saved = false; // the conversation is in the store (resumable)
 };
+
+// The system prompt of a new conversation: ours, then the rules the user wrote for the project (AGENTS.md and .agents/rules).
+std::string system_prompt(const ChatState &st) {
+    return std::string(kSystemPrompt) + load_project_rules(st.workspace, st.ctx->has_home ? st.ctx->home.root : st.ctx->config_dir);
+}
 
 void log_fn(LogLevel level, std::string_view message, void *user_data) {
     const auto *st = static_cast<const ChatState *>(user_data);
@@ -153,6 +187,7 @@ PermissionDecision check_tool(std::string_view name, std::string_view arguments,
     auto *st = static_cast<ChatState *>(user_data);
     ensure_newline();
     out("[tool] " + std::string(name) + " " + one_line(arguments, 300) + "\n");
+    if (st->journal) st->journal->before_tool(name, arguments);
     PermissionDecision d = tools::default_permission_policy(name, arguments, nullptr);
     if (d == PermissionDecision::Ask && std::find(st->always_allowed.begin(), st->always_allowed.end(), name) != st->always_allowed.end())
         return PermissionDecision::Allow;
@@ -165,6 +200,17 @@ bool prompt_tool(std::string_view name, std::string_view arguments, void *user_d
     if (st->auto_approve) {
         out("[permission] " + n + ": approved (--yes)\n");
         return true;
+    }
+    if (g_jsonl) {
+        // The editor answers on the next line of stdin: {"type":"permission","allow":true,"always":false}.
+        std::printf("{\"type\":\"permission_request\",\"tool\":\"%s\",\"arguments\":\"%s\"}\n", json_escape(n).c_str(),
+                    json_escape(arguments).c_str());
+        std::fflush(stdout);
+        std::string reply;
+        if (read_line(stdin, reply) != ReadStatus::Line) return false;
+        reply.erase(std::remove(reply.begin(), reply.end(), ' '), reply.end());
+        if (reply.find("\"always\":true") != std::string::npos) st->always_allowed.push_back(n);
+        return reply.find("\"allow\":true") != std::string::npos;
     }
 #if defined(AGENT_CLI_HAS_TUI)
     if (g_tui) {
@@ -334,6 +380,8 @@ void print_chat_help() {
          "/image <path> [text]  send an image (or audio) with an optional prompt\n"
          "/open [n]             list generated artifacts, or open the n-th with the default app\n"
          "/stats                token and tool-call counters\n"
+         "/diff                 what the tools changed in files this session\n"
+         "/undo                 put back the files of the last tool call\n"
          "/doctor               what is installed and how much disk it uses\n"
          "/setup                ask the setup questions here, then run agent setup with the answers\n"
          "//text                send a message that starts with '/'\n"
@@ -373,6 +421,7 @@ void run_one_turn(ChatState &st, const std::string &text, std::span<const Media>
     auto r = media.empty() ? run_turn(*st.lease, st.memory, text, true, on_token, &st)
                            : run_turn_with_media(*st.lease, st.memory, text, media, true, on_token, &st);
     g_generating.store(false);
+    g_last_turn_failed = !r.ok;
     if (!r.ok) {
         ensure_newline();
         if (r.error.code == ErrorCode::Cancelled) out("[cancelled]\n");
@@ -581,6 +630,7 @@ bool switch_session(ChatState &st, const std::string &id, const std::string &wor
         release_model(st.lease);
         unload_model(st.registry, st.model.name);
         st.workspace = workspace;
+        st.journal = std::make_unique<EditJournal>(st.workspace);
         Config store_cfg;
         store_cfg.provider = AiProvider::Mock;
         store_cfg.workspace_dir = st.workspace;
@@ -602,7 +652,7 @@ bool switch_session(ChatState &st, const std::string &id, const std::string &wor
     if (id.empty()) {
         st.memory = Conversation{};
         st.memory.id = new_conversation_id();
-        st.memory.history.push_back(Message{.role = "system", .content = std::string(kSystemPrompt)});
+        st.memory.history.push_back(Message{.role = "system", .content = system_prompt(st)});
         st.saved = false;
         return true;
     }
@@ -630,6 +680,7 @@ int cmd_chat(const CommandLine &cl, Context &ctx) {
     ChatState st;
     st.ctx = &ctx;
     st.workspace = workspace_dir(ctx, cl.get("workspace"));
+    st.journal = std::make_unique<EditJournal>(st.workspace);
     if (cl.has("list")) return list_conversations(st.workspace);
 
     st.verbose = cl.has("verbose");
@@ -637,7 +688,7 @@ int cmd_chat(const CommandLine &cl, Context &ctx) {
     st.inprocess = cl.has("inprocess");
     st.interactive = stdin_is_tty();
 #if defined(AGENT_CLI_HAS_TUI)
-    st.use_tui = st.interactive && stream_is_tty(stdout) && !cl.has("plain") && !st.verbose;
+    st.use_tui = st.interactive && stream_is_tty(stdout) && !cl.has("plain") && !st.verbose && !cl.has("prompt") && !cl.has("jsonl");
 #endif
     {
         // Names and bindings of the secrets; a broken index only means that no server gets a key.
@@ -863,6 +914,12 @@ bool handle_line(ChatState &st, const std::string &line) {
         break;
     }
     case SlashKind::Stats: print_stats(st); break;
+    case SlashKind::Diff: out((st.journal ? st.journal->diff() : std::string("no changes to files in this session")) + "\n"); break;
+    case SlashKind::Undo: {
+        const std::string done = st.journal ? st.journal->undo() : std::string();
+        out(done.empty() ? "nothing to undo\n" : done);
+        break;
+    }
     case SlashKind::Help: print_chat_help(); break;
     case SlashKind::Cli:
         if (cmd.arg == "setup" && cmd.rest.empty()) run_setup_wizard(st);
@@ -872,6 +929,49 @@ bool handle_line(ChatState &st, const std::string &line) {
     default: break;
     }
     return true;
+}
+
+// --prompt TEXT and --jsonl: chat without a terminal. -p answers once (stdout: the answer; stderr: tool lines and notes) and exits with
+// 1 when the turn failed. --jsonl reads one JSON object per line from stdin ({"type":"prompt","text":"..."}, {"type":"exit"}) and writes
+// one per line to stdout: ready, token, tool, note, error, permission_request, done.
+int run_scripted(ChatState &st, const CommandLine &cl) {
+    if (cl.has("jsonl")) {
+        g_jsonl = true;
+        std::printf("{\"type\":\"ready\",\"session\":\"%s\",\"model\":\"%s\",\"engine\":\"%s\",\"workspace\":\"%s\"}\n",
+                    json_escape(st.memory.id).c_str(), json_escape(st.model.name).c_str(), json_escape(st.engine.name).c_str(),
+                    json_escape(st.workspace).c_str());
+        std::fflush(stdout);
+        std::string line;
+        while (read_line(stdin, line) == ReadStatus::Line) {
+            simdjson::dom::parser parser;
+            auto doc = parser.parse(line);
+            if (doc.error()) {
+                json_event("error", "not a JSON line");
+                continue;
+            }
+            std::string_view type, text;
+            if (doc["type"].get(type) != simdjson::SUCCESS) continue;
+            if (type == "exit") break;
+            if (type != "prompt" || doc["text"].get(text) != simdjson::SUCCESS) continue;
+            const bool again = handle_line(st, std::string(text));
+            std::printf("{\"type\":\"done\",\"session\":\"%s\",\"metrics\":\"%s\"}\n", json_escape(st.memory.id).c_str(),
+                        json_escape(format_metrics(st)).c_str());
+            std::fflush(stdout);
+            if (!again) break;
+        }
+        return 0;
+    }
+    std::string prompt(cl.get("prompt"));
+    if (prompt == "-") {
+        prompt.clear();
+        std::string line;
+        while (read_line(stdin, line) == ReadStatus::Line) prompt += line + "\n";
+    }
+    if (prompt.empty()) return chat_fail(make_error(ErrorCode::InvalidConfig, "--prompt needs a text (or - to read it from stdin)"));
+    g_headless = true;
+    run_one_turn(st, prompt, {});
+    std::printf("\n");
+    return g_last_turn_failed ? 1 : 0;
 }
 
 int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log) {
@@ -900,7 +1000,7 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
         }
     } else {
         st.memory.id = new_conversation_id();
-        st.memory.history.push_back(Message{.role = "system", .content = std::string(kSystemPrompt)});
+        st.memory.history.push_back(Message{.role = "system", .content = system_prompt(st)});
     }
 
 #if defined(AGENT_CLI_HAS_TUI)
@@ -923,6 +1023,8 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
             {"/image", "send an image or audio file"},
             {"/open", "list or open generated files"},
             {"/stats", "token and tool-call counters"},
+            {"/diff", "what the tools changed in files"},
+            {"/undo", "put back the last file change"},
             {"/doctor", "what is installed and disk use"},
             {"/setup", "first-time setup questions"},
             {"/clear", "forget the conversation"},
@@ -938,6 +1040,7 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
         host.switch_session = [](void *u, const std::string &id, const std::string &workspace) {
             return switch_session(*static_cast<ChatState *>(u), id, workspace);
         };
+        host.notice = [](void *) { return sandbox_notice(); };
         host.history = [](void *u) { return tui_history(*static_cast<ChatState *>(u)); };
         host.cancel = [](void *) {
             if (!g_generating.load()) return;
@@ -953,11 +1056,13 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
         return rc;
     }
 #endif
+    if (cl.has("prompt") || cl.has("jsonl")) return run_scripted(st, cl);
     std::printf("agent chat  (%s)\n", st.memory.id.c_str());
     std::printf("  model:     %s  %s\n", st.model.name.c_str(), st.model.path.c_str());
     std::printf("  engine:    %s %s  %s  (%s)\n", st.engine.name.c_str(), st.engine.version.c_str(), st.engine.path.c_str(),
                 cli_engine_isolation(st.inprocess, st.engine.isolation) == EngineIsolation::Process ? "agent-engine-host" : "in-process");
     std::printf("  workspace: %s\n", st.workspace.c_str());
+    std::printf("  sandbox:   %s\n", sandbox_status_line().c_str());
     if (!engine_log.empty()) std::printf("  engine log: %s (--verbose prints it here)\n", engine_log.c_str());
     std::string tool_names;
     for (const auto &t : st.lease->config.tools) tool_names += (tool_names.empty() ? "" : " ") + std::string(t.name);

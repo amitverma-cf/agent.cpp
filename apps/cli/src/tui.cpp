@@ -247,6 +247,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
         Bind(side_class);
         Bind(app_class);
         Bind(tip);
+        Bind(notice);
+        Bind(has_notice);
         Bind(asking);
         Bind(prompting);
         Bind(busy);
@@ -267,6 +269,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
     std::vector<TuiSession> sessions;
     std::string input, header, subtitle, question, prompt_line, busy_line, status_left, gauge, gauge_class = "gauge",
                                                                                                caret = "\xE2\x80\xBA";
+    std::string notice;
+    bool has_notice = false;
     std::string main_title = "New chat", project_line, side_class = "side", app_class = "main home", tip;
     std::string md_css = std::string(kMarkdownCss);
     bool asking = false, prompting = false, busy = false;
@@ -421,6 +425,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
         header = host.header ? host.header(host.user) : std::string();
         subtitle = host.subtitle ? host.subtitle(host.user) : std::string();
         project_line = subtitle;
+        notice = host.notice ? host.notice(host.user) : std::string();
+        has_notice = !notice.empty();
         const std::string footer = host.footer ? host.footer(host.user) : std::string();
         const int percent = context_percent(footer);
         gauge = percent >= 0 ? "context " + std::to_string(percent) + "%" : std::string();
@@ -705,6 +711,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             <div class="small-brand">agent.cpp</div>
             <for each="{banner}" as="ln"><div class="{ln.cls}">{ln.text}</div></for>
             <div class="tag">local agents · tools · memory · voice · graphs</div>
+            <div class="warn" if="{has_notice}">{notice}</div>
           </div>
           <for each="{rows}" as="r">
             <div class="{r.cls}">
@@ -766,6 +773,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .pink { color: #ff147d; font-weight: bold; }
       .neon { color: #00e5ff; }
       .tag { color: #ffffff; margin-top: 1; }
+      .warn { color: #ff147d; margin-top: 1; }
       .row { display: flex; flex-direction: row; margin-bottom: 1; }
       .row .mark { width: 2; color: #00e5ff; }
       .row .body { flex-grow: 1; white-space: pre-wrap; }

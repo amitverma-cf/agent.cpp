@@ -2,6 +2,7 @@
 
 #include "runtimes.hpp" // host_os(), host_arch()
 
+#include <algorithm>
 #include <filesystem>
 #include <simdjson.h>
 
@@ -80,6 +81,42 @@ Result<std::string> pull_engine(const std::string &engines_dir, std::string_view
         return fail<std::string>(d.error.code, d.error.message);
     fs::permissions(target, fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec, fs::perm_options::add, ec);
     return ok(target.string());
+}
+
+namespace {
+// "v0.2.0" -> {0, 2, 0}; empty when the text is not a dotted number.
+std::vector<long> version_numbers(std::string_view text) {
+    if (!text.empty() && (text[0] == 'v' || text[0] == 'V')) text.remove_prefix(1);
+    std::vector<long> numbers;
+    long current = 0;
+    bool digits = false;
+    for (const char c : text) {
+        if (c >= '0' && c <= '9') {
+            current = current * 10 + (c - '0');
+            digits = true;
+        } else if (c == '.' && digits) {
+            numbers.push_back(current);
+            current = 0;
+            digits = false;
+        } else {
+            return {};
+        }
+    }
+    if (!digits) return {};
+    numbers.push_back(current);
+    return numbers;
+}
+
+} // namespace
+
+bool version_is_newer(std::string_view candidate, std::string_view current) {
+    const std::vector<long> a = version_numbers(candidate), b = version_numbers(current);
+    if (a.empty() || b.empty()) return false;
+    return std::lexicographical_compare(b.begin(), b.end(), a.begin(), a.end());
+}
+
+std::string cli_archive_name(std::string_view version, std::string_view os, std::string_view arch) {
+    return "agent-cpp-" + std::string(version) + "-" + std::string(os) + "-" + std::string(arch) + (os == "windows" ? ".zip" : ".tar.gz");
 }
 
 } // namespace agent::cli

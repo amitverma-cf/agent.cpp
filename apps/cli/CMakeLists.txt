@@ -2,6 +2,7 @@
 # config/engines.json, model/engine resolution, slash commands) and is linked by test_agent too.
 add_library(agent_cli_core STATIC
     src/cli_core.cpp
+    src/edit_journal.cpp
     src/cli_platform.cpp
     src/home.cpp
     src/secrets.cpp
@@ -84,6 +85,7 @@ endif()
 add_executable(agent_cli_bin
     src/main.cpp
     src/commands.cpp
+    src/update_cmd.cpp
     src/chat.cpp
     src/voice.cpp
     src/task.cpp

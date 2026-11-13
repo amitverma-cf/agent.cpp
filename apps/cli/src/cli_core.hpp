@@ -124,6 +124,17 @@ bool cli_engine_gpu(std::string_view backend);
 // --no-sandbox (a global flag): turns the sandboxes of this run off. The default is on; where the OS cannot provide one, it is
 // off anyway and a warning says so.
 void set_no_sandbox(bool value);
+// The subfolder of the models folder a pulled model goes to, so the files of one engine are never mixed with another's:
+// models/llama/owner/repo/file.gguf. `explicit_engine` is --engine, `registry_engine` the engine of a registry name; otherwise it follows the
+// spec ("owner/repo:Q4_K_M" and GGUF repos -> llama, ".onnx" -> onnx, ".safetensors"/".ckpt" -> sdcpp). Empty when it cannot be told.
+std::string model_engine_folder(std::string_view spec, std::string_view explicit_engine, std::string_view registry_engine);
+// `agent completion SHELL`: the completion script for bash, zsh, fish or powershell, built from the command table (commands,
+// subcommands and flags). Empty for an unknown shell.
+std::string completion_script(std::string_view shell);
+// The state of the OS sandbox as one line for `doctor`: "on (Landlock ABI 6, seccomp)", "off (--no-sandbox)" or "not supported (...)".
+std::string sandbox_status_line();
+// A sentence for the start of a session when nothing is confined (--no-sandbox, or an OS that cannot enforce it); empty otherwise.
+std::string sandbox_notice();
 void apply_sandbox_choice(Config &cfg);
 
 // Names of the agent_capability bits set in caps ("text_gen", "tool_call", ...).
@@ -163,7 +174,7 @@ std::string mime_for_path(std::string_view path);
 
 // -------------------------- Chat --------------------------
 
-enum class SlashKind { None, Exit, Clear, Model, Image, Open, Stats, Help, Cli, Unknown };
+enum class SlashKind { None, Exit, Clear, Model, Image, Open, Stats, Diff, Undo, Help, Cli, Unknown };
 
 // SlashKind::Cli: a slash command that runs an ordinary `agent` subcommand and shows its output: /doctor, /pull SPEC, /fit SPEC,
 // /recommend [TEXT], /search [TEXT], /setup, /wake, /schedule ... (arg = the name, rest = the arguments as typed).
@@ -243,5 +254,10 @@ void restore_stderr(std::FILE *original);
 // Hands the file to the OS default application (xdg-open / open / ShellExecute); waits only for the
 // opener itself, not for the application it launches.
 Result<void> open_with_os(const std::string &path);
+
+// The rules the user wrote for a project, as text to append to the system prompt: AGENTS.md in the workspace, then
+// .agents/AGENTS.md, then every .agents/rules/*.md in name order, then the user's own AGENTS.md in the home folder. Empty when there
+// is none. At most max_bytes are used; a file that does not fit is cut and says so.
+std::string load_project_rules(const std::string &workspace, const std::string &home_root, size_t max_bytes = 16384);
 
 } // namespace agent::cli

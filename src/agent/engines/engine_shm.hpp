@@ -3,7 +3,7 @@
 // Named shared-memory segments for the engine IPC protocol (engine_ipc.hpp): tensor and BYTES payloads
 // of at least kShmThreshold bytes travel in a segment the sender creates and the receiver maps, instead
 // of being copied through the pipe. POSIX: shm_open + mmap (the name lives in /dev/shm on Linux).
-// Windows: CreateFileMapping / OpenFileMapping in the session's Local\ namespace (written, untested).
+// Windows: CreateFileMapping / OpenFileMapping in the session's Local\ namespace (run by the Windows test suite).
 //
 // Lifetime: the sender creates a segment and sends its name; the receiver maps it on first use. Both
 // sides keep their mappings and reuse the segment for later calls (growing means a new segment and a

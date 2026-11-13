@@ -23,6 +23,7 @@ int cmd_doctor(const CommandLine &, Context &ctx) {
                     ec ? "" : "   free on this volume: ", ec ? "" : format_bytes(space.available).c_str());
     }
     const uint64_t ram = total_ram_bytes();
+    std::printf("sandbox:   %s\n", sandbox_status_line().c_str());
     std::printf("RAM:       %s installed, %d CPU cores\n", ram ? format_bytes(ram).c_str() : "unknown", detect_hardware().cpu_cores);
     if (!ctx.project_root.empty()) std::printf("project:   %s (.agents/ found)\n", ctx.project_root.c_str());
 

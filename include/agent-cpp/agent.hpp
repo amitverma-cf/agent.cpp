@@ -240,9 +240,17 @@ using PermissionPromptFn = bool (*)(std::string_view tool_name, std::string_view
 
 // OS-level sandbox for a child process (engine host, run_command, MCP server). See
 // docs/security-sandbox.md. Linux: Landlock + seccomp + rlimits + a new session; macOS: a
-// sandbox_init() profile (untested); Windows: a Job Object (untested; no filesystem/network rules).
+// sandbox_init() profile (untested); Windows: an AppContainer inside a Job Object.
 // Missing kernel features degrade to a logged warning, never to a failed spawn.
 enum class SandboxNetwork { Allow, Deny };
+
+// What the OS can enforce on this machine, for a status line: `supported` is false when the kernel cannot confine files (Linux
+// without Landlock, macOS), `detail` says what is available ("Landlock ABI 6, seccomp" / "AppContainer and Job Object").
+struct SandboxStatus {
+    bool supported = false;
+    std::string detail;
+};
+SandboxStatus sandbox_status();
 
 struct SandboxPolicy {
     bool enabled = false;

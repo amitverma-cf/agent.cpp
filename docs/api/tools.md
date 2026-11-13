@@ -470,8 +470,7 @@ cfg.sandbox_filesystem = false;
 `run_command` is a shell, so path checks cannot contain it. It runs under an **OS sandbox** (`Config::tool_sandbox`, on by
 default). On Linux, Landlock limits it to the workspace (read-write), the system directories (read-only) and `/tmp`. Absolute
 paths and symlinks are included, while `sandbox_filesystem` is true. seccomp can block the network
-(`tool_sandbox.network = SandboxNetwork::Deny`; allowed by default). On Windows the sandbox is a Job Object, which is
-untested and has no filesystem or network rules. See [../security-sandbox.md](../security-sandbox.md).
+(`tool_sandbox.network = SandboxNetwork::Deny`; allowed by default). On Windows the child runs in an AppContainer inside a Job Object: reads and writes are limited to the granted folders and the network can be denied. See [../security-sandbox.md](../security-sandbox.md).
 
 ## Disabling default tools
 

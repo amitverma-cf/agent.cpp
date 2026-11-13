@@ -14,7 +14,7 @@
 // ABI >= 6), seccomp-bpf (socket() other than AF_UNIX and io_uring fail when the network is denied),
 // PR_SET_NO_NEW_PRIVS, RLIMIT_CORE = 0, RLIMIT_AS, RLIMIT_NPROC, a new session. A kernel without
 // Landlock or seccomp degrades to a warning, never to a failed spawn.
-// macOS: a sandbox_init() SBPL profile (written, untested). Windows: a Job Object (written, untested).
+// macOS: a sandbox_init() SBPL profile (written, untested). Windows: an AppContainer inside a Job Object (tested on Windows 11).
 
 #include <agent-cpp/agent.hpp>
 #include <cstdint>

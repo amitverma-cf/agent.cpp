@@ -156,8 +156,8 @@ The host can rewrite `command` there, for example to run `npx` or `uvx` from its
   In `agent.json`, the same policy is the per-server `"sandbox"` object ([agent-json.md](agent-json.md#mcp_servers)).
 - **Path grants.** A sandboxed server's access to paths outside its own sandbox goes through the same grants and gate as the
   file tools. The consumer name is `mcp:<server name>`. See [tools.md](tools.md#path-grants).
-- **Windows** support (`CreateProcessW`, an environment block merged with the parent's, polled anonymous pipes) is written
-  but not yet tested in CI.
+- **Windows** support (`CreateProcessW`, an environment block merged with the parent's, polled anonymous pipes) is run by the
+  Windows test suite on Windows 11 (the project has no Windows CI).
 
 ## Not supported yet
 

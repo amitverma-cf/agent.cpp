@@ -1,5 +1,6 @@
 #include "hal/log_file.hpp"
 #include "hal/platform.hpp"
+#include "hal/sandbox.hpp"
 #include "memory/memory_store.hpp"
 #include "providers/provider_ops.hpp"
 #include "tools/tools_ops.hpp"
@@ -344,6 +345,19 @@ Result<void> clear_provider_kv_cache(Session &session) {
     if (!ops) return fail(ErrorCode::UnsupportedProvider, "Provider not compiled into this build.");
     if (!ops->clear_kv_cache) return ok();
     return ops->clear_kv_cache(session);
+}
+
+SandboxStatus sandbox_status() {
+#if defined(_WIN32)
+    return {true, "AppContainer and Job Object"};
+#elif defined(__APPLE__)
+    return {false, "macOS is not supported"};
+#else
+    const hal::SandboxSupport support = hal::sandbox_support();
+    if (support.landlock_abi <= 0)
+        return {false, std::string("this kernel has no Landlock") + (support.seccomp ? "; seccomp is available" : "")};
+    return {true, "Landlock ABI " + std::to_string(support.landlock_abi) + (support.seccomp ? ", seccomp" : ", no seccomp")};
+#endif
 }
 
 } // namespace agent

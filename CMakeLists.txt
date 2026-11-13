@@ -29,6 +29,7 @@ option(BUILD_SHARED_LIBS "Build libagent, agent_store_sqlite and agent_hub as sh
 option(AGENT_INSTALL "Generate install rules and the agent-cpp CMake package" ${PROJECT_IS_TOP_LEVEL})
 # Engine plugins install here; the CLI looks in <exe>/../lib/agent/engines, so this is fixed.
 set(AGENT_INSTALL_ENGINEDIR "lib/agent/engines")
+set(AGENT_INSTALL_TESTINGDIR "lib/agent/testing") # the mock engine for library users: not an engine the CLI should list
 # simdjson is an implementation detail: it is compiled into libagent but not part of the public
 # headers, so it is a private include path of each target that parses JSON.
 set(AGENT_SIMDJSON_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vendor/simdjson/singleheader)
@@ -308,6 +309,9 @@ if(AGENT_ENGINE_AUDIOCPP)
     add_subdirectory(src/engines/audiocpp)
 endif()
 
+# The unit tests (test_agent). Off by default when agent.cpp is a subproject (FetchContent, vcpkg), where nobody wants to build them.
+option(AGENT_BUILD_TESTS "Build test_agent, the unit tests" ${PROJECT_IS_TOP_LEVEL})
+if(AGENT_BUILD_TESTS)
 enable_testing()
 add_executable(test_agent
     vendor/catch2/catch_amalgamated.cpp
@@ -369,7 +373,7 @@ if(AGENT_BUILD_HUB)
     endif()
 endif()
 if(AGENT_BUILD_CLI)
-    target_sources(test_agent PRIVATE tests/unit/test_cli.cpp tests/unit/test_cli_status.cpp tests/unit/test_voice.cpp tests/unit/test_home.cpp tests/unit/test_secrets.cpp tests/unit/test_doctor.cpp tests/unit/test_mcp_config.cpp tests/unit/test_archive.cpp tests/unit/test_runtimes.cpp tests/unit/test_registries.cpp tests/unit/test_engine_release.cpp tests/unit/test_sandbox_windows.cpp tests/unit/test_path_gate.cpp tests/unit/test_cli_e2e.cpp tests/unit/test_cli_net.cpp)
+    target_sources(test_agent PRIVATE tests/unit/test_cli.cpp tests/unit/test_edit_journal.cpp tests/unit/test_cli_status.cpp tests/unit/test_voice.cpp tests/unit/test_home.cpp tests/unit/test_secrets.cpp tests/unit/test_doctor.cpp tests/unit/test_mcp_config.cpp tests/unit/test_archive.cpp tests/unit/test_runtimes.cpp tests/unit/test_registries.cpp tests/unit/test_engine_release.cpp tests/unit/test_sandbox_windows.cpp tests/unit/test_path_gate.cpp tests/unit/test_cli_e2e.cpp tests/unit/test_cli_net.cpp)
     target_link_libraries(test_agent PRIVATE agent_cli_core)
     # The agent voice end-to-end test runs the real binary.
     target_compile_definitions(test_agent PRIVATE AGENT_TEST_CLI_PATH="$<TARGET_FILE:agent_cli_bin>")
@@ -421,9 +425,10 @@ target_link_options(test_agent PRIVATE ${SANITIZER_FLAGS} ${COVERAGE_FLAGS})
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/vendor/catch2/extras/Catch.cmake)
 catch_discover_tests(test_agent ADD_TAGS_AS_LABELS)
+endif() # AGENT_BUILD_TESTS
 
 # Example programs (they take no arguments and use real models; see examples/README.md). They are compiled here, run from an installed prefix.
-option(AGENT_BUILD_EXAMPLES "Build the programs in examples/ (they need models to run; see examples/README.md)" ON)
+option(AGENT_BUILD_EXAMPLES "Build the programs in examples/ (they need models to run; see examples/README.md)" ${PROJECT_IS_TOP_LEVEL})
 if(AGENT_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
@@ -477,7 +482,7 @@ if(AGENT_INSTALL)
     configure_package_config_file(cmake/agent-cppConfig.cmake.in
         ${CMAKE_CURRENT_BINARY_DIR}/agent-cppConfig.cmake
         INSTALL_DESTINATION ${AGENT_CMAKE_INSTALL_DIR}
-        PATH_VARS AGENT_INSTALL_ENGINEDIR CMAKE_INSTALL_BINDIR
+        PATH_VARS AGENT_INSTALL_ENGINEDIR AGENT_INSTALL_TESTINGDIR CMAKE_INSTALL_BINDIR
     )
     # Pre-1.0: minor versions may break the API.
     write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/agent-cppConfigVersion.cmake

@@ -1768,11 +1768,7 @@ struct OcrFamily {
 };
 // clang-format off
 constexpr OcrFamily kOcrFamilies[] = {
-    {"paddleocr-vl", {"paddleocr", nullptr}, "OCR:"},
     {"glm-ocr", {"glm", "ocr"}, "Text Recognition:"},
-    {"deepseek-ocr", {"deepseek", "ocr"}, "Free OCR."},
-    {"dots.ocr", {"dots", "ocr"}, "Extract the text content from this image."},
-    {"hunyuan-ocr", {"hunyuan", "ocr"}, "OCR"},
 };
 // clang-format on
 constexpr const char *kGenericOcrPrompt =

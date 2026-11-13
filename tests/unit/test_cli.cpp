@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -432,6 +433,72 @@ TEST_CASE("--no-sandbox is a global flag that turns the sandboxes off", "[cli]")
     CHECK_FALSE(off.engine_sandbox.enabled);
     CHECK_FALSE(off.tool_sandbox.enabled);
     set_no_sandbox(false);
+}
+
+TEST_CASE("cli: project rules are read from AGENTS.md and .agents/rules", "[cli][rules]") {
+    namespace fs = std::filesystem;
+    const std::string ws = temp_dir("agent_rules_ws");
+    const std::string home = temp_dir("agent_rules_home");
+    CHECK(load_project_rules(ws, home).empty());
+
+    const auto write = [](const fs::path &p, const std::string &text) {
+        fs::create_directories(p.parent_path());
+        std::ofstream(p) << text;
+    };
+    write(fs::path(ws) / "AGENTS.md", "Use tabs.\n");
+    write(fs::path(ws) / ".agents" / "rules" / "b.md", "Second rule");
+    write(fs::path(ws) / ".agents" / "rules" / "a.md", "First rule");
+    write(fs::path(home) / "AGENTS.md", "Be brief.");
+    const std::string rules = load_project_rules(ws, home);
+    CHECK(rules.find("Use tabs.") != std::string::npos);
+    CHECK(rules.find("First rule") < rules.find("Second rule")); // rules/ is read in name order
+    CHECK(rules.find("Be brief.") != std::string::npos);
+    CHECK(rules.find("Use tabs.") < rules.find("First rule"));
+
+    // Too long: cut, and it says so.
+    write(fs::path(ws) / "AGENTS.md", std::string(5000, 'x'));
+    const std::string cut = load_project_rules(ws, home, 1000);
+    CHECK(cut.size() < 1300);
+    CHECK(cut.find("[cut:") != std::string::npos);
+}
+
+TEST_CASE("cli: a pulled model goes to a folder of its engine", "[cli]") {
+    CHECK(model_engine_folder("Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M", "", "") == "llama");
+    CHECK(model_engine_folder("owner/repo:model.onnx", "", "") == "onnx");
+    CHECK(model_engine_folder("owner/repo:unet.safetensors", "", "") == "sdcpp");
+    CHECK(model_engine_folder("owner/Thing-GGUF", "", "") == "llama");
+    CHECK(model_engine_folder("owner/repo", "", "").empty());
+    CHECK(model_engine_folder("owner/repo:Q4_K_M", "audiocpp", "") == "audiocpp"); // --engine wins
+    CHECK(model_engine_folder("owner/repo", "", "sdcpp") == "sdcpp");              // a registry name knows its engine
+    CHECK(model_engine_folder("owner/repo:Q4_K_M", "../x", "").empty() == false);  // an unsafe --engine is ignored
+    CHECK(model_engine_folder("owner/repo:Q4_K_M", "../x", "") == "llama");
+}
+
+TEST_CASE("cli: completion scripts list the commands and flags", "[cli][completion]") {
+    for (const char *shell : {"bash", "zsh", "fish", "powershell"}) {
+        const std::string script = completion_script(shell);
+        CAPTURE(shell);
+        REQUIRE_FALSE(script.empty());
+        CHECK(script.find("chat") != std::string::npos);
+        CHECK(script.find("completion") != std::string::npos);
+        CHECK(script.find("update") != std::string::npos);
+        CHECK(script.find("jsonl") != std::string::npos); // a flag of chat
+        CHECK(script.find("resume") != std::string::npos);
+    }
+    CHECK(completion_script("bash").find("complete -o default -F _agent agent") != std::string::npos);
+    CHECK(completion_script("csh").empty());
+}
+
+TEST_CASE("cli: chat takes -p and --jsonl, and the sandbox says what it does", "[cli]") {
+    auto r = parse({"chat", "-p", "hello there", "--jsonl"});
+    REQUIRE(r.ok);
+    CHECK(r.value.get("prompt") == "hello there");
+    CHECK(r.value.has("jsonl"));
+    set_no_sandbox(true);
+    CHECK(sandbox_status_line().find("off") == 0);
+    CHECK(sandbox_notice().find("Sandbox off") == 0);
+    set_no_sandbox(false);
+    CHECK(sandbox_status_line().empty() == false);
 }
 
 #if defined(AGENT_CLI_HAS_TUI)

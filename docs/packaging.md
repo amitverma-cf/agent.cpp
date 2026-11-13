@@ -45,8 +45,21 @@ The library directory is `CMAKE_INSTALL_LIBDIR` (`lib`, or `lib64` on some distr
 `lib/agent/engines`, because that is where the CLI looks (`<exe>/../lib/agent/engines`, see [cli.md](cli.md)). An installed
 `agent setup` finds the installed plugins there with no flags.
 
-The mock engine plugins (`agent-engine-mock*`, used by the tests) are not installed. `-DAGENT_INSTALL=OFF` generates no
-install rules; this is the default when agent.cpp is added with `add_subdirectory`.
+The mock engine plugins (`agent-engine-mock*`, used by the tests) are not installed by default, so CLI archives never carry
+them. Library users who want model-free tests build with `-DAGENT_INSTALL_MOCK_ENGINE=ON`; the plugins then go to
+`lib/agent/testing` (not `lib/agent/engines`, so the CLI does not list them) and the `testing` component finds them:
+
+```cmake
+find_package(agent-cpp REQUIRED COMPONENTS testing)
+add_executable(my_tests my_tests.cpp)
+target_link_libraries(my_tests PRIVATE agent-cpp::agent agent-cpp::testing)
+```
+
+`agent-cpp::testing` defines `AGENT_CPP_MOCK_ENGINE` (answers chat with canned text and calls tools on request) and
+`AGENT_CPP_MOCK_ALL_ENGINE` (every capability with deterministic stand-in output) as the plugin paths; set one as
+`Config::engine` with `provider = AiProvider::Engine` (`Config::engine` takes a path to a plugin).
+
+`-DAGENT_INSTALL=OFF` generates no install rules; this is the default when agent.cpp is added with `add_subdirectory`.
 
 ### Static or shared
 
@@ -105,6 +118,48 @@ pull in `Threads` (and `OpenSSL` for `agent-cpp::hub`) with `find_dependency`.
 cmake --install build --prefix /tmp/agent-prefix
 cmake -S tests/consumer -B /tmp/agent-consumer -DCMAKE_PREFIX_PATH=/tmp/agent-prefix
 cmake --build /tmp/agent-consumer && /tmp/agent-consumer/consumer
+```
+
+## Without installing: `FetchContent` or `add_subdirectory`
+
+When agent.cpp is part of your build instead of an installed package, only the library is built unless you ask for more: the tests, the
+examples, the CLI and the install rules are off (they default to on only when agent.cpp is the top-level project).
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(agent-cpp
+    GIT_REPOSITORY https://github.com/amitverma-cf/agent.cpp.git
+    GIT_TAG        main                  # pin a commit for reproducible builds
+    GIT_SHALLOW    TRUE
+    GIT_SUBMODULES vendor/simdjson vendor/llama.cpp)   # only what you build; add vendor/audio.cpp, ... for those engines
+set(AGENT_BUILD_HUB       OFF CACHE BOOL "" FORCE)  # ON needs OpenSSL
+set(AGENT_ENGINE_ONNX     OFF CACHE BOOL "" FORCE)  # downloads ONNX Runtime at configure time
+set(AGENT_ENGINE_SDCPP    OFF CACHE BOOL "" FORCE)
+set(AGENT_ENGINE_AUDIOCPP OFF CACHE BOOL "" FORCE)
+set(AGENT_ENGINE_TRELLIS  OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(agent-cpp)
+
+add_executable(my_app main.cpp)
+target_link_libraries(my_app PRIVATE agent-cpp::agent)
+```
+
+The llama.cpp engine plugin is built in your build tree (`AGENT_ENGINE_LLAMA`, default on; set it `OFF` for a library without engines). To
+run a program from the build tree, `agent_deploy_engines(my_app)` (from `cmake/agent-cppEngine.cmake`) puts the plugins and
+`agent-engine-host` next to it. The submodules you do not list are not cloned.
+
+## vcpkg
+
+`ports/agent-cpp` is an overlay port of the library (core, SQLite store, optionally the downloader): engines are not part of it, they are
+plugins you build or download separately.
+
+```sh
+vcpkg install agent-cpp --overlay-ports=path/to/agent.cpp/ports            # core + store
+vcpkg install "agent-cpp[hub]" --overlay-ports=path/to/agent.cpp/ports     # + agent::hub (needs openssl)
+```
+
+```cmake
+find_package(agent-cpp CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE agent-cpp::agent agent-cpp::store_sqlite)
 ```
 
 ## Shipping an application with engines

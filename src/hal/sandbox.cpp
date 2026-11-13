@@ -487,7 +487,7 @@ int apply_prepared_sandbox(const PreparedSandbox &p) noexcept {
     return 0;
 }
 
-// ------------------------------------------------------------------ Windows (written, untested)
+// ------------------------------------------------------------------ Windows (AppContainer + Job Object)
 
 #elif defined(AGENT_HAL_WINDOWS)
 

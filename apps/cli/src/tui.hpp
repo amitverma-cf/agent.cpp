@@ -62,6 +62,8 @@ struct TuiHost {
     bool (*switch_session)(void *user, const std::string &id, const std::string &workspace) = nullptr;
     // The messages of the open conversation, called after a switch to repaint the transcript.
     std::vector<TuiMessage> (*history)(void *user) = nullptr;
+    // A line shown on the welcome screen, for a warning that applies to the whole session (the sandbox is off); may be empty.
+    std::string (*notice)(void *user) = nullptr;
     // The commands listed in the palette.
     std::span<const TuiCommand> commands;
 };

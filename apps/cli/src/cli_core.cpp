@@ -69,15 +69,17 @@ constexpr std::string_view kScheduleBool[] = {"yes"};
 constexpr SubSpec kRuntimeSubs[] = {{"ls", 0, 0}, {"install", 1, 1}, {"rm", 1, 1}, {"path", 1, 1}, {"use", 1, 1}};
 constexpr std::string_view kRuntimeValue[] = {"version"};
 constexpr std::string_view kCleanBool[] = {"downloads", "cache", "logs", "yes"};
+constexpr std::string_view kUpdateValue[] = {"repo", "tag"};
+constexpr std::string_view kUpdateBool[] = {"check", "yes"};
 constexpr std::string_view kSecretValue[] = {"identity"};
 constexpr std::string_view kSecretBool[] = {"stdin"};
 
 constexpr SubSpec kModelSubs[] = {{"ls", 0, 0}, {"search", 0, 1}, {"info", 1, 1}, {"pull", 1, 1}, {"rm", 1, 1}};
-constexpr std::string_view kModelValue[] = {"name", "quant", "mmproj", "include", "task"};
+constexpr std::string_view kModelValue[] = {"name", "quant", "mmproj", "include", "task", "engine"};
 constexpr std::string_view kModelBool[] = {"allow-restricted", "keep-file", "no-mmproj"};
 
-constexpr std::string_view kChatValue[] = {"model", "engine", "resume", "workspace", "ctx", "max-tokens", "engine-options"};
-constexpr std::string_view kChatBool[] = {"yes", "list", "verbose", "inprocess", "plain"};
+constexpr std::string_view kChatValue[] = {"model", "engine", "resume", "workspace", "ctx", "max-tokens", "engine-options", "prompt"};
+constexpr std::string_view kChatBool[] = {"yes", "list", "verbose", "inprocess", "plain", "jsonl"};
 
 constexpr std::string_view kRunValue[] = {"model", "engine", "workspace", "thread", "set", "resume", "input", "engine-options"};
 constexpr std::string_view kRunBool[] = {"yes", "inprocess", "json", "swap-models"};
@@ -110,6 +112,8 @@ constexpr CommandSpec kCommands[] = {
     {"task", {}, 1, 1, kTaskValue, kTaskBool},
     {"help", {}, 0, 1, {}, {}},
     {"version", {}, 0, 0, {}, {}},
+    {"completion", {}, 1, 1, {}, {}},
+    {"update", {}, 0, 0, kUpdateValue, kUpdateBool},
 };
 
 const CommandSpec *find_command(std::string_view name) {
@@ -123,6 +127,7 @@ std::string_view expand_short(std::string_view s) {
     if (s == "-y") return "yes";
     if (s == "-m") return "model";
     if (s == "-e") return "engine";
+    if (s == "-p") return "prompt";
     return {};
 }
 
@@ -295,6 +300,9 @@ std::string usage_all() {
            "        [-m|--model NAME|PATH] [-e|--engine NAME|PATH] [--resume ID] [--list] [--plain]\n"
            "        [--workspace DIR] [--ctx N] [--max-tokens N] [--engine-options JSON] [-y|--yes] [--verbose]\n"
            "        [--inprocess]\n"
+           "        -p|--prompt TEXT    answer once and exit: the answer goes to stdout, tools and notes to stderr (- reads the prompt\n"
+           "                            from stdin); tool calls are denied unless -y\n"
+           "        --jsonl             editor integration: JSON lines in and out on stdio (see docs/cli.md)\n"
            "  run <graph.json>           run a declarative graph\n"
            "        [-m|--model NAME|PATH] [-e|--engine NAME|PATH] [--workspace DIR] [--thread ID] [--set k=v]\n"
            "        [--resume ID] [--input TEXT] [--engine-options JSON] [-y|--yes] [--inprocess] [--json]\n"
@@ -341,6 +349,8 @@ constexpr CommandBlurb kOverview[] = {
     {"clean", "remove partial downloads, caches or old logs"},
     {"wake", "resume graph runs that are waiting for a time (see schedule)"},
     {"schedule", "run an agent command on a schedule (cron / Task Scheduler)"},
+    {"completion", "print a completion script: bash, zsh, fish or powershell"},
+    {"update", "check for a newer release and install it (agent update --check only looks)"},
     {"version", "print the version"},
 };
 } // namespace
@@ -681,7 +691,102 @@ namespace {
 bool g_no_sandbox = false;
 }
 
+namespace {
+// All the words that can follow `agent <command>`: subcommands and --flags.
+std::string command_words(const CommandSpec &c) {
+    std::string words;
+    for (const SubSpec &sub : c.subs) (words += sub.name) += ' ';
+    const auto add = [&](std::span<const std::string_view> flags) {
+        for (const auto f : flags) (words += "--") += f, words += ' ';
+    };
+    add(c.value_flags);
+    add(c.bool_flags);
+    words += "--help";
+    return words;
+}
+} // namespace
+
+std::string model_engine_folder(std::string_view spec, std::string_view explicit_engine, std::string_view registry_engine) {
+    const auto valid = [](std::string_view name) { return !name.empty() && name.find_first_of("/\\.") == std::string_view::npos; };
+    if (valid(explicit_engine)) return std::string(explicit_engine);
+    if (valid(registry_engine)) return std::string(registry_engine);
+    std::string lower(spec);
+    for (char &c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const size_t colon = lower.rfind(':');
+    const std::string suffix = colon == std::string::npos ? std::string() : lower.substr(colon + 1);
+    const auto ends = [&](std::string_view e) {
+        return suffix.size() >= e.size() && suffix.compare(suffix.size() - e.size(), e.size(), e) == 0;
+    };
+    if (ends(".onnx")) return "onnx";
+    if (ends(".safetensors") || ends(".ckpt")) return "sdcpp";
+    if (ends(".gguf")) return "llama";
+    // A bare quant name (Q4_K_M, IQ3_XS, BF16, F16) or a GGUF repository.
+    const bool quant = !suffix.empty() && suffix.find('.') == std::string::npos && suffix.find('/') == std::string::npos;
+    if (quant || lower.find("gguf") != std::string::npos) return "llama";
+    return {};
+}
+
+std::string completion_script(std::string_view shell) {
+    std::string names;
+    for (const CommandSpec &c : kCommands) (names += c.name) += ' ';
+    const std::string global = "--no-sandbox --home --config-dir --help";
+    if (shell == "bash" || shell == "zsh") {
+        std::string s;
+        if (shell == "zsh") s += "autoload -U +X bashcompinit && bashcompinit\n";
+        s += "_agent() {\n  local cur=\"${COMP_WORDS[COMP_CWORD]}\" cmd=\"${COMP_WORDS[1]}\"\n  COMPREPLY=()\n";
+        s += "  if [ \"$COMP_CWORD\" -eq 1 ]; then COMPREPLY=($(compgen -W \"" + names + global + "\" -- \"$cur\")); return; fi\n";
+        s += "  case \"$cmd\" in\n";
+        for (const CommandSpec &c : kCommands)
+            s += "    " + std::string(c.name) + ") COMPREPLY=($(compgen -W \"" + command_words(c) + " " + global + "\" -- \"$cur\")) ;;\n";
+        s += "  esac\n}\ncomplete -o default -F _agent agent\n";
+        return s;
+    }
+    if (shell == "fish") {
+        std::string s = "complete -c agent -f\n";
+        for (const auto &blurb : kOverview)
+            s += "complete -c agent -n '__fish_use_subcommand' -a '" + std::string(blurb.name) + "' -d '" + std::string(blurb.summary) +
+                 "'\n";
+        for (const CommandSpec &c : kCommands) {
+            for (const SubSpec &sub : c.subs)
+                s += "complete -c agent -n '__fish_seen_subcommand_from " + std::string(c.name) + "' -a '" + std::string(sub.name) + "'\n";
+            const auto add = [&](std::span<const std::string_view> flags, const char *arg) {
+                for (const auto f : flags)
+                    s += "complete -c agent -n '__fish_seen_subcommand_from " + std::string(c.name) + "' -l " + std::string(f) + arg + "\n";
+            };
+            add(c.value_flags, " -r");
+            add(c.bool_flags, "");
+        }
+        return s;
+    }
+    if (shell == "powershell") {
+        std::string s = "Register-ArgumentCompleter -Native -CommandName agent -ScriptBlock {\n  param($wordToComplete, $commandAst, "
+                        "$cursorPosition)\n";
+        s += "  $words = $commandAst.CommandElements | ForEach-Object { $_.ToString() }\n";
+        s += "  $table = @{\n";
+        for (const CommandSpec &c : kCommands) s += "    '" + std::string(c.name) + "' = '" + command_words(c) + " " + global + "'\n";
+        s += "  }\n  if ($words.Count -le 1 -or ($words.Count -eq 2 -and $wordToComplete)) {\n    '" + names + global +
+             "'.Split(' ') | Where-Object { $_ -like \"$wordToComplete*\" }\n  } elseif ($table.ContainsKey($words[1])) {\n";
+        s += "    $table[$words[1]].Split(' ') | Where-Object { $_ -like \"$wordToComplete*\" }\n  }\n}\n";
+        return s;
+    }
+    return {};
+}
+
 void set_no_sandbox(bool value) { g_no_sandbox = value; }
+
+std::string sandbox_status_line() {
+    if (g_no_sandbox) return "off (--no-sandbox): engines, tools and commands run with your own permissions";
+    const SandboxStatus status = sandbox_status();
+    if (status.supported) return "on (" + status.detail + ")";
+    return "not supported on this system (" + status.detail + "): running unsandboxed";
+}
+
+std::string sandbox_notice() {
+    if (g_no_sandbox) return "Sandbox off (--no-sandbox): tools, commands and engines run with your own permissions.";
+    const SandboxStatus status = sandbox_status();
+    if (status.supported) return {};
+    return "Sandbox not supported on this system (" + status.detail + "): running unsandboxed.";
+}
 
 void apply_sandbox_choice(Config &cfg) {
     if (!g_no_sandbox) return;
@@ -873,6 +978,8 @@ SlashCommand parse_slash_command(std::string_view line) {
     else if (name == "image") cmd.kind = SlashKind::Image;
     else if (name == "open") cmd.kind = SlashKind::Open;
     else if (name == "stats") cmd.kind = SlashKind::Stats;
+    else if (name == "diff") cmd.kind = SlashKind::Diff;
+    else if (name == "undo") cmd.kind = SlashKind::Undo;
     else if (name == "help" || name == "?") cmd.kind = SlashKind::Help;
     else {
         cmd.kind = SlashKind::Unknown;
@@ -1014,6 +1121,41 @@ std::string one_line(std::string_view text, size_t max_bytes) {
         out += (c == '\n' || c == '\r' || c == '\t') ? ' ' : c;
     }
     return out;
+}
+
+std::string load_project_rules(const std::string &workspace, const std::string &home_root, size_t max_bytes) {
+    namespace fs = std::filesystem;
+    std::vector<std::pair<std::string, fs::path>> files;
+    std::error_code ec;
+    const fs::path ws(workspace);
+    files.emplace_back("AGENTS.md", ws / "AGENTS.md");
+    files.emplace_back(".agents/AGENTS.md", ws / ".agents" / "AGENTS.md");
+    std::vector<fs::path> rules;
+    for (const auto &entry : fs::directory_iterator(ws / ".agents" / "rules", ec))
+        if (entry.is_regular_file(ec) && entry.path().extension() == ".md") rules.push_back(entry.path());
+    std::sort(rules.begin(), rules.end());
+    for (const fs::path &r : rules) files.emplace_back(".agents/rules/" + r.filename().string(), r);
+    if (!home_root.empty()) files.emplace_back("your AGENTS.md", fs::path(home_root) / "AGENTS.md");
+
+    std::string out;
+    for (const auto &[label, path] : files) {
+        if (!fs::is_regular_file(path, ec)) continue;
+        std::ifstream in(path, std::ios::binary);
+        std::string body((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        while (!body.empty() && (body.back() == '\n' || body.back() == '\r' || body.back() == ' ')) body.pop_back();
+        if (body.empty()) continue;
+        const std::string head = "\n\n## Rules from " + label + "\n";
+        if (out.size() + head.size() >= max_bytes) break;
+        const size_t room = max_bytes - out.size() - head.size();
+        out += head;
+        if (body.size() > room) {
+            out += body.substr(0, room) + "\n[cut: the rules are longer than " + std::to_string(max_bytes) + " bytes]";
+            break;
+        }
+        out += body;
+    }
+    if (out.empty()) return {};
+    return "\n\nFollow these rules written by the user for this project." + out;
 }
 
 } // namespace agent::cli
