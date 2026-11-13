@@ -242,13 +242,28 @@ if(AGENT_BUILD_CLI)
 endif()
 
 option(AGENT_ENGINE_LLAMA "Build the llama.cpp engine plugin (src/engines/llama)" ON)
-option(AGENT_ENGINE_ONNX "Build the ONNX Runtime engine plugin (src/engines/onnx; needs a prebuilt ONNX Runtime, see ONNXRUNTIME_ROOT)" OFF)
-# Heavy (builds stable-diffusion.cpp + its own ggml), so off by default for now.
-option(AGENT_ENGINE_SDCPP "Build the stable-diffusion.cpp image generation engine plugin (src/engines/sdcpp)" OFF)
-# Heavy (builds trellis2.cpp + its own ggml), so off by default.
-option(AGENT_ENGINE_TRELLIS "Build the TRELLIS.2 image-to-3D engine plugin (src/engines/trellis)" OFF)
+option(AGENT_ENGINE_ONNX "Build the ONNX Runtime engine plugin (src/engines/onnx; downloads ONNX Runtime at configure time)" ON)
+# Engines whose source is a git submodule are on by default when the submodule is checked out (git clone --recurse-submodules);
+# a plain clone builds without them and says so. Pass -DAGENT_ENGINE_<NAME>=ON to require one.
+set(_sdcpp_default OFF)
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/vendor/stable-diffusion.cpp/CMakeLists.txt AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/vendor/stable-diffusion.cpp/ggml/CMakeLists.txt)
+    set(_sdcpp_default ON)
+endif()
+option(AGENT_ENGINE_SDCPP "Build the stable-diffusion.cpp image generation engine plugin (src/engines/sdcpp)" ${_sdcpp_default})
+# TRELLIS.2 needs a CUDA GPU: on by default only when a CUDA toolkit is found and the submodule is checked out.
+set(_trellis_default OFF)
+include(CheckLanguage)
+check_language(CUDA)
+if(CMAKE_CUDA_COMPILER AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/vendor/trellis2cpp/ggml/CMakeLists.txt)
+    set(_trellis_default ON)
+endif()
+option(AGENT_ENGINE_TRELLIS "Build the TRELLIS.2 image-to-3D engine plugin (src/engines/trellis; needs CUDA)" ${_trellis_default})
 # audio.cpp (Apache-2.0): TTS, ASR, VAD, diarization and more from one library; builds its own ggml, so off by default.
-option(AGENT_ENGINE_AUDIOCPP "Build the audio.cpp speech engine plugin (src/engines/audiocpp)" OFF)
+set(_audiocpp_default OFF)
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/vendor/audio.cpp/CMakeLists.txt)
+    set(_audiocpp_default ON)
+endif()
+option(AGENT_ENGINE_AUDIOCPP "Build the audio.cpp speech engine plugin (src/engines/audiocpp)" ${_audiocpp_default})
 # ggml's AMX kernels break when another in-process engine touches the AMX tile state; see
 # cmake/ggml_no_amx.cmake. Only matters for GGML_NATIVE builds on AMX CPUs.
 option(AGENT_GGML_AMX "Keep Intel AMX in the engines' ggml (safe only with process-isolated engines)" OFF)

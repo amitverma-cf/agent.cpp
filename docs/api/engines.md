@@ -31,11 +31,19 @@ cfg.workspace_dir  = ".workspace";
 auto session = agent::init(cfg);
 ```
 
-**Finding an engine.** `agent::engines::llama` (and `audiocpp`, `sdcpp`, `trellis`, `onnx`) are the shipped engines. A program that
-uses `find_package(agent-cpp)` gets the full path of the installed plugin in each constant (CMake defines `AGENT_ENGINES_DIR` for it), so it
-runs from any folder. Without the package they are bare names, resolved as follows. A name is resolved in this order: an engine registered with `register_engine` or listed in a loaded `engines.json`; then the file `agent-engine-<name>.so` (`.dll`, `.dylib`) in `$AGENT_ENGINES_DIR`, next to the
-running executable, in its `engines/` folder, in `../lib/agent/engines` and `../lib`, and in the working directory. A value that looks
-like a path is loaded as given.
+**Finding an engine.** `agent::engines::llama` (and `audiocpp`, `sdcpp`, `trellis`, `onnx`) are the names of the shipped engines. A name is
+resolved at run time, relative to your program, so an installed or moved application keeps working:
+
+1. an engine registered with `register_engine`, added with `engines::add`, or listed in a loaded `engines.json`;
+2. the file `agent-engine-<name>.so` (`.dll`, `.dylib`) in folders you added with `agent::engines::search_path(dir)`, then in
+   `$AGENT_ENGINES_DIR`, then `<program folder>/engines/`, `<program folder>/../lib/agent/engines/`, `<program folder>/`,
+   `<program folder>/../lib/`, and the working directory.
+
+A value that looks like a path is loaded as given. When nothing is found the error lists every folder it looked in and what to do.
+
+In CMake, `agent_deploy_engines(my_app llama audiocpp)` copies exactly those plugins, and the libraries they load, into
+`<my_app folder>/engines/` after each build, adds them to `install()` (`<bindir>/engines`) and copies `agent-engine-host` next to the program.
+Engines you do not name never reach your release.
 
 `init()` loads the plugin if `Config::engine` is a path, then calls the engine's `create()` with:
 
@@ -431,7 +439,7 @@ status codes. This is the only exception boundary in agent.cpp.
 `AGENT_CAP_GENERIC` (raw named tensors in and out) and `AGENT_ENGINE_FLAG_CONCURRENT`: `OrtSession::Run`
 is thread-safe and every call keeps its own buffers.
 
-Build it against a prebuilt ONNX Runtime release (option `AGENT_ENGINE_ONNX`, default `OFF`):
+Build it against a prebuilt ONNX Runtime release (option `AGENT_ENGINE_ONNX`, default `ON`):
 
 ```bash
 cmake -B build -G Ninja -DAGENT_ENGINE_ONNX=ON -DONNXRUNTIME_ROOT=/path/to/onnxruntime-linux-x64-1.31.1

@@ -183,6 +183,21 @@ Result<void> add(std::string_view name, std::string_view plugin_path, EngineIsol
     return ok();
 }
 
+std::vector<std::string> &search_dir_list() {
+    static std::vector<std::string> dirs;
+    return dirs;
+}
+
+void search_path(std::string_view dir) {
+    std::lock_guard<std::mutex> lk(registry_mutex());
+    search_dir_list().emplace_back(dir);
+}
+
+std::vector<std::string> extra_search_dirs() {
+    std::lock_guard<std::mutex> lk(registry_mutex());
+    return search_dir_list();
+}
+
 void remove(std::string_view name) {
     std::lock_guard<std::mutex> lk(registry_mutex());
     auto &records = plugin_records();

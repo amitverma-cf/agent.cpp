@@ -27,14 +27,9 @@ On Windows, run the same from a "Developer PowerShell for VS 2022" and add
 `-DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows`.
 
 The build puts `agent`, `agent-engine-host` and the tests at the top of `build/`, and each engine plugin under
-`build/src/engines/<name>/`. The default build has the llama engine only. Add the others when you need them:
-
-```sh
-cmake -B build -DAGENT_ENGINE_AUDIOCPP=ON -DAGENT_ENGINE_SDCPP=ON -DAGENT_ENGINE_ONNX=ON -DAGENT_ENGINE_TRELLIS=ON
-```
-
-audio.cpp and TRELLIS.2 come from submodules (`git submodule update --init vendor/audio.cpp vendor/trellis2cpp`). The full list of
-options is [at the end of this page](#build-options).
+`build/src/engines/<name>/`. Every engine is built by default (audio.cpp, stable-diffusion.cpp and TRELLIS.2 when their submodules are checked out, so clone with
+`--recurse-submodules`; TRELLIS.2 also needs a CUDA toolkit). Switch one off with `-DAGENT_ENGINE_<NAME>=OFF`. The full list of options is
+[at the end of this page](#build-options).
 
 ## Use the command
 
@@ -85,7 +80,7 @@ int main() {
 }
 ```
 
-`agent::engines::llama` is the engine; `audiocpp`, `sdcpp`, `trellis` and `onnx` are next to it. A different engine takes different
+`agent::engines::llama` is the engine; `audiocpp`, `sdcpp`, `trellis` and `onnx` are next to it. In CMake, `agent_deploy_engines(my_app llama)` puts the plugin where the program finds it. A different engine takes different
 model roles, for example `{"tts.model", ...}` and `{"asr.model", ...}` for audio.cpp. See [api/engines.md](api/engines.md).
 
 ### A graph
@@ -115,12 +110,12 @@ Routing, parallel branches, loops, checkpoints and human-in-the-loop interrupts:
 | `AGENT_CLI_AUDIO_DEVICE` | `ON` | Build microphone and speaker support (miniaudio) into the CLI; `OFF` leaves it out |
 | `AGENT_ENGINE_LLAMA` | `ON` | Build the llama.cpp engine plugin (`src/engines/llama`) |
 | `AGENT_LLAMA_UPSTREAM` | `ON` | Link llama.cpp's own server handlers in process (MTP models and native System One decision models) |
-| `AGENT_ENGINE_ONNX` | `OFF` | Build the ONNX Runtime engine (`src/engines/onnx`). CMake downloads the pinned ONNX Runtime release; `-DONNXRUNTIME_ROOT=<dir>` is needed only where upstream publishes no archive |
-| `AGENT_ENGINE_SDCPP` | `OFF` | Build the stable-diffusion.cpp engine for images and video (`src/engines/sdcpp`) |
-| `AGENT_ENGINE_AUDIOCPP` | `OFF` | Build the audio.cpp speech engine (`src/engines/audiocpp`: TTS, ASR, VAD, diarization); needs the `vendor/audio.cpp` submodule |
+| `AGENT_ENGINE_ONNX` | `ON` | Build the ONNX Runtime engine (`src/engines/onnx`). CMake downloads the pinned ONNX Runtime release; `-DONNXRUNTIME_ROOT=<dir>` is needed only where upstream publishes no archive |
+| `AGENT_ENGINE_SDCPP` | `ON` with its submodule | Build the stable-diffusion.cpp engine for images and video (`src/engines/sdcpp`) |
+| `AGENT_ENGINE_AUDIOCPP` | `ON` with its submodule | Build the audio.cpp speech engine (`src/engines/audiocpp`: TTS, ASR, VAD, diarization); needs the `vendor/audio.cpp` submodule |
 | `AGENT_AUDIOCPP_MODEL_SET` | `custom` | audio.cpp model families compiled in: `custom` builds the families in `AGENT_AUDIOCPP_MODELS`, `full` builds all of them |
 | `AGENT_AUDIOCPP_MODELS` | (list in `src/engines/audiocpp/CMakeLists.txt`) | Model families built when `AGENT_AUDIOCPP_MODEL_SET=custom` |
-| `AGENT_ENGINE_TRELLIS` | `OFF` | Build the TRELLIS.2 image-to-3D engine (`src/engines/trellis`); needs the `vendor/trellis2cpp` submodule |
+| `AGENT_ENGINE_TRELLIS` | `ON` with CUDA and its submodule | Build the TRELLIS.2 image-to-3D engine (`src/engines/trellis`); needs the `vendor/trellis2cpp` submodule |
 | `AGENT_TRELLIS_BUILD_JOBS`, `AGENT_AUDIOCPP_BUILD_JOBS` | (empty) | Parallel jobs for the nested build of the TRELLIS and audio.cpp engines; empty uses the build tool's default |
 | `AGENT_GGML_AMX` | `OFF` | Keep Intel AMX kernels in the engines' ggml; only safe when every engine runs out of process |
 | `BUILD_SHARED_LIBS` | `OFF` | Build `libagent`, `agent_store_sqlite` and `agent_hub` as shared libraries |

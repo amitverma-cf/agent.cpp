@@ -687,8 +687,8 @@ auto image = agent::open_session(agent::engines::sdcpp, {{"model", "sd.gguf"}, {
 auto voice = agent::open_session(agent::engines::audiocpp, {{"asr.model", "asr.gguf"}, {"tts.model", "tts.gguf"}, {"tts.voice", "alba"}});
 ```
 
-`agent::engines::llama`, `audiocpp`, `sdcpp`, `trellis` and `onnx` are the shipped engines (with the CMake package each is the full path of the
-installed plugin). `agent::engines::add(name, plugin_path, isolation)`, `remove(name)` and `list()` manage your own engines; see
+`agent::engines::llama`, `audiocpp`, `sdcpp`, `trellis` and `onnx` name the shipped engines; the plugin is found next to your program (CMake:
+`agent_deploy_engines(my_app llama)`), or in a folder added with `agent::engines::search_path(dir)`. `agent::engines::add(name, plugin_path, isolation)`, `remove(name)` and `list()` manage your own engines; see
 [api/engines.md](api/engines.md).
 
 ### One-shot tasks

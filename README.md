@@ -42,20 +42,22 @@ Prebuilt archives are not published yet; build from source. You need CMake 3.21+
 ```sh
 git clone --recurse-submodules https://github.com/amitverma-cf/agent.cpp
 cd agent.cpp
-cmake -B build -G Ninja -DAGENT_ENGINE_AUDIOCPP=ON -DAGENT_ENGINE_SDCPP=ON -DAGENT_ENGINE_ONNX=ON
+cmake -B build -G Ninja
 cmake --build build
+cmake --install build --prefix ~/agent-cpp
 ```
 
-The default build contains only the llama engine, because it is the one most people want and the others add build time
-and downloads. Each engine is a separate plugin, switched on with its own option:
+Every engine is built by default and installed as its own plugin. Switch one off with its option (`-DAGENT_ENGINE_SDCPP=OFF`):
 
-| Engine | Option | Needs |
+| Engine | Option | Built by default when |
 |---|---|---|
-| llama.cpp | `AGENT_ENGINE_LLAMA` (on) | nothing extra |
-| audio.cpp | `AGENT_ENGINE_AUDIOCPP` | the `vendor/audio.cpp` submodule |
-| stable-diffusion.cpp | `AGENT_ENGINE_SDCPP` | nothing extra |
-| ONNX Runtime | `AGENT_ENGINE_ONNX` | downloads ONNX Runtime at configure time |
-| TRELLIS.2 | `AGENT_ENGINE_TRELLIS` | the `vendor/trellis2cpp` submodule, a CUDA GPU |
+| llama.cpp | `AGENT_ENGINE_LLAMA` | always |
+| ONNX Runtime | `AGENT_ENGINE_ONNX` | always (downloads ONNX Runtime at configure time) |
+| audio.cpp | `AGENT_ENGINE_AUDIOCPP` | the `vendor/audio.cpp` submodule is checked out |
+| stable-diffusion.cpp | `AGENT_ENGINE_SDCPP` | the `vendor/stable-diffusion.cpp` submodule is checked out |
+| TRELLIS.2 | `AGENT_ENGINE_TRELLIS` | a CUDA toolkit is found and the `vendor/trellis2cpp` submodule is checked out |
+
+Your own application ships only the engines it names (see below), so having them all built costs your users nothing.
 
 ## First run
 
@@ -115,8 +117,15 @@ int main() {
 ```
 
 `agent::open_session` is the short path: one engine, one model file, defaults for the rest. For several model files, engine options or
-a full `Config`, use `agent::engine_config` and `agent::init` ([the guide](docs/guide.md)). `agent::engines::llama`, `audiocpp`, `sdcpp`, `trellis` and `onnx` name the engines that ship with agent.cpp; the plugin
-installed with the library is found for you. The library has one header, no exceptions (`Result<T>` everywhere), no virtual
+a full `Config`, use `agent::engine_config` and `agent::init` ([the guide](docs/guide.md)). `agent::engines::llama`, `audiocpp`, `sdcpp`, `trellis` and `onnx` name the engines that ship with agent.cpp. The plugin is found next to
+your program (in `engines/`), which one CMake line fills with just the engines you use:
+
+```cmake
+find_package(agent-cpp REQUIRED COMPONENTS llama)
+target_link_libraries(my_app PRIVATE agent-cpp::agent)
+agent_deploy_engines(my_app llama)        # copies engines/agent-engine-llama.* next to my_app after each build, and into install()
+```
+ The library has one header, no exceptions (`Result<T>` everywhere), no virtual
 calls, and works from C through [`agent_c.h`](docs/api/c-api.md).
 
 It covers chat turns with tools, graphs, MCP servers, skills, RAG, memory stores and the permission gate. Start with

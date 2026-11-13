@@ -49,28 +49,48 @@ struct EngineState {
 agent_str to_c(std::string_view s) { return agent_str{s.data(), s.size()}; }
 std::string_view from_c(agent_str s) { return s.data ? std::string_view(s.data, s.size) : std::string_view(); }
 
-// A bare engine name that no manifest lists ("llama"): look for agent-engine-<name> where engines are normally installed, so library
-// users can write Config::engine = "llama" without a path.
-std::string find_named_plugin(const std::string &name) {
-#if defined(_WIN32)
-    const std::string file = "agent-engine-" + name + ".dll";
-#elif defined(__APPLE__)
-    const std::string file = "agent-engine-" + name + ".dylib";
-#else
-    const std::string file = "agent-engine-" + name + ".so";
-#endif
+// The folders searched for an engine plugin given by name, most specific first.
+std::vector<std::filesystem::path> engine_search_dirs() {
     std::vector<std::filesystem::path> dirs;
+    for (const std::string &d : engines::extra_search_dirs()) dirs.emplace_back(d);
     if (const char *env = std::getenv("AGENT_ENGINES_DIR"); env && *env) dirs.emplace_back(env);
     const std::filesystem::path exe = hal::current_executable_path();
     if (!exe.empty()) {
         const auto dir = exe.parent_path();
-        dirs.insert(dirs.end(), {dir, dir / "engines", dir.parent_path() / "lib" / "agent" / "engines", dir.parent_path() / "lib"});
+        dirs.insert(dirs.end(), {dir / "engines", dir.parent_path() / "lib" / "agent" / "engines", dir, dir.parent_path() / "lib"});
     }
     dirs.emplace_back(std::filesystem::current_path());
+    return dirs;
+}
+
+std::string engine_file_name(const std::string &name) {
+#if defined(_WIN32)
+    return "agent-engine-" + name + ".dll";
+#elif defined(__APPLE__)
+    return "agent-engine-" + name + ".dylib";
+#else
+    return "agent-engine-" + name + ".so";
+#endif
+}
+
+// A bare engine name that no manifest lists ("llama"): look for agent-engine-<name> where engines are normally kept.
+std::string find_named_plugin(const std::string &name) {
+    const std::string file = engine_file_name(name);
     std::error_code ec;
-    for (const auto &d : dirs)
+    for (const auto &d : engine_search_dirs())
         if (std::filesystem::is_regular_file(d / file, ec)) return (d / file).string();
     return {};
+}
+
+std::string engine_not_found_message(const std::string &name) {
+    std::string msg = "Engine '" + name + "' was not found (" + engine_file_name(name) + "). Looked in:";
+    for (const auto &d : engine_search_dirs()) msg += "\n  " + d.string();
+    std::string upper = name;
+    for (char &c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    msg += "\nBuild it (-DAGENT_ENGINE_" + upper +
+           "=ON), put it in one of those folders (agent_deploy_engines() in CMake does that), "
+           "or add its folder with agent::engines::search_path().";
+    return msg;
 }
 
 bool looks_like_path(std::string_view s) {
@@ -215,7 +235,7 @@ Result<void> init_engine(Session &session) {
                 return fail(ErrorCode::InvalidConfig, "Engine '" + spec +
                                                           "' is linked into this process (register_engine); process isolation needs a "
                                                           "plugin file. Use EngineIsolation::InProcess or a plugin path.");
-            return fail(ErrorCode::UnsupportedProvider, "No engine named '" + spec + "' is registered.");
+            return fail(ErrorCode::UnsupportedProvider, engine_not_found_message(spec));
         }
         engines::RemoteOptions opts;
         opts.host_path = engines::resolve_engine_host_path(cfg.engine_host_path);
@@ -290,7 +310,7 @@ Result<void> init_engine(Session &session) {
         if (!loaded.ok) return fail(loaded.error.code, loaded.error.message);
         engine = find_engine(loaded.value);
     }
-    if (!engine) return fail(ErrorCode::UnsupportedProvider, "No engine named '" + spec + "' is registered.");
+    if (!engine) return fail(ErrorCode::UnsupportedProvider, engine_not_found_message(spec));
 
     state->engine = engine;
     state->name = engine->name;

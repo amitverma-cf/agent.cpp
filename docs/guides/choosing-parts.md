@@ -10,10 +10,10 @@ larger parts are switches in CMake, and every engine is its own plugin you build
 | RAG | `AGENT_WITH_RAG` (ON) | `embed`, `rerank`, chunking, vector stores, the C API's `agent_c_embed` |
 | Model registry | `AGENT_WITH_MODELS` (ON) | `ModelRegistry`: several models under a memory budget |
 | llama.cpp engine | `AGENT_ENGINE_LLAMA` (ON) | text, vision, embeddings, rerank, decisions |
-| audio.cpp engine | `AGENT_ENGINE_AUDIOCPP` (OFF) | speech recognition, synthesis, VAD, diarization |
-| stable-diffusion.cpp engine | `AGENT_ENGINE_SDCPP` (OFF) | images and video |
-| TRELLIS.2 engine | `AGENT_ENGINE_TRELLIS` (OFF) | image to 3D |
-| ONNX Runtime engine | `AGENT_ENGINE_ONNX` (OFF) | generic ONNX models |
+| audio.cpp engine | `AGENT_ENGINE_AUDIOCPP` (ON) | speech recognition, synthesis, VAD, diarization |
+| stable-diffusion.cpp engine | `AGENT_ENGINE_SDCPP` (ON) | images and video |
+| TRELLIS.2 engine | `AGENT_ENGINE_TRELLIS` (ON when CUDA is found) | image to 3D |
+| ONNX Runtime engine | `AGENT_ENGINE_ONNX` (ON) | generic ONNX models |
 | `agent` command | `AGENT_BUILD_CLI` (ON) | the CLI (it needs every library part above) |
 
 A small embedded build, with a chat engine and nothing else:
@@ -35,6 +35,19 @@ target_link_libraries(my_app PRIVATE agent-cpp::agent)
 `find_package` fails, with the missing component named, when the installed build lacks a part (`graph`, `mcp`, `rag`, `models`) or an engine
 (`llama`, `audiocpp`, `sdcpp`, `trellis`, `onnx`). Ask only for what you use. In C++ the engines are `agent::engines::llama` and the like; add
 your own with `agent::engines::add`.
+
+## Shipping only the engines you use
+
+Every engine is built by default, but your application ships just the ones you name:
+
+```cmake
+find_package(agent-cpp REQUIRED COMPONENTS llama)
+agent_deploy_engines(my_app llama)
+```
+
+After each build that copies `agent-engine-llama` (plus the libraries it loads) into `engines/` next to `my_app`, adds it to `install()` and
+copies `agent-engine-host`. Engines you do not list are not copied or installed. The program finds `engines/` at run time, so the folder can
+move with the app; `agent::engines::search_path(dir)` adds another place to look.
 
 ## Using less at run time
 

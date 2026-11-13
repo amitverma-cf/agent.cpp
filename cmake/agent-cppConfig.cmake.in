@@ -24,9 +24,6 @@ include("${CMAKE_CURRENT_LIST_DIR}/agent-cppTargets.cmake")
 # Where engine plugins are installed (<prefix>/lib/agent/engines). It may not exist when no
 # engine was built, so it is not checked.
 set(agent-cpp_ENGINE_DIR "@PACKAGE_AGENT_INSTALL_ENGINEDIR@")
-# Programs that link agent-cpp::agent get AGENT_ENGINES_DIR, which makes agent::engines::llama and friends the full path of the
-# installed plugin, wherever the program lives.
-set_property(TARGET agent-cpp::agent APPEND PROPERTY INTERFACE_COMPILE_DEFINITIONS "AGENT_ENGINES_DIR=\"${agent-cpp_ENGINE_DIR}\"")
 # The out-of-process engine host (EngineIsolation::Process). libagent looks for it next to the running
 # executable; programs installed elsewhere pass this path as Config::engine_host_path (or set
 # $AGENT_ENGINE_HOST).

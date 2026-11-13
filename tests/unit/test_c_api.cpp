@@ -187,3 +187,22 @@ TEST_CASE("tasks: transcribe, speak and the multi-model open_session on the mock
 
     CHECK_FALSE(agent::open_session("mock", {{"", "x"}}, base).ok);
 }
+
+TEST_CASE("engines: search_path adds a folder that is searched first", "[engines]") {
+    namespace fs = std::filesystem;
+    const fs::path plugin = AGENT_TEST_MOCK_ENGINE_PATH;
+    const std::string name = plugin.stem().string().substr(std::strlen("agent-engine-"));
+    agent::engines::search_path(plugin.parent_path().string());
+    char err[4096] = {};
+    const std::string ws = workspace("agent_test_search_path");
+    agent_c_session *session = agent_c_open(name.c_str(), "mock.bin", nullptr, ws.c_str(), 0, 0, err, sizeof(err));
+    INFO(err);
+    CHECK(session != nullptr);
+    agent_c_close(session);
+
+    // A name nobody has gives a message that says where it looked and what to do.
+    agent_c_session *missing = agent_c_open("nope", "mock.bin", nullptr, ws.c_str(), 0, 0, err, sizeof(err));
+    CHECK(missing == nullptr);
+    CHECK(std::string(err).find("Looked in") != std::string::npos);
+    CHECK(std::string(err).find("agent_deploy_engines") != std::string::npos);
+}

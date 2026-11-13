@@ -4,12 +4,12 @@ Each example is one short program with no arguments: the model files and the eng
 exactly what is needed. They use real models; none of them uses a mock.
 
 ```sh
-cmake -B build -G Ninja -DAGENT_ENGINE_AUDIOCPP=ON -DAGENT_ENGINE_SDCPP=ON    # llama is on by default
+cmake -B build -G Ninja                                                       # every engine is built by default
 cmake --build build
 cmake --install build --prefix ~/agent-cpp
 
 cmake -S examples -B build-examples -DCMAKE_PREFIX_PATH=~/agent-cpp          # the examples as a project of their own
-cmake --build build-examples
+cmake --build build-examples                                                   # copies the engines each example uses into build-examples/engines/
 examples/download-models.sh                                                    # once; run examples from this folder
 ./build-examples/hello
 ```
