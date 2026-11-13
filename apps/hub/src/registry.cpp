@@ -26,6 +26,7 @@ constexpr RegistryPart kVoxtral[] = {{"ggml-org/Voxtral-Mini-3B-2507-GGUF:Q4_K_M
 constexpr RegistryPart kBge[] = {{"ggml-org/bge-small-en-v1.5-Q8_0-GGUF", ""}};
 constexpr RegistryPart kNomic[] = {{"nomic-ai/nomic-embed-text-v1.5-GGUF:Q8_0", ""}};
 constexpr RegistryPart kEmbGemma[] = {{"ggml-org/embeddinggemma-300M-qat-q4_0-GGUF:q4_0", ""}};
+constexpr RegistryPart kEmbGemma2[] = {{"ggml-org/embeddinggemma-2-GGUF:Q8_0", ""}};
 constexpr RegistryPart kJina[] = {{"gpustack/jina-reranker-v1-tiny-en-GGUF:Q8_0", ""}};
 constexpr RegistryPart kBgeRerank[] = {{"gpustack/bge-reranker-v2-m3-GGUF:Q4_K_M", ""}};
 constexpr RegistryPart kSdxs[] = {{"concedo/sdxs-512-tinySDdistilled-GGUF:Q8_0", ""}};
@@ -65,6 +66,10 @@ constexpr RegistryEntry kRegistry[] = {
     {"bge-small", "embed", "llama", kBge, 35, "{\"mode\":\"embed\"}", "384 dims", true},
     {"nomic-embed", "embed", "llama", kNomic, 139, "{\"mode\":\"embed\"}", "768 dims", false},
     {"embeddinggemma", "embed", "llama", kEmbGemma, 265, "{\"mode\":\"embed\"}", "", false},
+    {"embeddinggemma-2", "embed", "llama", kEmbGemma2, 825, "{\"mode\":\"embed\"}",
+     "text, images and audio in one 768-dimensional space (Matryoshka 512/256/128); the projector is pulled with it. Text wants the prefix "
+     "\"task: search result | query: \" (or \"title: none | text: \" for documents), images and audio take none",
+     true},
     {"jina-reranker-tiny", "rerank", "llama", kJina, 35, "{\"mode\":\"rerank\"}", "ranked the right passage first in testing", true},
     {"bge-reranker-v2-m3", "rerank", "llama", kBgeRerank, 418, "{\"mode\":\"rerank\"}", "multilingual", false},
     {"sdxs-512", "image_gen", "sdcpp", kSdxs, 0, "", "one-step 512px; use {\"steps\":1,\"cfg_scale\":1}", true},

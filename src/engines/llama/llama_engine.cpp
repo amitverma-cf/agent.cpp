@@ -1159,8 +1159,26 @@ int32_t run_embed_media(Instance &inst, const agent_request *req, agent_response
         std::lock_guard<std::mutex> lock(inst.pool_mu);
         llama_memory_clear(llama_get_memory(ctx), true);
         llama_pos n_past = 0;
-        if (mtmd_helper_eval_chunks(inst.mtmd.get(), ctx, chunks.ptr.get(), 0, 0, static_cast<int32_t>(llama_n_batch(ctx)), true,
-                                    &n_past) != 0)
+        // The pooled vector comes from the last decode only. A message that is nothing but media is evaluated chunk by chunk without
+        // mtmd's marker tokens around it, so the pooling covers the media's own tokens (a mean-pooling model such as EmbeddingGemma 2
+        // would otherwise return the vector of the closing marker); a message with text keeps the whole sequence in order, which is
+        // right for last-token pooling (Qwen3-VL-Embedding).
+        bool media_only = true;
+        for (size_t p = 0; p < m.n_parts; ++p)
+            if (m.parts[p].kind == AGENT_PART_TEXT && !sv(m.parts[p].text).empty()) media_only = false;
+        int32_t rc = 0;
+        if (media_only) {
+            for (size_t ci = 0; ci < mtmd_input_chunks_size(chunks.ptr.get()) && rc == 0; ++ci) {
+                const mtmd_input_chunk *chunk = mtmd_input_chunks_get(chunks.ptr.get(), ci);
+                if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_TEXT) continue;
+                rc = mtmd_helper_eval_chunk_single(inst.mtmd.get(), ctx, chunk, n_past, 0, static_cast<int32_t>(llama_n_batch(ctx)), true,
+                                                   &n_past);
+            }
+        } else {
+            rc = mtmd_helper_eval_chunks(inst.mtmd.get(), ctx, chunks.ptr.get(), 0, 0, static_cast<int32_t>(llama_n_batch(ctx)), true,
+                                         &n_past);
+        }
+        if (rc != 0)
             return inst.fail(AGENT_ERR_DECODE_FAILED,
                              "llama: the model could not process the media (does this embedding model take images or audio?)");
         const float *e = llama_get_embeddings_seq(ctx, 0);

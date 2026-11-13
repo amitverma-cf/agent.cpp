@@ -668,11 +668,18 @@ uint32_t crc32_bytes(const unsigned char *p, size_t n, uint32_t crc = 0xFFFFFFFF
 }
 
 // A solid-colour PNG (RGB8, stored deflate blocks): enough for a vision tower, no image library needed.
-void write_solid_png(const std::filesystem::path &path, unsigned w, unsigned h, unsigned char r, unsigned char g, unsigned char b) {
+// shape: 'c' = a circle, 's' = a square, in the given colour on white; anything else fills the whole image with the colour.
+void write_solid_png(const std::filesystem::path &path, unsigned w, unsigned h, unsigned char r, unsigned char g, unsigned char b,
+                     char shape = 0) {
     std::vector<unsigned char> raw;
     for (unsigned y = 0; y < h; ++y) {
         raw.push_back(0);
-        for (unsigned x = 0; x < w; ++x) raw.insert(raw.end(), {r, g, b});
+        for (unsigned x = 0; x < w; ++x) {
+            const double dx = (static_cast<double>(x) - w / 2.0) / (w / 2.0), dy = (static_cast<double>(y) - h / 2.0) / (h / 2.0);
+            const bool inside = shape == 'c' ? dx * dx + dy * dy < 0.55 : shape == 's' ? std::abs(dx) < 0.6 && std::abs(dy) < 0.6 : true;
+            if (inside) raw.insert(raw.end(), {r, g, b});
+            else raw.insert(raw.end(), {255, 255, 255});
+        }
     }
     std::vector<unsigned char> z = {0x78, 0x01};
     uint32_t a = 1, bsum = 0;
@@ -710,16 +717,16 @@ void write_solid_png(const std::filesystem::path &path, unsigned w, unsigned h, 
 
 } // namespace
 
-// AGENT_TEST_EMBED_MM_MODEL + AGENT_TEST_EMBED_MM_MMPROJ: a projector-equipped embedding model, e.g. Qwen3-VL-Embedding-2B
-// (ifire/Qwen3-VL-Embedding-2B-GGUF).
+// AGENT_TEST_EMBED_MM_MODEL + AGENT_TEST_EMBED_MM_MMPROJ: a projector-equipped embedding model, e.g. ggml-org/embeddinggemma-2-GGUF
+// (Q8_0 plus its mmproj; AGENT_TEST_EMBED_MM_TEXT_PREFIX="task: search result | query: ") or Qwen3-VL-Embedding-2B (ifire/Qwen3-VL-Embedding-2B-GGUF).
 TEST_CASE("multimodal embedding: an image lands nearer the text that describes it", "[rag][llama][model][embed_mm]") {
     const char *model = std::getenv("AGENT_TEST_EMBED_MM_MODEL");
     const char *mmproj = std::getenv("AGENT_TEST_EMBED_MM_MMPROJ");
     if (!model || !mmproj) SKIP("AGENT_TEST_EMBED_MM_MODEL / AGENT_TEST_EMBED_MM_MMPROJ not set");
     const std::filesystem::path dir = std::filesystem::path(kWorkspace) / "mm";
     std::filesystem::create_directories(dir);
-    write_solid_png(dir / "red.png", 64, 64, 220, 20, 20);
-    write_solid_png(dir / "blue.png", 64, 64, 20, 20, 220);
+    write_solid_png(dir / "red.png", 224, 224, 220, 20, 20, 'c');  // a red circle on white
+    write_solid_png(dir / "blue.png", 224, 224, 20, 20, 220, 's'); // a blue square on white
 
     agent::Config cfg = llama_task_config(model, "embed");
     cfg.context_window = 2048;
@@ -730,7 +737,13 @@ TEST_CASE("multimodal embedding: an image lands nearer the text that describes i
 
     const std::string red = (dir / "red.png").string(), blue = (dir / "blue.png").string();
     std::vector<agent::Media> red_img{{red, "image/png"}}, blue_img{{blue, "image/png"}};
-    std::vector<agent::EmbedInput> in{{"A solid red square.", {}}, {"A solid blue square.", {}}, {"", red_img}, {"", blue_img}};
+    // Some models want a task prefix on text (EmbeddingGemma 2: "task: search result | query: "); images take none.
+    const char *prefix_env = std::getenv("AGENT_TEST_EMBED_MM_TEXT_PREFIX");
+    const std::string prefix = prefix_env ? prefix_env : "";
+    std::vector<agent::EmbedInput> in{{prefix + "A red circle on a white background.", {}},
+                                      {prefix + "A blue square on a white background.", {}},
+                                      {"", red_img},
+                                      {"", blue_img}};
     auto r = agent::embed(s.value, in);
     INFO(r.error.message);
     REQUIRE(r.ok);

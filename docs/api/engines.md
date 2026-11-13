@@ -425,8 +425,18 @@ can't generate text, so `options.mode` picks what an instance does:
 
 `caps` is static, so it lists `AGENT_CAP_EMBED | AGENT_CAP_RERANK` next to text generation; an
 instance returns `AGENT_ERR_UNSUPPORTED` for a task that doesn't match its mode (and for media parts
-in embed / rerank mode). `mmproj` is only accepted in generate mode. Loading a model that declares
-a non-rank pooling type (an embedding model) in rerank mode fails.
+in rerank mode). Loading a model that declares a non-rank pooling type (an embedding model) in rerank
+mode fails.
+
+**Multimodal embedding.** In embed mode with a projector (`"mmproj"`), a request with image or audio parts gives one
+embedding per message, made of the message's parts in order, so a picture and the text that describes it land near each other
+(`agent::embed` takes `EmbedInput{text, media}`). Without a projector such a request fails with `AGENT_ERR_UNSUPPORTED`.
+Example: `ggml-org/embeddinggemma-2-GGUF` (text, image and audio in one 768-dimensional space, Matryoshka sizes 512, 256, 128 after
+re-normalising) with its `mmproj-embeddinggemma-2-*.gguf`: `agent model pull embeddinggemma-2` fetches both. Give text the model's task
+prefix (`task: search result | query: ...` for queries, `title: none | text: ...` for documents) and images and audio none. A message that is only
+media is pooled over the media's own tokens; with text next to the media the whole sequence is decoded in order, which suits last-token
+pooling (Qwen3-VL-Embedding) but not mean pooling. Tested with `AGENT_TEST_EMBED_MM_MODEL`/`_MMPROJ`/`_TEXT_PREFIX`: a red circle image is
+nearer the text "a red circle" (0.73) than "a blue square" (0.61).
 
 - Rerank inputs are built the way llama-server builds them: the model's `rerank` chat template
   (`{query}` / `{document}` placeholders) when the GGUF has one, otherwise
@@ -679,6 +689,18 @@ trellis2.cpp itself does not throw (only its optional CGAL path does, and that i
 C++ underneath: an out-of-memory `std::bad_alloc` inside it is not caught, and ggml asserts abort.
 CPU generation is slow: the 512/1024 paths run two or three 1.3B-parameter DiTs over thousands of
 tokens and the 1024³ decode needs ~14 GB of host RAM.
+
+Measured on 4 vCPUs and 8 GB RAM with the f16 files above (a 256x256 test picture, 6 sampler steps, 1 seed, CPU only):
+
+| Pipeline | Time | Peak RAM | Mesh |
+|---|---|---|---|
+| coarse (`ss_flow`, `ss_dec`) | 510 s | 3.4 GiB | 35,641 vertices, 71,260 triangles |
+| 512 fine, untextured (`+ slat_flow`, `shape_dec`) | 753 s | 7.4 GiB | 479,587 vertices, 963,750 triangles |
+
+The 512 path only just fits in 8 GB. The textured paths (another 2.4 GB flow model and a decoder) and the 1024 cascade need more
+RAM than that and were not run. The quantized TRELLIS.2 GGUFs on Hugging Face (`ilintar/trellis2-gguf`, `q4/` and `q8/`) do not
+load into the pinned trellis2.cpp (its DINO file has another architecture name and the flow models fail with "cond/flow channel
+mismatch"): they were converted for a different runtime. The converters in `vendor/trellis2cpp` write f32, f16 or bf16 only.
 
 ## The audiocpp engine
 
