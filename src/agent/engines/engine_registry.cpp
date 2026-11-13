@@ -4,6 +4,7 @@
 
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/engine_abi.h>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -172,6 +173,28 @@ const agent_engine_v1 *find_engine(std::string_view name) {
 }
 
 namespace engines {
+
+Result<void> add(std::string_view name, std::string_view plugin_path, EngineIsolation isolation) {
+    if (name.empty() || plugin_path.empty()) return fail(ErrorCode::InvalidConfig, "engines::add: a name and a plugin path are required.");
+    std::error_code ec;
+    if (!std::filesystem::exists(std::filesystem::path(std::string(plugin_path)), ec))
+        return fail(ErrorCode::FilesystemError, "engines::add: engine plugin not found: " + std::string(plugin_path));
+    record_plugin(name, plugin_path, isolation);
+    return ok();
+}
+
+void remove(std::string_view name) {
+    std::lock_guard<std::mutex> lk(registry_mutex());
+    auto &records = plugin_records();
+    records.erase(std::remove_if(records.begin(), records.end(), [&](const PluginRecord &r) { return r.name == name; }), records.end());
+}
+
+std::vector<std::string> list() {
+    std::lock_guard<std::mutex> lk(registry_mutex());
+    std::vector<std::string> names;
+    for (const PluginRecord &r : plugin_records()) names.push_back(r.name);
+    return names;
+}
 
 bool find_plugin_record(std::string_view name, std::string &path, EngineIsolation &isolation) {
     std::lock_guard<std::mutex> lk(registry_mutex());

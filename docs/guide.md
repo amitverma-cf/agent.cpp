@@ -68,6 +68,7 @@ const agent::ModelSlot onnx[] = {{"model", ".workspace/models/clip-vit-b32.onnx"
 auto cfg2 = agent::engine_config(agent::engines::onnx, onnx, R"({"threads": 4})", base);
 ```
 
+To use your own engine, `agent::engines::add("name", "path/to/agent-engine-name.so")` first and pass `"name"` to `engine_config`.
 The third argument is a JSON object of engine options (threads, voices, GPU layers). Engine details: [api/engines.md](api/engines.md).
 For tests without a model, `agent::AiProvider::Mock` returns fixed text.
 

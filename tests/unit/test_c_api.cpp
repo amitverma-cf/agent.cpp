@@ -1,7 +1,9 @@
 // The C API (agent_c.h), used the way a C program would: opaque handles, plain strings, caller buffers.
 
+#include <agent-cpp/agent.hpp>
 #include <agent-cpp/agent_c.h>
 #include <agent-cpp/engine_abi.h>
+#include <algorithm>
 #include <catch_amalgamated.hpp>
 #include <cstdlib>
 #include <cstring>
@@ -135,4 +137,23 @@ TEST_CASE("c api: an engine name is found in AGENT_ENGINES_DIR", "[c_api]") {
 #else
     unsetenv("AGENT_ENGINES_DIR");
 #endif
+}
+
+TEST_CASE("engines: a library user adds, lists and removes a plugin by name", "[engines]") {
+    CHECK_FALSE(agent::engines::add("mine", "no/such/plugin.so").ok);
+    REQUIRE(agent::engines::add("mine", AGENT_TEST_MOCK_ENGINE_PATH).ok);
+    const auto names = agent::engines::list();
+    CHECK(std::find(names.begin(), names.end(), "mine") != names.end());
+
+    const agent::ModelSlot models[] = {{"model", "mock.bin"}};
+    agent::Config base;
+    base.workspace_dir = workspace("agent_test_engines_add");
+    auto cfg = agent::engine_config("mine", models, {}, base);
+    REQUIRE(cfg.ok);
+    auto session = agent::init(cfg.value);
+    CHECK(session.ok);
+
+    agent::engines::remove("mine");
+    const auto after = agent::engines::list();
+    CHECK(std::find(after.begin(), after.end(), "mine") == after.end());
 }

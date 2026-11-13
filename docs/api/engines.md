@@ -8,6 +8,18 @@ compiled in. Each plugin carries its own copy of ggml or ONNX Runtime.
 
 ## Using an engine
 
+Your own engine (see [writing an engine](../guides/writing-an-engine.md)) is a name away:
+
+```cpp
+agent::engines::add("echo", "/opt/myapp/plugins/agent-engine-echo.so");     // optionally: , agent::EngineIsolation::Process
+auto cfg = agent::engine_config("echo", models, {}, base);                  // use it like the shipped ones
+agent::engines::remove("echo");
+```
+
+`agent::engines::add` gives a plugin file a name, `list()` returns every name known, and `remove()` forgets one. The plugin is loaded
+when a session first uses it. `load_engine_manifest` does the same for a whole `engines.json`.
+
+
 ```cpp
 agent::Config cfg;
 cfg.provider       = agent::AiProvider::Engine;

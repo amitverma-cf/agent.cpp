@@ -673,6 +673,12 @@ static constexpr std::string_view audiocpp = AGENT_ENGINE_FILE_("audiocpp"); // 
 static constexpr std::string_view sdcpp = AGENT_ENGINE_FILE_("sdcpp");       // images and video
 static constexpr std::string_view trellis = AGENT_ENGINE_FILE_("trellis");   // image to 3D mesh
 static constexpr std::string_view onnx = AGENT_ENGINE_FILE_("onnx");         // any ONNX model
+
+// Your own engines. add() gives a plugin file a name; use that name (or the constant) in engine_config() afterwards. The plugin is
+// loaded when a session first uses it. remove() forgets the name; list() returns every name that was added or loaded.
+Result<void> add(std::string_view name, std::string_view plugin_path, EngineIsolation isolation = EngineIsolation::Default);
+void remove(std::string_view name);
+std::vector<std::string> list();
 } // namespace engines
 
 struct ModelSlot {
