@@ -56,6 +56,11 @@ endif()
 # The full-screen chat interface (RTXUI, MIT, vendor/RTXUI: HTML and CSS templates for the terminal). OFF keeps only the plain line-based chat.
 # RTXUI needs C++23, so the interface is its own small library at that standard; the rest of the CLI stays at C++20.
 option(AGENT_CLI_TUI "Build the full-screen chat interface (RTXUI) into the agent CLI" ON)
+if(AGENT_CLI_TUI AND ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13)
+                      OR (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 18)))
+    message(STATUS "agent CLI: the full-screen chat needs GCC 13+ or Clang 18+ (C++23); building the line-based chat only")
+    set(AGENT_CLI_TUI OFF)
+endif()
 if(AGENT_CLI_TUI)
     set(RTXUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(RTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)

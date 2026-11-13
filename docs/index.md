@@ -122,6 +122,7 @@ The complete table is in the [README](getting-started.md#build-options). The opt
 |---|---|---|
 | `AGENT_BUILD_CLI` | `ON` | Build the `agent` CLI (needs `AGENT_BUILD_HUB`) |
 | `AGENT_BUILD_HUB` | `ON` | Build `agent_hub` (needs OpenSSL) |
+| `AGENT_CLI_TUI` | `ON` | Full-screen chat in the CLI (RTXUI, needs GCC 13+ / Clang 18+ / MSVC 2022) |
 | `AGENT_ENGINE_LLAMA` | `ON` | llama.cpp engine plugin |
 | `AGENT_ENGINE_ONNX` | `OFF` | ONNX Runtime engine plugin (needs `ONNXRUNTIME_ROOT`) |
 | `AGENT_ENGINE_SDCPP` | `OFF` | stable-diffusion.cpp engine plugin (images and video) |

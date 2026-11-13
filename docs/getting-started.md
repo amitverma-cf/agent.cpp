@@ -6,7 +6,7 @@ Two ways in: run the **`agent`** command, or embed **`libagent`** in your own C+
 
 | | Linux | Windows 11 |
 |---|---|---|
-| Compiler | GCC 12+ or Clang 15+ | MSVC 2022 (C++ workload) |
+| Compiler | GCC 12+ or Clang 15+ (GCC 13+ or Clang 18+ for the full-screen chat) | MSVC 2022 (C++ workload) |
 | CMake, build tool | CMake 3.21+, Ninja | CMake 3.21+, Ninja |
 | OpenSSL 3 | `libssl-dev` | `vcpkg install openssl:x64-windows` |
 
@@ -107,6 +107,7 @@ Routing, parallel branches, loops, checkpoints and human-in-the-loop interrupts:
 |---|---|---|
 | `AGENT_BUILD_CLI` | `ON` | Build the `agent` CLI (`apps/cli`); needs `AGENT_BUILD_HUB` |
 | `AGENT_BUILD_HUB` | `ON` | Build `agent_hub`, the Hugging Face and GitHub downloader (needs OpenSSL) |
+| `AGENT_CLI_TUI` | `ON` | Build the full-screen chat (RTXUI, C++23, `vendor/RTXUI`) into the CLI; `OFF`, or a compiler older than GCC 13 / Clang 18, keeps only the line-based `agent chat --plain` |
 | `AGENT_CLI_AUDIO_DEVICE` | `ON` | Build microphone and speaker support (miniaudio) into the CLI; `OFF` leaves it out |
 | `AGENT_ENGINE_LLAMA` | `ON` | Build the llama.cpp engine plugin (`src/engines/llama`) |
 | `AGENT_LLAMA_UPSTREAM` | `ON` | Link llama.cpp's own server handlers in process (MTP models and native System One decision models) |

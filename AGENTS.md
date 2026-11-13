@@ -16,7 +16,7 @@ and test a change.
 4.  **Public headers.** The C++ API is the single header `include/agent-cpp/agent.hpp` (`Result<T>`, `std::string_view` / `std::span`
     views into the `Arena`, PascalCase types, snake_case free functions). Two C interfaces sit beside it: `agent_c.h` (the library from
     C) and `engine_abi.h` (engine plugins). Avoid breaking existing struct fields or function signatures.
-5.  **No new dependencies** and no code that bypasses the `Arena` allocator.
+5.  **No new dependencies** and no code that bypasses the `Arena` allocator. The full-screen chat (`apps/cli/src/tui.cpp`) is the one exception to the C++20 and no-allocation rules: it is built on RTXUI (`vendor/RTXUI`, MIT, C++23, its own small library) and runs outside the turn dispatch path.
 
 ## Layout
 

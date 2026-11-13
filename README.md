@@ -82,7 +82,7 @@ On Windows use `.\build\agent.exe`. `agent --help` lists every command, and `age
 | `agent sandbox`, `agent secret` | folders tools may use; API keys in the OS credential store |
 | `agent init`, `agent doctor`, `agent clean` | project folder, what is installed and disk use, cleanup |
 
-Typing `/` in the chat opens a command palette (`/model`, `/image`, `/open`, `/stats`, `/doctor`, `/setup`, `/clear`, `/help`, `/exit`); Tab completes, Up and Down recall earlier messages, PgUp and PgDn scroll.
+Typing `/` (or pressing Ctrl+P) in the chat opens a command palette (`/model`, `/image`, `/open`, `/stats`, `/doctor`, `/setup`, `/clear`, `/help`, `/exit`); Tab completes, Up and Down recall earlier messages, PgUp and PgDn scroll, Ctrl+K picks another session and Ctrl+N starts a new chat.
 
  Full reference: [docs/cli.md](docs/cli.md).
 
