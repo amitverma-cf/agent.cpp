@@ -1475,7 +1475,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
     <div class="shell">
       <div class="{side_class}">
         <div class="sback" onclick="ToggleSide">{ico_back}</div>
-        <div class="sbrand"><span class="neon sname">agent</span><span class="pink sname">.cpp</span></div>
+        <div class="sbrand"><for each="{banner}" as="ln"><div class="{ln.cls}">{ln.text}</div></for></div>
         <div class="newchat" onclick="NewChat"><span class="nico">+</span><span class="nlabel">New chat</span></div>
         <div class="slist">
           <for each="{side}" as="s"><div class="{s.cls}" onclick="Pick({s.idx})">{s.text}</div></for>
@@ -1520,7 +1520,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             <for each="{matches}" as="m"><div class="{m.cls}"><span class="pname">{m.name}</span><span class="phelp">{m.help}</span></div></for>
           </div>
           <div if="{prompting}" class="promptq">? {prompt_line}</div>
-          <div class="inrow"><div class="{box_class}"><input value="{input}" placeholder="Message agent.cpp" autofocus=""/></div><div class="{mic_class}" onclick="ToggleMic">{ico_mic}</div></div>
+          <div class="inrow"><div class="{mic_class}" onclick="ToggleMic">{ico_mic}</div><div class="{box_class}"><input value="{input}" placeholder="Message agent.cpp" autofocus=""/></div></div>
           <div class="hint">{hint}</div>
         </div>
         <div class="sp2"></div>
@@ -1554,7 +1554,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
 
     <style>
       .shell { display: flex; flex-direction: row; width: 100%; height: 100%; background-color: #000000; color: #ffffff; border: round; border-color: #40e0d0; }
-      .side { width: 33; flex-shrink: 0; display: flex; flex-direction: column; border-right: solid; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
+      .side { width: 38; flex-shrink: 0; display: flex; flex-direction: column; border-right: solid; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
       .hidden { display: none; }
       .keyhint { color: #8a8a8a; padding-left: 1; }
       .keyhint:hover { color: #40e0d0; }
@@ -1641,7 +1641,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .box.active { border-color: #40e0d0; }
       .inrow { display: flex; flex-direction: row; }
       .inrow .box { flex-grow: 1; }
-      .mic { border: round; border-color: #4a4a4a; color: #8a8a8a; padding-left: 1; padding-right: 1; margin-left: 1; }
+      .mic { border: round; border-color: #4a4a4a; color: #8a8a8a; padding-left: 1; padding-right: 1; margin-right: 1; }
       .mic:hover { border-color: #40e0d0; color: #40e0d0; }
       .mic.rec { border-color: #ffb3d1; color: #ffb3d1; font-weight: bold; }
       .box input { flex-grow: 1; background-color: #000000; color: #ffffff; padding-left: 0; }
