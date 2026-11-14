@@ -3,7 +3,7 @@
 # Picks the release archive that fits this machine (x64 or arm64; the Vulkan build on x64 when a Vulkan driver is present), checks its
 # SHA-256 against the release's SHA256SUMS, unpacks it to %LOCALAPPDATA%\Programs\agent-cpp and adds that folder to your user PATH.
 # It then runs `agent setup` and opens the chat (AGENT_NO_START=1 only installs).
-# Environment: AGENT_VERSION (a tag such as v1.0.0; default: the latest release), AGENT_VARIANT (cpu or vulkan; default: detected),
+# Environment: AGENT_VERSION (a tag such as v1.0.0; default: the latest release), AGENT_VARIANT (cpu, vulkan or cuda; default: detected),
 #              AGENT_REPO (default amitverma-cf/agent.cpp).
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -30,9 +30,10 @@ try {
     $detected = ''
     if (-not $variant) {
         $variant = 'cpu'
-        if ($arch -eq 'x86_64' -and (Test-Path "$env:SystemRoot\System32\vulkan-1.dll")) { $variant = 'vulkan'; $detected = ' (Vulkan driver found)' }
+        if ($arch -eq 'x86_64' -and (Test-Path "$env:SystemRoot\System32\nvcuda.dll")) { $variant = 'cuda'; $detected = ' (NVIDIA driver found)' }
+        elseif ($arch -eq 'x86_64' -and (Test-Path "$env:SystemRoot\System32\vulkan-1.dll")) { $variant = 'vulkan'; $detected = ' (Vulkan driver found)' }
     }
-    if ($variant -ne 'cpu' -and $variant -ne 'vulkan') { Fail 'AGENT_VARIANT must be cpu or vulkan.' }
+    if ($variant -notin 'cpu', 'vulkan', 'cuda') { Fail 'AGENT_VARIANT must be cpu, vulkan or cuda.' }
 
     $base = if ($env:AGENT_VERSION) { "https://github.com/$repo/releases/download/$($env:AGENT_VERSION)" } else { "https://github.com/$repo/releases/latest/download" }
     $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("agent-install-" + [guid]::NewGuid().ToString('N'))
@@ -45,7 +46,8 @@ try {
     function Pick($suffix) {
         $sums | Where-Object { $_ -match " \*?agent-cpp-\S*-windows-$arch$suffix\.zip\s*$" } | Select-Object -First 1
     }
-    $line = if ($variant -eq 'vulkan') { Pick '-vulkan' } else { Pick '' }
+    $line = if ($variant -eq 'cuda') { Pick '-cuda' } elseif ($variant -eq 'vulkan') { Pick '-vulkan' } else { Pick '' }
+    if (-not $line -and $variant -eq 'cuda') { Info 'No CUDA build in this release; trying Vulkan'; $variant = 'vulkan'; $line = Pick '-vulkan' }
     if (-not $line -and $variant -eq 'vulkan') { Info 'No GPU build in this release; using the CPU build'; $variant = 'cpu'; $detected = ''; $line = Pick '' }
     if (-not $line) { Fail "This release has no Windows $arch archive." }
     $parts = $line.Trim() -split '\s+', 2

@@ -17,6 +17,29 @@ if(NOT EXISTS ${TRELLIS_SOURCE_DIR}/trellis2_capi.h OR NOT EXISTS ${TRELLIS_SOUR
 endif()
 
 set(AGENT_TRELLIS_BUILD_JOBS "" CACHE STRING "Parallel jobs for the nested trellis2.cpp build (empty = build tool default)")
+# CPU by default. AGENT_TRELLIS_BACKEND=cuda builds trellis2.cpp with ggml's CUDA backend linked in statically: that plugin needs the
+# NVIDIA driver (libcuda) at load time, so it is shipped as its own archive (the "-cuda" release) and only picked on NVIDIA machines.
+set(AGENT_TRELLIS_BACKEND "cpu" CACHE STRING "TRELLIS.2 compute backend: cpu or cuda")
+set_property(CACHE AGENT_TRELLIS_BACKEND PROPERTY STRINGS cpu cuda)
+set(AGENT_TRELLIS_CUDA_ARCHITECTURES "75-virtual;80;86;89;90" CACHE STRING "CUDA architectures for the TRELLIS.2 CUDA backend")
+set(TRELLIS_CUDA_ARGS "")
+set(TRELLIS_EXTRA_LIBS "")
+if(AGENT_TRELLIS_BACKEND STREQUAL "cuda")
+    find_package(CUDAToolkit REQUIRED)
+    list(APPEND TRELLIS_CUDA_ARGS -DGGML_CUDA:BOOL=ON "-DCMAKE_CUDA_ARCHITECTURES:STRING=${AGENT_TRELLIS_CUDA_ARCHITECTURES}")
+    if(CMAKE_CUDA_COMPILER)
+        list(APPEND TRELLIS_CUDA_ARGS -DCMAKE_CUDA_COMPILER:FILEPATH=${CMAKE_CUDA_COMPILER})
+    elseif(CUDAToolkit_NVCC_EXECUTABLE)
+        list(APPEND TRELLIS_CUDA_ARGS -DCMAKE_CUDA_COMPILER:FILEPATH=${CUDAToolkit_NVCC_EXECUTABLE})
+    endif()
+    if(CMAKE_CUDA_HOST_COMPILER)
+        list(APPEND TRELLIS_CUDA_ARGS -DCMAKE_CUDA_HOST_COMPILER:FILEPATH=${CMAKE_CUDA_HOST_COMPILER})
+    endif()
+    list(APPEND TRELLIS_EXTRA_LIBS ${TRELLIS_LIB_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}ggml-cuda${CMAKE_STATIC_LIBRARY_SUFFIX})
+elseif(NOT AGENT_TRELLIS_BACKEND STREQUAL "cpu")
+    message(FATAL_ERROR "AGENT_TRELLIS_BACKEND must be cpu or cuda")
+endif()
+
 set(TRELLIS_BUILD_TYPE ${CMAKE_BUILD_TYPE})
 if(NOT TRELLIS_BUILD_TYPE)
     set(TRELLIS_BUILD_TYPE Release)
@@ -31,6 +54,7 @@ endif()
 set(TRELLIS_LIBS
     ${TRELLIS_LIB_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}trellis2${CMAKE_STATIC_LIBRARY_SUFFIX}
     ${TRELLIS_LIB_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}ggml${CMAKE_STATIC_LIBRARY_SUFFIX}
+    ${TRELLIS_EXTRA_LIBS}
     ${TRELLIS_LIB_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}ggml-cpu${CMAKE_STATIC_LIBRARY_SUFFIX}
     ${TRELLIS_LIB_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}ggml-base${CMAKE_STATIC_LIBRARY_SUFFIX}
 )
@@ -63,6 +87,7 @@ ExternalProject_Add(trellis2cpp-build
         # CPU build everywhere (Metal would need extra archives + frameworks linked into the plugin).
         -DTRELLIS2_METAL:BOOL=OFF
         -DGGML_OPENMP:BOOL=${TRELLIS_OPENMP}
+        ${TRELLIS_CUDA_ARGS}
         -DGGML_BUILD_TESTS:BOOL=OFF
         -DGGML_BUILD_EXAMPLES:BOOL=OFF
     BUILD_COMMAND ${TRELLIS_BUILD_COMMAND}
@@ -86,6 +111,10 @@ target_include_directories(agent-engine-trellis SYSTEM PRIVATE
 )
 find_package(Threads REQUIRED)
 target_link_libraries(agent-engine-trellis PRIVATE ${TRELLIS_LIBS} Threads::Threads ${CMAKE_DL_LIBS})
+if(AGENT_TRELLIS_BACKEND STREQUAL "cuda")
+    # ggml-cuda needs the CUDA runtime, cuBLAS and the driver API; the runtime and cuBLAS are linked statically.
+    target_link_libraries(agent-engine-trellis PRIVATE CUDA::cudart_static CUDA::cublas_static CUDA::cublasLt_static CUDA::cuda_driver)
+endif()
 if(TRELLIS_OPENMP)
     target_link_libraries(agent-engine-trellis PRIVATE OpenMP::OpenMP_CXX OpenMP::OpenMP_C)
 endif()
