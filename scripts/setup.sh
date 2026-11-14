@@ -83,6 +83,8 @@ if [ -z "$model" ] && [ -z "$no_model" ] && [ -n "$ask" ]; then
     prompt "Model to download now: a Hugging Face link, owner/repo, or a file on this computer (Enter to skip):" ""
     model="$answer"
 fi
+# A path dragged into the terminal comes with quotes: they are not part of the name.
+model="$(printf '%s' "$model" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e "s/^[\"']//" -e "s/[\"']\$//")"
 if [ -n "$model" ]; then
     printf '  %s↓%s Adding %s\n' "$T" "$R" "$model"
     "$agent" model pull "$model" || die "The model could not be added."

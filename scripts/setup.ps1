@@ -74,6 +74,8 @@ if ($runtimes -eq 'y') {
 if (-not $model -and -not $noModel -and $ask) {
     $model = Read-Host '  Model to download now: a Hugging Face link, owner/repo, or a file on this computer (Enter to skip)'
 }
+# A path dragged into the terminal or pasted from Explorer comes with quotes (and PowerShell adds "& "): they are not part of the name.
+if ($model) { $model = ($model.Trim() -replace '^&\s+', '').Trim().Trim('"').Trim("'").Trim() }
 if ($model) {
     Write-Host "  $([char]0x2193) Adding $model" -ForegroundColor Cyan
     & $agent model pull $model
