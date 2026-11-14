@@ -3,6 +3,7 @@
 #
 # Picks the release archive that fits this machine (x86_64 or aarch64; the Vulkan build when a Vulkan driver is present), checks its
 # SHA-256 against the release's SHA256SUMS, unpacks it to ~/.local/share/agent-cpp and links `agent` into ~/.local/bin.
+# It then runs `agent setup` and opens the chat (AGENT_NO_START=1 only installs).
 # Environment: AGENT_VERSION (a tag such as v0.2.0; default: the latest release), AGENT_VARIANT (cpu or vulkan; default: detected),
 #              AGENT_PREFIX (default ~/.local), AGENT_REPO (default amitverma-cf/agent.cpp).
 set -eu
@@ -73,5 +74,14 @@ mv "$DEST.new" "$DEST"
 ln -sf "$DEST/agent" "$BIN/agent"
 
 say "installed $name to $DEST"
-case ":$PATH:" in *":$BIN:"*) ;; *) say "add $BIN to your PATH:  export PATH=\"$BIN:\$PATH\"" ;; esac
+case ":$PATH:" in
+    *":$BIN:"*) ;;
+    *) say "note: add $BIN to your PATH to start it later by typing agent:  export PATH=\"$BIN:\$PATH\"" ;;
+esac
+
+# Set up and start. The script comes through a pipe, so the terminal is read from /dev/tty.
+if [ -z "${AGENT_NO_START:-}" ] && [ -t 1 ] && [ -r /dev/tty ]; then
+    "$BIN/agent" setup </dev/tty || exit $?
+    exec "$BIN/agent" </dev/tty
+fi
 say "next: agent setup"

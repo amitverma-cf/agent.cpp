@@ -12,6 +12,8 @@ export default {
     else if (pathname === "/install.ps1") file = "install.ps1";
     else if (pathname === "/") file = /powershell/i.test(request.headers.get("user-agent") || "") ? "install.ps1" : "install.sh";
     else return new Response("not found\n", { status: 404 });
+    // One log line per install request: what was asked for and from which country. No IP address, no User-Agent string.
+    console.log(JSON.stringify({ file, country: request.cf?.country || "", client: file === "install.ps1" ? "powershell" : "sh" }));
     return new Response(null, { status: 302, headers: { location: RAW + file, "cache-control": "public, max-age=300" } });
   },
 };

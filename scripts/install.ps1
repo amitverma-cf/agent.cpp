@@ -2,6 +2,7 @@
 #
 # Picks the release archive that fits this machine (x64 or arm64; the Vulkan build on x64 when a Vulkan driver is present), checks its
 # SHA-256 against the release's SHA256SUMS, unpacks it to %LOCALAPPDATA%\Programs\agent-cpp and adds that folder to your user PATH.
+# It then runs `agent setup` and opens the chat (AGENT_NO_START=1 only installs).
 # Environment: AGENT_VERSION (a tag such as v0.2.0; default: the latest release), AGENT_VARIANT (cpu or vulkan; default: detected),
 #              AGENT_REPO (default amitverma-cf/agent.cpp).
 $ErrorActionPreference = 'Stop'
@@ -57,7 +58,15 @@ try {
         Write-Host "added $dest to your user PATH (open a new terminal)"
     }
     Write-Host "installed $name to $dest"
-    Write-Host 'next: agent setup'
 } finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+}
+# Set up and start (the PATH change only reaches new terminals, so the full path is used here).
+$env:Path += ";$dest"
+$exe = Join-Path $dest 'agent.exe'
+if (-not $env:AGENT_NO_START -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    & $exe setup
+    if ($LASTEXITCODE -eq 0) { & $exe }
+} else {
+    Write-Host 'next: agent setup'
 }
