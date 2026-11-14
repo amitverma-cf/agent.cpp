@@ -36,6 +36,9 @@
 #include <vector>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX // windows.h would turn std::min and std::max into macros
+#endif
 #include <stdlib.h>
 #include <windows.h>
 #else
