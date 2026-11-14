@@ -13,6 +13,11 @@ Two ways in: run the **`agent`** command, or embed **`libagent`** in your own C+
 OpenSSL is used for model downloads (`agent_hub`); without it (`-DAGENT_BUILD_HUB=OFF`) the CLI is not built. macOS is not tested
 and not supported in v1.0.0.
 
+## Install a release
+
+`curl -fsSL https://agent.qozu.fyi | sh` (Linux) or `irm https://agent.qozu.fyi | iex` (Windows PowerShell) installs the latest release; see the
+[README](../README.md#install). Set `AGENT_VERSION=v1.0.0` to pin a version.
+
 ## Build
 
 ```sh

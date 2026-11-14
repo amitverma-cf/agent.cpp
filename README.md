@@ -34,8 +34,26 @@ engine yet.
 
 ## Install
 
-Prebuilt archives are not published yet; build from source. You need CMake 3.21+, Ninja and a C++20 compiler
-(MSVC 2022, GCC 12+ or Clang 15+). Windows details and OpenSSL are in [docs/getting-started.md](docs/getting-started.md).
+**Linux** (x86_64, aarch64):
+
+```sh
+curl -fsSL https://agent.qozu.fyi | sh
+```
+
+**Windows** (x64, arm64), in PowerShell:
+
+```powershell
+irm https://agent.qozu.fyi | iex
+```
+
+The script picks the archive for your machine (the Vulkan build for GPUs when a Vulkan driver is present; `AGENT_VARIANT=cpu` forces the
+CPU build), checks its SHA-256 against the release's `SHA256SUMS`, and installs to `~/.local/share/agent-cpp` (Linux) or
+`%LOCALAPPDATA%\Programsgent-cpp` (Windows). Then run `agent setup`. `agent update` keeps it current; it checks the release's signature.
+The archives are on the [releases page](https://github.com/amitverma-cf/agent.cpp/releases). Linux needs glibc 2.39 or newer. CUDA, ROCm and
+macOS builds are not published.
+
+**From source.** You need CMake 3.21+, Ninja and a C++20 compiler (MSVC 2022, GCC 12+ or Clang 15+). Windows details and OpenSSL are in
+[docs/getting-started.md](docs/getting-started.md).
 
 ```sh
 git clone --recurse-submodules https://github.com/amitverma-cf/agent.cpp
