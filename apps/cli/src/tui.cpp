@@ -14,6 +14,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <rtxui/headless.hpp>
@@ -102,6 +103,85 @@ std::vector<size_t> filter_commands(std::span<const TuiCommand> commands, std::s
     for (size_t i = 0; i < commands.size(); ++i)
         if (std::string_view(commands[i].name).substr(0, typed.size()) == typed) matches.push_back(i);
     return matches;
+}
+
+// ------------------------------------------------------------------ keyboard shortcuts
+
+namespace {
+
+using rtxui::Event;
+
+struct KeyName {
+    std::string name;
+    const Event *event;
+};
+
+// Every key the interface can bind, by name: F1 to F12, and the letters with Ctrl, Alt and both.
+const std::vector<KeyName> &key_table() {
+    static const std::vector<KeyName> table = [] {
+        std::vector<KeyName> v;
+#define RTXUI_KEY(L, UC)                                             \
+    v.push_back({"ctrl+" #L, &Event::Ctrl##UC()});                   \
+    v.push_back({"alt+" #L, &Event::Alt##UC()});                     \
+    v.push_back({"ctrl+alt+" #L, &Event::CtrlAlt##UC()});
+        RTXUI_KEY(a, A) RTXUI_KEY(b, B) RTXUI_KEY(c, C) RTXUI_KEY(d, D) RTXUI_KEY(e, E) RTXUI_KEY(f, F) RTXUI_KEY(g, G) RTXUI_KEY(h, H)
+        RTXUI_KEY(i, I) RTXUI_KEY(j, J) RTXUI_KEY(k, K) RTXUI_KEY(l, L) RTXUI_KEY(m, M) RTXUI_KEY(n, N) RTXUI_KEY(o, O) RTXUI_KEY(p, P)
+        RTXUI_KEY(q, Q) RTXUI_KEY(r, R) RTXUI_KEY(s, S) RTXUI_KEY(t, T) RTXUI_KEY(u, U) RTXUI_KEY(v, V) RTXUI_KEY(w, W) RTXUI_KEY(x, X)
+        RTXUI_KEY(y, Y) RTXUI_KEY(z, Z)
+#undef RTXUI_KEY
+        v.push_back({"f1", &Event::F1()});
+        v.push_back({"f2", &Event::F2()});
+        v.push_back({"f3", &Event::F3()});
+        v.push_back({"f4", &Event::F4()});
+        v.push_back({"f5", &Event::F5()});
+        v.push_back({"f6", &Event::F6()});
+        v.push_back({"f7", &Event::F7()});
+        v.push_back({"f8", &Event::F8()});
+        v.push_back({"f9", &Event::F9()});
+        v.push_back({"f10", &Event::F10()});
+        v.push_back({"f11", &Event::F11()});
+        v.push_back({"f12", &Event::F12()});
+        return v;
+    }();
+    return table;
+}
+
+constexpr TuiShortcut kShortcutActions[] = {
+    {"settings", "Open the settings", "ctrl+o"},
+    {"sessions", "Switch to another session", "ctrl+k"},
+    {"new_chat", "Start a new chat", "ctrl+n"},
+    {"sidebar", "Show or hide the sidebar", "ctrl+b"},
+    {"commands", "List the commands", "ctrl+p"},
+    {"help", "Show the keyboard shortcuts", "f1"},
+    {"quit", "Quit", "ctrl+d"},
+};
+
+} // namespace
+
+std::span<const TuiShortcut> tui_shortcut_actions() { return kShortcutActions; }
+
+bool tui_key_valid(std::string_view name) {
+    // Ctrl+I, Ctrl+J, Ctrl+M and Ctrl+H are Tab, Enter and Backspace to a terminal; Ctrl+C always cancels; Ctrl+[ is Escape.
+    for (const char *taken : {"ctrl+i", "ctrl+j", "ctrl+m", "ctrl+h", "ctrl+c"})
+        if (name == taken) return false;
+    for (const KeyName &k : key_table())
+        if (k.name == name) return true;
+    return false;
+}
+
+std::string tui_key_pretty(std::string_view name) {
+    if (!tui_key_valid(name)) return {};
+    std::string out;
+    size_t at = 0;
+    while (at <= name.size()) {
+        size_t plus = name.find('+', at);
+        std::string part(name.substr(at, plus == std::string_view::npos ? std::string_view::npos : plus - at));
+        if (!part.empty()) part[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(part[0])));
+        out += (out.empty() ? "" : "+") + part;
+        if (plus == std::string_view::npos) break;
+        at = plus + 1;
+    }
+    return out;
 }
 
 // ------------------------------------------------------------------ the screen
@@ -345,6 +425,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         Bind(Pick);
         Bind(NewChat);
         Bind(ToggleSide);
+        LoadKeymap();
         Refresh();
         RefreshSessions();
     }
@@ -363,6 +444,40 @@ class ChatApp : public rtxui::Component<ChatApp> {
     std::string md_css = std::string(kMarkdownCss);
     bool asking = false, prompting = false, busy = false;
     bool show_welcome = true, show_palette = false;
+    // ---- the shortcuts: action -> key name, the defaults with what the user changed on top
+    std::map<std::string, std::string> keymap;
+    bool set_capturing = false;
+
+    void LoadKeymap() {
+        keymap.clear();
+        for (const TuiShortcut &a : tui_shortcut_actions()) keymap[a.action] = a.default_key;
+        if (host.shortcuts)
+            for (const auto &[action, key] : host.shortcuts(host.user))
+                if (keymap.count(action) && tui_key_valid(key)) keymap[action] = key;
+        key_rows.clear();
+        for (const TuiShortcut &a : tui_shortcut_actions()) key_rows.push_back({tui_key_pretty(keymap[a.action]), a.label, ""});
+        key_rows.push_back({"? or F1", "Show this list", ""});
+        key_rows.push_back({"@file", "Put a file's text in your message", ""});
+        key_rows.push_back({"!command", "Run a shell command in your project", ""});
+        key_rows.push_back({"Esc", "Stop the answer that is running", ""});
+        key_rows.push_back({"PageUp, PageDown", "Scroll the conversation", ""});
+        key_rows.push_back({"Home, End", "Oldest message, newest message", ""});
+    }
+    // Whether this event is the key bound to the action.
+    bool Is(const Event &e, const char *action) const {
+        const auto bound = keymap.find(action);
+        if (bound == keymap.end()) return false;
+        for (const KeyName &k : key_table())
+            if (k.name == bound->second) return e == *k.event;
+        return false;
+    }
+    // The name of the key an event is, when it is one the interface can bind.
+    static std::string NameOf(const Event &e) {
+        for (const KeyName &k : key_table())
+            if (e == *k.event) return k.name;
+        return {};
+    }
+
     // ---- icons, the bottom bar, the hint line, dialogs
     std::string ico_copy = icons().copy, ico_del = icons().del, ico_mic = icons().mic, ico_back = icons().back, ico_menu = icons().menu,
                 ico_settings = icons().settings, mic_class = "mic", hint;
@@ -371,18 +486,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
     bool confirm_open = false, show_keys = false, toast_open = false, recording = false, transcribing = false;
     std::string confirm_title, confirm_text, confirm_kind, toast_text;
     int confirm_row = 0, next_row_id = 0;
-    std::vector<SetRow> key_rows = {{"? or F1", "Open this list", ""},
-                                    {"Ctrl+O", "Settings", ""},
-                                    {"Ctrl+K", "Switch to another session", ""},
-                                    {"Ctrl+N", "New chat", ""},
-                                    {"Ctrl+B", "Show or hide the sidebar", ""},
-                                    {"Ctrl+P or /", "Commands", ""},
-                                    {"@file", "Put a file's text in your message", ""},
-                                    {"!command", "Run a shell command in your project", ""},
-                                    {"Esc", "Stop the answer that is running", ""},
-                                    {"PageUp, PageDown", "Scroll the conversation", ""},
-                                    {"Home, End", "Oldest message, newest message", ""},
-                                    {"Ctrl+D", "Quit", ""}};
+    std::vector<SetRow> key_rows;
 
     void AddRow(Row r) {
         r.id = ++next_row_id;
@@ -582,9 +686,10 @@ class ChatApp : public rtxui::Component<ChatApp> {
 
     // The line between the input and the bottom bar: what the next useful key or command is, for what is going on right now.
     void ComputeHint() {
-        static const char *const idle[] = {"Press ? for every keyboard shortcut",      "/ lists the commands",
-                                           "@file puts a file's text in your message", "!command runs a shell command in your project",
-                                           "Ctrl+K switches to another session",       "Ctrl+O opens the settings"};
+        const std::string idle[] = {"Press ? for every keyboard shortcut", "/ lists the commands",
+                                    "@file puts a file's text in your message", "!command runs a shell command in your project",
+                                    tui_key_pretty(keymap["sessions"]) + " switches to another session",
+                                    tui_key_pretty(keymap["settings"]) + " opens the settings"};
         if (confirm_open) hint = "Enter or y confirms, Esc cancels";
         else if (asking) hint = "y allows this once, a always allows this tool, n refuses";
         else if (recording) hint = "Listening: click the microphone again to stop";
@@ -670,11 +775,15 @@ class ChatApp : public rtxui::Component<ChatApp> {
             section = s.section;
             const bool current = set_in_content && static_cast<int>(k) == set_sel;
             std::string value = s.value.empty() ? "-" : s.value;
-            if (set_editing && current) value = input + "_";
+            if (set_capturing && current) value = "press a key ...";
+            else if (set_editing && current) value = input + "_";
             else if (!s.options.empty() && s.editable) value = "\xE2\x97\x82 " + value + " \xE2\x96\xB8";
             set_rows.push_back({s.label, value, std::string("setrow") + (current ? " cur" : "") + (s.editable ? "" : " ro")});
         }
-        if (set_editing) {
+        if (set_capturing) {
+            set_note = "Press the new key now: F1 to F12, Ctrl+letter or Alt+letter. Esc cancels.";
+            set_help = "Press a key  \xC2\xB7  Esc cancels";
+        } else if (set_editing) {
             set_note = "Type the new value. Enter keeps it, Esc cancels.";
             set_help = "Enter saves  \xC2\xB7  Esc cancels";
         } else if (set_in_content && !shown.empty()) {
@@ -693,6 +802,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         const TuiSetting *s = CurrentSetting();
         if (!s || !host.set_setting) return;
         const std::string error = host.set_setting(host.user, s->key, value);
+        LoadKeymap();
         LoadSettings();
         if (!error.empty()) set_note = error;
         else if (const TuiSetting *now = CurrentSetting()) set_note = "Saved. " + now->hint;
@@ -710,6 +820,25 @@ class ChatApp : public rtxui::Component<ChatApp> {
     }
     // Keys while the settings screen is open. Returns true when the event was used.
     bool SettingsKey(const Event &e) {
+        if (set_capturing) {
+            if (e == Event::Escape()) {
+                set_capturing = false;
+                LoadSettings();
+                Refresh();
+                return true;
+            }
+            if (e.is<Event::Mouse>()) return true;
+            const std::string name = NameOf(e);
+            set_capturing = false;
+            if (name.empty() || !tui_key_valid(name)) {
+                LoadSettings();
+                set_note = "That key cannot be used. Press F1 to F12, Ctrl+letter or Alt+letter.";
+                Refresh();
+                return true;
+            }
+            ApplySetting(name);
+            return true;
+        }
         if (set_editing) {
             if (e == Event::Return()) {
                 set_editing = false;
@@ -756,6 +885,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
                     } else if (!s->options.empty()) {
                         CycleSetting(1);
                         return true;
+                    } else if (s->capture) {
+                        set_capturing = true;
                     } else {
                         set_editing = true;
                         SetInput(s->value);
@@ -1083,16 +1214,16 @@ class ChatApp : public rtxui::Component<ChatApp> {
             return true;
         }
         if (show_keys) {
-            if (e == Event::Escape() || e == Event::F1() || e == Event::Return() || Letter(e) == '?') CloseKeys();
+            if (e == Event::Escape() || Is(e, "help") || e == Event::F1() || e == Event::Return() || Letter(e) == '?') CloseKeys();
             else if (e.is<Event::Mouse>()) return Component<ChatApp>::OnEvent(e);
             return true;
         }
-        if (!asking && !show_settings && (e == Event::F1() || (!busy && input.empty() && !side_focus && Letter(e) == '?'))) {
+        if (!asking && !show_settings && (Is(e, "help") || e == Event::F1() || (!busy && input.empty() && !side_focus && Letter(e) == '?'))) {
             show_keys = true;
             return true;
         }
         if (show_settings && !asking) return SettingsKey(e);
-        if (!asking && !busy && host.settings && !side_focus && e == Event::CtrlO()) {
+        if (!asking && !busy && host.settings && !side_focus && Is(e, "settings")) {
             OpenSettings();
             return true;
         }
@@ -1120,7 +1251,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
                 side_filter.clear();
                 Pick(std::to_string(side_sel));
                 RebuildSide();
-            } else if (e == Event::Escape() || e == Event::CtrlK()) {
+            } else if (e == Event::Escape() || Is(e, "sessions")) {
                 side_focus = false;
                 side_drawer = false;
                 side_filter.clear();
@@ -1140,7 +1271,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             Refresh();
             return true;
         }
-        if (e == Event::CtrlK()) {
+        if (Is(e, "sessions")) {
             if (sessions.empty() || busy) return true;
             side_focus = true;
             side_hide = false;
@@ -1152,11 +1283,11 @@ class ChatApp : public rtxui::Component<ChatApp> {
             Refresh();
             return true;
         }
-        if (e == Event::CtrlN()) {
+        if (Is(e, "new_chat")) {
             if (!busy) NewChat();
             return true;
         }
-        if (e == Event::CtrlB()) {
+        if (Is(e, "sidebar")) {
             ToggleSide();
             return true;
         }
@@ -1170,11 +1301,11 @@ class ChatApp : public rtxui::Component<ChatApp> {
             }
             return true;
         }
-        if (e == Event::CtrlP() && !busy) {
+        if (Is(e, "commands") && !busy) {
             SetInput("/");
             return true;
         }
-        if (e == Event::CtrlD() && !busy) {
+        if (Is(e, "quit") && !busy) {
             if (g_screen) g_screen->Exit();
             return true;
         }

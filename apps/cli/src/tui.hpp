@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace agent::cli {
@@ -48,6 +49,7 @@ struct TuiSetting {
     std::string group, section, key, label, value, hint; // group: the category in the sidebar; section: a heading inside it
     std::vector<std::string> options;
     bool editable = true;
+    bool capture = false; // Enter, then the next key pressed becomes the value (the shortcuts editor)
 };
 
 // What the bottom bar shows. Read about once a second on the interface thread, so it must be cheap (the host keeps the numbers up to
@@ -61,6 +63,17 @@ struct TuiTaskbar {
     std::string mode;                // ask, plan, auto
     int context_used = 0, context_total = 0;
 };
+
+// The keyboard shortcuts that can be changed. `action` is the name in config.json, `key` a name such as "ctrl+o", "alt+x" or "f1".
+struct TuiShortcut {
+    const char *action, *label, *default_key;
+};
+std::span<const TuiShortcut> tui_shortcut_actions();
+// "ctrl+o" -> "Ctrl+O". Empty when the name is not one the interface knows.
+std::string tui_key_pretty(std::string_view name);
+// Whether the interface can bind this key name (F1 to F12, Ctrl+letter, Alt+letter, Ctrl+Alt+letter; not the ones the terminal uses for
+// Enter, Tab, Backspace and Escape).
+bool tui_key_valid(std::string_view name);
 
 struct TuiHost {
     void *user = nullptr;
@@ -102,6 +115,8 @@ struct TuiHost {
     // The microphone. start = true: begins recording ("" on success, otherwise the reason). start = false: stops and returns the words that
     // were said, or a text starting with "!" that says why not.
     std::string (*mic)(void *user, bool start) = nullptr;
+    // The shortcuts the user changed (action, key), from config.json; null = the defaults.
+    std::vector<std::pair<std::string, std::string>> (*shortcuts)(void *user) = nullptr;
     // The commands listed in the palette.
     std::span<const TuiCommand> commands;
 };

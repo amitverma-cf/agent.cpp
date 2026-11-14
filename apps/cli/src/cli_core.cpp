@@ -581,7 +581,10 @@ std::string config_to_json(const CliConfig &c) {
     out += "  \"temperature\": " + std::string(temp) + ",\n";
     out += "  \"memory_budget_mb\": " + std::to_string(c.memory_budget_mb) + ",\n";
     out += "  \"js_runtime\": \"" + c.js_runtime + "\",\n";
-    out += "  \"search_url\": " + json_str(c.search_url) + "\n";
+    out += "  \"search_url\": " + json_str(c.search_url) + ",\n";
+    out += "  \"shortcuts\": {";
+    for (auto it = c.shortcuts.begin(); it != c.shortcuts.end(); ++it) out += (it == c.shortcuts.begin() ? "" : ", ") + json_str(it->first) + ": " + json_str(it->second);
+    out += "}\n";
     out += "}\n";
     return out;
 }
@@ -611,6 +614,9 @@ Result<CliConfig> config_from_json(std::string_view json) {
     c.memory_budget_mb = get_int(doc, "memory_budget_mb", 0);
     if (c.memory_budget_mb < 0) return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: memory_budget_mb must be >= 0");
     c.search_url = std::string(get_str(doc, "search_url"));
+    if (simdjson::dom::object shortcuts; !doc["shortcuts"].get(shortcuts))
+        for (auto field : shortcuts)
+            if (field.value.is_string()) c.shortcuts[std::string(field.key)] = std::string(field.value.get_string().value_unsafe());
     c.js_runtime = std::string(get_str(doc, "js_runtime", "bun"));
     if (c.js_runtime != "bun" && c.js_runtime != "node" && c.js_runtime != "nub")
         return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: js_runtime must be \"bun\", \"node\" or \"nub\"");

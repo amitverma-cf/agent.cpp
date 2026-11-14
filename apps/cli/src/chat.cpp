@@ -1638,6 +1638,16 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
     }
     info("This project", size_text(folder_bytes((fs::path(st.workspace) / "memory").string())), "Conversations and memory of this project");
 
+    cat("Shortcuts");
+    head("Press Enter on a shortcut, then the keys you want instead");
+    for (const TuiShortcut &a : tui_shortcut_actions()) {
+        const auto changed = c.shortcuts.find(a.action);
+        const std::string key = changed != c.shortcuts.end() && tui_key_valid(changed->second) ? changed->second : a.default_key;
+        s.push_back({group, section, std::string("shortcut.") + a.action, a.label, tui_key_pretty(key),
+                     std::string("Default: ") + tui_key_pretty(a.default_key) + ". F1 to F12, Ctrl+letter or Alt+letter", {}, true, true});
+    }
+    add("shortcut_reset", "Put the defaults back", "keep", "Choose reset to forget every shortcut you changed", {"keep", "reset"});
+
     cat("About");
     head("agent.cpp");
     info("Version", std::string(kCliVersion), "agent update checks for a newer one");
@@ -1663,6 +1673,25 @@ std::string tui_set_setting(ChatState &st, const std::string &key, const std::st
         return {};
     };
 
+    if (key == "shortcut_reset") {
+        if (value == "reset") {
+            c.shortcuts.clear();
+            return persist();
+        }
+        return {};
+    }
+    if (key.rfind("shortcut.", 0) == 0) {
+        const std::string action = key.substr(9);
+        if (!tui_key_valid(value)) return "that key cannot be used";
+        for (const TuiShortcut &a : tui_shortcut_actions()) {
+            if (action == a.action) continue;
+            const auto other = c.shortcuts.find(a.action);
+            const std::string taken = other != c.shortcuts.end() ? other->second : a.default_key;
+            if (taken == value) return tui_key_pretty(value) + " is already used for: " + a.label;
+        }
+        c.shortcuts[action] = value;
+        return persist();
+    }
     if (key == "model") {
         if (value == st.model.name) return {};
         switch_model(st, value);
@@ -1889,6 +1918,11 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
         host.taskbar = [](void *u) { return tui_taskbar(*static_cast<ChatState *>(u)); };
         host.delete_turn = [](void *u, int from_end) { return tui_delete_turn(*static_cast<ChatState *>(u), from_end); };
         host.mic = [](void *u, bool start) { return tui_mic(*static_cast<ChatState *>(u), start); };
+        host.shortcuts = [](void *u) {
+            std::vector<std::pair<std::string, std::string>> changed;
+            for (const auto &[action, key] : static_cast<ChatState *>(u)->ctx->config.shortcuts) changed.emplace_back(action, key);
+            return changed;
+        };
         host.settings = [](void *u) { return tui_settings(*static_cast<ChatState *>(u)); };
         host.set_setting = [](void *u, const std::string &key, const std::string &value) {
             return tui_set_setting(*static_cast<ChatState *>(u), key, value);

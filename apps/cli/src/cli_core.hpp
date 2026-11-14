@@ -7,6 +7,7 @@
 #include <agent-cpp/agent.hpp>
 #include <cstdint>
 #include <cstdio>
+#include <map>
 #include <span>
 #include <string>
 #include <string_view>
@@ -92,6 +93,8 @@ struct CliConfig {
     // The address of a search service for the web_search tool, with {q} where the query goes, for example a SearXNG instance:
     // "http://localhost:8080/search?format=json&q={q}". Empty = the model has no web_search tool.
     std::string search_url;
+    // Keyboard shortcuts the user changed in the settings: action -> key ("settings" -> "ctrl+o"). An action that is not here has its default.
+    std::map<std::string, std::string> shortcuts;
 };
 
 std::string config_to_json(const CliConfig &config);
