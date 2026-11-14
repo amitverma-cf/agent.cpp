@@ -135,7 +135,9 @@ if (-not $env:AGENT_NO_START -and [Environment]::UserInteractive -and -not [Cons
         Info 'Could not fetch the setup script; run agent setup later'
     }
 } else {
-    Write-Host ''
-    Write-Host '  Next: ' -NoNewline; Write-Host 'agent setup' -ForegroundColor Cyan
-    Write-Host ''
+    if (-not $upToDate) {
+        Write-Host ''
+        Write-Host '  Next: ' -NoNewline; Write-Host 'agent setup' -ForegroundColor Cyan
+        Write-Host ''
+    }
 }

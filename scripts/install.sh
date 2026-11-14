@@ -129,4 +129,5 @@ if [ -z "${AGENT_NO_START:-}" ] && [ -t 1 ] && [ -r /dev/tty ]; then
     fi
     info "Could not fetch the setup script; run agent setup later"
 fi
-printf '\n  Next: %sagent setup%s\n\n' "$T" "$R"
+[ -n "$installed_now" ] && printf '\n  Next: %sagent setup%s\n\n' "$T" "$R"
+exit 0
