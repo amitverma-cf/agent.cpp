@@ -24,7 +24,10 @@ $base = if ($env:AGENT_VERSION) { "https://github.com/$repo/releases/download/$(
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("agent-install-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
-    $sums = (Invoke-WebRequest -UseBasicParsing "$base/SHA256SUMS").Content -split "`n" | Where-Object { $_.Trim() }
+    # GitHub serves SHA256SUMS as application/octet-stream: Content is then bytes, not text.
+    $resp = Invoke-WebRequest -UseBasicParsing "$base/SHA256SUMS"
+    $text = if ($resp.Content -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($resp.Content) } else { [string]$resp.Content }
+    $sums = $text -split "`r?`n" | Where-Object { $_.Trim() }
     function Pick($suffix) {
         $sums | Where-Object { $_ -match " \*?agent-cpp-\S*-windows-$arch$suffix\.zip\s*$" } | Select-Object -First 1
     }
