@@ -104,7 +104,16 @@ should not be trusted.
 
 - **Time to first audio chunk (TTS):** the harness implements it (`--audiocpp`, `--tts-model`), but
   no TTS model was available on the machine used, so it has not been run.
-- **Speech recognition, VAD and diarization** with the audio.cpp engine: `agent_bench --audio` is built in, but a measured run is not published yet.
+### Speech: recognition, voice activity, diarization (audio.cpp engine, 4 CPU cores)
+
+One 3.8 s WAV through `perform()` with process isolation; median of 3 runs after a warm-up. Real-time factor = audio seconds per processing
+second. Run with `agent_bench --audiocpp ... --audio FILE --asr-model M --vad-model M --diar-model M`; the WAV must be inside `--workspace`.
+
+| task | model | ms | real-time factor | peak RSS MiB |
+|---|---|---|---|---|
+| asr | parakeet-tdt-0.6b-v3-q8_0 | 168 | 22.8x | 1884 |
+| vad | firered-vad-f32 | 7 | 518.6x | 17 |
+| diarize | nemotron-3-diarization-q8_0 | 39 | 97.6x | 122 |
 - GPU backends and larger models.
 
 ## Graph evaluation, speculation and memory pressure (4 vCPU, 8 GB, CPU only)
