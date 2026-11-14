@@ -2,11 +2,15 @@
 #
 # Picks the release archive that fits this machine (x64 or arm64; the Vulkan build on x64 when a Vulkan driver is present), checks its
 # SHA-256 against the release's SHA256SUMS, unpacks it to %LOCALAPPDATA%\Programs\agent-cpp and adds that folder to your user PATH.
-# It then runs `agent setup` and opens the chat (AGENT_NO_START=1 only installs).
+# It then runs the setup script (scripts/setup.ps1) and opens the chat (AGENT_NO_START=1 only installs). Run again, it updates: the same
+# version is left alone, a newer one replaces it in place (`agent update` does exactly this).
 # Environment: AGENT_VERSION (a tag such as v1.0.0; default: the latest release), AGENT_VARIANT (cpu or vulkan; default: detected),
 #              AGENT_REPO (default amitverma-cf/agent.cpp).
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+
+# `agent update` starts this script and exits: Windows will not replace a program that is still running, so wait for it.
+if ($env:AGENT_WAIT_PID) { Wait-Process -Id ([int]$env:AGENT_WAIT_PID) -Timeout 30 -ErrorAction SilentlyContinue }
 
 # ---- output: turquoise accents, grey detail, pink for problems
 function Step($text) { Write-Host '  ' -NoNewline; Write-Host ([string][char]0x2713) -ForegroundColor Cyan -NoNewline; Write-Host " $text" }
@@ -56,6 +60,16 @@ try {
     Step "Windows $arch  $([char]0x00B7)  $variant build$detected"
     Step "Release $version"
 
+    $dest = Join-Path $env:LOCALAPPDATA 'Programs\agent-cpp'
+    $versionFile = Join-Path $dest '.version'
+    if ($env:AGENT_CHECK) { # agent update --check: only look
+        if ((Test-Path $versionFile) -and ((Get-Content $versionFile -Raw).Trim() -eq $name)) { Step "Up to date ($version)" } else { Step "An update is available: $version" }
+        return
+    }
+    $upToDate = (-not $env:AGENT_FORCE) -and (Test-Path $versionFile) -and ((Get-Content $versionFile -Raw).Trim() -eq $name) -and (Test-Path (Join-Path $dest 'agent.exe'))
+    if ($upToDate) { Step 'Already installed and up to date' }
+    else {
+
     # Download with a progress bar.
     Write-Host "  $([char]0x2193) Downloading $name" -ForegroundColor Cyan
     $zip = Join-Path $tmp $name
@@ -93,41 +107,35 @@ try {
     New-Item -ItemType Directory -Path (Split-Path $dest) -Force | Out-Null
     Move-Item $inner.FullName $dest
     Step "Installed to $dest"
+    Set-Content -Path $versionFile -Value $name -NoNewline
 
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     if (($userPath -split ';') -notcontains $dest) {
         [Environment]::SetEnvironmentVariable('Path', ($userPath.TrimEnd(';') + ';' + $dest), 'User')
         Step 'Added to your PATH (open a new terminal to type just agent)'
     }
+    }
 } finally {
     if ($tmp) { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
 }
 
-# Set up and start (the PATH change only reaches new terminals, so the full path is used here).
+# Setup is its own script (scripts/setup.ps1), fetched from the repository so it can be improved without a new release. `agent update` sets
+# AGENT_NO_START: an update does not set anything up again. The PATH change only reaches new terminals, so the full path is used here.
 $env:Path += ";$dest"
 $exe = Join-Path $dest 'agent.exe'
+$scripts = if ($env:AGENT_SCRIPTS) { $env:AGENT_SCRIPTS } else { 'https://raw.githubusercontent.com/amitverma-cf/agent.cpp/main/scripts' }
 if (-not $env:AGENT_NO_START -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
-    # The backend is not asked: the build that was installed says it (Vulkan or CPU). Only what is a real choice is asked.
-    Write-Host ''
-    Write-Host '  Setting up agent.cpp' -ForegroundColor Cyan
-    Write-Host ''
-    $runtimes = Read-Host '  Download the optional bun and uv runtimes, for MCP servers and skills? [y/N]'
-    $model = Read-Host '  Model to download now: a Hugging Face link or owner/repo (Enter to skip)'
-    $setupArgs = @('setup', '--yes', '--backend', $variant)
-    if ($runtimes -match '^(y|yes)$') { $setupArgs += '--install-runtimes' }
-    if ($model) { $setupArgs += @('--model', $model) } else { $setupArgs += '--no-models' }
-    Write-Host ''
-    & $exe @setupArgs
-    if ($LASTEXITCODE -eq 0) {
-        if ($model) { & $exe }
-        else {
-            Write-Host ''
-            Write-Host '  Next: add a model with ' -NoNewline; Write-Host 'agent model pull <Hugging Face link>' -ForegroundColor Cyan -NoNewline; Write-Host ', then run ' -NoNewline; Write-Host 'agent' -ForegroundColor Cyan
-            Write-Host ''
-        }
+    $setupText = $null
+    try { $setupText = (Invoke-WebRequest -UseBasicParsing "$scripts/setup.ps1").Content } catch { }
+    if ($setupText -is [byte[]]) { $setupText = [System.Text.Encoding]::UTF8.GetString($setupText) }
+    if ($setupText) {
+        $env:AGENT_BIN = $exe
+        & ([scriptblock]::Create($setupText))
+    } else {
+        Info 'Could not fetch the setup script; run agent setup later'
     }
 } else {
     Write-Host ''
-    Write-Host '  Next: ' -NoNewline; Write-Host "agent setup --yes --backend $variant" -ForegroundColor Cyan
+    Write-Host '  Next: ' -NoNewline; Write-Host 'agent setup' -ForegroundColor Cyan
     Write-Host ''
 }

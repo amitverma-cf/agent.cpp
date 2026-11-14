@@ -48,7 +48,8 @@ constexpr std::string_view kGlobalValue[] = {"config-dir", "home"};
 constexpr std::string_view kGlobalBool[] = {"help", "no-sandbox"};
 
 constexpr std::string_view kSetupValue[] = {"caps", "workspace", "models-dir", "engines-dir", "backend", "model", "js-runtime"};
-constexpr std::string_view kSetupBool[] = {"yes", "no-models", "download-engines", "install-runtimes", "reconfigure"};
+constexpr std::string_view kSetupBool[] = {"yes",         "no-models", "download-engines", "install-runtimes",
+                                           "reconfigure", "runtimes",  "no-runtimes",      "no-model"};
 
 constexpr SubSpec kEngineSubs[] = {{"ls", 0, 0}, {"add", 1, 1}, {"rm", 1, 1}, {"pull", 1, 1}};
 constexpr std::string_view kEngineValue[] = {"tag", "repo"};
@@ -96,6 +97,7 @@ constexpr std::string_view kTaskBool[] = {"inprocess", "all-values"};
 
 constexpr CommandSpec kCommands[] = {
     {"setup", {}, 0, 0, kSetupValue, kSetupBool},
+    {"home", {}, 0, 1, {}, {}},
     {"init", {}, 0, 1, {}, {}},
     {"secret", kSecretSubs, 0, 0, kSecretValue, kSecretBool},
     {"doctor", {}, 0, 0, {}, {}},
@@ -356,7 +358,8 @@ struct CommandBlurb {
 };
 constexpr CommandBlurb kOverview[] = {
     {"chat", "talk to a model in a full-screen chat with tools (also: just run `agent`)"},
-    {"setup", "first-time setup: home folder, hardware, engines, a first model"},
+    {"setup", "first-time setup (a script from the repository): the files folder, optional runtimes, a first model"},
+    {"home", "show or move the folder agent.cpp keeps its files in"},
     {"model", "download (from a Hugging Face link), list and remove models"},
     {"task", "run one engine capability once: asr, tts, image_gen, embed, ..."},
     {"run", "run a declarative agent graph"},
@@ -373,7 +376,7 @@ constexpr CommandBlurb kOverview[] = {
     {"wake", "resume graph runs that are waiting for a time (see schedule)"},
     {"schedule", "run an agent command on a schedule (cron / Task Scheduler)"},
     {"completion", "print a completion script: bash, zsh, fish or powershell"},
-    {"update", "check for a newer release and install it (agent update --check only looks)"},
+    {"update", "update to the latest release (runs the installer script from the repository; --check only looks)"},
     {"version", "print the version"},
 };
 } // namespace

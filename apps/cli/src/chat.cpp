@@ -1065,32 +1065,8 @@ std::string ask_line(const std::string &question, const std::string &fallback) {
     return a == std::string::npos ? fallback : line.substr(a);
 }
 
-// /setup with no arguments: the questions of `agent setup`, asked here, then the command runs with the answers.
-void run_setup_wizard(ChatState &st) {
-    out("setup: two questions, Enter keeps the answer in brackets\n");
-    const std::string home_now = st.ctx->has_home ? st.ctx->home.root : std::string();
-    const std::string home = ask_line("1/2 folder for models, engines and settings", home_now);
-    const std::string caps = "llama,audiocpp,sdcpp,onnx,trellis";   // every engine, no question
-    const std::string backend = suggest_backend(detect_hardware()); // detected, not asked
-    const std::string model = ask_line("2/2 model to download now (a Hugging Face link or owner/repo[:quant], or - for none)", "-");
-    std::vector<std::string> argv = {"setup", "--yes"};
-    if (!home.empty()) {
-        argv.push_back("--home");
-        argv.push_back(home);
-    }
-    argv.push_back("--caps");
-    argv.push_back(caps);
-    argv.push_back("--backend");
-    argv.push_back(backend);
-    if (model == "-" || model.empty()) {
-        argv.push_back("--no-models");
-    } else {
-        argv.push_back("--model");
-        argv.push_back(model);
-    }
-    run_cli_command(st, argv);
-    out("setup finished; /model lists what is available\n");
-}
+// /setup: setup is a script that asks questions and downloads, which does not fit inside the full-screen chat.
+void run_setup_wizard(ChatState &) { out("setup runs in a terminal: leave the chat (/exit) and run `agent setup`\n"); }
 
 // One input line: a message or a slash command. Returns false when the user asked to exit.
 bool handle_line(ChatState &st, const std::string &line) {

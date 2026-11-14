@@ -54,7 +54,10 @@ bool ask_yes_no(std::string_view question);
 
 int report_error(const Error &e);
 
-int cmd_setup(const CommandLine &cl, Context &ctx);
+int cmd_setup(const CommandLine &cl, Context &ctx); // script_cmd.cpp: runs scripts/setup.sh|ps1 from the repository
+int cmd_home(const CommandLine &cl, Context &ctx);  // script_cmd.cpp
+// Downloads scripts/<name>.sh (or .ps1 on Windows) from the repository and runs it; `detach`: start it and exit (an update on Windows).
+int run_remote_script(const std::string &name, const std::vector<std::string> &args, bool detach);
 int cmd_engine(const CommandLine &cl, Context &ctx);
 int cmd_model(const CommandLine &cl, Context &ctx);
 int cmd_chat(const CommandLine &cl, Context &ctx);
@@ -78,7 +81,7 @@ PathGateDecision cli_path_gate(const PathAccessRequest &request, void *context);
 // chosen js_runtime (Config::mcp_launcher). `ctx` must outlive the session.
 void install_cli_hooks(Config &cfg, Context &ctx);
 int cmd_skill(const CommandLine &cl, Context &ctx);  // skill_cmd.cpp
-int cmd_update(const CommandLine &cl, Context &ctx); // update_cmd.cpp
+int cmd_update(const CommandLine &cl, Context &ctx); // script_cmd.cpp: runs scripts/install.sh|ps1
 int mcp_serve(const CommandLine &cl, Context &ctx);  // mcp_serve.cpp
 int cmd_doctor(const CommandLine &cl, Context &ctx); // doctor_cmd.cpp
 int cmd_clean(const CommandLine &cl, Context &ctx);  // doctor_cmd.cpp

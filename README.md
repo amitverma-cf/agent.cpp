@@ -46,10 +46,14 @@ curl -fsSL https://agent.qozu.fyi/install.sh | sh
 irm https://agent.qozu.fyi/install.ps1 | iex
 ```
 
-The script picks the archive for your machine (the Vulkan build (Intel, AMD and Arm GPUs) when a Vulkan driver is present, else the CPU build; `AGENT_VARIANT=cpu|vulkan` overrides), checks its SHA-256 against the release's `SHA256SUMS`, and installs to `~/.local/share/agent-cpp` (Linux) or
-`%LOCALAPPDATA%\Programs\agent-cpp` (Windows). Then run `agent setup`. `agent update` keeps it current; it checks the release's signature.
-The archives are on the [releases page](https://github.com/amitverma-cf/agent.cpp/releases). Linux needs glibc 2.39 or newer. Linux and Windows on x86_64 (Intel, AMD) and
-aarch64 (Arm) are published; CUDA, ROCm and macOS builds are not.
+The script picks the build for your machine (Vulkan for Intel, AMD and Arm GPUs when a GPU driver is present, otherwise CPU; `AGENT_VARIANT=cpu|vulkan`
+overrides), checks its SHA-256 against the release's `SHA256SUMS`, installs it (`~/.local/share/agent-cpp` on Linux,
+`%LOCALAPPDATA%\Programs\agent-cpp` on Windows) and then runs setup: where to keep files, the optional bun and uv runtimes, and a model
+link. Run it again to update. `agent setup` and `agent update` are scripts from this repository's [`scripts/`](scripts) folder, so they improve
+without a new release.
+
+Builds: Linux and Windows on x86_64 (Intel, AMD) and aarch64 (Arm), all on the [releases page](https://github.com/amitverma-cf/agent.cpp/releases).
+Linux needs glibc 2.39 or newer. CUDA, ROCm and macOS builds are not published.
 
 **From source.** You need CMake 3.21+, Ninja and a C++20 compiler (MSVC 2022, GCC 12+ or Clang 15+). Windows details and OpenSSL are in
 [docs/getting-started.md](docs/getting-started.md).

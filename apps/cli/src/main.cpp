@@ -96,6 +96,7 @@ int main(int argc, char **argv) {
 
     agent::AgentRuntime runtime;
     if (cl.command == "setup") return cmd_setup(cl, ctx);
+    if (cl.command == "home") return cmd_home(cl, ctx);
     if (cl.command == "engine") return cmd_engine(cl, ctx);
     if (cl.command == "model") return cmd_model(cl, ctx);
     // No memory_budget_mb in config.json: use 85% of the installed RAM, so models that do not fit together are swapped

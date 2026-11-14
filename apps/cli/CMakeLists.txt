@@ -5,7 +5,6 @@ add_library(agent_cli_core STATIC
     src/edit_journal.cpp
     src/chat_extras.cpp
     src/model_detect.cpp
-    src/release_verify.cpp
     src/cli_platform.cpp
     src/home.cpp
     src/secrets.cpp
@@ -88,7 +87,7 @@ endif()
 add_executable(agent_cli_bin
     src/main.cpp
     src/commands.cpp
-    src/update_cmd.cpp
+    src/script_cmd.cpp
     src/mcp_serve.cpp
     src/chat.cpp
     src/voice.cpp

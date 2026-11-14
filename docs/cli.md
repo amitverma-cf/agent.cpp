@@ -20,21 +20,23 @@ one command.
 `--no-sandbox` works with every command and turns the OS sandbox off for engines, tools and commands. `--home DIR` picks the
 global home for one run. Everything is documented below; the same text is in `--help`.
 
-## agent setup
+## agent setup, agent home, agent update
+
+`agent setup` and `agent update` are not code in this program: each downloads a script from the repository
+([`scripts/setup.sh`](../scripts/setup.sh) / [`setup.ps1`](../scripts/setup.ps1) and [`install.sh`](../scripts/install.sh) /
+[`install.ps1`](../scripts/install.ps1)) and runs it, so they can be improved without a new release. `AGENT_SCRIPTS` points at another
+base URL or a folder with copies of the scripts.
 
 ```sh
-agent setup                                      # asks one or two questions (the folder, a model link); the GPU backend is detected
-agent setup --yes --model qwen2.5-0.5b           # no questions
-agent setup --no-models --caps llama,sdcpp --backend cpu
+agent setup                  # the files folder, the optional bun and uv runtimes, a model link or file; then the chat opens
+agent setup --yes --model https://huggingface.co/owner/repo     # no questions
+agent home [DIR]             # show, or move, the folder agent.cpp keeps its files in
+agent update                 # same version: nothing; a newer release: replaced in place (SHA-256 checked); --check only looks
 ```
 
-Setup chooses the global home (see [workspace.md](workspace.md)), detects your CPU, RAM and GPU, finds the engine plugins you
-built or downloaded and records them in `engines.json`, then lists the models your machine can run. It downloads nothing unless
-you pick a model, and each model it downloads is smoke-tested with a short real run.
-
-Options: `--home DIR`, `--model NAME|owner/repo[:quant]` (repeatable), `--no-models`, `--yes`, `--caps llama,audiocpp` (default: every engine, without asking),
-`--engines-dir DIR`, `--models-dir DIR`, `--workspace DIR`, `--backend cpu|cuda|vulkan`, `--js-runtime bun|node|nub`,
-`--download-engines`, `--install-runtimes`. Inside the chat, `/setup` asks the same questions.
+Options of `setup`: `--yes`, `--model LINK|FILE|owner/repo[:quant]`, `--no-model`, `--runtimes` / `--no-runtimes`, `--home DIR`. The GPU
+backend and the engines are not asked about: they come with the build that was installed (CPU or Vulkan). Engines are not touched by
+`update`; `agent engine pull NAME` fetches newer ones.
 
 ## agent chat
 
@@ -368,13 +370,11 @@ cannot confine anything; nothing is refused and nothing is faked.
 
 ```sh
 agent update --check        # is there a newer release? changes nothing
-agent update                # download it (SHA-256 checked) and replace agent and agent-engine-host next to the running program
+agent update                # runs the installer script: a newer release replaces this one in place
 agent completion bash       # also: zsh, fish, powershell
 ```
 
-`update` reads the project's GitHub releases (`--repo OWNER/NAME`, `--tag TAG`). A release must carry `manifest.json.sig`, an Ed25519 signature of the
-manifest made with the project's release key (`scripts/sign-release.sh`); without a valid one `update` stops (`--allow-unsigned` installs anyway). While no release is published it says so and
-changes nothing. Engines are not touched; `agent engine pull NAME` fetches newer ones. Load a completion script in your shell, for
+Load a completion script in your shell, for
 example `source <(agent completion bash)`, `agent completion fish | source`, or `agent completion powershell | Out-String | Invoke-Expression`.
 
 ## agent schedule

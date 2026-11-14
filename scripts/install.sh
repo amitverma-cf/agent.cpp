@@ -3,10 +3,17 @@
 #
 # Picks the release archive that fits this machine (x86_64 or aarch64; the Vulkan build when a Vulkan driver is present), checks its
 # SHA-256 against the release's SHA256SUMS, unpacks it to ~/.local/share/agent-cpp and links `agent` into ~/.local/bin.
-# It then runs `agent setup` and opens the chat (AGENT_NO_START=1 only installs).
+# It then runs the setup script (scripts/setup.sh) and opens the chat (AGENT_NO_START=1 only installs). Run again, it updates: the same
+# version is left alone, a newer one replaces it in place (`agent update` does exactly this).
 # Environment: AGENT_VERSION (a tag such as v1.0.0; default: the latest release), AGENT_VARIANT (cpu or vulkan; default: detected),
 #              AGENT_PREFIX (default ~/.local), AGENT_REPO (default amitverma-cf/agent.cpp), NO_COLOR.
 set -eu
+
+# `agent update` starts this script and exits; on a system that locks running programs the old process must be gone first.
+if [ -n "${AGENT_WAIT_PID:-}" ]; then
+    n=0
+    while kill -0 "$AGENT_WAIT_PID" 2>/dev/null && [ "$n" -lt 100 ]; do sleep 0.1 2>/dev/null || sleep 1; n=$((n + 1)); done
+fi
 
 REPO="${AGENT_REPO:-amitverma-cf/agent.cpp}"
 PREFIX="${AGENT_PREFIX:-$HOME/.local}"
@@ -79,6 +86,19 @@ version="$(printf '%s' "$name" | sed 's/^agent-cpp-\(v\{0,1\}[0-9][^-]*\)-.*/\1/
 step "Linux $arch  ·  $variant build$detected"
 step "Release ${version}"
 
+if [ -n "${AGENT_CHECK:-}" ]; then # agent update --check: only look
+    if [ -r "$DEST/.version" ] && [ "$(cat "$DEST/.version" 2>/dev/null)" = "$name" ]; then step "Up to date ($version)"; else step "An update is available: $version"; fi
+    exit 0
+fi
+
+if [ -z "${AGENT_FORCE:-}" ] && [ -r "$DEST/.version" ] && [ "$(cat "$DEST/.version" 2>/dev/null)" = "$name" ] && [ -x "$BIN/agent" ]; then
+    step "Already installed and up to date"
+    installed_now=""
+else
+    installed_now=1
+fi
+
+if [ -n "$installed_now" ]; then
 printf '  %s↓%s Downloading %s\n' "$T" "$R" "$name"
 fetch_progress "$base/$name" "$tmp/$name" || die "The download failed."
 [ "$(sha "$tmp/$name")" = "$want" ] || die "SHA-256 mismatch for $name. Nothing was installed."
@@ -91,29 +111,22 @@ rm -rf "$DEST"
 mv "$DEST.new" "$DEST"
 ln -sf "$DEST/agent" "$BIN/agent"
 step "Installed to $DEST"
+printf '%s' "$name" > "$DEST/.version"
 step "Command: $BIN/agent"
+fi
 case ":$PATH:" in
     *":$BIN:"*) ;;
     *) info "Add $BIN to your PATH to type just 'agent' in new shells:" ; info "  export PATH=\"$BIN:\$PATH\"" ;;
 esac
 
-# Set up and start. The script comes through a pipe, so the terminal is read from /dev/tty.
-# The backend is not asked: the build that was installed says it (Vulkan or CPU). Only what is a real choice is asked.
+# Setup is its own script (scripts/setup.sh), fetched from the repository so it can be improved without a new release. It runs here, through
+# the terminal (the installer itself comes through a pipe). `agent update` sets AGENT_NO_START: an update does not set anything up again.
+SCRIPTS="${AGENT_SCRIPTS:-https://raw.githubusercontent.com/amitverma-cf/agent.cpp/main/scripts}"
 if [ -z "${AGENT_NO_START:-}" ] && [ -t 1 ] && [ -r /dev/tty ]; then
-    printf '\n  %sSetting up agent.cpp%s\n\n' "$B" "$R"
-    printf '  Download the optional bun and uv runtimes, for MCP servers and skills? [y/N] ' >/dev/tty
-    read -r runtimes </dev/tty || runtimes=""
-    printf '  Model to download now: a Hugging Face link or owner/repo (Enter to skip): ' >/dev/tty
-    read -r model </dev/tty || model=""
-    set -- setup --yes --backend "$variant"
-    case "$runtimes" in y | Y | yes | YES) set -- "$@" --install-runtimes ;; esac
-    if [ -n "$model" ]; then set -- "$@" --model "$model"; else set -- "$@" --no-models; fi
-    printf '\n'
-    "$BIN/agent" "$@" </dev/tty || exit $?
-    if [ -z "$model" ]; then
-        printf '\n  Next: add a model with %sagent model pull <Hugging Face link>%s, then run %sagent%s\n\n' "$T" "$R" "$T" "$R"
-        exit 0
+    if fetch "$SCRIPTS/setup.sh" "$tmp/setup.sh"; then
+        AGENT_BIN="$BIN/agent" sh "$tmp/setup.sh" </dev/tty
+        exit $?
     fi
-    exec "$BIN/agent" </dev/tty
+    info "Could not fetch the setup script; run agent setup later"
 fi
-printf '\n  Next: %sagent setup --yes --backend %s%s\n\n' "$T" "$variant" "$R"
+printf '\n  Next: %sagent setup%s\n\n' "$T" "$R"
