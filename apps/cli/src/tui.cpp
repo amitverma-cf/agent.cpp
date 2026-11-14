@@ -1596,7 +1596,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .sr .tb { padding-left: 1; padding-right: 0; color: #8a8a8a; }
       .gauge { color: #40e0d0; padding-left: 2; white-space: nowrap; }
       .gauge.hot { color: #ffb3d1; }
-      dialog::part(dialog-box) { border: round; border-color: #40e0d0; background-color: #000000; color: #ffffff; min-width: 40; max-width: 62; }
+      dialog::part(dialog-box) { border: round; border-color: #40e0d0; background-color: #000000; color: #ffffff; min-width: 56; max-width: 90; }
       dialog::part(dialog-header) { color: #40e0d0; border-color: #4a4a4a; }
       toast::part(toast) { border-color: #40e0d0; background-color: #000000; color: #ffffff; }
       .box input::part(placeholder) { color: #8a8a8a; }
@@ -1606,7 +1606,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .btn.danger { color: #ffb3d1; }
       .btn.danger:hover { border-color: #ffb3d1; color: #ffb3d1; }
       .keyrow { display: flex; flex-direction: row; }
-      .kname { width: 16; color: #40e0d0; }
+      .kname { width: 20; color: #40e0d0; }
       .kdesc { color: #ffffff; }
 
       /* Below 84 columns the sidebar is a screen of its own: the list opens over the conversation with the menu button, and picking a session
