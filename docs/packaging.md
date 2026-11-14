@@ -2,7 +2,7 @@
 
 ## Version
 
-The version is set once, in `project("agent.cpp" VERSION x.y.z)` in the top-level `CMakeLists.txt` (currently 0.1.2).
+The version is set once, in `project("agent.cpp" VERSION x.y.z)` in the top-level `CMakeLists.txt` (currently 1.0.0).
 `agent version`, the CMake package version (`agent-cppConfigVersion.cmake`) and the Linux tarball names all come from it.
 
 ## Which engines are built

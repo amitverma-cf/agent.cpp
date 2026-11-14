@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 # The single version source: the CLI version string, the package config version and the release
 # tarball names all come from here.
-project("agent.cpp" VERSION 0.2.0 LANGUAGES C CXX)
+project("agent.cpp" VERSION 1.0.0 LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
