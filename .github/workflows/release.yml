@@ -1,7 +1,7 @@
 name: Release
 
-# Builds the CLI and the llama engine for Windows and Linux (macOS is not tested or supported in v1.0.0), on demand only (no tag trigger and no GitHub Release until v1.0.0), and
-# with publish=true uploads:
+# Builds the CLI and the llama engine for Windows and Linux (x86_64 and aarch64; plus a Vulkan build for GPUs on Linux x86_64 and
+# aarch64 and Windows x86_64), on demand only, and with publish=true (run on a tag: the release is then the "latest") uploads:
 #   * agent-cpp-<version>-<os>-<arch>.tar.gz / .zip     the CLI, the engine host and the engines, ready to run
 #   * agent-engine-<name>-<os>-<arch>.<so|dll|dylib>    each engine alone, for `agent engine pull` and `agent setup`
 #   * manifest.json and SHA256SUMS                       what the downloader reads, with a SHA-256 for every file
@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: "Create a GitHub release from the build (not before v1.0.0)"
+        description: "Create a GitHub release from the build (run on a tag, so it becomes the latest release)"
         type: boolean
         default: false
       engines:
@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   build:
-    name: ${{ matrix.os_name }}-${{ matrix.arch }}
+    name: ${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.variant }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -37,6 +37,10 @@ jobs:
           - { runner: ubuntu-24.04-arm, os_name: linux,   arch: aarch64, lib_prefix: lib, lib_ext: so,    exe_ext: "",     ggml: "-DGGML_NATIVE=OFF" }
           - { runner: windows-2022,     os_name: windows, arch: x86_64,  lib_prefix: "",  lib_ext: dll,   exe_ext: ".exe", ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON", triplet: x64-windows, dll: x64 }
           - { runner: windows-11-arm,   os_name: windows, arch: aarch64, lib_prefix: "",  lib_ext: dll,   exe_ext: ".exe", ggml: "-DGGML_NATIVE=ON", triplet: arm64-windows, dll: arm64 }
+          # GPU builds (Vulkan: NVIDIA, AMD, Intel). The driver brings the Vulkan loader; the installer picks this build when it is there.
+          - { runner: ubuntu-24.04,     os_name: linux,   arch: x86_64,  variant: "-vulkan", lib_prefix: lib, lib_ext: so,  exe_ext: "",     ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON -DGGML_VULKAN=ON" }
+          - { runner: ubuntu-24.04-arm, os_name: linux,   arch: aarch64, variant: "-vulkan", lib_prefix: lib, lib_ext: so,  exe_ext: "",     ggml: "-DGGML_NATIVE=OFF -DGGML_VULKAN=ON" }
+          - { runner: windows-2022,     os_name: windows, arch: x86_64,  variant: "-vulkan", lib_prefix: "",  lib_ext: dll, exe_ext: ".exe", ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON -DGGML_VULKAN=ON", triplet: x64-windows, dll: x64 }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,7 +58,7 @@ jobs:
         run: |
           # The full-screen chat (RTXUI) needs C++23: GCC 13 or newer. GCC 14 is used, and libstdc++ is linked statically so the
           # binaries do not need the newer libstdc++ on the machine that runs them.
-          sudo apt-get update && sudo apt-get install -y ninja-build libssl-dev g++-14
+          sudo apt-get update && sudo apt-get install -y ninja-build libssl-dev g++-14 ${{ matrix.variant == '-vulkan' && 'libvulkan-dev glslc' || '' }}
           echo "CC=gcc-14" >> "$GITHUB_ENV"
           echo "CXX=g++-14" >> "$GITHUB_ENV"
 
@@ -64,6 +68,11 @@ jobs:
         run: |
           choco install ninja -y --no-progress
           "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install openssl:${{ matrix.triplet }}
+          if [ "${{ matrix.variant }}" = "-vulkan" ]; then
+            choco install vulkan-sdk -y --no-progress
+            sdk="$(ls -d /c/VulkanSDK/* | sort | tail -1)"
+            echo "VULKAN_SDK=C:/VulkanSDK/$(basename "$sdk")" >> "$GITHUB_ENV"
+          fi
 
       - name: Compiler environment (Windows)
         if: matrix.os_name == 'windows'
@@ -96,7 +105,7 @@ jobs:
         shell: bash
         run: |
           v="${{ steps.version.outputs.value }}"
-          name="agent-cpp-${v}-${{ matrix.os_name }}-${{ matrix.arch }}"
+          name="agent-cpp-${v}-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.variant }}"
           mkdir -p "dist/${name}/engines" assets
           cp "build/agent${{ matrix.exe_ext }}" "dist/${name}/"
           cp "build/agent-engine-host${{ matrix.exe_ext }}" "dist/${name}/" 2>/dev/null || true
@@ -136,16 +145,19 @@ jobs:
           else
             tar -C dist -czf "assets/${name}.tar.gz" "${name}"
           fi
+          # A GPU build ships as its full archive only (its engine files carry the same names as the CPU build's).
+          if [ -n "${{ matrix.variant }}" ]; then find assets -type f ! -name "${name}.*" -delete; fi
           ls -la assets
 
       - uses: actions/upload-artifact@v4
         with:
-          name: assets-${{ matrix.os_name }}-${{ matrix.arch }}
+          name: assets-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.variant }}
           path: assets/*
           if-no-files-found: error
 
   publish:
-    if: ${{ inputs.publish }}
+    # A failing GPU build must not hold back the release: publish whatever was built.
+    if: ${{ !cancelled() && inputs.publish }}
     needs: build
     runs-on: ubuntu-22.04
     steps:
