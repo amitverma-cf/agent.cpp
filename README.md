@@ -48,7 +48,7 @@ irm https://agent.qozu.fyi | iex
 
 The script picks the archive for your machine (the Vulkan build for GPUs when a Vulkan driver is present; `AGENT_VARIANT=cpu` forces the
 CPU build), checks its SHA-256 against the release's `SHA256SUMS`, and installs to `~/.local/share/agent-cpp` (Linux) or
-`%LOCALAPPDATA%\Programsgent-cpp` (Windows). Then run `agent setup`. `agent update` keeps it current; it checks the release's signature.
+`%LOCALAPPDATA%\Programs\agent-cpp` (Windows). Then run `agent setup`. `agent update` keeps it current; it checks the release's signature.
 The archives are on the [releases page](https://github.com/amitverma-cf/agent.cpp/releases). Linux needs glibc 2.39 or newer. CUDA, ROCm and
 macOS builds are not published.
 
