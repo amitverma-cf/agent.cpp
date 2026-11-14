@@ -107,13 +107,27 @@ try {
 $env:Path += ";$dest"
 $exe = Join-Path $dest 'agent.exe'
 if (-not $env:AGENT_NO_START -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    # The backend is not asked: the build that was installed says it (Vulkan or CPU). Only what is a real choice is asked.
     Write-Host ''
-    Write-Host '  Setting up agent.cpp ...' -ForegroundColor Cyan
+    Write-Host '  Setting up agent.cpp' -ForegroundColor Cyan
     Write-Host ''
-    & $exe setup
-    if ($LASTEXITCODE -eq 0) { & $exe }
+    $runtimes = Read-Host '  Download the optional bun and uv runtimes, for MCP servers and skills? [y/N]'
+    $model = Read-Host '  Model to download now: a Hugging Face link or owner/repo (Enter to skip)'
+    $setupArgs = @('setup', '--yes', '--backend', $variant)
+    if ($runtimes -match '^(y|yes)$') { $setupArgs += '--install-runtimes' }
+    if ($model) { $setupArgs += @('--model', $model) } else { $setupArgs += '--no-models' }
+    Write-Host ''
+    & $exe @setupArgs
+    if ($LASTEXITCODE -eq 0) {
+        if ($model) { & $exe }
+        else {
+            Write-Host ''
+            Write-Host '  Next: add a model with ' -NoNewline; Write-Host 'agent model pull <Hugging Face link>' -ForegroundColor Cyan -NoNewline; Write-Host ', then run ' -NoNewline; Write-Host 'agent' -ForegroundColor Cyan
+            Write-Host ''
+        }
+    }
 } else {
     Write-Host ''
-    Write-Host '  Next: ' -NoNewline; Write-Host 'agent setup' -ForegroundColor Cyan
+    Write-Host '  Next: ' -NoNewline; Write-Host "agent setup --yes --backend $variant" -ForegroundColor Cyan
     Write-Host ''
 }

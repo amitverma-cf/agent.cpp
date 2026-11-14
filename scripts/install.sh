@@ -98,9 +98,22 @@ case ":$PATH:" in
 esac
 
 # Set up and start. The script comes through a pipe, so the terminal is read from /dev/tty.
+# The backend is not asked: the build that was installed says it (Vulkan or CPU). Only what is a real choice is asked.
 if [ -z "${AGENT_NO_START:-}" ] && [ -t 1 ] && [ -r /dev/tty ]; then
-    printf '\n  %sSetting up agent.cpp ...%s\n\n' "$B" "$R"
-    "$BIN/agent" setup </dev/tty || exit $?
+    printf '\n  %sSetting up agent.cpp%s\n\n' "$B" "$R"
+    printf '  Download the optional bun and uv runtimes, for MCP servers and skills? [y/N] ' >/dev/tty
+    read -r runtimes </dev/tty || runtimes=""
+    printf '  Model to download now: a Hugging Face link or owner/repo (Enter to skip): ' >/dev/tty
+    read -r model </dev/tty || model=""
+    set -- setup --yes --backend "$variant"
+    case "$runtimes" in y | Y | yes | YES) set -- "$@" --install-runtimes ;; esac
+    if [ -n "$model" ]; then set -- "$@" --model "$model"; else set -- "$@" --no-models; fi
+    printf '\n'
+    "$BIN/agent" "$@" </dev/tty || exit $?
+    if [ -z "$model" ]; then
+        printf '\n  Next: add a model with %sagent model pull <Hugging Face link>%s, then run %sagent%s\n\n' "$T" "$R" "$T" "$R"
+        exit 0
+    fi
     exec "$BIN/agent" </dev/tty
 fi
-printf '\n  Next: %sagent setup%s\n\n' "$T" "$R"
+printf '\n  Next: %sagent setup --yes --backend %s%s\n\n' "$T" "$variant" "$R"
