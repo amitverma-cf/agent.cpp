@@ -57,7 +57,12 @@ int mcp_serve(const CommandLine &cl, Context &ctx) {
         const std::string id = has_id ? simdjson::to_string(id_el) : std::string("null");
         if (!has_id) continue; // notifications (initialized, cancelled) need no answer
 
-        if (method == "initialize") {
+        if (method == "server/discover") {
+            send("{\"jsonrpc\":\"2.0\",\"id\":" + id +
+                 ",\"result\":{\"resultType\":\"complete\",\"supportedVersions\":[\"2026-07-28\",\"2025-06-18\"],\"capabilities\":{\"tools\":{}},"
+                 "\"_meta\":{\"io.modelcontextprotocol/serverInfo\":{\"name\":\"agent.cpp\",\"version\":\"" +
+                 std::string(kCliVersion) + "\"}},\"ttlMs\":0,\"cacheScope\":\"private\"}}");
+        } else if (method == "initialize") {
             send("{\"jsonrpc\":\"2.0\",\"id\":" + id +
                  ",\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"agent.cpp\","
                  "\"version\":\"" +
@@ -73,7 +78,7 @@ int mcp_serve(const CommandLine &cl, Context &ctx) {
                          "\",\"inputSchema\":" +
                          (t.parameter_schema.empty() ? std::string("{\"type\":\"object\"}") : std::string(t.parameter_schema)) + "}";
             }
-            send("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"tools\":[" + tools + "]}}");
+            send("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"resultType\":\"complete\",\"ttlMs\":0,\"cacheScope\":\"private\",\"tools\":[" + tools + "]}}");
         } else if (method == "tools/call") {
             std::string_view name;
             simdjson::dom::element params, arguments;
@@ -89,7 +94,7 @@ int mcp_serve(const CommandLine &cl, Context &ctx) {
             auto result = execute_tool(session.value, name, args);
             const bool failed = !result.ok;
             const std::string text = failed ? result.error.message : result.value;
-            send("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"" + json_escape(text) +
+            send("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"resultType\":\"complete\",\"content\":[{\"type\":\"text\",\"text\":\"" + json_escape(text) +
                  "\"}],\"isError\":" + (failed ? "true" : "false") + "}}");
         } else {
             send(error_reply(id, -32601, "method not found: " + std::string(method)));

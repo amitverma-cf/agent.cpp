@@ -54,6 +54,10 @@ TEST_CASE("mcp: a server reached over Streamable HTTP", "[mcp][http]") {
                  "\"name\":\"fake\",\"version\":\"1\"}}");
             return;
         }
+        if (has(b, "server/discover")) { // the probe of a newer-revision client: this server predates it
+            res.status = 400;
+            return;
+        }
         (req.get_header_value("Mcp-Session-Id") == "session-1" ? with_session : without_session)++;
         if (has(b, "notifications/initialized")) {
             res.status = 202;
@@ -147,6 +151,69 @@ TEST_CASE("mcp: a server reached over Streamable HTTP", "[mcp][http]") {
         CHECK(r.error.message.find("http_post") != std::string::npos);
     }
 
+    svr.stop();
+    server.join();
+}
+
+TEST_CASE("mcp: a 2026-07-28 server needs no handshake", "[mcp][http]") {
+    std::atomic<int> handshakes{0};
+    std::atomic<int> with_meta{0};
+    std::atomic<int> with_headers{0};
+    httplib::Server svr;
+    svr.Post("/mcp", [&](const httplib::Request &req, httplib::Response &res) {
+        const std::string &b = req.body;
+        const std::string id = id_of(b);
+        auto json = [&](const std::string &result) {
+            res.set_content("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":" + result + "}", "application/json");
+        };
+        if (has(b, "initialize") || has(b, "notifications/initialized")) {
+            ++handshakes;
+            res.status = 400;
+            return;
+        }
+        if (has(b, "server/discover")) {
+            json("{\"resultType\":\"complete\",\"supportedVersions\":[\"2026-07-28\"],\"capabilities\":{\"tools\":{}},\"_meta\":{"
+                 "\"io.modelcontextprotocol/serverInfo\":{\"name\":\"modern\",\"version\":\"2\"}}}");
+            return;
+        }
+        if (b.find("io.modelcontextprotocol/protocolVersion") != std::string::npos) ++with_meta;
+        if (req.get_header_value("Mcp-Method") == (has(b, "tools/call") ? "tools/call" : "tools/list") &&
+            req.get_header_value("MCP-Protocol-Version") == "2026-07-28")
+            ++with_headers;
+        if (has(b, "tools/list"))
+            json("{\"resultType\":\"complete\",\"ttlMs\":0,\"cacheScope\":\"private\",\"tools\":[{\"name\":\"echo\",\"description\":\"e\","
+                 "\"inputSchema\":{\"type\":\"object\"}}]}");
+        else if (has(b, "tools/call") && req.get_header_value("Mcp-Name") == "echo")
+            json("{\"resultType\":\"complete\",\"content\":[{\"type\":\"text\",\"text\":\"modern ok\"}]}");
+        else
+            res.status = 400;
+    });
+    const int port = svr.bind_to_any_port("127.0.0.1");
+    REQUIRE(port > 0);
+    std::thread server([&] { svr.listen_after_bind(); });
+
+    const auto ws = std::filesystem::temp_directory_path() / "agent_mcp_modern_ws";
+    std::filesystem::remove_all(ws);
+    std::filesystem::create_directories(ws);
+    agent::Config cfg;
+    cfg.workspace_dir = ws.string();
+    cfg.http_post = hub_post;
+    auto session = agent::init(cfg);
+    REQUIRE(session.ok);
+    agent::McpServerConfig mc;
+    mc.name = "m";
+    mc.url = "http://127.0.0.1:" + std::to_string(port) + "/mcp";
+    auto r = agent::connect_mcp_server(session.value, mc);
+    INFO(r.error.message);
+    REQUIRE(r.ok);
+    auto out = agent::execute_tool(session.value, "m.echo", "{}");
+    INFO(out.error.message);
+    REQUIRE(out.ok);
+    CHECK(out.value.find("modern ok") != std::string::npos);
+    CHECK(handshakes.load() == 0);
+    CHECK(with_meta.load() >= 2);
+    CHECK(with_headers.load() >= 2);
+    agent::disconnect_mcp_server(session.value, "m");
     svr.stop();
     server.join();
 }

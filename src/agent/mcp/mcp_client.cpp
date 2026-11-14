@@ -28,6 +28,7 @@ namespace agent {
 namespace {
 
 constexpr std::string_view kProtocolVersion = "2025-06-18";
+constexpr std::string_view kModernVersion = "2026-07-28"; // stateless: no handshake, every request carries its version
 constexpr std::string_view kDataSourcePrefix = "mcp:";
 constexpr size_t kMaxLineBytes = 64u * 1024 * 1024;
 constexpr size_t kStderrTailBytes = 2048;
@@ -150,6 +151,8 @@ class McpServer {
     std::shared_ptr<std::string> workspace;
     std::vector<std::unique_ptr<RemoteTool>> tools;
     std::string protocol_version;
+    bool modern_ = false;       // 2026-07-28 revision: per-request _meta instead of initialize
+    std::string call_method_, call_name_; // Mcp-Method / Mcp-Name headers of the request in flight (HTTP)
     std::string server_info;
     std::vector<std::string> secret_values; // inserted into the environment; kept out of logs and tool results
     HttpPostFn http_post = nullptr;         // servers reached by URL
@@ -311,11 +314,37 @@ void McpServer::answer_server_request(std::string_view method, simdjson::dom::el
     (void)send_line(line);
 }
 
-Result<simdjson::dom::element> McpServer::request(std::string_view method, std::string_view params_json) {
+// Modern revision: the version, capabilities and client identity travel in the params' _meta.
+static std::string with_meta(std::string_view params_json) {
+    const std::string meta = std::string("\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"") + std::string(kModernVersion) +
+                             "\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agent.cpp\","
+                             "\"version\":\"0.1.0\"}}";
+    std::string_view rest = params_json;
+    while (!rest.empty() && rest.front() == ' ') rest.remove_prefix(1);
+    if (rest.size() < 2 || rest.front() != '{') return "{" + meta + "}";
+    rest.remove_prefix(1);
+    while (!rest.empty() && rest.front() == ' ') rest.remove_prefix(1);
+    return "{" + meta + (rest.front() == '}' ? std::string() : std::string(",")) + std::string(rest);
+}
+
+Result<simdjson::dom::element> McpServer::request(std::string_view method_in, std::string_view params_in) {
     using R = Result<simdjson::dom::element>;
     auto failure = [](ErrorCode code, std::string msg) { return R{.ok = false, .value = {}, .error = make_error(code, std::move(msg))}; };
     if (dead_) return failure(ErrorCode::NetworkError, prefix() + " is not running: " + dead_reason_);
-    if (remote()) return request_http(method, params_json);
+    const std::string_view method = method_in;
+    const std::string meta_params = modern_ || method == "server/discover" ? with_meta(params_in) : std::string();
+    const std::string_view params_json = meta_params.empty() ? params_in : std::string_view(meta_params);
+    if (remote()) {
+        call_method_ = std::string(method);
+        call_name_.clear();
+        simdjson::dom::parser pp;
+        simdjson::padded_string padded(params_in);
+        simdjson::dom::element pe;
+        std::string_view nm;
+        if (pp.parse(padded).get(pe) == simdjson::SUCCESS && (pe["name"].get(nm) == simdjson::SUCCESS || pe["uri"].get(nm) == simdjson::SUCCESS))
+            call_name_ = std::string(nm);
+        return request_http(method, params_json);
+    }
 
     const int64_t id = next_id_++;
     std::string line = "{\"jsonrpc\":\"2.0\",\"id\":" + std::to_string(id) + ",\"method\":\"";
@@ -415,11 +444,46 @@ Result<void> McpServer::start() {
 
     std::lock_guard<std::mutex> lock(mutex_);
 
+    // Newer servers (2026-07-28) have no handshake: probe server/discover, and fall back to initialize on anything that is not a modern answer.
+    bool advertised_tools = true;
+    bool discovered = false;
+    {
+        auto disc = request("server/discover", "{}");
+        bool speaks_modern = false;
+        if (disc.ok) {
+            simdjson::dom::array versions;
+            if (disc.value["supportedVersions"].get(versions) == simdjson::SUCCESS)
+                for (simdjson::dom::element v : versions) {
+                    std::string_view sv;
+                    if (v.get(sv) == simdjson::SUCCESS && sv == kModernVersion) speaks_modern = true;
+                }
+        }
+        if (speaks_modern) {
+            modern_ = discovered = true;
+            protocol_version = std::string(kModernVersion);
+            std::string_view name, ver;
+            simdjson::dom::element info, caps, extra;
+            if (disc.value["_meta"]["io.modelcontextprotocol/serverInfo"].get(info) == simdjson::SUCCESS) {
+                try_get(info["name"], name);
+                try_get(info["version"], ver);
+                server_info = std::string(name) + (ver.empty() ? "" : " " + std::string(ver));
+            }
+            if (disc.value["capabilities"].get(caps) == simdjson::SUCCESS) {
+                advertised_tools = caps["tools"].get(extra) == simdjson::SUCCESS;
+                has_resources = caps["resources"].get(extra) == simdjson::SUCCESS;
+                has_prompts = caps["prompts"].get(extra) == simdjson::SUCCESS;
+            }
+        } else if (disc.error.message.find("-32022") != std::string::npos) {
+            return fail(ErrorCode::ProviderInitFailed, prefix() + ": the server does not speak protocol " + std::string(kModernVersion) + " (" + disc.error.message + ")");
+        }
+        // Any other error: a server of the earlier revisions.
+    }
     std::string init_params = "{\"protocolVersion\":\"" + std::string(kProtocolVersion) +
                               "\",\"capabilities\":{},\"clientInfo\":{\"name\":\"agent.cpp\",\"version\":\"0.1.0\"}}";
-    auto init = request("initialize", init_params);
-    bool advertised_tools = true;
-    if (init.ok) {
+    auto init = discovered ? Result<simdjson::dom::element>{.ok = false, .value = {}, .error = make_error(ErrorCode::ParseError, "")}
+                           : request("initialize", init_params);
+    if (discovered) {
+    } else if (init.ok) {
         std::string_view version, name, ver;
         if (init.value["protocolVersion"].get(version) == simdjson::SUCCESS) protocol_version = std::string(version);
         simdjson::dom::element info;
@@ -666,8 +730,13 @@ std::vector<std::string> sse_messages(std::string_view body) {
 Result<HttpReply> McpServer::post(std::string_view body) {
     std::vector<std::pair<std::string, std::string>> headers = {{"Content-Type", "application/json"},
                                                                 {"Accept", "application/json, text/event-stream"}};
-    if (!protocol_version.empty()) headers.emplace_back("MCP-Protocol-Version", protocol_version);
+    if (!protocol_version.empty() && !modern_ && call_method_ != "server/discover") headers.emplace_back("MCP-Protocol-Version", protocol_version);
     if (!session_id_.empty()) headers.emplace_back("Mcp-Session-Id", session_id_);
+    if (modern_ || call_method_ == "server/discover") {
+        headers.emplace_back("MCP-Protocol-Version", std::string(kModernVersion));
+        headers.emplace_back("Mcp-Method", call_method_);
+        if (!call_name_.empty()) headers.emplace_back("Mcp-Name", call_name_);
+    }
     for (const auto &h : config.headers) headers.emplace_back(h.first, h.second);
     return http_post(config.url, headers, body, config.timeout_ms, http_user);
 }
@@ -731,6 +800,9 @@ Result<simdjson::dom::element> McpServer::request_http(std::string_view method, 
             simdjson::dom::element result;
             if (msg["result"].get(result) != simdjson::SUCCESS)
                 return failure(ErrorCode::ParseError, prefix() + ": response to " + std::string(method) + " has neither result nor error");
+            std::string_view result_type;
+            if (modern_ && result["resultType"].get(result_type) == simdjson::SUCCESS && result_type == "input_required")
+                return failure(kRemoteError, prefix() + ": " + std::string(method) + " needs more input from the client (multi round-trip requests are not supported)");
             return R{.ok = true, .value = result, .error = {}};
         }
     }

@@ -185,8 +185,9 @@ agent::connect_mcp_server(session, remote);
 ```
 
 In the CLI's `mcp.json` a remote server is `"docs": {"url": "https://mcp.example.com/mcp", "headers": {"Authorization": "Bearer ${secret:docs}"}}`.
-The transport follows the 2025-06-18 revision (initialize handshake, session id). The stateless 2026-07-28 revision is not implemented yet;
-servers that still accept the earlier handshake work.
+The client speaks the stateless 2026-07-28 revision: it probes `server/discover` and, when the server lists that version, sends no
+`initialize`; every request carries version and client info in `_meta`, and HTTP requests carry `Mcp-Method` / `Mcp-Name`. A server that
+answers the probe with anything else is handled with the earlier handshake (2025-06-18, session id).
 
 ## Resources and prompts
 
@@ -203,4 +204,4 @@ what to approve; `--read-only` offers only the tools that change nothing. See [.
 ## Not supported yet
 
 Sampling, roots, elicitation, progress notifications, `notifications/tools/list_changed` (reconnect to refresh the tools), paginated
-resource and prompt lists (the first page is shown), and the stateless 2026-07-28 revision of the protocol.
+resource and prompt lists (the first page is shown), `subscriptions/listen`, multi round-trip input requests (an `input_required` result is an error) and the tasks extension.
