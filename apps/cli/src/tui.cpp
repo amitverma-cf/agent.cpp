@@ -1346,16 +1346,12 @@ class ChatApp : public rtxui::Component<ChatApp> {
         <div class="sethelp">{set_help}</div>
       </div>
       <dialog open="{confirm_open}" title="{confirm_title}">
-        <div class="dlgbody">
-          <p>{confirm_text}</p>
-          <div class="dlgactions"><button class="danger" onclick="ConfirmYes">Delete</button><button onclick="ConfirmNo">Cancel</button></div>
-        </div>
+        <p>{confirm_text}</p>
+        <div class="dlgactions"><span class="btn danger" onclick="ConfirmYes">y Delete  </span><span class="btn" onclick="ConfirmNo">n Cancel  </span></div>
       </dialog>
       <dialog open="{show_keys}" title="Keyboard shortcuts">
-        <div class="dlgbody">
-          <for each="{key_rows}" as="k"><div class="keyrow"><span class="kname">{k.label}</span><span class="kdesc">{k.value}</span></div></for>
-          <div class="dlgactions"><button onclick="CloseKeys">Close</button></div>
-        </div>
+        <for each="{key_rows}" as="k"><div class="keyrow"><span class="kname">{k.label}</span><span class="kdesc">{k.value}</span></div></for>
+        <div class="dlgactions"><span class="btn" onclick="CloseKeys">Esc Close  </span></div>
       </dialog>
       <toast open="{toast_open}">{toast_text}</toast>
     </div>
@@ -1470,12 +1466,15 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .sr .tb { padding-left: 1; padding-right: 0; color: #8a8a8a; }
       .gauge { color: #40e0d0; padding-left: 2; white-space: nowrap; }
       .gauge.hot { color: #ffb3d1; }
-      dialog { background-color: #000000; color: #ffffff; border-color: #40e0d0; }
+      dialog::part(dialog-box) { border: round; border-color: #40e0d0; background-color: #000000; color: #ffffff; min-width: 40; max-width: 62; }
+      dialog::part(dialog-header) { color: #40e0d0; border-color: #4a4a4a; }
       toast::part(toast) { border-color: #40e0d0; background-color: #000000; color: #ffffff; }
       .box input::part(placeholder) { color: #8a8a8a; }
       .dlgactions { display: flex; flex-direction: row; justify-content: flex-end; margin-top: 1; }
-      .danger { color: #ffb3d1; }
-      .dlgbody { width: 58; }
+      .btn { border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 0; margin-left: 1; color: #ffffff; white-space: nowrap; flex-shrink: 0; }
+      .btn:hover { border-color: #40e0d0; color: #40e0d0; }
+      .btn.danger { color: #ffb3d1; }
+      .btn.danger:hover { border-color: #ffb3d1; color: #ffb3d1; }
       .keyrow { display: flex; flex-direction: row; }
       .kname { width: 16; color: #40e0d0; }
       .kdesc { color: #ffffff; }
@@ -1506,14 +1505,12 @@ class ChatApp : public rtxui::Component<ChatApp> {
         .user { padding-left: 3; }
         .home .composer { width: 100%; padding-left: 1; padding-right: 1; }
         .tb.models, .tb.engine { display: none; }
-        .dlgbody { width: 40; }
       }
       @media (max-width: 49) {
         .tag { display: none; }
         .row .mark { width: 1; }
         .assistant .mark { display: none; }
         .tb.cpu, .tb.mode { display: none; }
-        .dlgbody { width: 30; }
         .kname { width: 10; }
       }
       @media (max-width: 35) {
