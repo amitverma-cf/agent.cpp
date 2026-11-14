@@ -272,7 +272,7 @@ std::string usage_all() {
            "  secret bind NAME CONSUMER  allow mcp:NAME / tool:NAME / group:NAME to use it (see `secret ls`); unbind, rm, ls too\n"
            "  setup                      choose the global home, detect hardware, find engines, pick and smoke-test models\n"
            "        [--home DIR] [--model NAME|owner/repo[:quant]]... [--no-models]\n"
-           "        [--yes] [--caps llama,audiocpp,sdcpp,onnx] [--workspace DIR] [--models-dir DIR]\n"
+           "        [--yes] [--caps llama,audiocpp,sdcpp,onnx,trellis] [--workspace DIR] [--models-dir DIR]\n"
            "        [--engines-dir DIR] [--backend cpu|cuda|vulkan] [--js-runtime bun|node|nub]\n"
            "        [--download-engines] [--install-runtimes]\n"
            "  runtime ls|use|install|path|rm   the private JavaScript and Python runtimes (bun, node, pnpm, nub, uv) kept in the home\n"
