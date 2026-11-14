@@ -124,13 +124,13 @@ const std::vector<KeyName> &key_table() {
     v.push_back({"ctrl+" #L, &Event::Ctrl##UC()});                                                                                         \
     v.push_back({"alt+" #L, &Event::Alt##UC()});                                                                                           \
     v.push_back({"ctrl+alt+" #L, &Event::CtrlAlt##UC()});
-        RTXUI_KEY(a, A)
-        RTXUI_KEY(b, B) RTXUI_KEY(c, C) RTXUI_KEY(d, D) RTXUI_KEY(e, E) RTXUI_KEY(f, F) RTXUI_KEY(g, G) RTXUI_KEY(h, H) RTXUI_KEY(i, I)
-            RTXUI_KEY(j, J) RTXUI_KEY(k, K) RTXUI_KEY(l, L) RTXUI_KEY(m, M) RTXUI_KEY(n, N) RTXUI_KEY(o, O) RTXUI_KEY(p, P) RTXUI_KEY(q, Q)
-                RTXUI_KEY(r, R) RTXUI_KEY(s, S) RTXUI_KEY(t, T) RTXUI_KEY(u, U) RTXUI_KEY(v, V) RTXUI_KEY(w, W) RTXUI_KEY(x, X)
-                    RTXUI_KEY(y, Y) RTXUI_KEY(z, Z)
+        // clang-format off
+        RTXUI_KEY(a, A) RTXUI_KEY(b, B) RTXUI_KEY(c, C) RTXUI_KEY(d, D) RTXUI_KEY(e, E) RTXUI_KEY(f, F) RTXUI_KEY(g, G) RTXUI_KEY(h, H) RTXUI_KEY(i, I)
+        RTXUI_KEY(j, J) RTXUI_KEY(k, K) RTXUI_KEY(l, L) RTXUI_KEY(m, M) RTXUI_KEY(n, N) RTXUI_KEY(o, O) RTXUI_KEY(p, P) RTXUI_KEY(q, Q) RTXUI_KEY(r, R)
+        RTXUI_KEY(s, S) RTXUI_KEY(t, T) RTXUI_KEY(u, U) RTXUI_KEY(v, V) RTXUI_KEY(w, W) RTXUI_KEY(x, X) RTXUI_KEY(y, Y) RTXUI_KEY(z, Z)
+        // clang-format on
 #undef RTXUI_KEY
-                        v.push_back({"f1", &Event::F1()});
+                    v.push_back({"f1", &Event::F1()});
         v.push_back({"f2", &Event::F2()});
         v.push_back({"f3", &Event::F3()});
         v.push_back({"f4", &Event::F4()});
