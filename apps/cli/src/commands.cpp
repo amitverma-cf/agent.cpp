@@ -227,6 +227,32 @@ bool smoke_test(Context &ctx, std::string_view task, std::string_view engine, co
     return cmd_task(make_command("task", "", {std::string(task)}, std::move(flags)), ctx) == 0;
 }
 
+// The kinds of model setup offers, in the order they are listed: (group, heading).
+int model_group(std::string_view task) {
+    if (task == "text_gen") return 0;
+    if (task == "vision" || task == "ocr" || task == "audio_in") return 1;
+    if (task == "embed" || task == "rerank") return 2;
+    if (task == "decide") return 3;
+    if (task == "tts" || task == "asr" || task == "vad" || task == "diarize") return 4;
+    if (task == "image_gen") return 5;
+    if (task == "mesh_gen") return 6;
+    return 7;
+}
+
+const char *model_group_title(int group) {
+    static constexpr const char *titles[] = {
+        "Language models: chat, reasoning, tool calls",
+        "Vision, OCR and audio input",
+        "Embeddings and rerankers",
+        "Decision models",
+        "Speech: text to speech, recognition, voice activity, speakers",
+        "Image generation (stable-diffusion.cpp)",
+        "3D from an image (TRELLIS)",
+        "Other models (ONNX)",
+    };
+    return titles[group];
+}
+
 void setup_models(const CommandLine &cl, Context &ctx, bool interactive) {
     if (cl.has("no-models")) return;
     std::vector<std::string> chosen; // registry names or owner/repo specs
@@ -235,12 +261,16 @@ void setup_models(const CommandLine &cl, Context &ctx, bool interactive) {
 
     const uint64_t ram = total_ram_bytes();
     if (chosen.empty() && interactive) {
-        const auto options = runnable_models(ctx, ram);
+        auto options = runnable_models(ctx, ram);
+        std::stable_sort(options.begin(), options.end(),
+                         [](const auto *x, const auto *y) { return model_group(x->task) < model_group(y->task); });
         std::printf("\nModels this machine can run (RAM %.1f GiB; nothing is downloaded until you choose):\n",
                     static_cast<double>(ram) / (1024.0 * 1024.0 * 1024.0));
         if (options.empty()) std::printf("  none of the registry models fit with an installed engine; you can still add your own below.\n");
         for (size_t i = 0; i < options.size(); ++i) {
             const auto &e = *options[i];
+            if (i == 0 || model_group(options[i - 1]->task) != model_group(e.task))
+                std::printf("\n  %s\n", model_group_title(model_group(e.task)));
             std::printf("  %2zu) %-24s %-9.*s %6u MiB  %s%.*s\n", i + 1, std::string(e.alias).c_str(), static_cast<int>(e.task.size()),
                         e.task.data(), e.size_mib, e.tested ? "[tested] " : "", static_cast<int>(e.notes.size()), e.notes.data());
         }

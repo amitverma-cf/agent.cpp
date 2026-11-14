@@ -3,28 +3,41 @@
 # Picks the release archive that fits this machine (x64 or arm64; the Vulkan build on x64 when a Vulkan driver is present), checks its
 # SHA-256 against the release's SHA256SUMS, unpacks it to %LOCALAPPDATA%\Programs\agent-cpp and adds that folder to your user PATH.
 # It then runs `agent setup` and opens the chat (AGENT_NO_START=1 only installs).
-# Environment: AGENT_VERSION (a tag such as v0.2.0; default: the latest release), AGENT_VARIANT (cpu or vulkan; default: detected),
+# Environment: AGENT_VERSION (a tag such as v1.0.0; default: the latest release), AGENT_VARIANT (cpu or vulkan; default: detected),
 #              AGENT_REPO (default amitverma-cf/agent.cpp).
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$repo = if ($env:AGENT_REPO) { $env:AGENT_REPO } else { 'amitverma-cf/agent.cpp' }
-$arch = switch ($env:PROCESSOR_ARCHITECTURE) {
-    'AMD64' { 'x86_64' }
-    'ARM64' { 'aarch64' }
-    default { throw "unsupported CPU: $($env:PROCESSOR_ARCHITECTURE) (x64 and arm64 are released)" }
-}
-$variant = $env:AGENT_VARIANT
-if (-not $variant) {
-    $variant = 'cpu'
-    if ($arch -eq 'x86_64' -and (Test-Path "$env:SystemRoot\System32\vulkan-1.dll")) { $variant = 'vulkan' }
-}
-if ($variant -ne 'cpu' -and $variant -ne 'vulkan') { throw 'AGENT_VARIANT must be cpu or vulkan' }
+# ---- output: turquoise accents, grey detail, pink for problems
+function Step($text) { Write-Host '  ' -NoNewline; Write-Host ([string][char]0x2713) -ForegroundColor Cyan -NoNewline; Write-Host " $text" }
+function Info($text) { Write-Host "  $([char]0x00B7) $text" -ForegroundColor DarkGray }
+function Fail($text) { Write-Host ''; Write-Host "  $([char]0x2717) $text" -ForegroundColor Magenta; Write-Host ''; throw $text }
 
-$base = if ($env:AGENT_VERSION) { "https://github.com/$repo/releases/download/$($env:AGENT_VERSION)" } else { "https://github.com/$repo/releases/latest/download" }
-$tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("agent-install-" + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $tmp | Out-Null
+Write-Host ''
+Write-Host '  agent.cpp' -ForegroundColor Cyan -NoNewline; Write-Host '  installer' -ForegroundColor DarkGray
+Write-Host "  $([string]([char]0x2500) * 28)" -ForegroundColor DarkGray
+Write-Host ''
+
+$tmp = $null
 try {
+    $repo = if ($env:AGENT_REPO) { $env:AGENT_REPO } else { 'amitverma-cf/agent.cpp' }
+    $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
+        'AMD64' { 'x86_64' }
+        'ARM64' { 'aarch64' }
+        default { Fail "Unsupported CPU: $($env:PROCESSOR_ARCHITECTURE). x64 and arm64 are released." }
+    }
+    $variant = $env:AGENT_VARIANT
+    $detected = ''
+    if (-not $variant) {
+        $variant = 'cpu'
+        if ($arch -eq 'x86_64' -and (Test-Path "$env:SystemRoot\System32\vulkan-1.dll")) { $variant = 'vulkan'; $detected = ' (Vulkan driver found)' }
+    }
+    if ($variant -ne 'cpu' -and $variant -ne 'vulkan') { Fail 'AGENT_VARIANT must be cpu or vulkan.' }
+
+    $base = if ($env:AGENT_VERSION) { "https://github.com/$repo/releases/download/$($env:AGENT_VERSION)" } else { "https://github.com/$repo/releases/latest/download" }
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("agent-install-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $tmp | Out-Null
+
     # GitHub serves SHA256SUMS as application/octet-stream: Content is then bytes, not text.
     $resp = Invoke-WebRequest -UseBasicParsing "$base/SHA256SUMS"
     $text = if ($resp.Content -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($resp.Content) } else { [string]$resp.Content }
@@ -33,16 +46,44 @@ try {
         $sums | Where-Object { $_ -match " \*?agent-cpp-\S*-windows-$arch$suffix\.zip\s*$" } | Select-Object -First 1
     }
     $line = if ($variant -eq 'vulkan') { Pick '-vulkan' } else { Pick '' }
-    if (-not $line -and $variant -eq 'vulkan') { Write-Host 'no Vulkan build in this release; using the CPU build'; $line = Pick '' }
-    if (-not $line) { throw "this release has no Windows $arch archive" }
+    if (-not $line -and $variant -eq 'vulkan') { Info 'No GPU build in this release; using the CPU build'; $variant = 'cpu'; $detected = ''; $line = Pick '' }
+    if (-not $line) { Fail "This release has no Windows $arch archive." }
     $parts = $line.Trim() -split '\s+', 2
     $want = $parts[0].ToLower()
     $name = $parts[1].TrimStart('*')
+    $version = if ($name -match '^agent-cpp-(v?\d[^-]*)-') { $Matches[1] } else { '' }
 
-    Write-Host "downloading $name"
+    Step "Windows $arch  $([char]0x00B7)  $variant build$detected"
+    Step "Release $version"
+
+    # Download with a progress bar.
+    Write-Host "  $([char]0x2193) Downloading $name" -ForegroundColor Cyan
     $zip = Join-Path $tmp $name
-    Invoke-WebRequest -UseBasicParsing "$base/$name" -OutFile $zip
-    if ((Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower() -ne $want) { throw "SHA-256 mismatch for $name; nothing was installed" }
+    Add-Type -AssemblyName System.Net.Http
+    $client = New-Object System.Net.Http.HttpClient
+    $client.Timeout = [TimeSpan]::FromMinutes(30)
+    $r = $client.GetAsync("$base/$name", [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).Result
+    [void]$r.EnsureSuccessStatusCode()
+    $total = $r.Content.Headers.ContentLength
+    $in = $r.Content.ReadAsStreamAsync().Result
+    $out = [System.IO.File]::Create($zip)
+    $buf = New-Object byte[] 262144
+    $done = 0; $shown = -1
+    while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+        $out.Write($buf, 0, $n); $done += $n
+        if ($total) {
+            $pct = [int](100 * $done / $total)
+            if ($pct -ne $shown) {
+                $shown = $pct
+                $filled = [int]($pct / 4)
+                Write-Host ("`r    [" + ('#' * $filled) + (' ' * (25 - $filled)) + "] $pct%  " + [math]::Round($done / 1MB, 1) + ' / ' + [math]::Round($total / 1MB, 1) + ' MB') -NoNewline -ForegroundColor DarkGray
+            }
+        }
+    }
+    $out.Dispose(); $in.Dispose(); $client.Dispose()
+    Write-Host ''
+    if ((Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower() -ne $want) { Fail "SHA-256 mismatch for $name. Nothing was installed." }
+    Step 'Checksum verified (SHA-256)'
 
     $dest = Join-Path $env:LOCALAPPDATA 'Programs\agent-cpp'
     $stage = Join-Path $tmp 'stage'
@@ -51,22 +92,28 @@ try {
     if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
     New-Item -ItemType Directory -Path (Split-Path $dest) -Force | Out-Null
     Move-Item $inner.FullName $dest
+    Step "Installed to $dest"
 
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     if (($userPath -split ';') -notcontains $dest) {
         [Environment]::SetEnvironmentVariable('Path', ($userPath.TrimEnd(';') + ';' + $dest), 'User')
-        Write-Host "added $dest to your user PATH (open a new terminal)"
+        Step 'Added to your PATH (open a new terminal to type just agent)'
     }
-    Write-Host "installed $name to $dest"
 } finally {
-    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    if ($tmp) { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
 }
+
 # Set up and start (the PATH change only reaches new terminals, so the full path is used here).
 $env:Path += ";$dest"
 $exe = Join-Path $dest 'agent.exe'
 if (-not $env:AGENT_NO_START -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    Write-Host ''
+    Write-Host '  Setting up agent.cpp ...' -ForegroundColor Cyan
+    Write-Host ''
     & $exe setup
     if ($LASTEXITCODE -eq 0) { & $exe }
 } else {
-    Write-Host 'next: agent setup'
+    Write-Host ''
+    Write-Host '  Next: ' -NoNewline; Write-Host 'agent setup' -ForegroundColor Cyan
+    Write-Host ''
 }
