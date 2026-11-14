@@ -3,9 +3,9 @@ main = "src/index.js"
 compatibility_date = "2025-01-01"
 workers_dev = false
 
+# Only redirects to the two install scripts. Custom domain: the DNS record is created by `wrangler deploy`.
+routes = [{ pattern = "agent.qozu.fyi", custom_domain = true }]
+
 # Workers Logs: requests per path, country and kind of client, in the Cloudflare dashboard (Workers > agent-installer > Observability).
 [observability]
 enabled = true
-
-# Only the two install scripts are served here. Custom domain: the DNS record is created by `wrangler deploy`.
-routes = [{ pattern = "agent.qozu.fyi", custom_domain = true }]
