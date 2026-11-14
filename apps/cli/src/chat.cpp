@@ -1067,12 +1067,12 @@ std::string ask_line(const std::string &question, const std::string &fallback) {
 
 // /setup with no arguments: the questions of `agent setup`, asked here, then the command runs with the answers.
 void run_setup_wizard(ChatState &st) {
-    out("setup: three questions, Enter keeps the answer in brackets\n");
+    out("setup: two questions, Enter keeps the answer in brackets\n");
     const std::string home_now = st.ctx->has_home ? st.ctx->home.root : std::string();
-    const std::string home = ask_line("1/3 folder for models, engines and settings", home_now);
-    const std::string caps = "llama,audiocpp,sdcpp,onnx,trellis"; // every engine, no question
-    const std::string backend = ask_line("2/3 backend (cpu, cuda or vulkan)", suggest_backend(detect_hardware()));
-    const std::string model = ask_line("3/3 model to download now (a registry name such as qwen2.5-0.5b, or - for none)", "-");
+    const std::string home = ask_line("1/2 folder for models, engines and settings", home_now);
+    const std::string caps = "llama,audiocpp,sdcpp,onnx,trellis";   // every engine, no question
+    const std::string backend = suggest_backend(detect_hardware()); // detected, not asked
+    const std::string model = ask_line("2/2 model to download now (a Hugging Face link or owner/repo[:quant], or - for none)", "-");
     std::vector<std::string> argv = {"setup", "--yes"};
     if (!home.empty()) {
         argv.push_back("--home");

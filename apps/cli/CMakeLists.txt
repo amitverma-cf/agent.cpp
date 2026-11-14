@@ -4,6 +4,7 @@ add_library(agent_cli_core STATIC
     src/cli_core.cpp
     src/edit_journal.cpp
     src/chat_extras.cpp
+    src/model_detect.cpp
     src/release_verify.cpp
     src/cli_platform.cpp
     src/home.cpp

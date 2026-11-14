@@ -59,10 +59,12 @@ struct HardwareInfo {
     int cpu_cores = 0;
     bool nvidia_smi = false;            // nvidia-smi found on PATH
     bool nvidia_device = false;         // /dev/nvidia0 exists
+    bool vulkan_loader = false;         // a Vulkan loader (vulkan-1.dll, libvulkan.so.1) is installed: some GPU driver is
     std::vector<std::string> dri_nodes; // /dev/dri/renderD* (Vulkan-capable GPUs usually show up here)
 };
 
-// "cuda" when an NVIDIA GPU is visible, "vulkan" when a DRI render node is, "cpu" otherwise.
+// "vulkan" when a GPU is visible (an NVIDIA device, a DRI render node or a Vulkan loader: the released GPU builds are Vulkan), else "cpu".
+// "cuda" is only for builds made from source with CUDA; it is never suggested.
 std::string suggest_backend(const HardwareInfo &hw);
 
 // -------------------------- config.json --------------------------

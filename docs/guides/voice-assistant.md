@@ -34,9 +34,9 @@ aliases are `parakeet-tdt` (speech to text), `pocket-tts` (text to speech, Engli
 detection). Parakeet TDT is CC-BY-4.0 (attribution required). For text to speech in 30+ languages, use `supertonic-3`.
 
 ```sh
-agent model pull parakeet-tdt        # speech to text
-agent model pull pocket-tts          # text to speech
-agent model pull firered-vad         # voice activity detection
+agent model pull audio-cpp/audio.cpp-gguf:Parakeet-TDT-0.6B-v3-GGUF/parakeet-tdt-0.6b-v3-q8_0.gguf --name parakeet-tdt   # speech to text
+agent model pull audio-cpp/audio.cpp-gguf:PocketTTS-GGUF/english/pocket-tts-english-q8_0.gguf --name pocket-tts      # text to speech
+agent model pull audio-cpp/audio.cpp-gguf:FireRedVAD-GGUF/firered-vad-f32.gguf --name firered-vad                  # voice activity detection
 agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M --name qwen   # the chat model
 ```
 

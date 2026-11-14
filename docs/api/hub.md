@@ -14,7 +14,6 @@ call in a few lines.
 ## Command line
 
 ```sh
-agent model search qwen3                                          # look up repos
 agent model info Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M           # files, sizes, licence
 agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M           # pick the file by quant tag
 agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf
@@ -200,38 +199,6 @@ std::string with_mmproj_option(std::string_view engine_options, std::string_view
 `with_mmproj_option` adds `"mmproj": <path>` to a JSON options object, unless it already has one or `mmproj_path` is empty.
 
 A JSON Schema for the file is in [`schemas/models.schema.json`](../../schemas/models.schema.json).
-
-## Curated registry
-
-```cpp
-struct RegistryPart { std::string_view spec; std::string_view include; };
-struct RegistryEntry {
-    std::string_view alias;          // "qwen3-4b", "glm-ocr", "trellis-coarse", ...
-    std::string_view task;           // text_gen, vision, ocr, embed, rerank, image_gen, asr, tts, vad, mesh_gen, ...
-    std::string_view engine;         // llama, sdcpp, audiocpp, onnx, trellis
-    std::span<const RegistryPart> parts;
-    uint32_t size_mib;               // total download; 0 = not measured
-    std::string_view engine_options; // JSON the engine needs for this model; "" = none
-    std::string_view notes;
-    bool tested;                     // pulled and run end to end with agent.cpp
-};
-
-std::span<const RegistryEntry> model_registry();
-const RegistryEntry *find_registry_entry(std::string_view alias);
-```
-
-A registry entry can need several downloads, such as a speech model and its codec. The first part is the model. Pass each part's `spec`
-to `pull_model`. When `include` is set, split it on commas into `PullOptions::include`.
-
-```cpp
-if (const auto *e = agent::hub::find_registry_entry("qwen3-4b")) {
-    for (const auto &part : e->parts) {
-        agent::hub::PullOptions opts;
-        // opts.include = split(part.include) when part.include is not empty
-        agent::hub::pull_model(part.spec, opts);
-    }
-}
-```
 
 ## Licence policy
 

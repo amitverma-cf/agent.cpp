@@ -35,6 +35,25 @@ constexpr std::string_view kRepoJson = R"({
 
 } // namespace
 
+TEST_CASE("parse_spec takes the links copied from a model page", "[hub]") {
+    auto file = parse_spec("https://huggingface.co/o/r/blob/main/dir/file.gguf?download=true");
+    REQUIRE(file.ok);
+    CHECK(file.value.repo == "o/r");
+    CHECK(file.value.revision == "main");
+    CHECK(file.value.file == "dir/file.gguf");
+    auto direct = parse_spec("https://huggingface.co/o/r/resolve/v1/m.onnx");
+    REQUIRE(direct.ok);
+    CHECK(direct.value.revision == "v1");
+    CHECK(direct.value.file == "m.onnx");
+    auto page = parse_spec("https://huggingface.co/o/r");
+    REQUIRE(page.ok);
+    CHECK(page.value.repo == "o/r");
+    CHECK(page.value.file.empty());
+    auto tree = parse_spec("huggingface.co/o/r/tree/main");
+    REQUIRE(tree.ok);
+    CHECK(tree.value.repo == "o/r");
+}
+
 TEST_CASE("parse_spec handles file, quant, bare repo and revisions", "[hub]") {
     auto a = parse_spec("Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf");
     REQUIRE(a.ok);

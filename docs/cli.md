@@ -23,7 +23,7 @@ global home for one run. Everything is documented below; the same text is in `--
 ## agent setup
 
 ```sh
-agent setup                                      # asks three questions: folder, backend, model
+agent setup                                      # asks one or two questions (the folder, a model link); the GPU backend is detected
 agent setup --yes --model qwen2.5-0.5b           # no questions
 agent setup --no-models --caps llama,sdcpp --backend cpu
 ```
@@ -178,16 +178,19 @@ now, and `/undo` puts back the files of the last tool call, newest first.
 ## agent model
 
 ```sh
-agent model search [TEXT] [--task asr]            # tested models with short names
 agent model info owner/repo                       # quants, sizes, projectors, licence of any Hugging Face repo
-agent model pull qwen3-4b                         # a short name
+agent model pull https://huggingface.co/Qwen/Qwen3-4B-GGUF   # a repository page: the quant is chosen for you
+agent model pull C:\Downloads\model.gguf                   # a file you already have
 agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M [--name qwen] [--allow-restricted]
 agent model pull owner/repo:* [--include int8]    # every file of a folder model (TRELLIS)
 agent model ls
 agent model rm qwen [--keep-file]
 ```
 
-`pull` accepts a short name from the registry, or `owner/repo[:quant-or-file]` from Hugging Face. Downloads resume after Ctrl-C
+`pull` takes a Hugging Face link (a repository page, or the page or download link of one file), `owner/repo[:quant-or-file]`, or a model
+file on this disk. There is no list of suggested models: the file itself says which engine runs it (llama.cpp, stable-diffusion.cpp,
+audio.cpp, ONNX Runtime or TRELLIS.2), and it is put in that engine's folder under `models/` and recorded in `models.json`. A file already
+installed is not fetched again. An embedding or reranker model is detected too; the command prints the `--engine-options` it needs. Downloads resume after Ctrl-C
 (the `.part` file is kept), are checked against the published hash, and refuse models with restrictive licences unless you pass
 `--allow-restricted` (on a terminal you are asked). Vision, audio and OCR repos also fetch their multimodal projector, record it
 and use it automatically. The first chat model you pull becomes the default.

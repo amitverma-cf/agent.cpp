@@ -162,8 +162,28 @@ uint64_t get_uint_field(simdjson::dom::element obj, std::string_view key) {
 
 Result<ModelSpec> parse_spec(std::string_view spec) {
     spec = trim(spec);
+    std::string rewritten; // keeps the rewritten link alive while `spec` points into it
     for (std::string_view prefix : {"https://huggingface.co/", "http://huggingface.co/", "huggingface.co/", "hf.co/", "hf://"})
         if (spec.substr(0, prefix.size()) == prefix) spec.remove_prefix(prefix.size());
+    // A link copied from the browser: https://huggingface.co/owner/repo/blob/main/dir/file.gguf?download=true (or resolve/, tree/)
+    // is owner/repo@main:dir/file.gguf.
+    if (const size_t cut = spec.find_first_of("?#"); cut != std::string_view::npos) spec = spec.substr(0, cut);
+    if (const size_t a = spec.find('/'); a != std::string_view::npos) {
+        if (const size_t b = spec.find('/', a + 1); b != std::string_view::npos && spec.find(':') == std::string_view::npos) {
+            const std::string_view rest = spec.substr(b + 1);
+            for (std::string_view kind : {"blob/", "resolve/", "tree/"})
+                if (rest.substr(0, kind.size()) == kind) {
+                    const std::string_view after = rest.substr(kind.size());
+                    const size_t slash = after.find('/');
+                    const std::string_view rev = after.substr(0, slash);
+                    const std::string_view path = slash == std::string_view::npos ? std::string_view() : after.substr(slash + 1);
+                    rewritten = std::string(spec.substr(0, b)) + (rev.empty() ? "" : "@" + std::string(rev)) +
+                                (path.empty() ? "" : ":" + std::string(path));
+                    spec = rewritten;
+                    break;
+                }
+        }
+    }
     if (spec.empty()) return fail<ModelSpec>(ErrorCode::InvalidConfig, "empty model spec");
 
     ModelSpec out;

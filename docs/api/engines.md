@@ -432,7 +432,7 @@ mode fails.
 embedding per message, made of the message's parts in order, so a picture and the text that describes it land near each other
 (`agent::embed` takes `EmbedInput{text, media}`). Without a projector such a request fails with `AGENT_ERR_UNSUPPORTED`.
 Example: `ggml-org/embeddinggemma-2-GGUF` (text, image and audio in one 768-dimensional space, Matryoshka sizes 512, 256, 128 after
-re-normalising) with its `mmproj-embeddinggemma-2-*.gguf`: `agent model pull embeddinggemma-2` fetches both. Give text the model's task
+re-normalising) with its `mmproj-embeddinggemma-2-*.gguf`: `agent model pull ggml-org/embeddinggemma-2-GGUF:Q8_0` fetches both. Give text the model's task
 prefix (`task: search result | query: ...` for queries, `title: none | text: ...` for documents) and images and audio none. A message that is only
 media is pooled over the media's own tokens; with text next to the media the whole sequence is decoded in order, which suits last-token
 pooling (Qwen3-VL-Embedding) but not mean pooling. Tested with `AGENT_TEST_EMBED_MM_MODEL`/`_MMPROJ`/`_TEXT_PREFIX`: a red circle image is

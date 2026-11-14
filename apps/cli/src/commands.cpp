@@ -4,6 +4,7 @@
 
 #include "doctor.hpp"
 #include "engine_release.hpp"
+#include "model_detect.hpp"
 #include "runtimes.hpp"
 #include "status_view.hpp"
 #include "waiting.hpp"
@@ -181,23 +182,6 @@ Result<LoadedEngine> load_engine_for(const Context &ctx, std::string_view engine
 
 namespace {
 
-// The models this machine can run: registry entries whose engine is installed and whose size fits in RAM with room for
-// the KV cache and the rest of the system. Printed as a numbered list; returns the entries in that order.
-std::vector<const agent::hub::RegistryEntry *> runnable_models(const Context &ctx, uint64_t ram_bytes) {
-    std::vector<const agent::hub::RegistryEntry *> out;
-    auto engines = load_engines(ctx.engines_path);
-    const uint64_t budget_mib = ram_bytes ? (ram_bytes / (1024ULL * 1024ULL)) * 7 / 10 : 0; // 70% of RAM
-    for (const auto &e : agent::hub::model_registry()) {
-        if (e.notes.find("NOT runnable") != std::string_view::npos) continue;
-        if (!engines.ok || !find_engine_entry(engines.value, std::string(e.engine))) continue;
-        if (budget_mib && e.size_mib && static_cast<uint64_t>(e.size_mib) * 13 / 10 > budget_mib)
-            continue; // weights + ~30% for KV and buffers
-        out.push_back(&e);
-    }
-    std::stable_sort(out.begin(), out.end(), [](const auto *a, const auto *b) { return a->tested && !b->tested; });
-    return out;
-}
-
 CommandLine make_command(std::string command, std::string sub, std::vector<std::string> positionals, std::vector<Flag> flags = {}) {
     CommandLine c;
     c.command = std::move(command);
@@ -227,69 +211,21 @@ bool smoke_test(Context &ctx, std::string_view task, std::string_view engine, co
     return cmd_task(make_command("task", "", {std::string(task)}, std::move(flags)), ctx) == 0;
 }
 
-// The kinds of model setup offers, in the order they are listed: (group, heading).
-int model_group(std::string_view task) {
-    if (task == "text_gen") return 0;
-    if (task == "vision" || task == "ocr" || task == "audio_in") return 1;
-    if (task == "embed" || task == "rerank") return 2;
-    if (task == "decide") return 3;
-    if (task == "tts" || task == "asr" || task == "vad" || task == "diarize") return 4;
-    if (task == "image_gen") return 5;
-    if (task == "mesh_gen") return 6;
-    return 7;
-}
-
-const char *model_group_title(int group) {
-    static constexpr const char *titles[] = {
-        "Language models: chat, reasoning, tool calls",
-        "Vision, OCR and audio input",
-        "Embeddings and rerankers",
-        "Decision models",
-        "Speech: text to speech, recognition, voice activity, speakers",
-        "Image generation (stable-diffusion.cpp)",
-        "3D from an image (TRELLIS)",
-        "Other models (ONNX)",
-    };
-    return titles[group];
-}
-
 void setup_models(const CommandLine &cl, Context &ctx, bool interactive) {
     if (cl.has("no-models")) return;
     std::vector<std::string> chosen; // registry names or owner/repo specs
     for (const Flag &f : cl.flags)
         if (f.name == "model") chosen.push_back(f.value);
 
-    const uint64_t ram = total_ram_bytes();
     if (chosen.empty() && interactive) {
-        auto options = runnable_models(ctx, ram);
-        std::stable_sort(options.begin(), options.end(),
-                         [](const auto *x, const auto *y) { return model_group(x->task) < model_group(y->task); });
-        std::printf("\nModels this machine can run (RAM %.1f GiB; nothing is downloaded until you choose):\n",
-                    static_cast<double>(ram) / (1024.0 * 1024.0 * 1024.0));
-        if (options.empty()) std::printf("  none of the registry models fit with an installed engine; you can still add your own below.\n");
-        for (size_t i = 0; i < options.size(); ++i) {
-            const auto &e = *options[i];
-            if (i == 0 || model_group(options[i - 1]->task) != model_group(e.task))
-                std::printf("\n  %s\n", model_group_title(model_group(e.task)));
-            std::printf("  %2zu) %-24s %-9.*s %6u MiB  %s%.*s\n", i + 1, std::string(e.alias).c_str(), static_cast<int>(e.task.size()),
-                        e.task.data(), e.size_mib, e.tested ? "[tested] " : "", static_cast<int>(e.notes.size()), e.notes.data());
-        }
-        const std::string answer =
-            ask_value(true, "Choose numbers separated by commas, or type owner/repo[:quant] to add your own (Enter = none)", "");
-        for (const std::string &token : split_list(answer)) {
-            const bool number =
-                !token.empty() && std::all_of(token.begin(), token.end(), [](unsigned char c) { return std::isdigit(c) != 0; });
-            if (number) {
-                const size_t n = static_cast<size_t>(std::atoi(token.c_str()));
-                if (n >= 1 && n <= options.size()) chosen.push_back(std::string(options[n - 1]->alias));
-                else std::fprintf(stderr, "ignoring %s: not in the list\n", token.c_str());
-            } else {
-                chosen.push_back(token);
-            }
-        }
+        const std::string answer = ask_value(true,
+                                             "Model to download now: a Hugging Face link (a repository or one file), or "
+                                             "owner/repo[:quant]; several with commas (Enter = none)",
+                                             "");
+        for (const std::string &token : split_list(answer)) chosen.push_back(token);
     }
     if (chosen.empty()) {
-        std::printf("\nNo models chosen. See what fits with `agent model search`, then `agent model pull <name>`.\n");
+        std::printf("\nNo model chosen. Add one any time with `agent model pull <Hugging Face link or owner/repo[:quant]>`.\n");
         return;
     }
 
@@ -299,20 +235,20 @@ void setup_models(const CommandLine &cl, Context &ctx, bool interactive) {
             std::printf("   download failed; continuing with the next model\n");
             continue;
         }
-        // Which task to smoke-test: the registry knows; for a custom repo, a GGUF is tried as a chat model.
-        const auto *entry = agent::hub::find_registry_entry(name);
-        const std::string task = entry ? std::string(entry->task) : std::string("text_gen");
-        const std::string engine = entry ? std::string(entry->engine) : std::string("llama");
-        const std::string model_name = entry ? std::string(entry->alias) : std::string();
-        std::string model_ref = model_name;
-        if (model_ref.empty()) {
-            // A custom spec: the catalogue entry is the newest one.
-            auto cat = agent::hub::load_catalog(catalog_path(ctx));
-            if (cat.ok && !cat.value.empty()) model_ref = cat.value.back().name;
+        // The catalogue entry just written is the newest one; its file says which engine and task to try.
+        auto cat = agent::hub::load_catalog(catalog_path(ctx));
+        if (!cat.ok || cat.value.empty()) continue;
+        const auto &added = cat.value.back();
+        const ModelKind kind = detect_model(added.path, added.repo, added.file, !added.mmproj.empty());
+        const std::string task = kind.task;
+        const std::string engine = kind.engine;
+        const std::string model_ref = added.name;
+        if (task.empty() || engine.empty()) {
+            std::printf("   %s\n", kind.why.c_str());
+            continue;
         }
-        if (model_ref.empty()) continue;
         std::printf("   smoke test (%s):\n", task.c_str());
-        const bool passed = smoke_test(ctx, task, engine, model_ref, entry ? entry->engine_options : std::string_view());
+        const bool passed = smoke_test(ctx, task, engine, model_ref, kind.engine_options);
         std::printf("   %s\n",
                     passed ? "smoke test passed" : "smoke test FAILED: the model downloaded but did not run; see the error above");
     }
@@ -339,11 +275,17 @@ int cmd_init(const CommandLine &cl, Context &ctx) {
 int cmd_setup(const CommandLine &cl, Context &ctx) {
     const bool interactive = stdin_is_tty() && !cl.has("yes");
     const HardwareInfo hw = detect_hardware();
+    bool already_set_up = false;
 
     // Where agent.cpp keeps its files. An explicit old-style config folder skips this.
     {
         const char *env_config = std::getenv("AGENT_CONFIG_DIR");
-        if (!cl.has("config-dir") && !(env_config && *env_config)) {
+        // Set up before: the folder, backend and tooling it chose are kept, not asked for again (`agent setup --reconfigure` asks).
+        const bool configured = ctx.has_home && file_exists(ctx.config_path) && !cl.has("reconfigure") && !cl.has("home");
+        if (configured) {
+            already_set_up = true;
+            std::printf("already set up: %s  (agent setup --reconfigure changes the answers)\n\n", ctx.home.root.c_str());
+        } else if (!cl.has("config-dir") && !(env_config && *env_config)) {
             const std::string suggestion =
                 cl.has("home") ? std::string(cl.get("home")) : (ctx.has_home ? ctx.home.root : default_home_suggestion());
             const std::string chosen = absolute_path(
@@ -368,7 +310,7 @@ int cmd_setup(const CommandLine &cl, Context &ctx) {
     std::printf("  DRI render nodes: %s\n", hw.dri_nodes.empty() ? "none" : join(hw.dri_nodes, ", ").c_str());
 #endif
     const std::string suggested = suggest_backend(hw);
-    std::printf("  suggested backend: %s\n\n", suggested.c_str());
+    std::printf("  GPU backend:      %s (detected)\n\n", suggested.c_str());
 
     CliConfig cfg = ctx.config;
     cfg.hardware = hw;
@@ -387,8 +329,8 @@ int cmd_setup(const CommandLine &cl, Context &ctx) {
         return 2;
     }
 
-    std::string backend = cl.has("backend") ? std::string(cl.get("backend")) : (ctx.config.hardware.cpu_cores ? cfg.backend : suggested);
-    backend = ask_value(interactive, "Backend (cpu, cuda, vulkan)", backend);
+    // The backend is detected, not asked: an earlier choice stays, --backend cpu|vulkan|cuda overrides.
+    const std::string backend = cl.has("backend") ? std::string(cl.get("backend")) : (already_set_up ? cfg.backend : suggested);
     if (backend != "cpu" && backend != "cuda" && backend != "vulkan") {
         std::fprintf(stderr, "error: unknown backend '%s' (expected cpu, cuda or vulkan)\n", backend.c_str());
         return 2;
@@ -397,7 +339,9 @@ int cmd_setup(const CommandLine &cl, Context &ctx) {
 
     // JavaScript tooling for MCP servers and skills. npm is never used: node goes with pnpm.
     std::string js = cl.has("js-runtime") ? std::string(cl.get("js-runtime")) : cfg.js_runtime;
-    js = ask_value(interactive, "JavaScript tooling for MCP servers: bun, node (with pnpm) or nub", js);
+    // A first setup asks (bun, node with pnpm, or nub); later runs keep the answer unless --js-runtime or --reconfigure says otherwise.
+    if (!already_set_up || cl.has("js-runtime"))
+        js = ask_value(interactive, "JavaScript tooling for MCP servers: bun, node (with pnpm) or nub", js);
     if (js != "bun" && js != "node" && js != "nub") {
         std::fprintf(stderr, "error: unknown JavaScript tooling '%s' (expected bun, node or nub)\n", js.c_str());
         return 2;
@@ -469,11 +413,20 @@ int cmd_setup(const CommandLine &cl, Context &ctx) {
     std::printf("\nwrote %s\nwrote %s (%zu engine%s)\n", ctx.config_path.c_str(), ctx.engines_path.c_str(), engines.size(),
                 engines.size() == 1 ? "" : "s");
     // The chosen runtimes (and uv for Python servers) are downloaded only on request: they are 20-60 MB each.
-    if (ctx.has_home &&
-        (cl.has("install-runtimes") || (interactive && ask_yes_no("Download the private runtimes now (" + cfg.js_runtime + ", uv)?")))) {
-        std::vector<std::string> wanted = runtimes_for_js(cfg.js_runtime);
-        wanted.push_back("uv");
-        for (const std::string &n : wanted) {
+    std::vector<std::string> wanted = runtimes_for_js(cfg.js_runtime);
+    wanted.push_back("uv");
+    std::vector<std::string> absent;
+    for (const std::string &n : wanted)
+        if (runtime_binary_path(ctx.home, n).empty()) absent.push_back(n);
+    if (ctx.has_home && absent.empty()) {
+        std::printf("runtimes: %s installed\n", join(wanted, ", ").c_str());
+    } else if (ctx.has_home && already_set_up && !cl.has("install-runtimes")) {
+        // The choice was made when it was first set up: no nagging. `agent setup --install-runtimes` adds them later.
+        std::printf("runtimes: %s not installed (agent setup --install-runtimes adds them)
+", join(absent, ", ").c_str());
+    } else if (ctx.has_home && (cl.has("install-runtimes") || (interactive && ask_yes_no("Download the private runtimes now (" +
+                                                                                         join(absent, ", ") + ")? They are optional.")))) {
+        for (const std::string &n : absent) {
             if (!runtime_binary_path(ctx.home, n).empty()) continue;
             std::fprintf(stderr, "downloading %s ...\n", n.c_str());
             auto r = install_runtime(ctx.home, n, "latest", agent::hub::http_options_from_env());
@@ -482,7 +435,9 @@ int cmd_setup(const CommandLine &cl, Context &ctx) {
         }
     }
     setup_models(cl, ctx, interactive);
-    std::printf("\nnext: agent chat   (or `agent model search` to see more models, `agent init` inside a project)\n");
+    if (already_set_up) std::printf("\nnothing to install. `agent update` checks for a newer release.\n");
+    std::printf("\nnext: agent   (opens the chat; add a model with `agent model pull <Hugging Face link or file>`, `agent init` inside a "
+                "project)\n");
     return 0;
 }
 
@@ -569,6 +524,106 @@ int cmd_engine(const CommandLine &cl, Context &ctx) {
 
 // -------------------------- agent model --------------------------
 
+namespace {
+
+// A model file that is already on the disk: `agent model pull C:\\Downloads\\model.gguf`. It is put in the folder of its engine
+// (a hard link on the same volume, a copy otherwise) and recorded in the catalogue like a downloaded one.
+int register_local_model(const CommandLine &cl, Context &ctx, const std::string &models_dir, const std::string &catalog) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path source = fs::absolute(fs::path(cl.positionals[0]), ec);
+    const std::string filename = source.filename().string();
+    ModelKind kind = detect_model(source.string(), "", filename, false);
+    if (cl.has("engine")) kind.engine = std::string(cl.get("engine"));
+    if (kind.engine.empty()) {
+        std::fprintf(stderr, "%s\n", kind.why.c_str());
+        return 2;
+    }
+    const fs::path target = fs::path(models_dir) / kind.engine / "local" / filename;
+    std::string name = std::string(cl.get("name"));
+    if (name.empty()) name = source.stem().string();
+
+    auto cat = agent::hub::load_catalog(catalog);
+    if (!cat.ok) return report_error(cat.error);
+    agent::hub::CatalogEntry entry;
+    for (const auto &e : cat.value)
+        if (e.name == name && fs::exists(e.path, ec) && fs::file_size(e.path, ec) == fs::file_size(source, ec)) {
+            std::printf("%s is already installed: %s\n", name.c_str(), e.path.c_str());
+            return 0;
+        }
+    fs::create_directories(target.parent_path(), ec);
+    fs::remove(target, ec);
+    fs::create_hard_link(source, target, ec);
+    if (ec) {
+        ec.clear();
+        fs::copy_file(source, target, fs::copy_options::overwrite_existing, ec);
+        if (ec) return report_error(Error{ErrorCode::FilesystemError, "cannot copy " + source.string() + ": " + ec.message()});
+    }
+    entry.name = name;
+    entry.repo = "local";
+    entry.file = filename;
+    entry.path = target.string();
+    entry.size = fs::file_size(target, ec);
+    if (auto h = agent::hub::sha256_file(entry.path); h.ok) entry.sha256 = h.value;
+    entry.license = "unknown (local file)";
+    cat.value.erase(std::remove_if(cat.value.begin(), cat.value.end(), [&](const auto &e) { return e.name == name; }), cat.value.end());
+    cat.value.push_back(entry);
+    if (auto s = agent::hub::save_catalog(catalog, cat.value); !s.ok) return report_error(s.error);
+
+    std::printf("%s\n  file:    %s\n  path:    %s\n  size:    %llu bytes\n", name.c_str(), source.string().c_str(), entry.path.c_str(),
+                static_cast<unsigned long long>(entry.size));
+    std::printf("  engine:  %s%s%s%s\n", kind.engine.c_str(), kind.task.empty() ? "" : "  (task ", kind.task.c_str(),
+                kind.task.empty() ? "" : ")");
+    std::printf("  because: %s%s\n", kind.why.c_str(), kind.architecture.empty() ? "" : (", architecture " + kind.architecture).c_str());
+    if (!kind.engine_options.empty()) std::printf("  use with: --engine-options '%s'\n", kind.engine_options.c_str());
+    if (ctx.config.default_model.empty() && kind.engine == "llama" && kind.task == "text_gen") {
+        ctx.config.default_model = name;
+        if (auto s = save_config(ctx.config_path, ctx.config); s.ok) std::printf("set as the default chat model\n");
+    }
+    return 0;
+}
+
+// Puts a pulled model in the folder of the engine that runs it (models/<engine>/...), when the guess made before the download (from the
+// name of the link) was wrong, and updates the catalogue. Returns whether the files moved; `entry` is updated to the new paths.
+bool place_model(const std::string &models_dir, const std::string &catalog, agent::hub::CatalogEntry &entry, const std::string &engine) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path root = fs::weakly_canonical(fs::path(models_dir), ec);
+    const fs::path current = fs::weakly_canonical(fs::path(entry.path), ec);
+    const fs::path rel = current.lexically_relative(root);
+    if (rel.empty() || *rel.begin() == "..") return false;
+    // Everything below models/ starts with the engine's folder (models/llama/owner/repo/file) or with owner/repo when the folder is unknown.
+    const std::string first = rel.begin()->string();
+    static constexpr std::string_view kEngines[] = {"llama", "sdcpp", "audiocpp", "onnx", "trellis"};
+    const bool has_folder = std::find(std::begin(kEngines), std::end(kEngines), first) != std::end(kEngines);
+    if (has_folder && first == engine) return false;
+    fs::path tail;
+    for (auto it = has_folder ? std::next(rel.begin()) : rel.begin(); it != rel.end(); ++it) tail /= *it;
+    const fs::path target = root / engine / tail;
+    fs::create_directories(target.parent_path(), ec);
+    fs::rename(current, target, ec);
+    if (ec) return false;
+    entry.path = target.string();
+    if (!entry.mmproj.empty()) {
+        const fs::path old_projector = fs::weakly_canonical(fs::path(entry.mmproj), ec);
+        const fs::path projector_target = target.parent_path() / old_projector.filename();
+        fs::rename(old_projector, projector_target, ec);
+        if (!ec) entry.mmproj = projector_target.string();
+    }
+    auto cat = agent::hub::load_catalog(catalog);
+    if (cat.ok) {
+        for (auto &e : cat.value)
+            if (e.name == entry.name) {
+                e.path = entry.path;
+                e.mmproj = entry.mmproj;
+            }
+        (void)agent::hub::save_catalog(catalog, cat.value);
+    }
+    return true;
+}
+
+} // namespace
+
 int cmd_model(const CommandLine &cl, Context &ctx) {
     const std::string dir = models_dir(ctx);
     const std::string catalog = catalog_path(ctx);
@@ -587,33 +642,6 @@ int cmd_model(const CommandLine &cl, Context &ctx) {
                         file_exists(m.path) ? "" : "  MISSING", m.path.c_str());
             if (!m.mmproj.empty()) std::printf("    + projector %s%s\n", m.mmproj_file.c_str(), file_exists(m.mmproj) ? "" : "  MISSING");
         }
-        return 0;
-    }
-
-    if (cl.subcommand == "search") {
-        auto lower = [](std::string s) {
-            for (char &c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            return s;
-        };
-        const std::string needle = cl.positionals.empty() ? std::string() : lower(cl.positionals[0]);
-        const std::string task = std::string(cl.get("task"));
-        std::printf("%-24s %-9s %-9s %9s  %s\n", "NAME", "TASK", "ENGINE", "SIZE", "NOTES");
-        size_t shown = 0;
-        for (const auto &e : agent::hub::model_registry()) {
-            if (!task.empty() && e.task != task) continue;
-            const std::string hay =
-                lower(std::string(e.alias) + " " + std::string(e.task) + " " + std::string(e.engine) + " " + std::string(e.notes));
-            if (!needle.empty() && hay.find(needle) == std::string::npos) continue;
-            char size[24];
-            if (e.size_mib) std::snprintf(size, sizeof(size), "%u MiB", e.size_mib);
-            else std::snprintf(size, sizeof(size), "-");
-            std::printf("%-24s %-9.*s %-9.*s %9s  %s%.*s\n", std::string(e.alias).c_str(), static_cast<int>(e.task.size()), e.task.data(),
-                        static_cast<int>(e.engine.size()), e.engine.data(), size, e.tested ? "[tested] " : "",
-                        static_cast<int>(e.notes.size()), e.notes.data());
-            ++shown;
-        }
-        if (!shown) std::printf("nothing matches; `agent model info owner/repo` lists any Hugging Face repo\n");
-        else std::printf("pull one with: agent model pull <name>   ([tested] = run end to end with agent.cpp)\n");
         return 0;
     }
 
@@ -651,28 +679,8 @@ int cmd_model(const CommandLine &cl, Context &ctx) {
         return 0;
     }
 
-    // pull
-    if (cl.positionals[0].find('/') == std::string::npos) {
-        // A registry name ("qwen3-4b"): pull every part (a talker and its codec, a 3D model's three files).
-        const auto *entry = agent::hub::find_registry_entry(cl.positionals[0]);
-        if (!entry)
-            return report_error(Error{ErrorCode::KeyNotFound,
-                                      "'" + cl.positionals[0] + "' is not a registry name (see `agent model search`) and not owner/repo"});
-        for (size_t i = 0; i < entry->parts.size(); ++i) {
-            CommandLine part = cl;
-            part.positionals = {std::string(entry->parts[i].spec)};
-            if (i == 0 && !cl.has("name")) part.flags.push_back(Flag{"name", std::string(entry->alias)});
-            if (!entry->parts[i].include.empty()) part.flags.push_back(Flag{"include", std::string(entry->parts[i].include)});
-            if (!part.has("engine") && !entry->engine.empty()) part.flags.push_back(Flag{"engine", std::string(entry->engine)});
-            if (const int rc = cmd_model(part, ctx); rc != 0) return rc;
-        }
-        if (!entry->engine_options.empty())
-            std::printf("engine options for %.*s: %.*s\n", static_cast<int>(entry->alias.size()), entry->alias.data(),
-                        static_cast<int>(entry->engine_options.size()), entry->engine_options.data());
-        if (!entry->notes.empty()) std::printf("note: %.*s\n", static_cast<int>(entry->notes.size()), entry->notes.data());
-        return 0;
-    }
-
+    // pull: a Hugging Face link (a repository page, or the page or download link of one file), or owner/repo[:file-or-quant]
+    if (std::error_code ec; fs::is_regular_file(cl.positionals[0], ec)) return register_local_model(cl, ctx, dir, catalog);
     std::string spec = cl.positionals[0];
     if (cl.has("quant")) {
         // --quant Q4_K_M is the same as "owner/repo:Q4_K_M"; it can't also be given in the spec.
@@ -728,7 +736,19 @@ int cmd_model(const CommandLine &cl, Context &ctx) {
                 static_cast<unsigned long long>(r.value.size), r.value.sha256.empty() ? "(not published)" : r.value.sha256.c_str(),
                 r.value.license.c_str());
     if (!r.value.mmproj.empty()) std::printf("  projector: %s\n", r.value.mmproj.c_str());
-    if (ctx.config.default_model.empty() && engine_for_model(r.value.path) == "llama") {
+    const ModelKind kind = detect_model(r.value.path, r.value.repo, r.value.file, !r.value.mmproj.empty());
+    if (!kind.engine.empty()) {
+        const bool moved = place_model(dir, catalog, r.value, kind.engine);
+        std::printf("  engine:  %s%s%s%s\n", kind.engine.c_str(), kind.task.empty() ? "" : "  (task ",
+                    kind.task.empty() ? "" : kind.task.c_str(), kind.task.empty() ? "" : ")");
+        std::printf("  because: %s%s\n", kind.why.c_str(),
+                    kind.architecture.empty() ? "" : (", architecture " + kind.architecture).c_str());
+        if (moved) std::printf("  moved to the %s folder: %s\n", kind.engine.c_str(), r.value.path.c_str());
+        if (!kind.engine_options.empty()) std::printf("  use with: --engine-options '%s'\n", kind.engine_options.c_str());
+    } else {
+        std::printf("  engine:  not detected (%s)\n", kind.why.c_str());
+    }
+    if (ctx.config.default_model.empty() && kind.engine == "llama" && kind.task == "text_gen") {
         ctx.config.default_model = r.value.name;
         if (auto s = save_config(ctx.config_path, ctx.config); s.ok) std::printf("set as the default chat model\n");
     }

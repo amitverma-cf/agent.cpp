@@ -54,7 +54,7 @@ variant="${AGENT_VARIANT:-}"
 detected=""
 if [ -z "$variant" ]; then
     variant=cpu
-    if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q 'libvulkan\.so'; then variant=vulkan; detected=" (Vulkan driver found)"; fi
+    if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q 'libvulkan\.so' && ls /dev/dri/renderD* >/dev/null 2>&1; then variant=vulkan; detected=" (Vulkan driver found)"; fi
 fi
 case "$variant" in cpu) suffix="" ;; vulkan) suffix="-vulkan" ;; *) die "AGENT_VARIANT must be cpu or vulkan." ;; esac
 

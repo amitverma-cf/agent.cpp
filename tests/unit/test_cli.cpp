@@ -341,7 +341,7 @@ TEST_CASE("cli: small helpers", "[cli]") {
     hw.dri_nodes = {"/dev/dri/renderD128"};
     CHECK(suggest_backend(hw) == "vulkan");
     hw.nvidia_smi = true;
-    CHECK(suggest_backend(hw) == "cuda");
+    CHECK(suggest_backend(hw) == "vulkan"); // the released GPU builds are Vulkan
 
     std::string index = add_conversation_id("", "a");
     index = add_conversation_id(index, "b");

@@ -75,29 +75,6 @@ std::string sha256_hex(std::span<const uint8_t> data);
 std::string sha256_hex(std::string_view data);
 Result<std::string> sha256_file(const std::string &path);
 
-// -------------------------- Curated registry --------------------------
-
-// Short names for models known to work with the engines here ("qwen3-4b", "glm-ocr", "trellis-coarse").
-// A model may need several downloads (a TTS talker and its codec); the first part is the model.
-struct RegistryPart {
-    std::string_view spec;    // an `agent model pull` spec
-    std::string_view include; // for "owner/repo:*" parts: comma separated path filters; otherwise ""
-};
-
-struct RegistryEntry {
-    std::string_view alias;
-    std::string_view task;   // text_gen, vision, ocr, embed, rerank, image_gen, asr, tts, vad, mesh_gen, ...
-    std::string_view engine; // llama, sdcpp, audiocpp, onnx, trellis
-    std::span<const RegistryPart> parts;
-    uint32_t size_mib;               // total download, 0 = not measured
-    std::string_view engine_options; // JSON the engine needs to serve this model, "" = none
-    std::string_view notes;
-    bool tested; // pulled and run end to end with agent.cpp
-};
-
-std::span<const RegistryEntry> model_registry();
-const RegistryEntry *find_registry_entry(std::string_view alias);
-
 // -------------------------- Catalogue (models.json) --------------------------
 
 struct CatalogEntry {

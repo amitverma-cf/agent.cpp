@@ -159,6 +159,11 @@ HardwareInfo detect_hardware() {
     hw.cpu_cores = static_cast<int>(std::thread::hardware_concurrency());
 #if defined(_WIN32)
     hw.nvidia_smi = on_path("nvidia-smi.exe");
+    {
+        const char *root = std::getenv("SystemRoot");
+        std::error_code ec;
+        hw.vulkan_loader = fs::exists(fs::path(root ? root : "C:/Windows") / "System32" / "vulkan-1.dll", ec);
+    }
 #else
     hw.nvidia_smi = on_path("nvidia-smi");
     std::error_code ec;

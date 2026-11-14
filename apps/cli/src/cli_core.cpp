@@ -48,7 +48,7 @@ constexpr std::string_view kGlobalValue[] = {"config-dir", "home"};
 constexpr std::string_view kGlobalBool[] = {"help", "no-sandbox"};
 
 constexpr std::string_view kSetupValue[] = {"caps", "workspace", "models-dir", "engines-dir", "backend", "model", "js-runtime"};
-constexpr std::string_view kSetupBool[] = {"yes", "no-models", "download-engines", "install-runtimes"};
+constexpr std::string_view kSetupBool[] = {"yes", "no-models", "download-engines", "install-runtimes", "reconfigure"};
 
 constexpr SubSpec kEngineSubs[] = {{"ls", 0, 0}, {"add", 1, 1}, {"rm", 1, 1}, {"pull", 1, 1}};
 constexpr std::string_view kEngineValue[] = {"tag", "repo"};
@@ -75,7 +75,7 @@ constexpr std::string_view kUpdateBool[] = {"check", "yes", "allow-unsigned"};
 constexpr std::string_view kSecretValue[] = {"identity"};
 constexpr std::string_view kSecretBool[] = {"stdin"};
 
-constexpr SubSpec kModelSubs[] = {{"ls", 0, 0}, {"search", 0, 1}, {"info", 1, 1}, {"pull", 1, 1}, {"rm", 1, 1}};
+constexpr SubSpec kModelSubs[] = {{"ls", 0, 0}, {"info", 1, 1}, {"pull", 1, 1}, {"rm", 1, 1}};
 constexpr std::string_view kModelValue[] = {"name", "quant", "mmproj", "include", "task", "engine"};
 constexpr std::string_view kModelBool[] = {"allow-restricted", "keep-file", "no-mmproj"};
 
@@ -145,7 +145,25 @@ std::string_view CommandLine::get(std::string_view flag, std::string_view fallba
     return fallback;
 }
 
-Result<CommandLine> parse_command_line(std::span<const std::string_view> args) {
+Result<CommandLine> parse_command_line(std::span<const std::string_view> args_in) {
+    // `agent --model FILE` (options and no command) is the chat: `agent chat --model FILE`.
+    std::vector<std::string_view> with_chat(args_in.begin(), args_in.end());
+    for (size_t i = 0; i < with_chat.size(); ++i) {
+        const std::string_view a = with_chat[i];
+        if (a.size() < 2 || a.front() != '-') break; // a command (or a positional): nothing to add
+        if (a.substr(0, 2) != "--") continue;        // a short option such as -h
+        std::string_view name = a.substr(2);
+        const bool inline_value = name.find('=') != std::string_view::npos;
+        name = name.substr(0, name.find('='));
+        if (contains(kGlobalBool, name)) continue;
+        if (contains(kGlobalValue, name)) {
+            if (!inline_value) ++i;
+            continue;
+        }
+        with_chat.insert(with_chat.begin() + static_cast<std::ptrdiff_t>(i), "chat");
+        break;
+    }
+    const std::span<const std::string_view> args(with_chat);
     CommandLine cl;
     const CommandSpec *spec = nullptr;
     std::vector<std::string> positionals;
@@ -271,7 +289,7 @@ std::string usage_all() {
            "  secret set NAME            store a key in the OS credential store (typed without echo, or --stdin); never shown again\n"
            "  secret bind NAME CONSUMER  allow mcp:NAME / tool:NAME / group:NAME to use it (see `secret ls`); unbind, rm, ls too\n"
            "  setup                      choose the global home, detect hardware, find engines, pick and smoke-test models\n"
-           "        [--home DIR] [--model NAME|owner/repo[:quant]]... [--no-models]\n"
+           "        [--home DIR] [--model LINK|FILE|owner/repo[:quant]]... [--no-models] [--reconfigure]\n"
            "        [--yes] [--caps llama,audiocpp,sdcpp,onnx,trellis] [--workspace DIR] [--models-dir DIR]\n"
            "        [--engines-dir DIR] [--backend cpu|cuda|vulkan] [--js-runtime bun|node|nub]\n"
            "        [--download-engines] [--install-runtimes]\n"
@@ -289,11 +307,12 @@ std::string usage_all() {
            "  engine add <plugin>        validate an engine plugin and record it\n"
            "  engine pull <name>         download a prebuilt engine from the GitHub release (--tag, --repo)\n"
            "  engine rm <name>           forget an engine\n"
-           "  model pull <spec>          download from Hugging Face (owner/repo[:file-or-QUANT])\n"
+           "  model pull <spec>          a Hugging Face link (repo or file page), owner/repo[:file-or-QUANT], or a model file on this "
+           "disk;\n"
+           "                             the engine that runs it is detected and the files go in its folder (models/llama, sdcpp, ...)\n"
            "        owner/repo:*  pulls every file of a folder model (TRELLIS); [--include STR[,STR]] narrows it\n"
            "        [--name NAME] [--quant Q4_K_M] [--mmproj auto|none|QUANT|FILE] [--no-mmproj] [--allow-restricted]\n"
            "        (vision / audio / OCR repos: the projector is fetched too, recorded, and used automatically)\n"
-           "  model search [TEXT] [--task T]  curated registry: short names for tested models (pull by name)\n"
            "  model info <repo>          list a Hugging Face repo: quants with sizes, projectors, licence\n"
            "        (pick a file, then: model pull owner/repo:QUANT)\n"
            "  model ls                   list downloaded models (models.json)\n"
@@ -338,7 +357,7 @@ struct CommandBlurb {
 constexpr CommandBlurb kOverview[] = {
     {"chat", "talk to a model in a full-screen chat with tools (also: just run `agent`)"},
     {"setup", "first-time setup: home folder, hardware, engines, a first model"},
-    {"model", "download, list, search and remove models"},
+    {"model", "download (from a Hugging Face link), list and remove models"},
     {"task", "run one engine capability once: asr, tts, image_gen, embed, ..."},
     {"run", "run a declarative agent graph"},
     {"voice", "talk to the agent with a microphone and speakers"},
@@ -529,8 +548,7 @@ Result<void> write_text_file_atomic(const std::string &path, std::string_view te
 // -------------------------- Hardware --------------------------
 
 std::string suggest_backend(const HardwareInfo &hw) {
-    if (hw.nvidia_smi || hw.nvidia_device) return "cuda";
-    if (!hw.dri_nodes.empty()) return "vulkan";
+    if (hw.nvidia_smi || hw.nvidia_device || hw.vulkan_loader || !hw.dri_nodes.empty()) return "vulkan";
     return "cpu";
 }
 
