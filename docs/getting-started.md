@@ -39,9 +39,9 @@ The build puts `agent`, `agent-engine-host` and the tests at the top of `build/`
 ## Use the command
 
 ```sh
-./build/agent setup                                            # home folder, hardware check, engines, first model
-./build/agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M
-./build/agent                                                  # chat
+agent setup                                                    # home folder, hardware check, engines, first model
+agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M       # more models
+agent                                                          # chat; built from source: ./build/agent
 ```
 
 On Windows use `.\build\agent.exe`. Setup records the engines it finds, so `-e llama` works afterwards. The commands are

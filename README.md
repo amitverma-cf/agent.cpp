@@ -78,11 +78,12 @@ Your own application ships only the engines it names (see below), so having them
 ## First run
 
 ```sh
-./build/agent setup                                  # picks a home folder, finds your hardware and engines, suggests models
-./build/agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M
-./build/agent                                        # opens the chat
+agent setup      # picks a home folder, finds your hardware and engines, suggests and downloads a model
+agent            # opens the chat
 ```
 
+After the install script, `agent` is on your PATH (open a new terminal on Windows). `agent setup` offers a model that fits your machine, so
+there is no separate download step; `agent model pull NAME` adds more. Built from source, run `./build/agent` (`.\build\agent.exe` on
 On Windows use `.\build\agent.exe`. `agent --help` lists every command, and `agent <command> --help` explains one.
 
 ## The command line
