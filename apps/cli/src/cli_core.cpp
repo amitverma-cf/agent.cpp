@@ -81,7 +81,7 @@ constexpr std::string_view kModelBool[] = {"allow-restricted", "keep-file", "no-
 
 constexpr std::string_view kChatValue[] = {"model",      "engine",         "resume", "workspace", "ctx",
                                            "max-tokens", "engine-options", "prompt", "grammar"};
-constexpr std::string_view kChatBool[] = {"yes", "list", "verbose", "inprocess", "plain", "jsonl", "json"};
+constexpr std::string_view kChatBool[] = {"yes", "list", "verbose", "inprocess", "plain", "jsonl", "json", "acp"};
 
 constexpr std::string_view kRunValue[] = {"model", "engine", "workspace", "thread", "set", "resume", "input", "engine-options"};
 constexpr std::string_view kRunBool[] = {"yes", "inprocess", "json", "swap-models"};
@@ -305,6 +305,7 @@ std::string usage_all() {
            "        -p|--prompt TEXT    answer once and exit: the answer goes to stdout, tools and notes to stderr (- reads the prompt\n"
            "                            from stdin); tool calls are denied unless -y\n"
            "        --jsonl             editor integration: JSON lines in and out on stdio (see docs/cli.md)\n"
+           "        --acp               Agent Client Protocol on stdio, for editors such as Zed (see docs/cli.md)\n"
            "        --json | --grammar FILE   constrain the answer: valid JSON only, or a GBNF grammar (llama engine)\n"
            "  run <graph.json>           run a declarative graph\n"
            "        [-m|--model NAME|PATH] [-e|--engine NAME|PATH] [--workspace DIR] [--thread ID] [--set k=v]\n"

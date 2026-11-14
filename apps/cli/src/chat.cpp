@@ -67,7 +67,46 @@ void install_sigint() {
 bool g_tui = false;      // the full-screen interface is running: output goes to it, not to stdout
 bool g_headless = false; // -p: the answer alone goes to stdout; tool lines and notes go to stderr
 bool g_jsonl = false;    // --jsonl: every piece of output is one JSON line on stdout
+bool g_acp = false;      // --acp: Agent Client Protocol on stdio (JSON-RPC, one message per line)
+std::string g_acp_session, g_acp_call;
+int g_acp_calls = 0;
 bool g_last_turn_failed = false;
+
+void acp_send(const std::string &line) {
+    std::fwrite(line.data(), 1, line.size(), stdout);
+    std::fputc('\n', stdout);
+    std::fflush(stdout);
+}
+
+void acp_update(const std::string &update) {
+    acp_send("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"" + json_escape(g_acp_session) +
+             "\",\"update\":" + update + "}}");
+}
+
+const char *acp_kind(std::string_view tool) {
+    if (tool == "read_file" || tool == "list_dir" || tool == "list_files") return "read";
+    if (tool == "search_files" || tool == "grep" || tool == "web_search") return "search";
+    if (tool == "write_file" || tool == "append_file" || tool == "create_dir") return "edit";
+    if (tool == "delete_path") return "delete";
+    if (tool == "move_path") return "move";
+    if (tool == "run_command") return "execute";
+    if (tool == "web_fetch") return "fetch";
+    return "other";
+}
+
+void acp_tool_call(std::string_view name, std::string_view arguments) {
+    g_acp_call = "call_" + std::to_string(++g_acp_calls);
+    const bool is_json = !arguments.empty() && arguments.front() == '{';
+    acp_update("{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"" + g_acp_call + "\",\"title\":\"" + json_escape(name) +
+               "\",\"kind\":\"" + acp_kind(name) + "\",\"status\":\"in_progress\"" +
+               (is_json ? ",\"rawInput\":" + std::string(arguments) : std::string()) + "}");
+}
+
+void acp_tool_result(std::string_view result) {
+    acp_update("{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"" + g_acp_call +
+               "\",\"status\":\"completed\",\"content\":[{\"type\":\"content\",\"content\":{\"type\":\"text\",\"text\":\"" +
+               json_escape(result.substr(0, 4000)) + "\"}}]}");
+}
 
 void json_event(const char *type, std::string_view text) {
     std::printf("{\"type\":\"%s\",\"text\":\"%s\"}\n", type, json_escape(text).c_str());
@@ -81,7 +120,7 @@ TuiKind classify(std::string_view s) {
 }
 
 void out(std::string_view s) {
-    if (s.empty()) return;
+    if (s.empty() || g_acp) return;
     if (g_jsonl) {
         const TuiKind kind = classify(s);
         json_event(kind == TuiKind::Tool ? "tool" : kind == TuiKind::Error ? "error" : "note", s);
@@ -103,12 +142,16 @@ void out(std::string_view s) {
 }
 
 void ensure_newline() {
-    if (!g_tui && !g_headless && !g_jsonl && !g_at_line_start) out("\n");
+    if (!g_tui && !g_headless && !g_jsonl && !g_acp && !g_at_line_start) out("\n");
 }
 
 // Streamed answer text: the transcript's assistant block in the full-screen interface, stdout otherwise.
 void emit_assistant(std::string_view s) {
     if (s.empty()) return;
+    if (g_acp) {
+        acp_update("{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"" + json_escape(s) + "\"}}");
+        return;
+    }
     if (g_jsonl) {
         json_event("token", s);
         return;
@@ -201,6 +244,7 @@ void remember_always(ChatState &st, const std::string &tool) {
 PermissionDecision check_tool(std::string_view name, std::string_view arguments, void *user_data) {
     auto *st = static_cast<ChatState *>(user_data);
     ensure_newline();
+    if (g_acp) acp_tool_call(name, arguments);
     out("[tool] " + std::string(name) + " " + one_line(arguments, 300) + "\n");
     if (st->journal) st->journal->before_tool(name, arguments);
     if (st->mode == ChatMode::Plan && tool_changes_things(name)) {
@@ -218,6 +262,22 @@ PermissionDecision check_tool(std::string_view name, std::string_view arguments,
 bool prompt_tool(std::string_view name, std::string_view arguments, void *user_data) {
     auto *st = static_cast<ChatState *>(user_data);
     const std::string n(name);
+    if (g_acp && !st->auto_approve) {
+        // session/request_permission: the editor answers with the option it picked.
+        const std::string rid = "perm_" + std::to_string(++g_acp_calls);
+        acp_send("{\"jsonrpc\":\"2.0\",\"id\":\"" + rid + "\",\"method\":\"session/request_permission\",\"params\":{\"sessionId\":\"" +
+                 json_escape(g_acp_session) + "\",\"toolCall\":{\"toolCallId\":\"" + g_acp_call +
+                 "\"},\"options\":[{\"optionId\":\"allow-once\",\"name\":\"Allow once\",\"kind\":\"allow_once\"},"
+                 "{\"optionId\":\"allow-always\",\"name\":\"Always allow\",\"kind\":\"allow_always\"},"
+                 "{\"optionId\":\"reject-once\",\"name\":\"Reject\",\"kind\":\"reject_once\"}]}}");
+        std::string reply;
+        while (read_line(stdin, reply) == ReadStatus::Line) {
+            if (reply.find(rid) == std::string::npos || reply.find("\"method\"") != std::string::npos) continue; // not our answer
+            if (reply.find("allow-always") != std::string::npos) remember_always(*st, n);
+            return reply.find("allow-once") != std::string::npos || reply.find("allow-always") != std::string::npos;
+        }
+        return false;
+    }
     if (st->auto_approve) {
         out("[permission] " + n + ": approved (--yes)\n");
         return true;
@@ -264,6 +324,10 @@ bool prompt_tool(std::string_view name, std::string_view arguments, void *user_d
 
 void on_tool_result(const Event &event, void *) {
     const std::string_view result(reinterpret_cast<const char *>(event.payload.data()), event.payload.size());
+    if (g_acp) {
+        acp_tool_result(result);
+        return;
+    }
     ensure_newline();
     out("[result] " + one_line(result, 300) + "\n");
 }
@@ -861,7 +925,8 @@ int cmd_chat(const CommandLine &cl, Context &ctx) {
     st.inprocess = cl.has("inprocess");
     st.interactive = stdin_is_tty();
 #if defined(AGENT_CLI_HAS_TUI)
-    st.use_tui = st.interactive && stream_is_tty(stdout) && !cl.has("plain") && !st.verbose && !cl.has("prompt") && !cl.has("jsonl");
+    st.use_tui = st.interactive && stream_is_tty(stdout) && !cl.has("plain") && !st.verbose && !cl.has("prompt") && !cl.has("jsonl") &&
+                 !cl.has("acp");
 #endif
     {
         // Names and bindings of the secrets; a broken index only means that no server gets a key.
@@ -1245,6 +1310,60 @@ int run_scripted(ChatState &st, const CommandLine &cl) {
     return g_last_turn_failed ? 1 : 0;
 }
 
+// --acp: the Agent Client Protocol, for editors (Zed and others): JSON-RPC 2.0, one message per line on stdio. initialize, session/new,
+// session/prompt (streams session/update notifications, asks session/request_permission). session/cancel is read between turns only.
+int run_acp(ChatState &st) {
+    g_acp = true;
+    std::string line;
+    while (read_line(stdin, line) == ReadStatus::Line) {
+        simdjson::dom::parser parser;
+        simdjson::padded_string padded(line);
+        simdjson::dom::element msg;
+        if (parser.parse(padded).get(msg) || !msg.is_object()) continue;
+        std::string_view method;
+        if (msg["method"].get(method)) continue;
+        simdjson::dom::element id_el;
+        const bool has_id = !msg["id"].get(id_el) && !id_el.is_null();
+        const std::string id = has_id ? simdjson::to_string(id_el) : std::string("null");
+        auto reply = [&](const std::string &result) { acp_send("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":" + result + "}"); };
+        auto error = [&](int code, const std::string &text) {
+            acp_send("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + std::to_string(code) + ",\"message\":\"" +
+                     json_escape(text) + "\"}}");
+        };
+        if (method == "initialize") {
+            reply("{\"protocolVersion\":1,\"agentCapabilities\":{\"loadSession\":false,\"promptCapabilities\":{\"image\":false,\"audio\":"
+                  "false,"
+                  "\"embeddedContext\":true}},\"agentInfo\":{\"name\":\"agent.cpp\",\"title\":\"agent.cpp\",\"version\":\"" +
+                  std::string(kCliVersion) + "\"},\"authMethods\":[]}");
+        } else if (method == "session/new") {
+            g_acp_session = st.memory.id;
+            reply("{\"sessionId\":\"" + json_escape(g_acp_session) + "\"}");
+        } else if (method == "session/prompt") {
+            simdjson::dom::array blocks;
+            std::string text;
+            if (msg["params"]["prompt"].get(blocks)) {
+                error(-32602, "session/prompt needs a prompt array");
+                continue;
+            }
+            for (simdjson::dom::element b : blocks) {
+                std::string_view type, t, uri;
+                if (b["type"].get(type)) continue;
+                if (type == "text" && !b["text"].get(t)) {
+                    text += std::string(t) + "\n";
+                } else if (type == "resource" && !b["resource"]["text"].get(t)) {
+                    if (b["resource"]["uri"].get(uri)) uri = "";
+                    text += "\nFile " + std::string(uri) + ":\n```\n" + std::string(t) + "\n```\n";
+                }
+            }
+            run_one_turn(st, text, {});
+            reply(std::string("{\"stopReason\":\"") + (g_last_turn_failed ? "refusal" : "end_turn") + "\"}");
+        } else if (has_id) {
+            error(-32601, "method not found: " + std::string(method));
+        }
+    }
+    return 0;
+}
+
 int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log) {
     Config store_cfg;
     store_cfg.provider = AiProvider::Mock;
@@ -1349,6 +1468,7 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
         return rc;
     }
 #endif
+    if (cl.has("acp")) return run_acp(st);
     if (cl.has("prompt") || cl.has("jsonl")) return run_scripted(st, cl);
     std::printf("agent chat  (%s)\n", st.memory.id.c_str());
     std::printf("  model:     %s  %s\n", st.model.name.c_str(), st.model.path.c_str());

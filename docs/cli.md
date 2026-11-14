@@ -154,6 +154,15 @@ instance. Both ask first (like `run_command`); `-y` or `/mode auto` approve them
 llama engine and switch the tools off for the session (a grammar cannot share a turn with the tool-call grammar). In `task text_gen` the same
 is `--params '{"json": true}'` or `--params '{"grammar": "..."}'`.
 
+### In an editor: `--acp`
+
+`agent chat --acp` speaks the [Agent Client Protocol](https://agentclientprotocol.com) on stdin and stdout (JSON-RPC 2.0, one message per
+line), so an editor such as Zed can run it as its agent. Supported: `initialize`, `session/new`, `session/prompt` (text and embedded
+resource blocks), the `session/update` notifications `agent_message_chunk`, `tool_call` and `tool_call_update`, and
+`session/request_permission` (allow once, allow always, reject). Not supported yet: `session/load`, images and audio in prompts, and
+`session/cancel` while a turn is running (it is read after the turn). The model, sandbox and project rules are the ones of `agent chat`;
+`--jsonl` is the simpler, agent.cpp-specific line protocol.
+
 ### Seeing and undoing edits
 
 Before a built-in tool changes a file (`write_file`, `append_file`, `delete_path`, `move_path`), the chat remembers the file's
