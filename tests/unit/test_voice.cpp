@@ -496,6 +496,11 @@ const char *env_or_null(const char *name) {
     return (v && *v) ? v : nullptr;
 }
 
+#if defined(_WIN32)
+#define popen _popen
+#define pclose _pclose
+#endif
+
 std::string run_capture(const std::string &cmd, int &status) {
     std::string out;
     std::FILE *p = popen(cmd.c_str(), "r");

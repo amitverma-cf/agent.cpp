@@ -418,7 +418,7 @@ TEST_CASE("cli: the usage text names every command main() dispatches", "[cli]") 
     CHECK(usage.find("--install-runtimes") != std::string::npos);
 }
 
-TEST_CASE("--no-sandbox is a global flag that turns the sandboxes off", "[cli]") {
+TEST_CASE("the global no-sandbox flag turns the sandboxes off", "[cli]") {
     agent::Config on;
     apply_sandbox_choice(on);
     CHECK(on.engine_sandbox.enabled);
