@@ -21,8 +21,12 @@ set(AGENT_TRELLIS_BUILD_JOBS "" CACHE STRING "Parallel jobs for the nested trell
 # NVIDIA driver (libcuda) at load time, so it is shipped as its own archive (the "-cuda" release) and only picked on NVIDIA machines.
 set(AGENT_TRELLIS_BACKEND "cpu" CACHE STRING "TRELLIS.2 compute backend: cpu or cuda")
 set_property(CACHE AGENT_TRELLIS_BACKEND PROPERTY STRINGS cpu cuda)
-set(AGENT_TRELLIS_CUDA_ARCHITECTURES "75-virtual;80;86;89;90" CACHE STRING "CUDA architectures for the TRELLIS.2 CUDA backend")
+set(AGENT_TRELLIS_CUDA_ARCHITECTURES "75;86;89;90-virtual" CACHE STRING "CUDA architectures for the TRELLIS.2 CUDA backend")
 set(TRELLIS_CUDA_ARGS "")
+if(MSVC)
+    # trellis2.cpp uses M_PI.
+    list(APPEND TRELLIS_CUDA_ARGS "-DCMAKE_CXX_FLAGS:STRING=${CMAKE_CXX_FLAGS} /D_USE_MATH_DEFINES")
+endif()
 set(TRELLIS_EXTRA_LIBS "")
 if(AGENT_TRELLIS_BACKEND STREQUAL "cuda")
     find_package(CUDAToolkit REQUIRED)
@@ -113,7 +117,12 @@ find_package(Threads REQUIRED)
 target_link_libraries(agent-engine-trellis PRIVATE ${TRELLIS_LIBS} Threads::Threads ${CMAKE_DL_LIBS})
 if(AGENT_TRELLIS_BACKEND STREQUAL "cuda")
     # ggml-cuda needs the CUDA runtime, cuBLAS and the driver API; the runtime and cuBLAS are linked statically.
-    target_link_libraries(agent-engine-trellis PRIVATE CUDA::cudart_static CUDA::cublas_static CUDA::cublasLt_static CUDA::cuda_driver)
+    if(WIN32)
+        # The Windows toolkit has no static cuBLAS: the CUDA DLLs ship next to the plugin.
+        target_link_libraries(agent-engine-trellis PRIVATE CUDA::cudart CUDA::cublas CUDA::cublasLt CUDA::cuda_driver)
+    else()
+        target_link_libraries(agent-engine-trellis PRIVATE CUDA::cudart_static CUDA::cublas_static CUDA::cublasLt_static CUDA::cuda_driver)
+    endif()
 endif()
 if(TRELLIS_OPENMP)
     target_link_libraries(agent-engine-trellis PRIVATE OpenMP::OpenMP_CXX OpenMP::OpenMP_C)

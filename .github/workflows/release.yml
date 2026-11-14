@@ -95,6 +95,8 @@ jobs:
         shell: bash
         run: |
           eng=",${{ inputs.engines || 'llama' }},"
+          # ggml's nested builds (audio.cpp, stable-diffusion.cpp, TRELLIS.2) refuse MSVC on ARM ("use clang"): Windows arm64 ships llama and onnx.
+          if [ "${{ matrix.os_name }}-${{ matrix.arch }}" = "windows-aarch64" ]; then eng="$(echo "$eng" | sed 's/,audiocpp,/,/; s/,sdcpp,/,/; s/,trellis,/,/')"; fi
           on() { case "$eng" in *",$1,"*) echo ON ;; *) echo OFF ;; esac; }
           extra=""
           if [ "${{ matrix.os_name }}" = "linux" ]; then export LDFLAGS="-static-libstdc++ -static-libgcc"; fi
@@ -144,6 +146,9 @@ jobs:
               if [ "${{ matrix.os_name }}" = "windows" ]; then (cd stage && 7z a -tzip "../assets/${pkg}.zip" "${pkg}"); else tar -C stage -czf "assets/${pkg}.tar.gz" "${pkg}"; fi
             fi
           done
+          if [ "${{ matrix.variant }}${{ matrix.os_name }}" = "-cudawindows" ]; then
+            for d in cudart64 cublas64 cublasLt64; do cp "$CUDA_PATH"/bin/$d*.dll "dist/${name}/engines/"; done
+          fi
           if [ "${{ matrix.os_name }}" = "windows" ]; then cp "$VCPKG_INSTALLATION_ROOT"/installed/${{ matrix.triplet }}/bin/{libssl-3-${{ matrix.dll }},libcrypto-3-${{ matrix.dll }}}.dll "dist/${name}/"; fi
           cp LICENSE README.md "dist/${name}/"
           # third-party licences of what is compiled in
