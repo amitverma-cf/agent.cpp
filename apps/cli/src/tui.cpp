@@ -687,12 +687,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
 
     // The line between the input and the bottom bar: what the next useful key or command is, for what is going on right now.
     void ComputeHint() {
-        const std::string idle[] = {"Press ? for every keyboard shortcut",
-                                    "/ lists the commands",
-                                    "@file puts a file's text in your message",
-                                    "!command runs a shell command in your project",
-                                    tui_key_pretty(keymap["sessions"]) + " switches to another session",
-                                    tui_key_pretty(keymap["settings"]) + " opens the settings"};
+        const std::string idle = tui_key_pretty(keymap["help"]) + " shortcuts";
         if (confirm_open) hint = "Enter or y confirms, Esc cancels";
         else if (asking) hint = "y allows this once, a always allows this tool, n refuses";
         else if (recording) hint = "Listening: click the microphone again to stop";
@@ -703,7 +698,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         else if (!input.empty() && input[0] == '!')
             hint = "Runs in your project folder; the output goes into the chat for the model to see";
         else if (!input.empty()) hint = "Enter sends";
-        else hint = idle[static_cast<size_t>(std::time(nullptr) / 8) % (sizeof idle / sizeof *idle)];
+        else hint = idle;
     }
 
     // ---- the settings screen: categories on the left, the settings of the chosen category on the right
