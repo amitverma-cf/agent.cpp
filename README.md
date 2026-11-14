@@ -1,6 +1,6 @@
 # agent.cpp
 
-<p align="center"><img src="docs/images/banner.svg" alt="The agent.cpp chat screen: sessions grouped by project on the left, the input at the bottom" width="1000"></p>
+<p align="center"><img src="docs/images/chat.svg" alt="The agent.cpp chat screen: logo, New chat and sessions grouped by project on the left, a conversation in the middle, the mic and input at the bottom, CPU, RAM, engine, model, mode and context in the bottom bar" width="1000"></p>
 
 **Run AI agents on your own machine, from one small C++ library or one command.**
 
@@ -8,9 +8,7 @@ agent.cpp is a local-first agent runtime. Chat with a model that can read your f
 speak, draw, turn a picture into a 3D mesh, or wire all of that into a graph that runs on a schedule. Nothing leaves your
 computer, and you do not need Python, Node or a cloud account.
 
-<p align="center"><img src="docs/images/chat.svg" alt="A reply in the agent.cpp chat with the model and speed under it" width="1000"></p>
-
-That is the real chat screen (Qwen2.5-0.5B on a 4-core CPU), laid out like a chat website: your sessions on the left, grouped by project (pick one and the agent switches to that folder), the conversation in the middle with the model and speed under every answer, and the input at the bottom.
+That is the real chat screen (Qwen3.5-9B Coder at Q2 on a 4-core CPU with no GPU), laid out like a chat app: the logo, a New chat button and your sessions on the left, grouped by project (pick one and the agent switches to that folder), Settings under them, the conversation in the middle with how long every answer took, and below it the mic, the input and a bottom bar with CPU, RAM, the engine, the model, the mode and the context.
 
 > Status: pre-1.0. Flags, APIs and file formats can still change. Targets Windows 11 and Linux.
 
@@ -103,7 +101,7 @@ there is no separate download step; `agent model pull NAME` adds more. Built fro
 | `agent sandbox`, `agent secret` | folders tools may use; API keys in the OS credential store |
 | `agent init`, `agent doctor`, `agent clean` | project folder, what is installed and disk use, cleanup |
 
-Typing `/` (or pressing Ctrl+P) in the chat opens a command palette (`/model`, `/image`, `/open`, `/stats`, `/doctor`, `/setup`, `/clear`, `/help`, `/exit`); Tab completes, Up and Down recall earlier messages, PgUp and PgDn scroll, Ctrl+K picks another session and Ctrl+N starts a new chat.
+Typing `/` (or pressing Ctrl+P) in the chat opens a command palette (`/model`, `/image`, `/open`, `/stats`, `/doctor`, `/setup`, `/clear`, `/help`, `/exit`); Tab completes, Up and Down recall earlier messages, PgUp and PgDn scroll, Ctrl+K picks another session and Ctrl+N starts a new chat (F1 lists every shortcut; Settings, Shortcuts changes them).
 
  Full reference: [docs/cli.md](docs/cli.md).
 

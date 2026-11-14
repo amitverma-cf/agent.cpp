@@ -165,12 +165,12 @@ is `--params '{"json": true}'` or `--params '{"grammar": "..."}'`.
 - **Messages:** every message of yours has a copy icon and a delete icon (the delete removes your message and the model's answers to it from
   what the model sees, after a confirmation). Every answer has a copy icon, how fast it was written (tok/s, when the engine measured it) and
   how long the whole answer took. Copy goes to the clipboard through the terminal (OSC 52) and the system's clipboard tool.
-- **Input:** a microphone icon on the left records until you click it again, then writes what you said into the input with the first speech
+- **Input:** a `mic` box on the left of the input records until you click it again, then writes what you said into the input with the first speech
   recognition model that is installed (`agent model pull <a speech model link>`). `/` lists commands, `@file` attaches a file, `!command` runs
-  a shell command. A line under the input suggests the next useful key or command.
+  a shell command. A line under the input suggests the next useful key or command while you type.
 - **Bottom bar:** CPU use, RAM used and installed, the size of the files folder; and on the right the engine, the models held in RAM, the mode
   and the context used and available.
-- **Shortcuts:** `?` on an empty input, or F1, lists every keyboard shortcut. (A terminal cannot report the Alt key alone.) Ctrl+O opens the
+- **Shortcuts:** `?` on an empty input, or F1, lists every keyboard shortcut; the sidebar reminds you of F1 under the Settings button. To change one, open the Settings, choose Shortcuts, press Enter on an action and then the keys you want (F1 to F12, Ctrl+letter, Alt+letter or Ctrl+Alt+letter; a key that is already used is refused). The choices are kept in `config.json` under `shortcuts`, and "Put the defaults back" clears them. (A terminal cannot report the Alt key alone.) Ctrl+O opens the
   settings; there, the categories are on the left, and each setting changes with Left and Right or by typing a new value.
 
 ### Look
