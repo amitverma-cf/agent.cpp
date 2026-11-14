@@ -452,6 +452,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         Bind(set_view);
         Bind(set_note);
         Bind(settings_label);
+        Bind(key_hint);
         Bind(OpenSettings);
         Bind(ico_copy);
         Bind(ico_del);
@@ -482,6 +483,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         Bind(ConfirmYes);
         Bind(ConfirmNo);
         Bind(CloseKeys);
+        Bind(OpenKeys);
         Bind(ToggleMic);
         Bind(Pick);
         Bind(NewChat);
@@ -517,6 +519,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
                 if (keymap.count(action) && tui_key_valid(key)) keymap[action] = key;
         key_rows.clear();
         for (const TuiShortcut &a : tui_shortcut_actions()) key_rows.push_back({tui_key_pretty(keymap[a.action]), a.label, ""});
+        key_hint = tui_key_pretty(keymap["help"]) + " shortcuts";
         key_rows.push_back({"? or F1", "Show this list", ""});
         key_rows.push_back({"@file", "Put a file's text in your message", ""});
         key_rows.push_back({"!command", "Run a shell command in your project", ""});
@@ -540,8 +543,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
     }
 
     // ---- icons, the bottom bar, the hint line, dialogs
-    std::string ico_copy = icons().copy, ico_del = icons().del, ico_mic = "mic", ico_back = icons().back, ico_menu = icons().menu,
-                ico_settings = icons().settings, mic_class = "mic", hint;
+    std::string ico_copy = icons().copy, ico_del = icons().del, ico_mic = std::string(icons().mic) + " mic", ico_back = icons().back,
+                ico_menu = icons().menu, ico_settings = icons().settings, mic_class = "mic", hint;
     bool has_messages = false;
     std::string tb_cpu, tb_ram, tb_files, tb_engine, tb_models, tb_mode, tb_ctx;
     bool confirm_open = false, show_keys = false, toast_open = false, recording = false, transcribing = false;
@@ -681,6 +684,9 @@ class ChatApp : public rtxui::Component<ChatApp> {
         }
         Refresh();
     }
+    void OpenKeys() {
+        if (!busy) show_keys = true;
+    }
     void CloseKeys() { show_keys = false; }
 
     void ToggleMic() {
@@ -747,7 +753,6 @@ class ChatApp : public rtxui::Component<ChatApp> {
 
     // The line between the input and the bottom bar: what the next useful key or command is, for what is going on right now.
     void ComputeHint() {
-        const std::string idle = tui_key_pretty(keymap["help"]) + " shortcuts";
         if (confirm_open) hint = "Enter or y confirms, Esc cancels";
         else if (asking) hint = "y allows this once, a always allows this tool, n refuses";
         else if (recording) hint = "Listening: click the microphone again to stop";
@@ -758,7 +763,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         else if (!input.empty() && input[0] == '!')
             hint = "Runs in your project folder; the output goes into the chat for the model to see";
         else if (!input.empty()) hint = "Enter sends";
-        else hint = idle;
+        else hint.clear();
     }
 
     // ---- the settings screen: categories on the left, the settings of the chosen category on the right
@@ -769,7 +774,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
     std::vector<SideRow> cat_rows;
     std::vector<SetRow> set_rows;
     int cat_sel = 0, set_sel = 0;
-    std::string set_view = "setbody cats", set_note, set_help, cat_title, settings_label = std::string(icons().settings) + " Settings";
+    std::string key_hint, set_view = "setbody cats", set_note, set_help, cat_title,
+                          settings_label = std::string(icons().settings) + " Settings";
 
     void OpenSettings() {
         if (!host.settings || busy) return;
@@ -1469,12 +1475,13 @@ class ChatApp : public rtxui::Component<ChatApp> {
     <div class="shell">
       <div class="{side_class}">
         <div class="sback" onclick="ToggleSide">{ico_back}</div>
-        <div class="sbrand"><for each="{banner}" as="ln"><div class="{ln.cls}">{ln.text}</div></for></div>
+        <div class="sbrand"><span class="neon sname">agent</span><span class="pink sname">.cpp</span></div>
         <div class="newchat" onclick="NewChat"><span class="nico">+</span><span class="nlabel">New chat</span></div>
         <div class="slist">
           <for each="{side}" as="s"><div class="{s.cls}" onclick="Pick({s.idx})">{s.text}</div></for>
         </div>
         <div class="setbtn" onclick="OpenSettings"><span class="setico">{ico_settings}</span><span class="setlabel">Settings</span></div>
+        <div class="keyhint" onclick="OpenKeys">{key_hint}</div>
       </div>
       <div class="{app_class}">
         <div class="top">
@@ -1513,7 +1520,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             <for each="{matches}" as="m"><div class="{m.cls}"><span class="pname">{m.name}</span><span class="phelp">{m.help}</span></div></for>
           </div>
           <div if="{prompting}" class="promptq">? {prompt_line}</div>
-          <div class="{box_class}"><span class="{mic_class}" onclick="ToggleMic">{ico_mic}</span><input value="{input}" placeholder="Message agent.cpp" autofocus=""/></div>
+          <div class="inrow"><div class="{box_class}"><input value="{input}" placeholder="Message agent.cpp" autofocus=""/></div><div class="{mic_class}" onclick="ToggleMic">{ico_mic}</div></div>
           <div class="hint">{hint}</div>
         </div>
         <div class="sp2"></div>
@@ -1549,9 +1556,12 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .shell { display: flex; flex-direction: row; width: 100%; height: 100%; background-color: #000000; color: #ffffff; border: round; border-color: #40e0d0; }
       .side { width: 33; flex-shrink: 0; display: flex; flex-direction: column; border-right: solid; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
       .hidden { display: none; }
+      .keyhint { color: #8a8a8a; padding-left: 1; }
+      .keyhint:hover { color: #40e0d0; }
       .burger, .small-brand, .sback { display: none; }
       .small-brand { color: #ffb3d1; font-weight: bold; }
       .sbrand { padding-bottom: 1; }
+      .sname { font-weight: bold; }
       .newchat { display: flex; flex-direction: row; border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; margin-bottom: 1; color: #ffffff; }
       .newchat:hover { border-color: #40e0d0; }
       .nico { color: #ffb3d1; font-weight: bold; padding-right: 1; }
@@ -1629,9 +1639,11 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .home .composer { width: 76%; align-self: center; padding-left: 0; padding-right: 0; }
       .box { display: flex; flex-direction: row; border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
       .box.active { border-color: #40e0d0; }
-      .mic { color: #ffffff; background-color: #4a4a4a; width: 5; padding-left: 1; padding-right: 1; margin-right: 1; }
-      .mic:hover { background-color: #40e0d0; color: #000000; }
-      .mic.rec { background-color: #ffb3d1; color: #000000; font-weight: bold; }
+      .inrow { display: flex; flex-direction: row; }
+      .inrow .box { flex-grow: 1; }
+      .mic { border: round; border-color: #4a4a4a; color: #8a8a8a; padding-left: 1; padding-right: 1; margin-left: 1; }
+      .mic:hover { border-color: #40e0d0; color: #40e0d0; }
+      .mic.rec { border-color: #ffb3d1; color: #ffb3d1; font-weight: bold; }
       .box input { flex-grow: 1; background-color: #000000; color: #ffffff; padding-left: 0; }
       .box input:focus, .box input:hover { background-color: #000000; color: #ffffff; }
       .box input::part(cursor), .box input:focus::part(cursor), .box input::part(cursor-focused),
