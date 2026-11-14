@@ -331,75 +331,115 @@ const char *const kTips[] = {
 const char *const kSpinner[] = {"\xE2\xA0\x8B", "\xE2\xA0\x99", "\xE2\xA0\xB9", "\xE2\xA0\xB8", "\xE2\xA0\xBC",
                                 "\xE2\xA0\xB4", "\xE2\xA0\xA6", "\xE2\xA0\xA7", "\xE2\xA0\x87", "\xE2\xA0\x8F"};
 
-// The "agent.cpp" logo: two rows of half-block letters, turquoise over pink (a narrow terminal shows the plain name).
-const char *const kBanner[2] = {"\xE2\x96\x84"
-                                "\xE2\x96\x80"
-                                "\xE2\x96\x88"
+// The big "agent.cpp" on the empty screen: block letters with shadows, 29 columns wide (a narrow terminal shows the plain name).
+const char *const kBanner[4] = {"\xE2\x94\x8C"
+                                "\xE2\x94\x80"
+                                "\xE2\x94\x90"
+                                "\xE2\x94\x8C"
+                                "\xE2\x94\x80"
+                                "\xE2\x94\x90"
+                                "\xE2\x94\x8C"
+                                "\xE2\x94\x80"
+                                "\xE2\x94\x90"
+                                "\xE2\x94\x8C"
+                                "\xE2\x94\x90"
+                                "\xE2\x94\x8C"
+                                "\xE2\x94\x8C"
+                                "\xE2\x94\xAC"
+                                "\xE2\x94\x90"
                                 " "
-                                "\xE2\x96\x88"
-                                "\xE2\x96\x80"
-                                "\xE2\x96\x80"
                                 " "
-                                "\xE2\x96\x88"
-                                "\xE2\x96\x80"
-                                "\xE2\x96\x80"
                                 " "
-                                "\xE2\x96\x88"
+                                "\xE2\x94\x8C"
+                                "\xE2\x94\x80"
+                                "\xE2\x94\x90"
+                                "\xE2\x94\x8C"
+                                "\xE2\x94\x80"
+                                "\xE2\x94\x90"
+                                "\xE2\x94\x8C"
+                                "\xE2\x94\x80"
+                                "\xE2\x94\x90",
+                                "\xE2\x94\x9C"
+                                "\xE2\x94\x80"
+                                "\xE2\x94\xA4"
+                                "\xE2\x94\x82"
+                                " "
+                                "\xE2\x94\xAC"
+                                "\xE2\x94\x9C"
+                                "\xE2\x94\xA4"
+                                " "
+                                "\xE2\x94\x82"
+                                "\xE2\x94\x82"
+                                "\xE2\x94\x82"
+                                " "
+                                "\xE2\x94\x82"
+                                " "
+                                " "
+                                " "
+                                " "
+                                "\xE2\x94\x82"
+                                " "
+                                " "
+                                "\xE2\x94\x9C"
+                                "\xE2\x94\x80"
+                                "\xE2\x94\x98"
+                                "\xE2\x94\x9C"
+                                "\xE2\x94\x80"
+                                "\xE2\x94\x98",
+                                "\xE2\x94\xB4"
+                                " "
+                                "\xE2\x94\xB4"
+                                "\xE2\x94\x94"
+                                "\xE2\x94\x80"
+                                "\xE2\x94\x98"
+                                "\xE2\x94\x94"
+                                "\xE2\x94\x80"
+                                "\xE2\x94\x98"
+                                "\xE2\x94\x98"
+                                "\xE2\x94\x94"
+                                "\xE2\x94\x98"
+                                " "
+                                "\xE2\x94\xB4"
+                                " "
+                                " "
+                                "."
+                                " "
+                                "\xE2\x94\x94"
+                                "\xE2\x94\x80"
+                                "\xE2\x94\x98"
+                                "\xE2\x94\xB4"
+                                " "
+                                " "
+                                "\xE2\x94\xB4"
+                                " "
+                                " ",
+                                "\xE2\x96\x80"
                                 "\xE2\x96\x84"
-                                " "
-                                "\xE2\x96\x88"
-                                " "
                                 "\xE2\x96\x80"
-                                "\xE2\x96\x88"
-                                "\xE2\x96\x80"
-                                " "
-                                " "
-                                " "
-                                "\xE2\x96\x88"
-                                "\xE2\x96\x80"
-                                "\xE2\x96\x80"
-                                " "
-                                "\xE2\x96\x88"
-                                "\xE2\x96\x80"
-                                "\xE2\x96\x88"
-                                " "
-                                "\xE2\x96\x88"
-                                "\xE2\x96\x80"
-                                "\xE2\x96\x88",
-                                "\xE2\x96\x88"
-                                "\xE2\x96\x80"
-                                "\xE2\x96\x88"
-                                " "
-                                "\xE2\x96\x88"
                                 "\xE2\x96\x84"
-                                "\xE2\x96\x88"
+                                "\xE2\x96\x91"
+                                "\xE2\x96\x91"
+                                "\xE2\x96\x92"
+                                "\xE2\x96\x92"
+                                "\xE2\x96\x93"
+                                "\xE2\x96\x93"
                                 " "
-                                "\xE2\x96\x88"
-                                "\xE2\x96\x88"
+                                " "
+                                " "
+                                "\xE2\x96\x93"
+                                "\xE2\x96\x92"
+                                "\xE2\x96\x91"
                                 "\xE2\x96\x84"
-                                " "
-                                "\xE2\x96\x88"
-                                " "
-                                "\xE2\x96\x80"
-                                "\xE2\x96\x88"
-                                " "
-                                " "
-                                "\xE2\x96\x88"
-                                " "
-                                " "
-                                "\xE2\x96\x84"
-                                " "
-                                "\xE2\x96\x88"
-                                "\xE2\x96\x84"
-                                "\xE2\x96\x84"
-                                " "
-                                "\xE2\x96\x88"
-                                "\xE2\x96\x80"
                                 "\xE2\x96\x80"
                                 " "
-                                "\xE2\x96\x88"
+                                " "
+                                "\xE2\x96\x91"
+                                "\xE2\x96\x92"
+                                "\xE2\x96\x93"
                                 "\xE2\x96\x80"
-                                "\xE2\x96\x80"};
+                                "\xE2\x96\x84"
+                                "\xE2\x96\x80"
+                                "\xE2\x96\x84"};
 
 // The last folder name of a path, for the project headings.
 std::string base_name(std::string_view path) {
@@ -411,7 +451,8 @@ std::string base_name(std::string_view path) {
 class ChatApp : public rtxui::Component<ChatApp> {
   public:
     explicit ChatApp(const TuiHost &host_) : host(host_) {
-        for (size_t i = 0; i < 2; ++i) banner.push_back({kBanner[i], i == 0 ? "banner neon" : "banner pink"});
+        static const char *const kGlitch[4] = {"banner pink", "banner neon", "banner pink", "banner dim"};
+        for (size_t i = 0; i < 4; ++i) banner.push_back({kBanner[i], kGlitch[i]});
         tip = kTips[static_cast<size_t>(std::time(nullptr) / 60) % (sizeof kTips / sizeof *kTips)];
         Bind(rows);
         Bind(banner);
@@ -1554,7 +1595,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
 
     <style>
       .shell { display: flex; flex-direction: row; width: 100%; height: 100%; background-color: #000000; color: #ffffff; border: round; border-color: #40e0d0; }
-      .side { width: 38; flex-shrink: 0; display: flex; flex-direction: column; border-right: solid; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
+      .side { width: 33; flex-shrink: 0; display: flex; flex-direction: column; border-right: solid; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
       .hidden { display: none; }
       .keyhint { color: #8a8a8a; padding-left: 1; }
       .keyhint:hover { color: #40e0d0; }
@@ -1612,6 +1653,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .banner { white-space: pre; }
       .pink { color: #ffb3d1; font-weight: bold; }
       .neon { color: #40e0d0; }
+      .dim { color: #4a4a4a; }
       .warn { color: #ffb3d1; margin-top: 1; }
       .row { display: flex; flex-direction: row; margin-bottom: 1; }
       .row .mark { width: 2; color: #40e0d0; }
