@@ -33,7 +33,7 @@ On Windows, run the same from a "Developer PowerShell for VS 2022" and add
 
 The build puts `agent`, `agent-engine-host` and the tests at the top of `build/`, and each engine plugin under
 `build/src/engines/<name>/`. Every engine is built by default (audio.cpp, stable-diffusion.cpp and TRELLIS.2 when their submodules are checked out, so clone with
-`--recurse-submodules`; TRELLIS.2 also needs a CUDA toolkit). Switch one off with `-DAGENT_ENGINE_<NAME>=OFF`. The full list of options is
+`--recurse-submodules`). Switch one off with `-DAGENT_ENGINE_<NAME>=OFF`. The full list of options is
 [at the end of this page](#build-options).
 
 ## Use the command
@@ -121,7 +121,7 @@ Routing, parallel branches, loops, checkpoints and human-in-the-loop interrupts:
 | `AGENT_ENGINE_AUDIOCPP` | `ON` with its submodule | Build the audio.cpp speech engine (`src/engines/audiocpp`: TTS, ASR, VAD, diarization); needs the `vendor/audio.cpp` submodule |
 | `AGENT_AUDIOCPP_MODEL_SET` | `custom` | audio.cpp model families compiled in: `custom` builds the families in `AGENT_AUDIOCPP_MODELS`, `full` builds all of them |
 | `AGENT_AUDIOCPP_MODELS` | (list in `src/engines/audiocpp/CMakeLists.txt`) | Model families built when `AGENT_AUDIOCPP_MODEL_SET=custom` |
-| `AGENT_ENGINE_TRELLIS` | `ON` with CUDA and its submodule | Build the TRELLIS.2 image-to-3D engine (`src/engines/trellis`); needs the `vendor/trellis2cpp` submodule |
+| `AGENT_ENGINE_TRELLIS` | `ON` with its submodule | Build the TRELLIS.2 image-to-3D engine (`src/engines/trellis`); needs the `vendor/trellis2cpp` submodule |
 | `AGENT_TRELLIS_BUILD_JOBS`, `AGENT_AUDIOCPP_BUILD_JOBS` | (empty) | Parallel jobs for the nested build of the TRELLIS and audio.cpp engines; empty uses the build tool's default |
 | `AGENT_GGML_AMX` | `OFF` | Keep Intel AMX kernels in the engines' ggml; only safe when every engine runs out of process |
 | `BUILD_SHARED_LIBS` | `OFF` | Build `libagent`, `agent_store_sqlite` and `agent_hub` as shared libraries |

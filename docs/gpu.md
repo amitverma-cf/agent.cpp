@@ -37,9 +37,8 @@ cmake -B build -G Ninja -DAGENT_ENGINE_LLAMA=ON -DGGML_CUDA=ON     # or -DGGML_V
 
 Other engines:
 
-- **TRELLIS** (`AGENT_ENGINE_TRELLIS`) is enabled by default only when a CUDA compiler is found and its submodule is checked out.
-  Its option text says it needs CUDA, but [api/engines.md](api/engines.md#the-trellis-engine) describes its nested build as
-  CPU-only. Whether it uses the GPU is not established.
+- **TRELLIS** (`AGENT_ENGINE_TRELLIS`) is on by default when its submodule is checked out. It runs on the CPU and needs no CUDA
+  ([api/engines.md](api/engines.md#the-trellis-engine)); a GPU path is not part of this tree.
 - **sdcpp** and **onnx** take no GPU option from this tree. ONNX Runtime's CUDA provider would need its own runtime and is not set up.
 
 ## What is not covered

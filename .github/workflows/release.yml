@@ -19,7 +19,7 @@ on:
       engines:
         description: "Engines to build and ship, comma separated: llama,onnx,audiocpp,sdcpp,trellis"
         type: string
-        default: "llama,onnx,audiocpp,sdcpp"
+        default: "llama,onnx,audiocpp,sdcpp,trellis"
 
 
 permissions:

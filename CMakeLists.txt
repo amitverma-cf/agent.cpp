@@ -259,11 +259,11 @@ option(AGENT_ENGINE_SDCPP "Build the stable-diffusion.cpp image generation engin
 # TRELLIS.2 needs a CUDA GPU: on by default only when a CUDA toolkit is found and the submodule is checked out.
 set(_trellis_default OFF)
 include(CheckLanguage)
-check_language(CUDA)
-if(CMAKE_CUDA_COMPILER AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/vendor/trellis2cpp/ggml/CMakeLists.txt)
+# TRELLIS.2 runs on the CPU (the plugin links ggml-cpu only; no CUDA is needed), so it is on whenever its sources are checked out.
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/vendor/trellis2cpp/ggml/CMakeLists.txt)
     set(_trellis_default ON)
 endif()
-option(AGENT_ENGINE_TRELLIS "Build the TRELLIS.2 image-to-3D engine plugin (src/engines/trellis; needs CUDA)" ${_trellis_default})
+option(AGENT_ENGINE_TRELLIS "Build the TRELLIS.2 image-to-3D engine plugin (src/engines/trellis; CPU, no CUDA needed)" ${_trellis_default})
 # audio.cpp (Apache-2.0): TTS, ASR, VAD, diarization and more from one library; builds its own ggml, so off by default.
 set(_audiocpp_default OFF)
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/vendor/audio.cpp/CMakeLists.txt)

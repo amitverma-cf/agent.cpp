@@ -71,7 +71,7 @@ Every engine is built by default and installed as its own plugin. Switch one off
 | ONNX Runtime | `AGENT_ENGINE_ONNX` | always (downloads ONNX Runtime at configure time) |
 | audio.cpp | `AGENT_ENGINE_AUDIOCPP` | the `vendor/audio.cpp` submodule is checked out |
 | stable-diffusion.cpp | `AGENT_ENGINE_SDCPP` | the `vendor/stable-diffusion.cpp` submodule is checked out |
-| TRELLIS.2 | `AGENT_ENGINE_TRELLIS` | a CUDA toolkit is found and the `vendor/trellis2cpp` submodule is checked out |
+| TRELLIS.2 | `AGENT_ENGINE_TRELLIS` | the `vendor/trellis2cpp` submodule is checked out (CPU; no CUDA needed) |
 
 Your own application ships only the engines it names (see below), so having them all built costs your users nothing.
 

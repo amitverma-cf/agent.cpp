@@ -15,7 +15,7 @@ Every engine is a plugin file, and each one has its own switch (`AGENT_ENGINE_<N
 | `onnx` | `ON` | CMake downloads the pinned ONNX Runtime release at configure time. Use `-DAGENT_ENGINE_ONNX=OFF` to avoid that. |
 | `sdcpp` | `ON` when `vendor/stable-diffusion.cpp` is checked out | Its own nested ggml submodule is needed too. |
 | `audiocpp` | `ON` when `vendor/audio.cpp` is checked out | |
-| `trellis` | `ON` when a CUDA compiler is found and `vendor/trellis2cpp` is checked out | The option text says it needs CUDA; [api/engines.md](api/engines.md#the-trellis-engine) describes its nested build as CPU-only. Check before relying on it. |
+| `trellis` | `ON` when `vendor/trellis2cpp` is checked out | CPU only, no CUDA needed ([api/engines.md](api/engines.md#the-trellis-engine)); the coarse path takes about 6 minutes and 3.5 GiB. |
 
 Clone with `git clone --recurse-submodules` so the optional engines are included. A plain clone still builds and says which
 engines it skipped. Build options are listed in [getting-started.md](getting-started.md#build-options).

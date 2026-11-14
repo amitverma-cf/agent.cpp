@@ -358,7 +358,7 @@ API when the matching macro is 0 (`AGENT_WITH_GRAPH`, `AGENT_WITH_MCP`, `AGENT_W
 
 Engines are plugins, so each is a separate switch that only adds or leaves out one file: `AGENT_ENGINE_LLAMA` (`ON`),
 `AGENT_ENGINE_ONNX` (`ON`), `AGENT_ENGINE_SDCPP`, `AGENT_ENGINE_AUDIOCPP` and `AGENT_ENGINE_TRELLIS`. The last three are on by
-default only when their sources are checked out (and, for TRELLIS, a CUDA compiler is found). The full list is in
+default only when their sources are checked out (TRELLIS runs on the CPU and needs no CUDA). The full list is in
 [getting-started.md](getting-started.md#build-options).
 
 The other pieces are separate targets: `agent_store_sqlite` (`apps/store-sqlite`), `agent_hub` (`apps/hub`, needs OpenSSL,
