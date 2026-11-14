@@ -154,6 +154,12 @@ instance. Both ask first (like `run_command`); `-y` or `/mode auto` approve them
 llama engine and switch the tools off for the session (a grammar cannot share a turn with the tool-call grammar). In `task text_gen` the same
 is `--params '{"json": true}'` or `--params '{"grammar": "..."}'`.
 
+### Look
+
+The chat uses four colours: black, white, turquoise and pastel pink, with white at reduced opacity for secondary text and lines. The window
+frame is turquoise; the input box turns turquoise while it takes input. Icons are Unicode symbols; `AGENT_ICONS=nerd` uses Nerd Font glyphs
+(install a [Nerd Font](https://www.nerdfonts.com) in your terminal first) and `AGENT_ICONS=ascii` plain characters.
+
 ### In an editor: `--acp`
 
 `agent chat --acp` speaks the [Agent Client Protocol](https://agentclientprotocol.com) on stdin and stdout (JSON-RPC 2.0, one message per

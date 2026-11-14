@@ -111,27 +111,47 @@ using rtxui::Event;
 // the open session, the spinner, errors).
 constexpr std::string_view kMarkdownCss = R"css(
   h1, h2, h3, h4, h5, h6, p, ul, ol, pre, blockquote, table, hr { margin-top: 0; }
-  h1 { color: #ff147d; font-weight: bold; border-bottom: double; border-color: #00e5ff; margin-bottom: 1; }
-  h2 { color: #ffffff; font-weight: bold; border-bottom: solid; border-color: #00e5ff; margin-bottom: 1; }
-  h3, h4, h5, h6 { color: #00e5ff; font-weight: bold; }
+  h1 { color: #ffb3d1; font-weight: bold; border-bottom: double; border-color: #4a4a4a; margin-bottom: 1; }
+  h2 { color: #ffffff; font-weight: bold; border-bottom: solid; border-color: #4a4a4a; margin-bottom: 1; }
+  h3, h4, h5, h6 { color: #40e0d0; font-weight: bold; }
   p { color: #ffffff; margin-bottom: 1; }
   strong { color: #ffffff; font-weight: bold; }
   em { color: #ffffff; }
-  a { color: #00e5ff; text-decoration: underline; }
-  code { color: #00e5ff; }
-  pre { color: #00e5ff; scrollbar-width: none; border: round; border-color: #00e5ff; padding-left: 1; padding-right: 1; margin-bottom: 1; }
-  blockquote { color: #ffffff; border-left: solid; border-color: #00e5ff; padding-left: 1; margin-bottom: 1; }
+  a { color: #40e0d0; text-decoration: underline; }
+  code { color: #40e0d0; }
+  pre { color: #40e0d0; scrollbar-width: none; border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; margin-bottom: 1; }
+  blockquote { color: #ffffff; border-left: solid; border-color: #4a4a4a; padding-left: 1; margin-bottom: 1; }
   blockquote p { margin-bottom: 0; }
   ul, ol { padding-left: 2; margin-bottom: 1; }
   li { color: #ffffff; }
   li p { margin-bottom: 0; }
-  table { border: round; border-color: #00e5ff; margin-bottom: 1; }
-  th { color: #ff147d; font-weight: bold; border-bottom: solid; border-color: #00e5ff; padding-left: 1; padding-right: 1; }
+  table { border: round; border-color: #4a4a4a; margin-bottom: 1; }
+  th { color: #ffb3d1; font-weight: bold; border-bottom: solid; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
   td { color: #ffffff; padding-left: 1; padding-right: 1; }
-  hr { color: #00e5ff; margin-bottom: 1; }
+  hr { color: #40e0d0; margin-bottom: 1; }
 )css";
 
 // One block of the conversation, as the template reads it.
+struct Icons {
+    const char *assistant, *error, *tool, *result, *current, *other, *project, *caret, *busy;
+};
+
+// Unicode symbols every terminal font has; a Nerd Font (https://www.nerdfonts.com) gives richer glyphs: AGENT_ICONS=nerd.
+const Icons &icons() {
+    static const Icons unicode{"\xE2\x9C\xA6", "\xE2\x9C\x97", "\xE2\x9D\xAF", "\xE2\x86\xB3", "\xE2\x97\x8F",
+                               "\xE2\x97\x8B", "\xE2\x96\xB8", "\xE2\x9D\xAF", "\xC2\xB7"};
+    static const Icons nerd{"\xEF\x80\x85", "\xEF\x80\x8D", "\xEF\x80\x93", "\xEF\x80\x8C", "\xEF\x84\x91",
+                            "\xEF\x84\x8C", "\xEF\x81\xBB", "\xEF\x84\x85", "\xC2\xB7"};
+    static const Icons ascii{"*", "x", ">", "-", "*", "o", ">", ">", "."};
+    static const Icons &chosen = []() -> const Icons & {
+        const char *want = std::getenv("AGENT_ICONS");
+        if (want && std::string_view(want) == "nerd") return nerd;
+        if (want && std::string_view(want) == "ascii") return ascii;
+        return unicode;
+    }();
+    return chosen;
+}
+
 struct Row {
     TuiKind kind = TuiKind::Note;
     std::string mark; // the symbol in the left gutter
@@ -241,6 +261,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         Bind(gauge);
         Bind(gauge_class);
         Bind(caret);
+        Bind(box_class);
         Bind(md_css);
         Bind(main_title);
         Bind(project_line);
@@ -267,8 +288,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
     std::vector<Match> matches;
     std::vector<SideRow> side;
     std::vector<TuiSession> sessions;
-    std::string input, header, subtitle, question, prompt_line, busy_line, status_left, gauge, gauge_class = "gauge",
-                                                                                               caret = "\xE2\x80\xBA";
+    std::string box_class = "box", input, header, subtitle, question, prompt_line, busy_line, status_left, gauge, gauge_class = "gauge",
+                caret = "\xE2\x9D\xAF";
     std::string notice;
     bool has_notice = false;
     std::string main_title = "New chat", project_line, side_class = "side", app_class = "main home", tip;
@@ -296,13 +317,13 @@ class ChatApp : public rtxui::Component<ChatApp> {
     void Emit(TuiKind kind, const std::string &text) {
         if (kind == TuiKind::Assistant) {
             if (!rows.empty() && rows.back().kind == TuiKind::Assistant) rows.back().text += text;
-            else rows.push_back({kind, "\xE2\x97\x86", text, "row assistant", 1});
+            else rows.push_back({kind, icons().assistant, text, "row assistant", 1});
         } else {
             std::string t = text;
             while (!t.empty() && (t.back() == '\n' || t.back() == '\r')) t.pop_back();
             if (t.empty()) return;
             if (kind == TuiKind::User) rows.push_back({kind, "", t, "row user", 0});
-            else if (kind == TuiKind::Error) rows.push_back({kind, "!", t, "row error", 0});
+            else if (kind == TuiKind::Error) rows.push_back({kind, icons().error, t, "row error", 0});
             else if (kind == TuiKind::Tool) AddTool(t);
             else if (kind == TuiKind::Metrics) rows.push_back({kind, "", t, "row metrics", 0});
             else rows.push_back({kind, "", t, "row note", 0});
@@ -320,12 +341,12 @@ class ChatApp : public rtxui::Component<ChatApp> {
             const size_t space = rest.find(' ');
             const std::string name = rest.substr(0, space);
             const std::string args = space == std::string::npos ? std::string() : trim_both(std::string_view(rest).substr(space + 1));
-            rows.push_back({TuiKind::Tool, "\xE2\x9A\x99", name + "  " + args, "row tool", 0});
+            rows.push_back({TuiKind::Tool, icons().tool, name + "  " + args, "row tool", 0});
         } else if (t.compare(0, result.size(), result) == 0) {
             const std::string body = summarize_tool_result(trim_both(std::string_view(t).substr(result.size())), 4, 200);
             const bool failed = body.compare(0, 5, "Error") == 0 ||
                                 (body.find("\"exit_code\":0") == std::string::npos && body.find("\"exit_code\":") != std::string::npos);
-            rows.push_back({TuiKind::Tool, "", body, failed ? "row result failed" : "row result", 0});
+            rows.push_back({TuiKind::Tool, failed ? icons().error : icons().result, body, failed ? "row result failed" : "row result", 0});
         } else {
             rows.push_back({TuiKind::Tool, "", t, "row note", 0});
         }
@@ -373,10 +394,11 @@ class ChatApp : public rtxui::Component<ChatApp> {
                 std::string cls = s.active ? "sess current" : "sess";
                 if (side_focus && static_cast<int>(j) == side_sel) cls += " hi";
                 const std::string title = s.title.empty() ? "New chat" : s.title;
-                group.push_back({std::string(s.active ? "\xE2\x97\x8F " : "  ") + clip(title, 22), cls, static_cast<int>(j)});
+                group.push_back(
+                    {std::string(s.active ? icons().current : icons().other) + " " + clip(title, 22), cls, static_cast<int>(j)});
             }
             if (group.empty()) continue;
-            side.push_back({"\xE2\x96\xB8 " + base_name(ws), "proj", -1});
+            side.push_back({std::string(icons().project) + " " + base_name(ws), "proj", -1});
             side.insert(side.end(), group.begin(), group.end());
         }
         if (!side_filter.empty()) side.insert(side.begin(), {"find: " + side_filter, "proj", -1});
@@ -460,7 +482,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
         if (!mode_text.empty() && mode_text != "ask") status_left = "[" + mode_text + " mode]  " + status_left;
         app_class = show_welcome ? "main home" : "main";
         side_class = std::string("side") + (side_hide ? " hidden" : "") + (side_drawer ? " drawer" : "");
-        caret = busy ? "\xC2\xB7" : "\xE2\x80\xBA";
+        caret = busy ? icons().busy : icons().caret;
+        box_class = (busy || asking || side_focus) ? "box" : "box active";
         UpdateBusyLine();
     }
 
@@ -781,7 +804,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             <for each="{matches}" as="m"><div class="{m.cls}"><span class="pname">{m.name}</span><span class="phelp">{m.help}</span></div></for>
           </div>
           <div if="{prompting}" class="promptq">? {prompt_line}</div>
-          <div class="box"><span class="caret">{caret}</span><input value="{input}" autofocus=""/></div>
+          <div class="{box_class}"><span class="caret">{caret}</span><input value="{input}" autofocus=""/></div>
           <div class="meta"><span class="model">{header}</span></div>
           <div class="tip" if="{show_welcome}">{tip}</div>
         </div>
@@ -791,95 +814,96 @@ class ChatApp : public rtxui::Component<ChatApp> {
     </div>
 
     <style>
-      .shell { display: flex; flex-direction: row; width: 100%; height: 100%; background-color: #000000; color: #ffffff; }
-      .side { width: 30; flex-shrink: 0; display: flex; flex-direction: column; border-right: solid; border-color: #00e5ff; padding-left: 1; padding-right: 1; }
+      .shell { display: flex; flex-direction: row; width: 100%; height: 100%; background-color: #000000; color: #ffffff; border: round; border-color: #40e0d0; }
+      .side { width: 30; flex-shrink: 0; display: flex; flex-direction: column; border-right: solid; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
       .hidden { display: none; }
       .burger, .small-brand { display: none; }
-      .small-brand { color: #ff147d; font-weight: bold; }
+      .small-brand { color: #ffb3d1; font-weight: bold; }
       .sbrand { padding-bottom: 1; }
-      .brand { color: #ff147d; font-weight: bold; }
-      .newchat { display: flex; flex-direction: row; border: round; border-color: #00e5ff; padding-left: 1; padding-right: 1; margin-bottom: 1; }
-      .plus { color: #ff147d; font-weight: bold; padding-right: 1; }
-      .kbd { color: #00e5ff; flex-grow: 1; text-align: right; }
+      .brand { color: #ffb3d1; font-weight: bold; }
+      .newchat { display: flex; flex-direction: row; border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; margin-bottom: 1; }
+      .plus { color: #ffb3d1; font-weight: bold; padding-right: 1; }
+      .kbd { color: #8a8a8a; flex-grow: 1; text-align: right; }
       .slist { flex-grow: 1; flex-basis: 0; min-height: 0; overflow-y: scroll; scrollbar-width: none; }
-      .proj { color: #00e5ff; font-weight: bold; margin-top: 1; }
-      .sess { color: #ffffff; padding-left: 1; white-space: nowrap; }
-      .sess.current { color: #ff147d; font-weight: bold; }
-      .sess.hi { background-color: #00e5ff; color: #000000; font-weight: bold; }
-      .sfoot { border-top: solid; border-color: #00e5ff; }
-      .sproj { color: #ffffff; white-space: nowrap; }
-      .skeys { color: #00e5ff; }
+      .proj { color: #40e0d0; font-weight: bold; margin-top: 1; }
+      .sess { color: #8a8a8a; padding-left: 1; white-space: nowrap; }
+      .sess.current { color: #ffb3d1; font-weight: bold; }
+      .sess.hi { background-color: #40e0d0; color: #000000; font-weight: bold; }
+      .sfoot { border-top: solid; border-color: #4a4a4a; }
+      .sproj { color: #8a8a8a; white-space: nowrap; }
+      .skeys { color: #8a8a8a; }
       .main { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; }
       .sp1, .sp2 { flex-grow: 0; }
       .home .sp1, .home .sp2 { flex-grow: 1; }
-      .top { display: flex; flex-direction: row; border-bottom: solid; border-color: #00e5ff; padding-left: 2; padding-right: 2; }
+      .top { display: flex; flex-direction: row; border-bottom: solid; border-color: #4a4a4a; padding-left: 2; padding-right: 2; }
       .home .top { display: none; }
       .ttitle { color: #ffffff; font-weight: bold; flex-grow: 1; white-space: nowrap; }
-      .tproj { color: #00e5ff; white-space: nowrap; }
-      .transcript { flex-grow: 1; flex-shrink: 1; flex-basis: 0; min-height: 0; overflow-y: scroll; padding-left: 2; padding-right: 2; padding-top: 1; scrollbar-color: #00e5ff #000000; }
+      .tproj { color: #8a8a8a; white-space: nowrap; }
+      .transcript { flex-grow: 1; flex-shrink: 1; flex-basis: 0; min-height: 0; overflow-y: scroll; padding-left: 2; padding-right: 2; padding-top: 1; scrollbar-color: #40e0d0 #000000; }
       .home .transcript { flex-grow: 0; flex-shrink: 0; flex-basis: auto; overflow-y: visible; }
       .welcome { display: flex; flex-direction: column; margin-bottom: 1; }
       .welcome > div { width: 100%; text-align: center; }
       .banner { white-space: pre; }
-      .pink { color: #ff147d; font-weight: bold; }
-      .neon { color: #00e5ff; }
-      .tag { color: #ffffff; margin-top: 1; }
-      .warn { color: #ff147d; margin-top: 1; }
+      .pink { color: #ffb3d1; font-weight: bold; }
+      .neon { color: #40e0d0; }
+      .tag { color: #8a8a8a; margin-top: 1; }
+      .warn { color: #ffb3d1; margin-top: 1; }
       .row { display: flex; flex-direction: row; margin-bottom: 1; }
-      .row .mark { width: 2; color: #00e5ff; }
+      .row .mark { width: 2; color: #40e0d0; }
       .row .body { flex-grow: 1; white-space: pre-wrap; }
       .user { padding-left: 12; }
       .user .mark { display: none; }
-      .user .body { flex-grow: 1; border: round; border-color: #00e5ff; padding-left: 1; padding-right: 1; color: #ffffff; }
+      .user .body { flex-grow: 1; border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; color: #ffffff; }
       .assistant { margin-bottom: 0; }
-      .assistant .mark { color: #ff147d; font-weight: bold; }
+      .assistant .mark { color: #ffb3d1; font-weight: bold; }
       .assistant .body { white-space: normal; }
       .metrics { margin-bottom: 1; padding-left: 2; }
       .metrics .mark { display: none; }
-      .metrics .body { color: #00e5ff; }
+      .metrics .body { color: #8a8a8a; }
       .tool { margin-bottom: 0; }
-      .tool .body { color: #ffffff; }
+      .tool .body { color: #8a8a8a; }
       .result { margin-bottom: 1; }
       .result .mark { width: 2; }
-      .result .body { color: #00e5ff; }
-      .result.failed .body { color: #ff147d; }
-      .error .mark, .error .body { color: #ff147d; }
-      .note .body { color: #ffffff; }
-      .busy { color: #ff147d; padding-left: 2; }
+      .result .body { color: #40e0d0; }
+      .result.failed .body { color: #ffb3d1; }
+      .error .mark, .error .body { color: #ffb3d1; }
+      .note .body { color: #8a8a8a; }
+      .busy { color: #ffb3d1; padding-left: 2; }
       .composer { padding-left: 2; padding-right: 2; padding-bottom: 0; }
       .home .composer { width: 76%; align-self: center; padding-left: 0; padding-right: 0; }
-      .box { display: flex; flex-direction: row; border: round; border-color: #00e5ff; padding-left: 1; padding-right: 1; }
-      .caret { color: #ff147d; font-weight: bold; width: 2; }
+      .box { display: flex; flex-direction: row; border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
+      .box.active { border-color: #40e0d0; }
+      .caret { color: #ffb3d1; font-weight: bold; width: 2; }
       .box input { flex-grow: 1; background-color: #000000; color: #ffffff; padding-left: 0; }
       .box input:focus, .box input:hover { background-color: #000000; color: #ffffff; }
       .box input::part(cursor), .box input:focus::part(cursor), .box input::part(cursor-focused),
       .box input:focus::part(cursor-focused) { color: #ffffff; }
-      .box input::part(selection), .box input:focus::part(selection) { background-color: #00e5ff; color: #000000; }
+      .box input::part(selection), .box input:focus::part(selection) { background-color: #40e0d0; color: #000000; }
       .meta { display: flex; flex-direction: row; padding-left: 1; padding-right: 1; }
-      .model { color: #00e5ff; flex-grow: 1; white-space: nowrap; }
-      .tip { color: #ffffff; padding-left: 1; margin-top: 1; }
-      .ask { border: round; border-color: #ff147d; padding-left: 1; padding-right: 1; margin-bottom: 0; }
-      .allow { color: #ff147d; font-weight: bold; padding-right: 1; }
+      .model { color: #8a8a8a; flex-grow: 1; white-space: nowrap; }
+      .tip { color: #8a8a8a; padding-left: 1; margin-top: 1; }
+      .ask { border: round; border-color: #40e0d0; padding-left: 1; padding-right: 1; margin-bottom: 0; }
+      .allow { color: #ffb3d1; font-weight: bold; padding-right: 1; }
       .q { flex-grow: 1; white-space: pre-wrap; }
-      .keys { color: #00e5ff; font-weight: bold; padding-left: 2; }
-      .palette { border: round; border-color: #00e5ff; padding-left: 1; padding-right: 1; }
-      .pitem { display: flex; flex-direction: row; color: #00e5ff; }
+      .keys { color: #40e0d0; font-weight: bold; padding-left: 2; }
+      .palette { border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
+      .pitem { display: flex; flex-direction: row; color: #40e0d0; }
       .pitem .pname { width: 14; }
       .pitem .phelp { color: #ffffff; }
-      .current .pname { color: #ff147d; font-weight: bold; }
-      .promptq { color: #ff147d; font-weight: bold; padding-left: 1; }
-      .status { display: flex; flex-direction: row; padding-left: 2; padding-right: 2; color: #00e5ff; }
+      .current .pname { color: #ffb3d1; font-weight: bold; }
+      .promptq { color: #ffb3d1; font-weight: bold; padding-left: 1; }
+      .status { display: flex; flex-direction: row; padding-left: 2; padding-right: 2; color: #8a8a8a; }
       .status .left { flex-grow: 1; flex-shrink: 1; min-width: 0; white-space: nowrap; overflow-x: hidden; }
       .gauge { white-space: nowrap; padding-left: 2; flex-shrink: 0; }
-      .gauge { color: #00e5ff; }
-      .gauge.hot { color: #ff147d; }
+      .gauge { color: #40e0d0; }
+      .gauge.hot { color: #ffb3d1; }
 
       /* Narrow terminals (below 84 columns): the sidebar becomes a drawer over the conversation, opened with Ctrl+K, Ctrl+B or the menu button. */
       @media (max-width: 83) {
         .shell { position: relative; }
         .side { display: none; }
         .side.drawer { display: flex; position: absolute; left: 0; top: 0; bottom: 0; background-color: #000000; z-index: 5; }
-        .burger { display: inline; color: #ff147d; font-weight: bold; }
+        .burger { display: inline; color: #ffb3d1; font-weight: bold; }
         .home .top { display: flex; border-bottom: none; }
         .home .ttitle, .home .tproj { display: none; }
       }
