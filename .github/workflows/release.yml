@@ -58,7 +58,7 @@ jobs:
         run: |
           # The full-screen chat (RTXUI) needs C++23: GCC 13 or newer. GCC 14 is used, and libstdc++ is linked statically so the
           # binaries do not need the newer libstdc++ on the machine that runs them.
-          sudo apt-get update && sudo apt-get install -y ninja-build libssl-dev g++-14 ${{ matrix.variant == '-vulkan' && 'libvulkan-dev glslc' || '' }}
+          sudo apt-get update && sudo apt-get install -y ninja-build libssl-dev g++-14 ${{ matrix.variant == '-vulkan' && 'libvulkan-dev glslc spirv-headers' || '' }}
           echo "CC=gcc-14" >> "$GITHUB_ENV"
           echo "CXX=g++-14" >> "$GITHUB_ENV"
 
