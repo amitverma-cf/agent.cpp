@@ -120,16 +120,17 @@ struct KeyName {
 const std::vector<KeyName> &key_table() {
     static const std::vector<KeyName> table = [] {
         std::vector<KeyName> v;
-#define RTXUI_KEY(L, UC)                                             \
-    v.push_back({"ctrl+" #L, &Event::Ctrl##UC()});                   \
-    v.push_back({"alt+" #L, &Event::Alt##UC()});                     \
+#define RTXUI_KEY(L, UC)                                                                                                                   \
+    v.push_back({"ctrl+" #L, &Event::Ctrl##UC()});                                                                                         \
+    v.push_back({"alt+" #L, &Event::Alt##UC()});                                                                                           \
     v.push_back({"ctrl+alt+" #L, &Event::CtrlAlt##UC()});
-        RTXUI_KEY(a, A) RTXUI_KEY(b, B) RTXUI_KEY(c, C) RTXUI_KEY(d, D) RTXUI_KEY(e, E) RTXUI_KEY(f, F) RTXUI_KEY(g, G) RTXUI_KEY(h, H)
-        RTXUI_KEY(i, I) RTXUI_KEY(j, J) RTXUI_KEY(k, K) RTXUI_KEY(l, L) RTXUI_KEY(m, M) RTXUI_KEY(n, N) RTXUI_KEY(o, O) RTXUI_KEY(p, P)
-        RTXUI_KEY(q, Q) RTXUI_KEY(r, R) RTXUI_KEY(s, S) RTXUI_KEY(t, T) RTXUI_KEY(u, U) RTXUI_KEY(v, V) RTXUI_KEY(w, W) RTXUI_KEY(x, X)
-        RTXUI_KEY(y, Y) RTXUI_KEY(z, Z)
+        RTXUI_KEY(a, A)
+        RTXUI_KEY(b, B) RTXUI_KEY(c, C) RTXUI_KEY(d, D) RTXUI_KEY(e, E) RTXUI_KEY(f, F) RTXUI_KEY(g, G) RTXUI_KEY(h, H) RTXUI_KEY(i, I)
+            RTXUI_KEY(j, J) RTXUI_KEY(k, K) RTXUI_KEY(l, L) RTXUI_KEY(m, M) RTXUI_KEY(n, N) RTXUI_KEY(o, O) RTXUI_KEY(p, P) RTXUI_KEY(q, Q)
+                RTXUI_KEY(r, R) RTXUI_KEY(s, S) RTXUI_KEY(t, T) RTXUI_KEY(u, U) RTXUI_KEY(v, V) RTXUI_KEY(w, W) RTXUI_KEY(x, X)
+                    RTXUI_KEY(y, Y) RTXUI_KEY(z, Z)
 #undef RTXUI_KEY
-        v.push_back({"f1", &Event::F1()});
+                        v.push_back({"f1", &Event::F1()});
         v.push_back({"f2", &Event::F2()});
         v.push_back({"f3", &Event::F3()});
         v.push_back({"f4", &Event::F4()});
@@ -686,8 +687,10 @@ class ChatApp : public rtxui::Component<ChatApp> {
 
     // The line between the input and the bottom bar: what the next useful key or command is, for what is going on right now.
     void ComputeHint() {
-        const std::string idle[] = {"Press ? for every keyboard shortcut", "/ lists the commands",
-                                    "@file puts a file's text in your message", "!command runs a shell command in your project",
+        const std::string idle[] = {"Press ? for every keyboard shortcut",
+                                    "/ lists the commands",
+                                    "@file puts a file's text in your message",
+                                    "!command runs a shell command in your project",
                                     tui_key_pretty(keymap["sessions"]) + " switches to another session",
                                     tui_key_pretty(keymap["settings"]) + " opens the settings"};
         if (confirm_open) hint = "Enter or y confirms, Esc cancels";
@@ -1218,7 +1221,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
             else if (e.is<Event::Mouse>()) return Component<ChatApp>::OnEvent(e);
             return true;
         }
-        if (!asking && !show_settings && (Is(e, "help") || e == Event::F1() || (!busy && input.empty() && !side_focus && Letter(e) == '?'))) {
+        if (!asking && !show_settings &&
+            (Is(e, "help") || e == Event::F1() || (!busy && input.empty() && !side_focus && Letter(e) == '?'))) {
             show_keys = true;
             return true;
         }

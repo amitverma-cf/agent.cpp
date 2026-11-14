@@ -583,7 +583,8 @@ std::string config_to_json(const CliConfig &c) {
     out += "  \"js_runtime\": \"" + c.js_runtime + "\",\n";
     out += "  \"search_url\": " + json_str(c.search_url) + ",\n";
     out += "  \"shortcuts\": {";
-    for (auto it = c.shortcuts.begin(); it != c.shortcuts.end(); ++it) out += (it == c.shortcuts.begin() ? "" : ", ") + json_str(it->first) + ": " + json_str(it->second);
+    for (auto it = c.shortcuts.begin(); it != c.shortcuts.end(); ++it)
+        out += (it == c.shortcuts.begin() ? "" : ", ") + json_str(it->first) + ": " + json_str(it->second);
     out += "}\n";
     out += "}\n";
     return out;

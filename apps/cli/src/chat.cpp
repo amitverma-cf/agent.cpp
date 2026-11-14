@@ -1643,8 +1643,15 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
     for (const TuiShortcut &a : tui_shortcut_actions()) {
         const auto changed = c.shortcuts.find(a.action);
         const std::string key = changed != c.shortcuts.end() && tui_key_valid(changed->second) ? changed->second : a.default_key;
-        s.push_back({group, section, std::string("shortcut.") + a.action, a.label, tui_key_pretty(key),
-                     std::string("Default: ") + tui_key_pretty(a.default_key) + ". F1 to F12, Ctrl+letter or Alt+letter", {}, true, true});
+        s.push_back({group,
+                     section,
+                     std::string("shortcut.") + a.action,
+                     a.label,
+                     tui_key_pretty(key),
+                     std::string("Default: ") + tui_key_pretty(a.default_key) + ". F1 to F12, Ctrl+letter or Alt+letter",
+                     {},
+                     true,
+                     true});
     }
     add("shortcut_reset", "Put the defaults back", "keep", "Choose reset to forget every shortcut you changed", {"keep", "reset"});
 
