@@ -46,11 +46,10 @@ curl -fsSL https://agent.qozu.fyi/install.sh | sh
 irm https://agent.qozu.fyi/install.ps1 | iex
 ```
 
-The script picks the archive for your machine (the CUDA build on NVIDIA machines (Vulkan for llama, stable-diffusion.cpp and audio.cpp, CUDA for TRELLIS.2), the Vulkan build
-where only a Vulkan driver is present, else the CPU build; `AGENT_VARIANT=cpu|vulkan|cuda` overrides), checks its SHA-256 against the release's `SHA256SUMS`, and installs to `~/.local/share/agent-cpp` (Linux) or
+The script picks the archive for your machine (the Vulkan build (Intel, AMD and Arm GPUs) when a Vulkan driver is present, else the CPU build; `AGENT_VARIANT=cpu|vulkan` overrides), checks its SHA-256 against the release's `SHA256SUMS`, and installs to `~/.local/share/agent-cpp` (Linux) or
 `%LOCALAPPDATA%\Programs\agent-cpp` (Windows). Then run `agent setup`. `agent update` keeps it current; it checks the release's signature.
-The archives are on the [releases page](https://github.com/amitverma-cf/agent.cpp/releases). Linux needs glibc 2.39 or newer. CUDA, ROCm and
-macOS builds are not published.
+The archives are on the [releases page](https://github.com/amitverma-cf/agent.cpp/releases). Linux needs glibc 2.39 or newer. Linux and Windows on x86_64 (Intel, AMD) and
+aarch64 (Arm) are published; CUDA, ROCm and macOS builds are not.
 
 **From source.** You need CMake 3.21+, Ninja and a C++20 compiler (MSVC 2022, GCC 12+ or Clang 15+). Windows details and OpenSSL are in
 [docs/getting-started.md](docs/getting-started.md).

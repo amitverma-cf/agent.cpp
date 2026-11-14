@@ -41,9 +41,6 @@ jobs:
           - { runner: ubuntu-24.04,     os_name: linux,   arch: x86_64,  variant: "-vulkan", lib_prefix: lib, lib_ext: so,  exe_ext: "",     ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON -DGGML_VULKAN=ON" }
           - { runner: ubuntu-24.04-arm, os_name: linux,   arch: aarch64, variant: "-vulkan", lib_prefix: lib, lib_ext: so,  exe_ext: "",     ggml: "-DGGML_NATIVE=OFF -DGGML_VULKAN=ON" }
           - { runner: windows-2022,     os_name: windows, arch: x86_64,  variant: "-vulkan", lib_prefix: "",  lib_ext: dll, exe_ext: ".exe", ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON -DGGML_VULKAN=ON", triplet: x64-windows, dll: x64 }
-          # NVIDIA: Vulkan for llama, stable-diffusion.cpp and audio.cpp, CUDA for TRELLIS.2 (the CUDA plugin needs the NVIDIA driver).
-          - { runner: ubuntu-24.04,     os_name: linux,   arch: x86_64,  variant: "-cuda", lib_prefix: lib, lib_ext: so,  exe_ext: "",     ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON -DGGML_VULKAN=ON -DAGENT_TRELLIS_BACKEND=cuda" }
-          - { runner: windows-2022,     os_name: windows, arch: x86_64,  variant: "-cuda", lib_prefix: "",  lib_ext: dll, exe_ext: ".exe", ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON -DGGML_VULKAN=ON -DAGENT_TRELLIS_BACKEND=cuda", triplet: x64-windows, dll: x64 }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,11 +58,9 @@ jobs:
         run: |
           # The full-screen chat (RTXUI) needs C++23: GCC 13 or newer. GCC 14 is used, and libstdc++ is linked statically so the
           # binaries do not need the newer libstdc++ on the machine that runs them.
-          sudo apt-get update && sudo apt-get install -y ninja-build libssl-dev g++-14 ${{ matrix.variant != '' && 'libvulkan-dev glslc spirv-headers' || '' }} ${{ matrix.variant == '-cuda' && 'nvidia-cuda-toolkit g++-12' || '' }}
+          sudo apt-get update && sudo apt-get install -y ninja-build libssl-dev g++-14 ${{ matrix.variant != '' && 'libvulkan-dev glslc spirv-headers' || '' }}
           echo "CC=gcc-14" >> "$GITHUB_ENV"
           echo "CXX=g++-14" >> "$GITHUB_ENV"
-          # nvcc of Ubuntu's CUDA toolkit supports GCC 12 at most: it compiles the CUDA sources, GCC 14 everything else.
-          if [ "${{ matrix.variant }}" = "-cuda" ]; then echo "CUDAHOSTCXX=g++-12" >> "$GITHUB_ENV"; fi
 
       - name: Dependencies (Windows)
         if: matrix.os_name == 'windows'
@@ -73,12 +68,6 @@ jobs:
         run: |
           choco install ninja -y --no-progress
           "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install openssl:${{ matrix.triplet }}
-          if [ "${{ matrix.variant }}" = "-cuda" ]; then
-            choco install cuda -y --no-progress
-            cuda="$(ls -d "/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA"/v* | sort -V | tail -1)"
-            echo "CUDA_PATH=$(cygpath -w "$cuda")" >> "$GITHUB_ENV"
-            cygpath -w "$cuda/bin" >> "$GITHUB_PATH"
-          fi
           if [ -n "${{ matrix.variant }}" ]; then
             choco install vulkan-sdk -y --no-progress
             sdk="$(ls -d /c/VulkanSDK/* | sort | tail -1)"
@@ -146,9 +135,6 @@ jobs:
               if [ "${{ matrix.os_name }}" = "windows" ]; then (cd stage && 7z a -tzip "../assets/${pkg}.zip" "${pkg}"); else tar -C stage -czf "assets/${pkg}.tar.gz" "${pkg}"; fi
             fi
           done
-          if [ "${{ matrix.variant }}${{ matrix.os_name }}" = "-cudawindows" ]; then
-            for d in cudart64 cublas64 cublasLt64; do cp "$CUDA_PATH"/bin/$d*.dll "dist/${name}/engines/"; done
-          fi
           if [ "${{ matrix.os_name }}" = "windows" ]; then cp "$VCPKG_INSTALLATION_ROOT"/installed/${{ matrix.triplet }}/bin/{libssl-3-${{ matrix.dll }},libcrypto-3-${{ matrix.dll }}}.dll "dist/${name}/"; fi
           cp LICENSE README.md "dist/${name}/"
           # third-party licences of what is compiled in

@@ -4,7 +4,7 @@
 # Picks the release archive that fits this machine (x86_64 or aarch64; the Vulkan build when a Vulkan driver is present), checks its
 # SHA-256 against the release's SHA256SUMS, unpacks it to ~/.local/share/agent-cpp and links `agent` into ~/.local/bin.
 # It then runs `agent setup` and opens the chat (AGENT_NO_START=1 only installs).
-# Environment: AGENT_VERSION (a tag such as v1.0.0; default: the latest release), AGENT_VARIANT (cpu, vulkan or cuda; default: detected),
+# Environment: AGENT_VERSION (a tag such as v1.0.0; default: the latest release), AGENT_VARIANT (cpu or vulkan; default: detected),
 #              AGENT_PREFIX (default ~/.local), AGENT_REPO (default amitverma-cf/agent.cpp), NO_COLOR.
 set -eu
 
@@ -54,10 +54,9 @@ variant="${AGENT_VARIANT:-}"
 detected=""
 if [ -z "$variant" ]; then
     variant=cpu
-    if [ "$arch" = x86_64 ] && { command -v nvidia-smi >/dev/null 2>&1 || [ -e /proc/driver/nvidia/version ]; }; then variant=cuda; detected=" (NVIDIA driver found)"
-    elif command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q 'libvulkan\.so'; then variant=vulkan; detected=" (Vulkan driver found)"; fi
+    if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q 'libvulkan\.so'; then variant=vulkan; detected=" (Vulkan driver found)"; fi
 fi
-case "$variant" in cpu) suffix="" ;; vulkan) suffix="-vulkan" ;; cuda) suffix="-cuda" ;; *) die "AGENT_VARIANT must be cpu, vulkan or cuda." ;; esac
+case "$variant" in cpu) suffix="" ;; vulkan) suffix="-vulkan" ;; *) die "AGENT_VARIANT must be cpu or vulkan." ;; esac
 
 if [ -n "${AGENT_VERSION:-}" ]; then base="https://github.com/$REPO/releases/download/$AGENT_VERSION"; else base="https://github.com/$REPO/releases/latest/download"; fi
 
@@ -67,10 +66,6 @@ fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS" || die "Cannot read the release ($bas
 
 pick() { grep -E " \*?agent-cpp-[^ ]*-linux-$arch$1\.tar\.gz\$" "$tmp/SHA256SUMS" | head -n 1; }
 line="$(pick "$suffix")"
-if [ -z "$line" ] && [ "$suffix" = "-cuda" ]; then
-    info "No CUDA build for $arch in this release; trying Vulkan"
-    variant=vulkan; suffix="-vulkan"; line="$(pick "-vulkan")"
-fi
 if [ -z "$line" ] && [ -n "$suffix" ]; then
     info "No GPU build for $arch in this release; using the CPU build"
     variant=cpu; suffix=""; detected=""
