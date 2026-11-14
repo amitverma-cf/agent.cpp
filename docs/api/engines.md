@@ -183,7 +183,7 @@ enum class EngineIsolation { Default, InProcess, Process };
 cfg.engine_isolation       = agent::EngineIsolation::Process;
 cfg.engine_host_path       = "";    // default: $AGENT_ENGINE_HOST, next to the executable, <exe>/../bin, PATH
 cfg.engine_timeout_ms      = 0;     // per-request watchdog, 0 = none
-cfg.engine_cancel_grace_ms = 2000;  // after request_cancel(), then the host is killed
+cfg.engine_cancel_grace_ms = 6000;  // after request_cancel(), then the host is killed
 cfg.engine_max_restarts    = 3;     // automatic restarts per rolling minute
 ```
 

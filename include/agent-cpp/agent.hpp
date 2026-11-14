@@ -588,7 +588,7 @@ struct Config {
     // request takes longer the host is killed and the call fails with ErrorCode::EngineCrashed. 0 = none.
     int engine_timeout_ms = 0;
     // Process isolation: after request_cancel(), how long the engine gets to stop before the host is killed.
-    int engine_cancel_grace_ms = 2000;
+    int engine_cancel_grace_ms = 6000;
     // Process isolation: automatic host restarts allowed per rolling minute. Past it, calls fail with
     // ErrorCode::EngineCrashed until the window frees up.
     int engine_max_restarts = 3;

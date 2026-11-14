@@ -216,7 +216,8 @@ class Batcher {
 
     // Prompt prefill runs as its own decodes (not batched across sequences), split into chunks of
     // at most n_batch tokens: a single llama_decode larger than n_batch aborts inside llama.cpp.
-    bool prefill(llama_seq_id seq, const std::vector<llama_token> &tokens, size_t begin, common_sampler *sampler, llama_token &out) {
+    bool prefill(llama_seq_id seq, const std::vector<llama_token> &tokens, size_t begin, common_sampler *sampler, llama_token &out,
+                 const volatile int32_t *cancel = nullptr) {
         if (begin >= tokens.size()) return false;
         std::lock_guard<std::mutex> lock(mu_);
         if (use_checkpoints && reusable_[seq] && tokens.size() > begin + kCheckpointMargin + 1) {
@@ -224,11 +225,11 @@ class Batcher {
             // earlier one differently (the assistant header is followed by the reply, and its last tokens can split
             // differently), so only the part before that is certain to be shared.
             const size_t split = tokens.size() - kCheckpointMargin;
-            if (!decode_prompt_locked(seq, tokens, begin, split)) return false;
+            if (!decode_prompt_locked(seq, tokens, begin, split, cancel)) return false;
             save_checkpoint_locked(seq);
-            if (!decode_prompt_locked(seq, tokens, split)) return false;
+            if (!decode_prompt_locked(seq, tokens, split, SIZE_MAX, cancel)) return false;
         } else {
-            if (!decode_prompt_locked(seq, tokens, begin)) return false;
+            if (!decode_prompt_locked(seq, tokens, begin, SIZE_MAX, cancel)) return false;
             if (use_checkpoints && reusable_[seq]) save_checkpoint_locked(seq);
         }
         out = sample_token(sampler, ctx, -1);
@@ -466,14 +467,24 @@ class Batcher {
     // the last token only. mu_ must be held.
     static constexpr size_t kCheckpointMargin = 8; // tokens decoded after the checkpoint (see prefill)
 
-    bool decode_prompt_locked(llama_seq_id seq, const std::vector<llama_token> &tokens, size_t first = 0, size_t last = SIZE_MAX) {
+    // `cancel`: the request's cancel flag. A long prompt is decoded in chunks; with a flag the chunks are smaller and the flag is looked at
+    // before each one (and by the backend, where it can), so a cancel stops within about a second instead of after the whole prompt.
+    bool decode_prompt_locked(llama_seq_id seq, const std::vector<llama_token> &tokens, size_t first = 0, size_t last = SIZE_MAX,
+                              const volatile int32_t *cancel = nullptr) {
         const size_t end = std::min(last, tokens.size());
         if (first >= end) return false;
-        const size_t chunk = std::max<size_t>(1, llama_n_batch(ctx));
+        const size_t chunk = std::max<size_t>(1, cancel ? std::min<size_t>(llama_n_batch(ctx), 96) : llama_n_batch(ctx));
+        if (cancel)
+            llama_set_abort_callback(
+                ctx, [](void *flag) { return *static_cast<const volatile int32_t *>(flag) != 0; }, const_cast<int32_t *>(cancel));
         llama_batch batch = llama_batch_init(static_cast<int32_t>(std::min(chunk, end - first)), 0, 1);
         llama_pos pos = next_pos_[seq];
         bool ok = true;
         for (size_t begin = first; ok && begin < end; begin += chunk) {
+            if (cancel && *cancel) {
+                ok = false;
+                break;
+            }
             const size_t n = std::min(chunk, end - begin);
             for (size_t i = 0; i < n; ++i) {
                 batch.token[i] = tokens[begin + i];
@@ -487,6 +498,7 @@ class Batcher {
             pos += static_cast<llama_pos>(n);
         }
         llama_batch_free(batch);
+        if (cancel) llama_set_abort_callback(ctx, nullptr, nullptr);
         if (ok) {
             next_pos_[seq] = pos;
             if (reusable_[seq])
@@ -1733,10 +1745,11 @@ int32_t generate(Instance &inst, const agent_request *req, const std::vector<lla
     uint64_t spec_rounds = 0, spec_accepted = 0;
     const auto t_prefill = std::chrono::steady_clock::now();
     const bool prefilled =
-        chunks ? b.prefill_media(seq, inst.mtmd.get(), chunks, sampler, tok) : b.prefill(seq, tokens, reused, sampler, tok);
+        chunks ? b.prefill_media(seq, inst.mtmd.get(), chunks, sampler, tok) : b.prefill(seq, tokens, reused, sampler, tok, req->cancel);
     const auto t_first_token = std::chrono::steady_clock::now(); // the prompt is decoded and the first token sampled
     if (!prefilled) {
-        status = inst.fail(AGENT_ERR_DECODE_FAILED, "llama: prompt decode failed");
+        status = req->cancel && *req->cancel ? inst.fail(AGENT_ERR_CANCELLED, "llama: cancelled")
+                                             : inst.fail(AGENT_ERR_DECODE_FAILED, "llama: prompt decode failed");
     } else {
         char piece[256];
         for (int i = 0; i < max_tokens; ++i) {

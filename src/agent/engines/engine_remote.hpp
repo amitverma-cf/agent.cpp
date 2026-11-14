@@ -24,7 +24,7 @@ struct RemoteOptions {
     std::string plugin_path;   // passed to agent-engine-host
     std::string create_config; // create() config JSON, replayed on every restart
     int timeout_ms = 0;        // per-request watchdog, 0 = none
-    int cancel_grace_ms = 2000;
+    int cancel_grace_ms = 6000;
     int max_restarts = 3;                   // per rolling minute
     SandboxPolicy sandbox;                  // applied to the host before exec; see core/sandbox/sandbox_policy.hpp
     std::map<std::string, std::string> env; // added to the host's environment (GPU cache folders, ...)

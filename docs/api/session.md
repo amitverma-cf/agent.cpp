@@ -222,7 +222,7 @@ These apply when `provider` is `Engine`. See [engines.md](engines.md#isolation).
 | `engine_isolation` | `EngineIsolation::Default` | `InProcess` loads the engine into your process. `Process` runs it in an `agent-engine-host` child. `Default` uses the isolation the engine was added with (`engines::add`, or its entry in an `engines.json`), otherwise `InProcess`. |
 | `engine_host_path` | `""` | Path of the `agent-engine-host` executable for `Process`. Empty = `AGENT_ENGINE_HOST`, then next to your program, then `../bin`, then `PATH`. |
 | `engine_timeout_ms` | `0` | For `Process`: a request running longer kills the host and fails with `EngineCrashed`. `0` = no limit. |
-| `engine_cancel_grace_ms` | `2000` | For `Process`: time an engine gets to stop after `request_cancel` before the host is killed. |
+| `engine_cancel_grace_ms` | `6000` | For `Process`: time an engine gets to stop after `request_cancel` before the host is killed. |
 | `engine_max_restarts` | `3` | For `Process`: automatic host restarts allowed per minute. |
 | `engine_sandbox` | `{enabled = true, allow_tmp = false, network = Deny}` | OS sandbox for the engine host. |
 | `gpu_cache_dir` | `""` | Where GPU drivers keep compiled kernels when `engine_sandbox.gpu` is set. Empty = `<workspace>/cache/gpu`. See [gpu.md](../gpu.md). |

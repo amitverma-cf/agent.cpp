@@ -42,6 +42,26 @@ struct TuiMessage {
     std::string text;
 };
 
+// One line of the settings screen. `options` non-empty: Left/Right/Enter cycle through them; `editable` without options: Enter types a new
+// value in the input line; not editable: shown only.
+struct TuiSetting {
+    std::string group, section, key, label, value, hint; // group: the category in the sidebar; section: a heading inside it
+    std::vector<std::string> options;
+    bool editable = true;
+};
+
+// What the bottom bar shows. Read about once a second on the interface thread, so it must be cheap (the host keeps the numbers up to
+// date in the background).
+struct TuiTaskbar {
+    int cpu_percent = -1; // -1: unknown
+    double ram_used_gb = 0, ram_total_gb = 0;
+    double files_gb = -1;            // the size of the files folder and the project's memory; -1: not measured yet
+    std::string engine;              // the engine of the open model
+    std::vector<std::string> models; // every model held in RAM
+    std::string mode;                // ask, plan, auto
+    int context_used = 0, context_total = 0;
+};
+
 struct TuiHost {
     void *user = nullptr;
     // The title bar after the brand: model, engine, session id.
@@ -70,6 +90,18 @@ struct TuiHost {
     bool (*take_repaint)(void *user) = nullptr;
     // A line shown on the welcome screen, for a warning that applies to the whole session (the sandbox is off); may be empty.
     std::string (*notice)(void *user) = nullptr;
+    // The settings screen (bottom-left button, Ctrl+,): every setting with its current value; null = no settings screen.
+    std::vector<TuiSetting> (*settings)(void *user) = nullptr;
+    // Changes one setting. Returns "" on success, or the reason it was refused. Called on the interface thread; the chat must be idle.
+    std::string (*set_setting)(void *user, const std::string &key, const std::string &value) = nullptr;
+    // The bottom bar (see TuiTaskbar); null = no bottom bar numbers.
+    TuiTaskbar (*taskbar)(void *user) = nullptr;
+    // Removes the Nth user message counted from the newest (0 = the last one) and the answers to it, from the conversation the model sees
+    // and from the saved one. Returns false when that message is no longer in the history (it was compacted). Chat must be idle.
+    bool (*delete_turn)(void *user, int user_from_end) = nullptr;
+    // The microphone. start = true: begins recording ("" on success, otherwise the reason). start = false: stops and returns the words that
+    // were said, or a text starting with "!" that says why not.
+    std::string (*mic)(void *user, bool start) = nullptr;
     // The commands listed in the palette.
     std::span<const TuiCommand> commands;
 };

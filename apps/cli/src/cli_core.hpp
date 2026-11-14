@@ -80,8 +80,8 @@ struct CliConfig {
     std::vector<std::string> capabilities;
     std::string backend = "cpu"; // cpu | cuda | vulkan (recorded; prebuilt downloads do not exist yet)
     HardwareInfo hardware;
-    int context_window = 4096;
-    int max_tokens = 512;
+    int context_window = 8192;
+    int max_tokens = 2048;
     float temperature = 0.7f;
     // RAM budget of the model registry behind `chat` /model switches and multi-model `run` graphs.
     // 0 = unlimited. Exceeding it evicts the least recently used idle model.
@@ -255,6 +255,13 @@ std::string find_plugin(std::string_view engine_name, std::span<const std::strin
 HardwareInfo detect_hardware();
 // Installed RAM in bytes; 0 when it cannot be read.
 uint64_t total_ram_bytes();
+// CPU time counters (busy, total) of the whole machine; the percentage is the change of busy over the change of total between two readings.
+struct CpuSample {
+    uint64_t busy = 0, total = 0;
+};
+bool cpu_sample(CpuSample &out);
+// RAM in use and installed, in GiB.
+bool memory_gb(double &used, double &total);
 
 bool file_exists(std::string_view path);
 bool path_exists(std::string_view path); // file or folder

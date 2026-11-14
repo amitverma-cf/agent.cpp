@@ -9,8 +9,11 @@
 #include <chrono>
 #include <climits>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <rtxui/headless.hpp>
@@ -133,16 +136,18 @@ constexpr std::string_view kMarkdownCss = R"css(
 
 // One block of the conversation, as the template reads it.
 struct Icons {
-    const char *assistant, *error, *tool, *result, *current, *other, *project, *caret, *busy;
+    const char *assistant, *error, *tool, *result, *current, *other, *project, *caret, *busy, *settings, *copy, *del, *mic, *back, *menu;
 };
 
 // Unicode symbols every terminal font has; a Nerd Font (https://www.nerdfonts.com) gives richer glyphs: AGENT_ICONS=nerd.
 const Icons &icons() {
     static const Icons unicode{"\xE2\x9C\xA6", "\xE2\x9C\x97", "\xE2\x9D\xAF", "\xE2\x86\xB3", "\xE2\x97\x8F",
-                               "\xE2\x97\x8B", "\xE2\x96\xB8", "\xE2\x9D\xAF", "\xC2\xB7"};
+                               "\xE2\x97\x8B", "\xE2\x96\xB8", "\xE2\x9D\xAF", "\xC2\xB7",     "\xE2\x9C\xB1",
+                               "\xE2\xA7\x89", "\xE2\x9C\x95", "\xE2\x97\x89", "\xE2\x80\xB9", "\xE2\x98\xB0"};
     static const Icons nerd{"\xEF\x80\x85", "\xEF\x80\x8D", "\xEF\x80\x93", "\xEF\x80\x8C", "\xEF\x84\x91",
-                            "\xEF\x84\x8C", "\xEF\x81\xBB", "\xEF\x84\x85", "\xC2\xB7"};
-    static const Icons ascii{"*", "x", ">", "-", "*", "o", ">", ">", "."};
+                            "\xEF\x84\x8C", "\xEF\x81\xBB", "\xEF\x84\x85", "\xC2\xB7",     "\xEF\x80\x93",
+                            "\xEF\x83\x85", "\xEF\x87\xB8", "\xEF\x84\xB0", "\xEF\x81\x93", "\xEF\x83\x89"};
+    static const Icons ascii{"*", "x", ">", "-", "*", "o", ">", ">", ".", "*", "c", "x", "o", "<", "="};
     static const Icons &chosen = []() -> const Icons & {
         const char *want = std::getenv("AGENT_ICONS");
         if (want && std::string_view(want) == "nerd") return nerd;
@@ -158,6 +163,10 @@ struct Row {
     std::string text;
     std::string cls;  // CSS classes
     int markdown = 0; // 1: render `text` as markdown
+    int id = 0;       // what the copy and delete buttons name
+    int user = 0;     // 1: a message of the user (it has a delete button)
+    int acts = 0;     // 1: the row has the copy button (user messages and answers)
+    std::string meta; // under an answer: how fast and how long
     bool operator==(const Row &) const = default;
 };
 
@@ -167,6 +176,10 @@ void Fields(const Row &row, rtxui::FieldSink &out) {
     out("cls", row.cls);
     out("md", row.markdown);
     out("plain", row.markdown ? 0 : 1);
+    out("id", row.id);
+    out("user", row.user);
+    out("acts", row.acts);
+    out("meta", row.meta);
 }
 
 struct Line {
@@ -201,6 +214,18 @@ void Fields(const SideRow &row, rtxui::FieldSink &out) {
     out("text", row.text);
     out("cls", row.cls);
     out("idx", row.idx);
+}
+
+// One line of the settings screen: a heading, or a setting with its value.
+struct SetRow {
+    std::string label, value, cls;
+    bool operator==(const SetRow &) const = default;
+};
+
+void Fields(const SetRow &row, rtxui::FieldSink &out) {
+    out("label", row.label);
+    out("value", row.value);
+    out("cls", row.cls);
 }
 
 // What the worker thread waits on: the answer to a permission question or a free-text question.
@@ -275,6 +300,48 @@ class ChatApp : public rtxui::Component<ChatApp> {
         Bind(busy);
         Bind(show_welcome);
         Bind(show_palette);
+        Bind(show_settings);
+        Bind(set_rows);
+        Bind(cat_rows);
+        Bind(cat_title);
+        Bind(set_help);
+        Bind(PickCat);
+        Bind(SettingsBack);
+        Bind(CloseSettings);
+        Bind(set_view);
+        Bind(set_note);
+        Bind(settings_label);
+        Bind(OpenSettings);
+        Bind(ico_copy);
+        Bind(ico_del);
+        Bind(ico_mic);
+        Bind(ico_back);
+        Bind(ico_menu);
+        Bind(ico_settings);
+        Bind(mic_class);
+        Bind(hint);
+        Bind(has_messages);
+        Bind(tb_cpu);
+        Bind(tb_ram);
+        Bind(tb_files);
+        Bind(tb_engine);
+        Bind(tb_models);
+        Bind(tb_mode);
+        Bind(tb_ctx);
+        Bind(confirm_open);
+        Bind(confirm_title);
+        Bind(confirm_text);
+        Bind(show_keys);
+        Bind(key_rows);
+        Bind(toast_open);
+        Bind(toast_text);
+        Bind(CopyRow);
+        Bind(AskDelete);
+        Bind(AskDeleteSession);
+        Bind(ConfirmYes);
+        Bind(ConfirmNo);
+        Bind(CloseKeys);
+        Bind(ToggleMic);
         Bind(Pick);
         Bind(NewChat);
         Bind(ToggleSide);
@@ -296,6 +363,411 @@ class ChatApp : public rtxui::Component<ChatApp> {
     std::string md_css = std::string(kMarkdownCss);
     bool asking = false, prompting = false, busy = false;
     bool show_welcome = true, show_palette = false;
+    // ---- icons, the bottom bar, the hint line, dialogs
+    std::string ico_copy = icons().copy, ico_del = icons().del, ico_mic = icons().mic, ico_back = icons().back, ico_menu = icons().menu,
+                ico_settings = icons().settings, mic_class = "mic", hint;
+    bool has_messages = false;
+    std::string tb_cpu, tb_ram, tb_files, tb_engine, tb_models, tb_mode, tb_ctx;
+    bool confirm_open = false, show_keys = false, toast_open = false, recording = false, transcribing = false;
+    std::string confirm_title, confirm_text, confirm_kind, toast_text;
+    int confirm_row = 0, next_row_id = 0;
+    std::vector<SetRow> key_rows = {{"? or F1", "Open this list", ""},
+                                    {"Ctrl+O", "Settings", ""},
+                                    {"Ctrl+K", "Switch to another session", ""},
+                                    {"Ctrl+N", "New chat", ""},
+                                    {"Ctrl+B", "Show or hide the sidebar", ""},
+                                    {"Ctrl+P or /", "Commands", ""},
+                                    {"@file", "Put a file's text in your message", ""},
+                                    {"!command", "Run a shell command in your project", ""},
+                                    {"Esc", "Stop the answer that is running", ""},
+                                    {"PageUp, PageDown", "Scroll the conversation", ""},
+                                    {"Home, End", "Oldest message, newest message", ""},
+                                    {"Ctrl+D", "Quit", ""}};
+
+    void AddRow(Row r) {
+        r.id = ++next_row_id;
+        r.acts = r.kind == TuiKind::User || r.kind == TuiKind::Assistant ? 1 : 0;
+        r.user = r.kind == TuiKind::User ? 1 : 0;
+        rows.push_back(std::move(r));
+    }
+    void Toast(const std::string &text) {
+        toast_text = text;
+        toast_open = true;
+    }
+    Row *FindRow(const std::string &id) {
+        const int want = std::atoi(id.c_str());
+        for (Row &r : rows)
+            if (r.id == want) return &r;
+        return nullptr;
+    }
+
+    static std::string Base64(std::string_view in) {
+        static const char *t = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        std::string out;
+        size_t i = 0;
+        for (; i + 2 < in.size(); i += 3) {
+            const unsigned v = (static_cast<unsigned char>(in[i]) << 16) | (static_cast<unsigned char>(in[i + 1]) << 8) |
+                               static_cast<unsigned char>(in[i + 2]);
+            out += t[v >> 18];
+            out += t[(v >> 12) & 63];
+            out += t[(v >> 6) & 63];
+            out += t[v & 63];
+        }
+        if (i + 1 == in.size()) {
+            const unsigned v = static_cast<unsigned char>(in[i]) << 16;
+            out += t[v >> 18];
+            out += t[(v >> 12) & 63];
+            out += "==";
+        } else if (i + 2 == in.size()) {
+            const unsigned v = (static_cast<unsigned char>(in[i]) << 16) | (static_cast<unsigned char>(in[i + 1]) << 8);
+            out += t[v >> 18];
+            out += t[(v >> 12) & 63];
+            out += t[(v >> 6) & 63];
+            out += '=';
+        }
+        return out;
+    }
+
+    // The text goes to the clipboard: through the terminal (OSC 52, which Windows Terminal, iTerm, kitty, WezTerm, tmux and most others take,
+    // also over SSH) and through the system's own clipboard tool where there is one.
+    void CopyText(const std::string &text) {
+        const std::string seq = "\x1b]52;c;" + Base64(text) + "\x07";
+        std::fwrite(seq.data(), 1, seq.size(), stdout);
+        std::fflush(stdout);
+        std::thread([text] {
+#if defined(_WIN32)
+            std::error_code ec;
+            const auto file = std::filesystem::temp_directory_path(ec) / "agent-clip.txt";
+            {
+                std::ofstream f(file, std::ios::binary | std::ios::trunc);
+                f << text;
+            }
+            const std::string cmd =
+                "powershell -NoProfile -Command \"Get-Content -Raw -Encoding UTF8 '" + file.string() + "' | Set-Clipboard\" >nul 2>nul";
+            (void)std::system(cmd.c_str());
+            std::filesystem::remove(file, ec);
+#else
+            if (std::FILE *p = popen("(wl-copy || xclip -selection clipboard || xsel -b -i || pbcopy) 2>/dev/null", "w")) {
+                std::fwrite(text.data(), 1, text.size(), p);
+                pclose(p);
+            }
+#endif
+        }).detach();
+    }
+
+    void CopyRow(std::string id) {
+        if (Row *r = FindRow(id)) {
+            CopyText(r->text);
+            Toast("Copied");
+        }
+    }
+
+    void AskDelete(std::string id) {
+        if (busy) return;
+        if (!FindRow(id)) return;
+        confirm_kind = "turn";
+        confirm_row = std::atoi(id.c_str());
+        confirm_title = "Delete this message?";
+        confirm_text = "The message and the answers to it are removed from this conversation, and the model forgets them.";
+        confirm_open = true;
+    }
+    void AskDeleteSession() {
+        if (busy) return;
+        confirm_kind = "session";
+        confirm_title = "Delete this conversation?";
+        confirm_text = "It is removed from every place it is kept: the list, the saved history and the memory. This cannot be undone.";
+        confirm_open = true;
+    }
+    void ConfirmNo() { confirm_open = false; }
+    void ConfirmYes() {
+        confirm_open = false;
+        if (confirm_kind == "turn") {
+            size_t at = rows.size();
+            for (size_t i = 0; i < rows.size(); ++i)
+                if (rows[i].id == confirm_row) at = i;
+            if (at == rows.size()) return;
+            int from_end = 0;
+            size_t end = rows.size();
+            for (size_t i = at + 1; i < rows.size(); ++i)
+                if (rows[i].kind == TuiKind::User) {
+                    if (end == rows.size()) end = i;
+                    ++from_end;
+                }
+            const bool in_memory = host.delete_turn && host.delete_turn(host.user, from_end);
+            rows.erase(rows.begin() + static_cast<std::ptrdiff_t>(at), rows.begin() + static_cast<std::ptrdiff_t>(end));
+            if (rows.empty()) {
+                show_welcome = true;
+                app_class = "main home";
+            }
+            Toast(in_memory ? "Deleted" : "Removed from the screen; the model had already compacted it");
+            RefreshSessions();
+        } else if (confirm_kind == "session") {
+            for (const TuiSession &s : sessions)
+                if (s.active && host.delete_session) {
+                    if (!host.delete_session(host.user, s.id, s.workspace)) {
+                        Toast("Could not delete the conversation");
+                        return;
+                    }
+                    break;
+                }
+            if (host.take_repaint && host.take_repaint(host.user)) Repaint();
+            RefreshSessions();
+            Toast("Conversation deleted");
+        }
+        Refresh();
+    }
+    void CloseKeys() { show_keys = false; }
+
+    void ToggleMic() {
+        if (busy || transcribing || !host.mic) return;
+        if (!recording) {
+            const std::string err = host.mic(host.user, true);
+            if (!err.empty()) {
+                Toast(err);
+                return;
+            }
+            recording = true;
+            mic_class = "mic rec";
+            return;
+        }
+        recording = false;
+        transcribing = true;
+        mic_class = "mic";
+        busy_line = "turning your speech into text ...";
+        std::thread([this] {
+            const std::string words = host.mic(host.user, false);
+            rtxui::PostTask([this, words] {
+                transcribing = false;
+                busy_line.clear();
+                if (!words.empty() && words[0] == '!') Toast(words.substr(1));
+                else if (!words.empty()) SetInput(input.empty() ? words : input + " " + words);
+                Refresh();
+            });
+        }).detach();
+    }
+
+    void RefreshTaskbar() {
+        TuiTaskbar tb;
+        if (host.taskbar) tb = host.taskbar(host.user);
+        char buf[96];
+        tb_cpu = tb.cpu_percent >= 0 ? "CPU " + std::to_string(tb.cpu_percent) + "%" : std::string();
+        if (tb.ram_total_gb > 0) {
+            std::snprintf(buf, sizeof(buf), "RAM %.1f/%.1f GB", tb.ram_used_gb, tb.ram_total_gb);
+            tb_ram = buf;
+        }
+        if (tb.files_gb >= 0) {
+            std::snprintf(buf, sizeof(buf), "Files %.1f GB", tb.files_gb);
+            tb_files = buf;
+        }
+        tb_engine = tb.engine;
+        tb_models.clear();
+        if (!tb.models.empty()) {
+            tb_models = clip(tb.models.front(), 12);
+            if (tb.models.size() > 1) tb_models += " +" + std::to_string(tb.models.size() - 1);
+        }
+        tb_mode = tb.mode;
+        if (tb.context_total > 0) {
+            tb_ctx = "ctx " + std::to_string(tb.context_used) + "/" + std::to_string(tb.context_total);
+            gauge_class = tb.context_used * 100 >= tb.context_total * 85 ? "gauge hot" : "gauge";
+        } else {
+            tb_ctx.clear();
+        }
+    }
+    // Once a second, whether or not an answer is running.
+    void StatsTick() {
+        RefreshTaskbar();
+        ComputeHint();
+        rtxui::PostDelayedTask([this] { StatsTick(); }, std::chrono::milliseconds(1000));
+    }
+
+    // The line between the input and the bottom bar: what the next useful key or command is, for what is going on right now.
+    void ComputeHint() {
+        static const char *const idle[] = {"Press ? for every keyboard shortcut",      "/ lists the commands",
+                                           "@file puts a file's text in your message", "!command runs a shell command in your project",
+                                           "Ctrl+K switches to another session",       "Ctrl+O opens the settings"};
+        if (confirm_open) hint = "Enter or y confirms, Esc cancels";
+        else if (asking) hint = "y allows this once, a always allows this tool, n refuses";
+        else if (recording) hint = "Listening: click the microphone again to stop";
+        else if (busy) hint = "Esc stops the answer; the wheel or PageUp scrolls";
+        else if (!follow) hint = "End jumps to the newest message";
+        else if (!input.empty() && input[0] == '/') hint = "Tab completes the command, Enter runs it";
+        else if (!input.empty() && input[0] == '@') hint = "@path puts that file's text in your message, for example @src/main.cpp";
+        else if (!input.empty() && input[0] == '!')
+            hint = "Runs in your project folder; the output goes into the chat for the model to see";
+        else if (!input.empty()) hint = "Enter sends";
+        else hint = idle[static_cast<size_t>(std::time(nullptr) / 8) % (sizeof idle / sizeof *idle)];
+    }
+
+    // ---- the settings screen: categories on the left, the settings of the chosen category on the right
+    bool show_settings = false, set_editing = false, set_in_content = false;
+    std::vector<TuiSetting> set_items;
+    std::vector<size_t> shown; // indexes into set_items of the chosen category
+    std::vector<std::string> categories;
+    std::vector<SideRow> cat_rows;
+    std::vector<SetRow> set_rows;
+    int cat_sel = 0, set_sel = 0;
+    std::string set_view = "setbody cats", set_note, set_help, cat_title, settings_label = std::string(icons().settings) + " Settings";
+
+    void OpenSettings() {
+        if (!host.settings || busy) return;
+        show_settings = true;
+        set_editing = false;
+        set_in_content = false;
+        cat_sel = 0;
+        set_sel = 0;
+        set_note.clear();
+        SetInput("");
+        LoadSettings();
+    }
+    void CloseSettings() {
+        show_settings = false;
+        set_editing = false;
+        SetInput("");
+        Refresh();
+    }
+    // The back arrow of the header: from the settings of a category to the list of categories, from the list closes the screen.
+    void SettingsBack() {
+        if (set_in_content && !set_editing) {
+            set_in_content = false;
+            LoadSettings();
+            Refresh();
+        } else {
+            CloseSettings();
+        }
+    }
+    void PickCat(const std::string &index) {
+        const int at = std::atoi(index.c_str());
+        if (at < 0 || at >= static_cast<int>(categories.size())) return;
+        cat_sel = at;
+        set_sel = 0;
+        set_in_content = true;
+        set_editing = false;
+        LoadSettings();
+        Refresh();
+    }
+    void LoadSettings() {
+        if (host.settings) set_items = host.settings(host.user);
+        set_view = set_in_content ? "setbody content" : "setbody cats";
+        categories.clear();
+        for (const TuiSetting &s : set_items)
+            if (std::find(categories.begin(), categories.end(), s.group) == categories.end()) categories.push_back(s.group);
+        if (cat_sel >= static_cast<int>(categories.size())) cat_sel = std::max(0, static_cast<int>(categories.size()) - 1);
+        cat_rows.clear();
+        for (size_t i = 0; i < categories.size(); ++i)
+            cat_rows.push_back({categories[i],
+                                static_cast<int>(i) == cat_sel ? (set_in_content ? "setcat cur" : "setcat cur focus") : "setcat",
+                                static_cast<int>(i)});
+        shown.clear();
+        cat_title = categories.empty() ? std::string() : categories[static_cast<size_t>(cat_sel)];
+        for (size_t i = 0; i < set_items.size(); ++i)
+            if (set_items[i].group == cat_title) shown.push_back(i);
+        if (set_sel >= static_cast<int>(shown.size())) set_sel = std::max(0, static_cast<int>(shown.size()) - 1);
+        set_rows.clear();
+        std::string section;
+        for (size_t k = 0; k < shown.size(); ++k) {
+            const TuiSetting &s = set_items[shown[k]];
+            if (!s.section.empty() && s.section != section) set_rows.push_back({s.section, "", "setgroup"});
+            section = s.section;
+            const bool current = set_in_content && static_cast<int>(k) == set_sel;
+            std::string value = s.value.empty() ? "-" : s.value;
+            if (set_editing && current) value = input + "_";
+            else if (!s.options.empty() && s.editable) value = "\xE2\x97\x82 " + value + " \xE2\x96\xB8";
+            set_rows.push_back({s.label, value, std::string("setrow") + (current ? " cur" : "") + (s.editable ? "" : " ro")});
+        }
+        if (set_editing) {
+            set_note = "Type the new value. Enter keeps it, Esc cancels.";
+            set_help = "Enter saves  \xC2\xB7  Esc cancels";
+        } else if (set_in_content && !shown.empty()) {
+            set_note = set_items[shown[static_cast<size_t>(set_sel)]].hint;
+            set_help = "Up and Down choose  \xC2\xB7  Left, Right or Enter change  \xC2\xB7  Esc or Tab back to the list";
+        } else {
+            set_help = "Up and Down choose a category  \xC2\xB7  Enter or Tab opens it  \xC2\xB7  Esc closes";
+            if (!set_in_content) set_note.clear();
+        }
+    }
+    const TuiSetting *CurrentSetting() const {
+        if (shown.empty() || set_sel >= static_cast<int>(shown.size())) return nullptr;
+        return &set_items[shown[static_cast<size_t>(set_sel)]];
+    }
+    void ApplySetting(const std::string &value) {
+        const TuiSetting *s = CurrentSetting();
+        if (!s || !host.set_setting) return;
+        const std::string error = host.set_setting(host.user, s->key, value);
+        LoadSettings();
+        if (!error.empty()) set_note = error;
+        else if (const TuiSetting *now = CurrentSetting()) set_note = "Saved. " + now->hint;
+        Refresh();
+    }
+    void CycleSetting(int step) {
+        const TuiSetting *s = CurrentSetting();
+        if (!s || !s->editable || s->options.empty()) return;
+        size_t at = 0;
+        for (size_t i = 0; i < s->options.size(); ++i)
+            if (s->options[i] == s->value) at = i;
+        const size_t n = s->options.size();
+        const std::string next = s->options[(at + n + static_cast<size_t>(step % static_cast<int>(n) + static_cast<int>(n))) % n];
+        ApplySetting(next);
+    }
+    // Keys while the settings screen is open. Returns true when the event was used.
+    bool SettingsKey(const Event &e) {
+        if (set_editing) {
+            if (e == Event::Return()) {
+                set_editing = false;
+                const std::string value = input;
+                SetInput("");
+                ApplySetting(value);
+                return true;
+            }
+            if (e == Event::Escape() || e == Event::CtrlC()) {
+                set_editing = false;
+                SetInput("");
+                LoadSettings();
+                Refresh();
+                return true;
+            }
+            const bool used = Component<ChatApp>::OnEvent(e); // typing goes to the input line
+            LoadSettings();
+            Refresh();
+            return used;
+        }
+        if (e.is<Event::Mouse>()) return Component<ChatApp>::OnEvent(e); // clicks reach the category list
+        if (e == Event::Tab()) {
+            set_in_content = !set_in_content && !shown.empty();
+        } else if (!set_in_content) {
+            const int count = static_cast<int>(categories.size());
+            if (e == Event::Escape() || e == Event::CtrlC()) {
+                CloseSettings();
+                return true;
+            }
+            if (e == Event::ArrowDown() && count) cat_sel = (cat_sel + 1) % count, set_sel = 0;
+            else if (e == Event::ArrowUp() && count) cat_sel = (cat_sel + count - 1) % count, set_sel = 0;
+            else if ((e == Event::Return() || e == Event::ArrowRight()) && !shown.empty()) set_in_content = true;
+        } else {
+            const int count = static_cast<int>(shown.size());
+            if (e == Event::Escape() || e == Event::CtrlC()) set_in_content = false;
+            else if (e == Event::ArrowDown() && count) set_sel = (set_sel + 1) % count;
+            else if (e == Event::ArrowUp() && count) set_sel = (set_sel + count - 1) % count;
+            else if (e == Event::ArrowRight()) CycleSetting(1);
+            else if (e == Event::ArrowLeft()) CycleSetting(-1);
+            else if (e == Event::Return()) {
+                if (const TuiSetting *s = CurrentSetting()) {
+                    if (!s->editable) {
+                        set_note = "This one is shown for information only.";
+                    } else if (!s->options.empty()) {
+                        CycleSetting(1);
+                        return true;
+                    } else {
+                        set_editing = true;
+                        SetInput(s->value);
+                    }
+                }
+            }
+        }
+        LoadSettings();
+        Refresh();
+        return true;
+    }
+
     bool follow = true;       // the conversation stays at the newest line
     bool side_hide = false;   // Ctrl+B on a wide terminal hides the sidebar
     bool side_drawer = false; // on a narrow terminal the sidebar is a drawer over the conversation: Ctrl+K, Ctrl+B or the ☰ button
@@ -317,16 +789,23 @@ class ChatApp : public rtxui::Component<ChatApp> {
     void Emit(TuiKind kind, const std::string &text) {
         if (kind == TuiKind::Assistant) {
             if (!rows.empty() && rows.back().kind == TuiKind::Assistant) rows.back().text += text;
-            else rows.push_back({kind, icons().assistant, text, "row assistant", 1});
+            else AddRow({kind, icons().assistant, text, "row assistant", 1});
         } else {
             std::string t = text;
             while (!t.empty() && (t.back() == '\n' || t.back() == '\r')) t.pop_back();
             if (t.empty()) return;
-            if (kind == TuiKind::User) rows.push_back({kind, "", t, "row user", 0});
-            else if (kind == TuiKind::Error) rows.push_back({kind, icons().error, t, "row error", 0});
+            if (kind == TuiKind::User) AddRow({kind, "", t, "row user", 0});
+            else if (kind == TuiKind::Error) AddRow({kind, icons().error, t, "row error", 0});
             else if (kind == TuiKind::Tool) AddTool(t);
-            else if (kind == TuiKind::Metrics) rows.push_back({kind, "", t, "row metrics", 0});
-            else rows.push_back({kind, "", t, "row note", 0});
+            else if (kind == TuiKind::Metrics) {
+                for (size_t i = rows.size(); i-- > 0;)
+                    if (rows[i].kind == TuiKind::Assistant) {
+                        rows[i].meta = t;
+                        break;
+                    }
+                Settle();
+                return;
+            } else AddRow({kind, "", t, "row note", 0});
         }
         show_welcome = false;
         app_class = "main";
@@ -341,21 +820,26 @@ class ChatApp : public rtxui::Component<ChatApp> {
             const size_t space = rest.find(' ');
             const std::string name = rest.substr(0, space);
             const std::string args = space == std::string::npos ? std::string() : trim_both(std::string_view(rest).substr(space + 1));
-            rows.push_back({TuiKind::Tool, icons().tool, name + "  " + args, "row tool", 0});
+            AddRow({TuiKind::Tool, icons().tool, name + "  " + args, "row tool", 0});
         } else if (t.compare(0, result.size(), result) == 0) {
             const std::string body = summarize_tool_result(trim_both(std::string_view(t).substr(result.size())), 4, 200);
             const bool failed = body.compare(0, 5, "Error") == 0 ||
                                 (body.find("\"exit_code\":0") == std::string::npos && body.find("\"exit_code\":") != std::string::npos);
-            rows.push_back({TuiKind::Tool, failed ? icons().error : icons().result, body, failed ? "row result failed" : "row result", 0});
+            AddRow({TuiKind::Tool, failed ? icons().error : icons().result, body, failed ? "row result failed" : "row result", 0});
         } else {
-            rows.push_back({TuiKind::Tool, "", t, "row note", 0});
+            AddRow({TuiKind::Tool, "", t, "row note", 0});
         }
     }
 
     // After any change: keep the newest output in view.
     void Settle() {
+        // The position the layout last settled on is where the bottom is; pinning to the end sets a huge offset that only the next layout
+        // clamps, and a scroll up that starts from it would land at the bottom again. So the settled value is remembered first.
+        if (const int y = QueryElement("#t").scroll_y(); y < kPinned) known_bottom = std::max(known_bottom, y);
         if (follow) ScrollToEnd();
     }
+    static constexpr int kPinned = INT_MAX / 8;
+    int known_bottom = 0;
     void ScrollToEnd() { QueryElement("#t").SetScrollY(INT_MAX / 4); }
 
     // ---- the sidebar: sessions grouped by project
@@ -383,6 +867,13 @@ class ChatApp : public rtxui::Component<ChatApp> {
     void RebuildSide() {
         side.clear();
         std::vector<std::string> seen;
+        int projects = 0;
+        {
+            std::vector<std::string> all;
+            for (const TuiSession &s : sessions)
+                if (std::find(all.begin(), all.end(), s.workspace) == all.end()) all.push_back(s.workspace);
+            projects = static_cast<int>(all.size());
+        }
         for (size_t i = 0; i < sessions.size(); ++i) {
             const std::string &ws = sessions[i].workspace;
             if (std::find(seen.begin(), seen.end(), ws) != seen.end()) continue;
@@ -398,7 +889,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
                     {std::string(s.active ? icons().current : icons().other) + " " + clip(title, 22), cls, static_cast<int>(j)});
             }
             if (group.empty()) continue;
-            side.push_back({std::string(icons().project) + " " + base_name(ws), "proj", -1});
+            if (projects > 1) side.push_back({std::string(icons().project) + " " + base_name(ws), "proj", -1});
             side.insert(side.end(), group.begin(), group.end());
         }
         if (!side_filter.empty()) side.insert(side.begin(), {"find: " + side_filter, "proj", -1});
@@ -449,6 +940,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
 
     // The transcript of the open conversation, from the host.
     void Repaint() {
+        known_bottom = 0;
         rows.clear();
         show_welcome = true;
         app_class = "main home";
@@ -466,28 +958,16 @@ class ChatApp : public rtxui::Component<ChatApp> {
         project_line = subtitle;
         notice = host.notice ? host.notice(host.user) : std::string();
         has_notice = !notice.empty();
-        const std::string footer = host.footer ? host.footer(host.user) : std::string();
-        const int percent = context_percent(footer);
-        gauge = percent >= 0 ? "context " + std::to_string(percent) + "%" : std::string();
-        gauge_class = percent >= 85 ? "gauge hot" : "gauge";
-        if (side_focus) status_left = "type to filter \xC2\xB7 Up/Down \xC2\xB7 Enter open \xC2\xB7 Del delete \xC2\xB7 Esc close";
-        else if (!follow) status_left = "scrolled up \xC2\xB7 End follows the newest output";
-        else if (busy) status_left = "Esc to stop";
-        else if (footer.empty() || prompting) status_left = "Ctrl+K sessions   Ctrl+N new chat   / commands   Ctrl-D quit";
-        else {
-            // The gauge already shows the KV cache, so the footer keeps only the speeds.
-            const size_t kv = percent >= 0 ? footer.find(" | KV ") : std::string::npos;
-            status_left = kv == std::string::npos ? footer : footer.substr(0, kv);
-        }
-        if (!mode_text.empty() && mode_text != "ask") status_left = "[" + mode_text + " mode]  " + status_left;
+        has_messages = !show_welcome;
+        ComputeHint();
         app_class = show_welcome ? "main home" : "main";
         side_class = std::string("side") + (side_hide ? " hidden" : "") + (side_drawer ? " drawer" : "");
-        caret = busy ? icons().busy : icons().caret;
         box_class = (busy || asking || side_focus) ? "box" : "box active";
         UpdateBusyLine();
     }
 
     void UpdateBusyLine() {
+        if (transcribing) return;
         if (!busy || asking) {
             busy_line.clear();
             return;
@@ -595,6 +1075,27 @@ class ChatApp : public rtxui::Component<ChatApp> {
     }
 
     bool OnEvent(Event e) override {
+        if (confirm_open) {
+            const int c = Letter(e);
+            if (e == Event::Return() || c == 'y' || c == 'Y') ConfirmYes();
+            else if (e == Event::Escape() || c == 'n' || c == 'N') ConfirmNo();
+            else if (e.is<Event::Mouse>()) return Component<ChatApp>::OnEvent(e);
+            return true;
+        }
+        if (show_keys) {
+            if (e == Event::Escape() || e == Event::F1() || e == Event::Return() || Letter(e) == '?') CloseKeys();
+            else if (e.is<Event::Mouse>()) return Component<ChatApp>::OnEvent(e);
+            return true;
+        }
+        if (!asking && !show_settings && (e == Event::F1() || (!busy && input.empty() && !side_focus && Letter(e) == '?'))) {
+            show_keys = true;
+            return true;
+        }
+        if (show_settings && !asking) return SettingsKey(e);
+        if (!asking && !busy && host.settings && !side_focus && e == Event::CtrlO()) {
+            OpenSettings();
+            return true;
+        }
         if (asking) {
             const int c = Letter(e);
             int a = 0;
@@ -680,11 +1181,11 @@ class ChatApp : public rtxui::Component<ChatApp> {
         if (e == Event::PageUp()) return Scroll(-12);
         if (e == Event::PageDown()) return Scroll(12);
         if (auto mouse = e.get_if<Event::Mouse>()) {
-            if (mouse->button() == Event::Mouse::WheelUp) {
-                follow = false;
-                Refresh();
-            }
-            return Component<ChatApp>::OnEvent(e); // the conversation scrolls itself
+            // The wheel scrolls the conversation by hand: while the answer streams the offset is pinned to the end, and the component
+            // would scroll from there.
+            if (mouse->button() == Event::Mouse::WheelUp) return Scroll(-3);
+            if (mouse->button() == Event::Mouse::WheelDown) return Scroll(3);
+            return Component<ChatApp>::OnEvent(e);
         }
         if (input.empty() && e == Event::Home()) {
             follow = false;
@@ -734,7 +1235,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             if (prompting && g_sync) {
                 // The line typed is the answer to the question the worker is waiting on; an empty line takes the default.
                 const std::string answer = input.empty() ? prompt_default : input;
-                rows.push_back({TuiKind::User, "", answer.empty() ? std::string("(default)") : answer, "row user", 0});
+                AddRow({TuiKind::User, "", answer.empty() ? std::string("(default)") : answer, "row user", 0});
                 SetInput("");
                 {
                     std::lock_guard<std::mutex> lock(g_sync->mu);
@@ -759,10 +1260,17 @@ class ChatApp : public rtxui::Component<ChatApp> {
         return Component<ChatApp>::OnEvent(e); // the rest goes to the input
     }
 
-    bool Scroll(int rows_up) {
+    bool Scroll(int rows) { // negative: up
         auto t = QueryElement("#t");
-        if (rows_up < 0) follow = false;
-        t.SetScrollY(t.scroll_y() + rows_up, true);
+        if (rows < 0) follow = false;
+        int current = t.scroll_y();
+        if (current >= kPinned) current = known_bottom; // pinned to the end: start from where the bottom was
+        if (rows > 0 && current + rows >= known_bottom) {
+            follow = true; // back at the bottom: follow the newest output again
+            ScrollToEnd();
+        } else {
+            t.SetScrollY(std::max(0, std::min(current + rows, known_bottom)));
+        }
         Refresh();
         return true;
     }
@@ -770,15 +1278,20 @@ class ChatApp : public rtxui::Component<ChatApp> {
     std::string_view view = R"html(
     <div class="shell">
       <div class="{side_class}">
-        <div class="sbrand"><span class="brand">agent.cpp</span></div>
-        <div class="newchat" onclick="NewChat"><span class="plus">+</span> New chat<span class="kbd">Ctrl+N</span></div>
+        <div class="sback" onclick="ToggleSide">{ico_back}</div>
+        <div class="sbrand"><for each="{banner}" as="ln"><div class="{ln.cls}">{ln.text}</div></for></div>
+        <div class="newchat" onclick="NewChat"><span class="nico">+</span><span class="nlabel">New chat</span></div>
         <div class="slist">
           <for each="{side}" as="s"><div class="{s.cls}" onclick="Pick({s.idx})">{s.text}</div></for>
         </div>
-        <div class="sfoot"><div class="sproj">{project_line}</div><div class="skeys">Ctrl+K sessions</div><div class="skeys">Ctrl+B hide</div></div>
+        <div class="setbtn" onclick="OpenSettings"><span class="setico">{ico_settings}</span><span class="setlabel">Settings</span></div>
       </div>
       <div class="{app_class}">
-        <div class="top"><span class="burger" onclick="ToggleSide">☰ </span><span class="ttitle">{main_title}</span><span class="tproj">{project_line}</span></div>
+        <div class="top">
+          <span class="burger" onclick="ToggleSide">{ico_menu}</span>
+          <span class="ttitle">{main_title}</span>
+          <span class="act tdel" if="{has_messages}" onclick="AskDeleteSession">{ico_del}</span>
+        </div>
         <div class="sp1"></div>
         <div class="transcript" id="t">
           <div if="{show_welcome}" class="welcome">
@@ -790,55 +1303,113 @@ class ChatApp : public rtxui::Component<ChatApp> {
           <for each="{rows}" as="r">
             <div class="{r.cls}">
               <span class="mark">{r.mark}</span>
-              <div class="body">
-                <markdown if="{r.md}" content="{r.text}" stylesheet="{md_css}"/>
-                <span if="{r.plain}">{r.text}</span>
+              <div class="col">
+                <div class="body">
+                  <markdown if="{r.md}" content="{r.text}" stylesheet="{md_css}"/>
+                  <span if="{r.plain}">{r.text}</span>
+                </div>
+                <div class="acts" if="{r.acts}">
+                  <span class="act" onclick="CopyRow({r.id})">{ico_copy}</span>
+                  <span class="act del" if="{r.user}" onclick="AskDelete({r.id})">{ico_del}</span>
+                  <span class="rmeta">{r.meta}</span>
+                </div>
               </div>
             </div>
           </for>
           <div class="busy">{busy_line}</div>
         </div>
         <div class="composer">
-          <div if="{asking}" class="ask"><span class="allow">allow</span><span class="q">{question}</span><span class="keys">y once · a always · n deny</span></div>
+          <div if="{asking}" class="ask"><span class="allow">allow</span><span class="q">{question}</span></div>
           <div if="{show_palette}" class="palette">
             <for each="{matches}" as="m"><div class="{m.cls}"><span class="pname">{m.name}</span><span class="phelp">{m.help}</span></div></for>
           </div>
           <div if="{prompting}" class="promptq">? {prompt_line}</div>
-          <div class="{box_class}"><span class="caret">{caret}</span><input value="{input}" autofocus=""/></div>
-          <div class="meta"><span class="model">{header}</span></div>
-          <div class="tip" if="{show_welcome}">{tip}</div>
+          <div class="{box_class}"><span class="{mic_class}" onclick="ToggleMic">{ico_mic}</span><input value="{input}" placeholder="Message agent.cpp" autofocus=""/></div>
+          <div class="hint">{hint}</div>
         </div>
         <div class="sp2"></div>
-        <div class="status"><span class="left">{status_left}</span><span class="{gauge_class}">{gauge}</span></div>
+        <div class="status">
+          <span class="sl"><span class="tb cpu">{tb_cpu}</span><span class="tb ram">{tb_ram}</span><span class="tb files">{tb_files}</span></span>
+          <span class="sr"><span class="tb engine">{tb_engine}</span><span class="tb models">{tb_models}</span><span class="tb mode">{tb_mode}</span><span class="{gauge_class}">{tb_ctx}</span></span>
+        </div>
       </div>
+      <div if="{show_settings}" class="settings">
+        <div class="sethead"><span class="setback" onclick="SettingsBack">{ico_back}</span><span class="setname">Settings</span><span class="act" onclick="CloseSettings">{ico_del}</span></div>
+        <div class="{set_view}">
+          <div class="setside"><for each="{cat_rows}" as="c"><div class="{c.cls}" onclick="PickCat({c.idx})">{c.text}</div></for></div>
+          <div class="setmain">
+            <div class="setcattitle">{cat_title}</div>
+            <div class="setlist"><for each="{set_rows}" as="r"><div class="{r.cls}"><span class="slabel">{r.label}</span><span class="sval">{r.value}</span></div></for></div>
+            <div class="setnote">{set_note}</div>
+          </div>
+        </div>
+        <div class="sethelp">{set_help}</div>
+      </div>
+      <dialog open="{confirm_open}" title="{confirm_title}">
+        <div class="dlgbody">
+          <p>{confirm_text}</p>
+          <div class="dlgactions"><button class="danger" onclick="ConfirmYes">Delete</button><button onclick="ConfirmNo">Cancel</button></div>
+        </div>
+      </dialog>
+      <dialog open="{show_keys}" title="Keyboard shortcuts">
+        <div class="dlgbody">
+          <for each="{key_rows}" as="k"><div class="keyrow"><span class="kname">{k.label}</span><span class="kdesc">{k.value}</span></div></for>
+          <div class="dlgactions"><button onclick="CloseKeys">Close</button></div>
+        </div>
+      </dialog>
+      <toast open="{toast_open}">{toast_text}</toast>
     </div>
 
     <style>
       .shell { display: flex; flex-direction: row; width: 100%; height: 100%; background-color: #000000; color: #ffffff; border: round; border-color: #40e0d0; }
-      .side { width: 30; flex-shrink: 0; display: flex; flex-direction: column; border-right: solid; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
+      .side { width: 33; flex-shrink: 0; display: flex; flex-direction: column; border-right: solid; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
       .hidden { display: none; }
-      .burger, .small-brand { display: none; }
+      .burger, .small-brand, .sback { display: none; }
       .small-brand { color: #ffb3d1; font-weight: bold; }
       .sbrand { padding-bottom: 1; }
-      .brand { color: #ffb3d1; font-weight: bold; }
-      .newchat { display: flex; flex-direction: row; border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; margin-bottom: 1; }
-      .plus { color: #ffb3d1; font-weight: bold; padding-right: 1; }
-      .kbd { color: #8a8a8a; flex-grow: 1; text-align: right; }
+      .newchat { display: flex; flex-direction: row; border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; margin-bottom: 1; color: #ffffff; }
+      .newchat:hover { border-color: #40e0d0; }
+      .nico { color: #ffb3d1; font-weight: bold; padding-right: 1; }
       .slist { flex-grow: 1; flex-basis: 0; min-height: 0; overflow-y: scroll; scrollbar-width: none; }
       .proj { color: #40e0d0; font-weight: bold; margin-top: 1; }
       .sess { color: #8a8a8a; padding-left: 1; white-space: nowrap; }
+      .sess:hover { color: #ffffff; }
       .sess.current { color: #ffb3d1; font-weight: bold; }
       .sess.hi { background-color: #40e0d0; color: #000000; font-weight: bold; }
-      .sfoot { border-top: solid; border-color: #4a4a4a; }
-      .sproj { color: #8a8a8a; white-space: nowrap; }
-      .skeys { color: #8a8a8a; }
+      .setbtn { display: flex; flex-direction: row; color: #ffffff; margin-top: 1; border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
+      .setbtn:hover { border-color: #40e0d0; }
+      .setico { color: #40e0d0; padding-right: 1; }
+      .settings { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 8; background-color: #000000; border: round; border-color: #40e0d0;
+                  display: flex; flex-direction: column; padding-left: 2; padding-right: 2; }
+      .sethead { display: flex; flex-direction: row; color: #40e0d0; font-weight: bold; border-bottom: solid; border-color: #4a4a4a; margin-bottom: 1; background-color: #000000; }
+      .setname { flex-grow: 1; background-color: #000000; }
+      .setback { display: none; padding-right: 2; }
+      .setbody { display: flex; flex-direction: row; flex-grow: 1; flex-basis: 0; min-height: 0; }
+      .setside { width: 22; flex-shrink: 0; display: flex; flex-direction: column; border-right: solid; border-color: #4a4a4a; padding-right: 1; }
+      .setcat { color: #8a8a8a; padding-left: 1; white-space: nowrap; }
+      .setcat.cur { color: #ffffff; font-weight: bold; }
+      .setcat.focus { background-color: #40e0d0; color: #000000; }
+      .setmain { display: flex; flex-direction: column; flex-grow: 1; flex-basis: 0; min-width: 0; padding-left: 2; }
+      .setcattitle { color: #ffb3d1; font-weight: bold; }
+      .setlist { flex-grow: 1; flex-basis: 0; min-height: 0; overflow-y: scroll; scrollbar-width: none; }
+      .setgroup { color: #8a8a8a; margin-top: 1; }
+      .setrow { display: flex; flex-direction: row; color: #ffffff; padding-left: 1; }
+      .setrow .slabel { width: 28; flex-shrink: 0; }
+      .setrow .sval { flex-grow: 1; color: #40e0d0; white-space: nowrap; }
+      .setrow.ro .sval { color: #8a8a8a; }
+      .setrow.cur { background-color: #40e0d0; color: #000000; font-weight: bold; }
+      .setrow.cur .sval { color: #000000; }
+      .setnote { color: #8a8a8a; border-top: solid; border-color: #4a4a4a; }
+      .sethelp { color: #8a8a8a; }
       .main { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; }
       .sp1, .sp2 { flex-grow: 0; }
       .home .sp1, .home .sp2 { flex-grow: 1; }
       .top { display: flex; flex-direction: row; border-bottom: solid; border-color: #4a4a4a; padding-left: 2; padding-right: 2; }
       .home .top { display: none; }
       .ttitle { color: #ffffff; font-weight: bold; flex-grow: 1; white-space: nowrap; }
-      .tproj { color: #8a8a8a; white-space: nowrap; }
+      .act { color: #8a8a8a; padding-left: 1; padding-right: 1; }
+      .act:hover { color: #40e0d0; }
+      .act.del:hover, .tdel:hover { color: #ffb3d1; }
       .transcript { flex-grow: 1; flex-shrink: 1; flex-basis: 0; min-height: 0; overflow-y: scroll; padding-left: 2; padding-right: 2; padding-top: 1; scrollbar-color: #40e0d0 #000000; }
       .home .transcript { flex-grow: 0; flex-shrink: 0; flex-basis: auto; overflow-y: visible; }
       .welcome { display: flex; flex-direction: column; margin-bottom: 1; }
@@ -850,16 +1421,17 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .warn { color: #ffb3d1; margin-top: 1; }
       .row { display: flex; flex-direction: row; margin-bottom: 1; }
       .row .mark { width: 2; color: #40e0d0; }
-      .row .body { flex-grow: 1; white-space: pre-wrap; }
+      .row .col { display: flex; flex-direction: column; flex-grow: 1; min-width: 0; }
+      .row .body { white-space: pre-wrap; }
+      .acts { display: flex; flex-direction: row; justify-content: flex-end; }
+      .assistant .acts { justify-content: flex-start; }
+      .rmeta { color: #8a8a8a; padding-left: 1; }
       .user { padding-left: 12; }
       .user .mark { display: none; }
-      .user .body { flex-grow: 1; border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; color: #ffffff; }
+      .user .body { border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; color: #ffffff; }
       .assistant { margin-bottom: 0; }
       .assistant .mark { color: #ffb3d1; font-weight: bold; }
       .assistant .body { white-space: normal; }
-      .metrics { margin-bottom: 1; padding-left: 2; }
-      .metrics .mark { display: none; }
-      .metrics .body { color: #8a8a8a; }
       .tool { margin-bottom: 0; }
       .tool .body { color: #8a8a8a; }
       .result { margin-bottom: 1; }
@@ -873,64 +1445,82 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .home .composer { width: 76%; align-self: center; padding-left: 0; padding-right: 0; }
       .box { display: flex; flex-direction: row; border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
       .box.active { border-color: #40e0d0; }
-      .caret { color: #ffb3d1; font-weight: bold; width: 2; }
+      .mic { color: #8a8a8a; width: 3; }
+      .mic:hover { color: #40e0d0; }
+      .mic.rec { color: #ffb3d1; font-weight: bold; }
       .box input { flex-grow: 1; background-color: #000000; color: #ffffff; padding-left: 0; }
       .box input:focus, .box input:hover { background-color: #000000; color: #ffffff; }
       .box input::part(cursor), .box input:focus::part(cursor), .box input::part(cursor-focused),
       .box input:focus::part(cursor-focused) { color: #ffffff; }
       .box input::part(selection), .box input:focus::part(selection) { background-color: #40e0d0; color: #000000; }
-      .meta { display: flex; flex-direction: row; padding-left: 1; padding-right: 1; }
-      .model { color: #8a8a8a; flex-grow: 1; white-space: nowrap; }
-      .tip { color: #8a8a8a; padding-left: 1; margin-top: 1; }
+      .hint { color: #8a8a8a; padding-left: 1; white-space: nowrap; overflow-x: hidden; }
       .ask { border: round; border-color: #40e0d0; padding-left: 1; padding-right: 1; margin-bottom: 0; }
       .allow { color: #ffb3d1; font-weight: bold; padding-right: 1; }
       .q { flex-grow: 1; white-space: pre-wrap; }
-      .keys { color: #40e0d0; font-weight: bold; padding-left: 2; }
       .palette { border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
       .pitem { display: flex; flex-direction: row; color: #40e0d0; }
       .pitem .pname { width: 14; }
       .pitem .phelp { color: #ffffff; }
       .current .pname { color: #ffb3d1; font-weight: bold; }
       .promptq { color: #ffb3d1; font-weight: bold; padding-left: 1; }
-      .status { display: flex; flex-direction: row; padding-left: 2; padding-right: 2; color: #8a8a8a; }
-      .status .left { flex-grow: 1; flex-shrink: 1; min-width: 0; white-space: nowrap; overflow-x: hidden; }
-      .gauge { white-space: nowrap; padding-left: 2; flex-shrink: 0; }
-      .gauge { color: #40e0d0; }
+      .status { display: flex; flex-direction: row; padding-left: 2; padding-right: 2; color: #8a8a8a; border-top: solid; border-color: #4a4a4a; }
+      .sl { display: flex; flex-direction: row; flex-grow: 1; min-width: 0; white-space: nowrap; overflow-x: hidden; }
+      .sr { display: flex; flex-direction: row; flex-shrink: 0; white-space: nowrap; }
+      .tb { padding-right: 1; white-space: nowrap; flex-shrink: 0; }
+      .sr .tb { padding-left: 1; padding-right: 0; color: #8a8a8a; }
+      .gauge { color: #40e0d0; padding-left: 2; white-space: nowrap; }
       .gauge.hot { color: #ffb3d1; }
+      dialog { background-color: #000000; color: #ffffff; border-color: #40e0d0; }
+      toast::part(toast) { border-color: #40e0d0; background-color: #000000; color: #ffffff; }
+      .box input::part(placeholder) { color: #8a8a8a; }
+      .dlgactions { display: flex; flex-direction: row; justify-content: flex-end; margin-top: 1; }
+      .danger { color: #ffb3d1; }
+      .dlgbody { width: 58; }
+      .keyrow { display: flex; flex-direction: row; }
+      .kname { width: 16; color: #40e0d0; }
+      .kdesc { color: #ffffff; }
 
-      /* Narrow terminals (below 84 columns): the sidebar becomes a drawer over the conversation, opened with Ctrl+K, Ctrl+B or the menu button. */
+      /* Below 84 columns the sidebar is a screen of its own: the list opens over the conversation with the menu button, and picking a session
+         goes back to the conversation, like a phone app. */
       @media (max-width: 83) {
         .shell { position: relative; }
         .side { display: none; }
         .side.drawer { display: flex; position: absolute; left: 0; top: 0; bottom: 0; background-color: #000000; z-index: 5; }
-        .burger { display: inline; color: #ffb3d1; font-weight: bold; }
+        .burger { display: inline; color: #40e0d0; font-weight: bold; padding-right: 2; }
+        .sback { display: block; color: #40e0d0; margin-bottom: 1; }
         .home .top { display: flex; border-bottom: none; }
-        .home .ttitle, .home .tproj { display: none; }
+        .home .ttitle, .home .tdel { display: none; }
+        .tb.files { display: none; }
       }
-      /* Phones and split panes (below 70): tighter margins, the project path moves out of the title bar. */
       @media (max-width: 69) {
-        .tproj { display: none; }
+        .side.drawer { width: 100%; border-right: none; }
+        .setback { display: inline; }
+        .setside { width: 100%; border-right: none; }
+        .setbody.cats .setmain { display: none; }
+        .setbody.content .setside { display: none; }
+        .setmain { padding-left: 0; }
+        .setrow .slabel { width: 25; }
         .transcript { padding-left: 1; padding-right: 1; }
         .composer { padding-left: 1; padding-right: 1; }
         .status { padding-left: 1; padding-right: 1; }
         .user { padding-left: 3; }
         .home .composer { width: 100%; padding-left: 1; padding-right: 1; }
-        .metrics { padding-left: 0; }
+        .tb.models, .tb.engine { display: none; }
+        .dlgbody { width: 40; }
       }
-      /* Very narrow (below 50): only what is needed to talk. */
       @media (max-width: 49) {
-        .tag, .tip, .meta { display: none; }
-        .status .left { display: none; }
-        .status { justify-content: flex-end; }
+        .tag { display: none; }
         .row .mark { width: 1; }
         .assistant .mark { display: none; }
-        .side.drawer { width: 100%; }
+        .tb.cpu, .tb.mode { display: none; }
+        .dlgbody { width: 30; }
+        .kname { width: 10; }
       }
-      /* Tiny (below 36): the big logo gives way to the name. */
       @media (max-width: 35) {
         .banner { display: none; }
         .small-brand { display: block; }
-        .gauge { display: none; }
+        .hint { display: none; }
+        .tb.ram { display: none; }
       }
     </style>
   )html";
@@ -1024,6 +1614,9 @@ int run_tui(const TuiHost &host) {
     g_app = app.get();
     rtxui::Screen screen(app);
     g_screen = &screen;
+    rtxui::PostTask([] {
+        if (g_app) g_app->StatsTick();
+    });
     screen.SetInline(false);
     screen.Loop();
 

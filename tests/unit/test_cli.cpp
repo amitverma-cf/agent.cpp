@@ -119,7 +119,7 @@ TEST_CASE("cli: config.json round trip", "[cli]") {
     auto partial = config_from_json(R"({"workspace": "/w", "future_key": {"x": 1}, "temperature": 1})");
     REQUIRE(partial.ok);
     CHECK(partial.value.workspace == "/w");
-    CHECK(partial.value.context_window == 4096);
+    CHECK(partial.value.context_window == 8192);
     CHECK(partial.value.temperature == Catch::Approx(1.0f));
     CHECK(partial.value.memory_budget_mb == 0);
 

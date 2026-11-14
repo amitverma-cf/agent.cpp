@@ -156,6 +156,23 @@ instance. Both ask first (like `run_command`); `-y` or `/mode auto` approve them
 llama engine and switch the tools off for the session (a grammar cannot share a turn with the tool-call grammar). In `task text_gen` the same
 is `--params '{"json": true}'` or `--params '{"grammar": "..."}'`.
 
+### The screen
+
+- **Sidebar:** the logo, a New chat button, your sessions (scrollable) and a Settings button. On a terminal narrower than 84 columns it is a
+  screen of its own, opened with the menu icon in the title bar (like a phone app); below 70 columns it fills the whole terminal.
+- **Title bar:** the session name and a trash icon that deletes the session, after a confirmation, from the list, the saved history and the
+  memory.
+- **Messages:** every message of yours has a copy icon and a delete icon (the delete removes your message and the model's answers to it from
+  what the model sees, after a confirmation). Every answer has a copy icon, how fast it was written (tok/s, when the engine measured it) and
+  how long the whole answer took. Copy goes to the clipboard through the terminal (OSC 52) and the system's clipboard tool.
+- **Input:** a microphone icon on the left records until you click it again, then writes what you said into the input with the first speech
+  recognition model that is installed (`agent model pull <a speech model link>`). `/` lists commands, `@file` attaches a file, `!command` runs
+  a shell command. A line under the input suggests the next useful key or command.
+- **Bottom bar:** CPU use, RAM used and installed, the size of the files folder; and on the right the engine, the models held in RAM, the mode
+  and the context used and available.
+- **Shortcuts:** `?` on an empty input, or F1, lists every keyboard shortcut. (A terminal cannot report the Alt key alone.) Ctrl+O opens the
+  settings; there, the categories are on the left, and each setting changes with Left and Right or by typing a new value.
+
 ### Look
 
 The chat uses four colours: black, white, turquoise and pastel pink, with white at reduced opacity for secondary text and lines. The window

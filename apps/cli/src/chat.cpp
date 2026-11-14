@@ -6,9 +6,12 @@
 #include "commands.hpp"
 #include "edit_journal.hpp"
 #include "mcp_config.hpp"
+#include "model_detect.hpp"
+#include "runtimes.hpp"
 #include "schedule.hpp"
 #include "secrets.hpp"
 #include "tui.hpp"
+#include "voice.hpp"
 
 #include <agent-cpp/hub.hpp>
 #include <agent-cpp/store_sqlite.hpp>
@@ -23,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <simdjson.h>
+#include <thread>
 
 #if !defined(_WIN32)
 #include <signal.h>
@@ -194,8 +198,8 @@ struct ChatState {
     std::string engine_flag; // --engine as given (empty = by model file type)
     std::string engine_options;
     std::string workspace;
-    int context_window = 4096;
-    int max_tokens = 512;
+    int context_window = 8192;
+    int max_tokens = 2048;
     bool verbose = false;
     bool auto_approve = false;
     bool inprocess = false; // --inprocess: load the engine into the CLI instead of agent-engine-host
@@ -218,7 +222,20 @@ struct ChatState {
 
 // The system prompt of a new conversation: ours, then the rules the user wrote for the project (AGENTS.md and .agents/rules).
 std::string system_prompt(const ChatState &st) {
-    return std::string(kSystemPrompt) + load_project_rules(st.workspace, st.ctx->has_home ? st.ctx->home.root : st.ctx->config_dir);
+    // The model must know what computer it is on: a small model otherwise tries `ls` and `find` on Windows and loops on the errors.
+#if defined(_WIN32)
+    const char *platform =
+        " The computer runs Windows: run_command uses cmd.exe, which has no ls, find, cat, grep, touch or mkdir -p (use dir, type and "
+        "mkdir). "
+        "To work with files prefer the file tools (list_dir, read_file, write_file) over shell commands. If a command fails, change "
+        "the approach or tell the user what went wrong; never repeat the same failing command.";
+#else
+    const char *platform =
+        " The computer runs Linux: run_command uses sh. To work with files prefer the file tools (list_dir, read_file, write_file) over "
+        "shell commands. If a command fails, change the approach or tell the user what went wrong; never repeat the same failing command.";
+#endif
+    return std::string(kSystemPrompt) + platform +
+           load_project_rules(st.workspace, st.ctx->has_home ? st.ctx->home.root : st.ctx->config_dir);
 }
 
 void log_fn(LogLevel level, std::string_view message, void *user_data) {
@@ -462,6 +479,9 @@ Result<void> open_session(ChatState &st) {
     cfg.secret_user_data = st.secrets.get();
     cfg.context_window = st.context_window;
     cfg.max_tokens = st.max_tokens;
+    // A chat has one conversation: one sequence slot. The default of four (for parallel sub-agents) made the memory estimate count the
+    // cache four times, and a 9B model was refused on a machine that runs it.
+    cfg.max_parallel_subagents = 1;
     cfg.temperature = st.ctx->config.temperature;
     cfg.enable_file_logging = true;
     cfg.logger = log_fn;
@@ -555,23 +575,22 @@ void print_chat_help() {
          "Ctrl-C while the model is answering cancels the answer.\n");
 }
 
-// The line under an answer in the full-screen interface: which model answered, how fast, how many tokens.
-std::string format_metrics(const ChatState &st) {
+// The line under an answer in the full-screen interface: how fast it wrote and how long the whole answer took (all its rounds, with
+// the tools in between). `elapsed` is the wall time of the turn.
+std::string format_metrics(const ChatState &st, double elapsed = 0.0) {
     const TokenUsage &u = st.memory.stats.last;
-    if (u.completion_tokens <= 0) return {};
-    char buf[160];
-    std::string out = st.model.name;
+    char buf[96];
+    std::string out;
     if (u.decode_ms > 0.0f && u.completion_tokens > 1) {
-        std::snprintf(buf, sizeof(buf), "  \xC2\xB7  %.0f tok/s",
+        std::snprintf(buf, sizeof(buf), "%.1f tok/s",
                       static_cast<double>(u.completion_tokens - 1) / (static_cast<double>(u.decode_ms) / 1000.0));
-        out += buf;
+        out = buf;
     }
-    std::snprintf(buf, sizeof(buf), "  \xC2\xB7  %d tokens", u.completion_tokens);
-    out += buf;
-    const double seconds = (static_cast<double>(u.prefill_ms) + static_cast<double>(u.decode_ms)) / 1000.0;
+    double seconds = elapsed;
+    if (seconds <= 0.0) seconds = (static_cast<double>(u.prefill_ms) + static_cast<double>(u.decode_ms)) / 1000.0;
     if (seconds > 0.0) {
-        std::snprintf(buf, sizeof(buf), "  \xC2\xB7  %.1f s", seconds);
-        out += buf;
+        std::snprintf(buf, sizeof(buf), "%.1f s", seconds);
+        out += (out.empty() ? "" : "  \xC2\xB7  ") + std::string(buf);
     }
     return out;
 }
@@ -582,6 +601,7 @@ void run_one_turn(ChatState &st, const std::string &text, std::span<const Media>
         return;
     }
     const size_t before = st.memory.history.size();
+    const auto turn_started = std::chrono::steady_clock::now();
     st.streamed_bytes = 0;
     clear_cancel(*st.lease);
     g_generating.store(true);
@@ -606,7 +626,8 @@ void run_one_turn(ChatState &st, const std::string &text, std::span<const Media>
         if (!footer.empty()) std::fprintf(g_err, "[%s]\n", footer.c_str());
 #if defined(AGENT_CLI_HAS_TUI)
         if (g_tui) {
-            const std::string metrics = format_metrics(st);
+            const std::string metrics =
+                format_metrics(st, std::chrono::duration<double>(std::chrono::steady_clock::now() - turn_started).count());
             if (!metrics.empty()) tui_emit(TuiKind::Metrics, metrics);
         }
 #endif
@@ -1048,23 +1069,6 @@ void run_cli_command(ChatState &st, const std::vector<std::string> &argv) {
 #endif
 }
 
-// A free-text question in the chat: the full-screen interface asks above its input line, line mode reads stdin.
-std::string ask_line(const std::string &question, const std::string &fallback) {
-#if defined(AGENT_CLI_HAS_TUI)
-    if (g_tui) {
-        std::string answer;
-        tui_prompt(question, fallback, answer);
-        return answer;
-    }
-#endif
-    out(question + (fallback.empty() ? "" : " [" + fallback + "]") + ": ");
-    std::string line;
-    if (read_line(stdin, line) != ReadStatus::Line) return fallback;
-    g_at_line_start = true;
-    const size_t a = line.find_first_not_of(" \t");
-    return a == std::string::npos ? fallback : line.substr(a);
-}
-
 // /setup: setup is a script that asks questions and downloads, which does not fit inside the full-screen chat.
 void run_setup_wizard(ChatState &) { out("setup runs in a terminal: leave the chat (/exit) and run `agent setup`\n"); }
 
@@ -1286,6 +1290,474 @@ int run_scripted(ChatState &st, const CommandLine &cl) {
     return g_last_turn_failed ? 1 : 0;
 }
 
+// ---- the settings screen (bottom-left button of the full-screen chat)
+
+#if defined(AGENT_CLI_HAS_TUI)
+// ---- numbers for the bottom bar, kept up to date by a thread of their own so the screen never waits for them
+
+struct SysStats {
+    std::atomic<int> cpu{-1};
+    std::atomic<double> ram_used{0}, ram_total{0}, files{-1};
+    std::atomic<bool> stop{false};
+    std::mutex mu;
+    std::string folder;
+    std::thread thread;
+};
+SysStats g_stats;
+
+uint64_t folder_bytes_capped(const std::string &dir, size_t max_files) {
+    uint64_t total = 0;
+    size_t seen = 0;
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec)) return 0;
+    for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        std::error_code ec2;
+        if (it->is_regular_file(ec2)) total += static_cast<uint64_t>(it->file_size(ec2));
+        if (++seen >= max_files) break;
+    }
+    return total;
+}
+
+void start_stats(const std::string &folder) {
+    if (g_stats.thread.joinable()) return;
+    g_stats.folder = folder;
+    g_stats.thread = std::thread([] {
+        CpuSample last;
+        cpu_sample(last);
+        int tick = 0;
+        while (!g_stats.stop.load()) {
+            for (int i = 0; i < 10 && !g_stats.stop.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            CpuSample now;
+            if (cpu_sample(now) && now.total > last.total) {
+                g_stats.cpu.store(static_cast<int>(100 * (now.busy - last.busy) / (now.total - last.total)));
+                last = now;
+            }
+            double used = 0, total = 0;
+            if (memory_gb(used, total)) {
+                g_stats.ram_used.store(used);
+                g_stats.ram_total.store(total);
+            }
+            if (tick++ % 30 == 0)
+                g_stats.files.store(static_cast<double>(folder_bytes_capped(g_stats.folder, 200000)) / (1024.0 * 1024.0 * 1024.0));
+        }
+    });
+}
+
+void stop_stats() {
+    g_stats.stop.store(true);
+    if (g_stats.thread.joinable()) g_stats.thread.join();
+}
+
+TuiTaskbar tui_taskbar(ChatState &st) {
+    TuiTaskbar tb;
+    tb.cpu_percent = g_stats.cpu.load();
+    tb.ram_used_gb = g_stats.ram_used.load();
+    tb.ram_total_gb = g_stats.ram_total.load();
+    tb.files_gb = g_stats.files.load();
+    tb.engine = st.engine.name;
+    for (const LoadedModelInfo &m : loaded_models(st.registry)) tb.models.push_back(m.name);
+    if (tb.models.empty() && !st.model.name.empty()) tb.models.push_back(st.model.name);
+    tb.mode = chat_mode_name(st.mode);
+    tb.context_total = st.context_window;
+    const TokenUsage &u = st.memory.stats.last;
+    tb.context_used = u.kv_tokens > 0 ? u.kv_tokens : u.prompt_tokens + u.completion_tokens;
+    return tb;
+}
+
+// Removes a message of the user and the answers to it from what the model sees and from the saved conversation.
+bool tui_delete_turn(ChatState &st, int user_from_end) {
+    auto &h = st.memory.history;
+    int seen = 0;
+    for (size_t i = h.size(); i-- > 0;) {
+        if (h[i].role != "user") continue;
+        if (seen++ != user_from_end) continue;
+        size_t end = i + 1;
+        while (end < h.size() && h[end].role != "user") ++end;
+        h.erase(h.begin() + static_cast<std::ptrdiff_t>(i), h.begin() + static_cast<std::ptrdiff_t>(end));
+        remember_conversation(st);
+        return true;
+    }
+    return false;
+}
+
+// ---- the microphone button: records, then turns the speech into text with the first speech recognition model that is installed
+
+struct MicState {
+    std::mutex mu;
+    std::vector<float> samples;
+    std::atomic<bool> stop{false};
+    std::thread thread;
+    Session asr;
+    bool asr_ready = false;
+    std::string asr_model;
+};
+MicState g_mic;
+
+std::string tui_mic(ChatState &st, bool start) {
+    if (start) {
+        if (!audio::device_backend_available()) return "This build has no microphone support";
+        auto in = audio::open_device_input();
+        if (!in.ok) return in.error.message;
+        g_mic.samples.clear();
+        g_mic.stop.store(false);
+        g_mic.thread = std::thread([input = std::move(in.value)]() mutable {
+            float buf[4096];
+            bool eof = false;
+            while (!g_mic.stop.load() && !eof) {
+                const size_t n = audio::read(input, buf, 4096, 100, eof);
+                std::lock_guard<std::mutex> lock(g_mic.mu);
+                g_mic.samples.insert(g_mic.samples.end(), buf, buf + n);
+            }
+        });
+        return {};
+    }
+    g_mic.stop.store(true);
+    if (g_mic.thread.joinable()) g_mic.thread.join();
+    std::vector<float> samples;
+    {
+        std::lock_guard<std::mutex> lock(g_mic.mu);
+        samples = std::move(g_mic.samples);
+    }
+    if (samples.size() < audio::kCaptureRate / 2) return "!Nothing was heard";
+
+    // The first installed model that recognises speech.
+    std::string model_path, model_name;
+    if (auto catalog = agent::hub::list_models(catalog_path(*st.ctx)); catalog.ok)
+        for (const auto &m : catalog.value) {
+            const ModelKind kind = detect_model(m.path, m.repo, m.file, false);
+            if (kind.engine == "audiocpp" && kind.task == "asr") {
+                model_path = m.path;
+                model_name = m.name;
+                break;
+            }
+        }
+    if (model_path.empty()) return "!No speech recognition model is installed: agent model pull <a speech model link>";
+    if (!g_mic.asr_ready || g_mic.asr_model != model_name) {
+        auto engine = load_engine_for(*st.ctx, "audiocpp", model_path);
+        if (!engine.ok) return "!" + engine.error.message;
+        auto options = audiocpp_asr_options(model_path);
+        if (!options.ok) return "!" + options.error.message;
+        Config cfg;
+        cfg.provider = AiProvider::Engine;
+        cfg.engine = engine.value.name;
+        cfg.engine_isolation = cli_engine_isolation(st.inprocess, engine.value.isolation);
+        cfg.engine_sandbox.gpu = cli_engine_gpu(engine.value.backend);
+        apply_sandbox_choice(cfg);
+        cfg.workspace_dir = st.workspace;
+        cfg.engine_options = options.value;
+        cfg.auto_default_tools = false;
+        auto session = init(cfg);
+        if (!session.ok) return "!" + session.error.message;
+        g_mic.asr = std::move(session.value);
+        g_mic.asr_ready = true;
+        g_mic.asr_model = model_name;
+    }
+    g_mic.asr.arena.reset();
+    const int64_t shape[] = {static_cast<int64_t>(samples.size())};
+    const TensorView tensor{
+        .name = "audio",
+        .dtype = DType::Float32,
+        .shape = shape,
+        .data = std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(samples.data()), samples.size() * sizeof(float))};
+    const MessageView msg{.role = "user", .content = {}, .tensors = std::span<const TensorView>(&tensor, 1)};
+    InferRequest req;
+    req.messages = std::span<const MessageView>(&msg, 1);
+    req.cancel = g_mic.asr.cancel_flag.get();
+    auto r = infer(g_mic.asr, req);
+    if (!r.ok) return "!" + r.error.message;
+    std::string words(r.value.message.content);
+    while (!words.empty() && (words.back() == '\n' || words.back() == ' ')) words.pop_back();
+    return words.empty() ? "!Nothing was recognised" : words;
+}
+
+bool reload_model(ChatState &st) {
+    release_model(st.lease);
+    unload_model(st.registry, st.model.name);
+    return open_session(st).ok;
+}
+
+std::string icons_name() {
+    const char *v = std::getenv("AGENT_ICONS");
+    return v && *v ? v : "unicode";
+}
+
+uint64_t folder_bytes(const std::string &dir) {
+    uint64_t total = 0;
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec)) return 0;
+    for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        std::error_code ec2;
+        if (it->is_regular_file(ec2)) total += static_cast<uint64_t>(it->file_size(ec2));
+    }
+    return total;
+}
+
+std::string size_text(uint64_t bytes) {
+    char buf[32];
+    if (bytes >= (1ull << 30)) std::snprintf(buf, sizeof(buf), "%.1f GiB", static_cast<double>(bytes) / static_cast<double>(1ull << 30));
+    else std::snprintf(buf, sizeof(buf), "%.1f MiB", static_cast<double>(bytes) / static_cast<double>(1ull << 20));
+    return buf;
+}
+
+size_t count_folders(const std::string &dir) {
+    size_t n = 0;
+    std::error_code ec;
+    if (fs::is_directory(dir, ec))
+        for (const auto &e : fs::directory_iterator(dir, ec))
+            if (e.is_directory(ec)) ++n;
+    return n;
+}
+
+std::string join_names(const std::vector<std::string> &names, const char *none) {
+    std::string out;
+    for (const std::string &n : names) out += (out.empty() ? "" : ", ") + n;
+    return out.empty() ? std::string(none) : out;
+}
+
+// Every setting of the chat, by category. The first group is the category in the sidebar, the second a heading inside it.
+std::vector<TuiSetting> tui_settings(ChatState &st) {
+    std::vector<TuiSetting> s;
+    std::string group, section;
+    auto cat = [&](const char *g) {
+        group = g;
+        section.clear();
+    };
+    auto head = [&](const char *h) { section = h; };
+    auto add = [&](std::string key, std::string label, std::string value, std::string hint, std::vector<std::string> options = {},
+                   bool editable = true) {
+        s.push_back({group, section, std::move(key), std::move(label), std::move(value), std::move(hint), std::move(options), editable});
+    };
+    auto info = [&](std::string label, std::string value, std::string hint = {}) {
+        add("info", std::move(label), std::move(value), std::move(hint), {}, false);
+    };
+
+    const CliConfig &c = st.ctx->config;
+    std::vector<std::string> models;
+    auto catalog = agent::hub::list_models(catalog_path(*st.ctx));
+    if (catalog.ok)
+        for (const auto &m : catalog.value) models.push_back(m.name);
+    std::vector<std::string> switchable = models;
+    if (std::find(switchable.begin(), switchable.end(), st.model.name) == switchable.end()) switchable.push_back(st.model.name);
+    char temperature[16];
+    std::snprintf(temperature, sizeof(temperature), "%g", static_cast<double>(c.temperature));
+    const std::string home = st.ctx->has_home ? st.ctx->home.root : st.ctx->config_dir;
+
+    cat("General");
+    head("Where things are");
+    info("Files folder", home, "Models, engines, skills, memory and logs live here. agent home DIR moves it");
+    info("Project folder", st.workspace, "The folder the agent works in; its conversations are kept here");
+    info("Models folder", models_dir(*st.ctx));
+    info("Conversation", st.memory.id, "Resume it later with: agent chat --resume ID");
+    head("Startup");
+    if (!models.empty())
+        add("default_model", "Model to open", c.default_model.empty() ? "(the first one)" : c.default_model,
+            "The model a new chat starts with", models);
+
+    cat("Model");
+    head("This chat");
+    add("model", "Model", st.model.name, "Left and Right switch the model; it loads now", switchable);
+    head("How it answers");
+    add("temperature", "Temperature", temperature, "0 is exact, 1 is creative, up to 2. Reloads the model");
+    add("max_tokens", "Longest answer (tokens)", std::to_string(st.max_tokens), "Where an answer is cut. Reloads the model");
+    add("context_window", "Context window (tokens)", std::to_string(st.context_window),
+        "How much of the conversation the model sees; more uses more memory. Reloads the model");
+    head("Memory");
+    add("memory_budget_mb", "Memory budget (MB)", std::to_string(c.memory_budget_mb),
+        "0 lets it use 85% of the RAM. Models that do not fit are unloaded in turn");
+    add("engine_options", "Engine options (JSON)", st.engine_options,
+        "Extra options for this model's engine, for example {\"flash_attn\": true}. Empty for none. Reloads the model");
+
+    cat("Chat");
+    head("Tools and permissions");
+    add("mode", "Mode", chat_mode_name(st.mode), "ask: asks before changes   plan: only reads   auto: never asks", {"ask", "plan", "auto"});
+    add("use_tools", "Use tools", st.no_tools ? "off" : "on",
+        "Off: the model only talks (files, commands and the web are not offered). Reloads the model", {"on", "off"});
+    add("auto_approve", "Approve without asking", st.auto_approve ? "on" : "off",
+        "On answers yes to every permission question, like agent chat -y", {"off", "on"});
+    add("always_allowed", "Always-allowed tools", join_names(st.always_allowed, ""),
+        "Tools you answered \"a\" for in this project, separated by commas. Empty forgets them");
+    head("Reading the answer");
+    add("thinking", "Show reasoning", st.think.show ? "on" : "off", "Show the <think> blocks of reasoning models", {"off", "on"});
+    head("The web");
+    add("search_url", "Web search address", c.search_url,
+        "A search service with {q} in it, for example http://localhost:8080/search?format=json&q={q}. Empty: no web_search tool. Reloads "
+        "the model");
+
+    cat("Tools and MCP");
+    head("JavaScript and Python tooling");
+    add("js_runtime", "JavaScript tooling", c.js_runtime, "For MCP servers and skills. Install it with: agent runtime use <name>",
+        {"bun", "node", "nub"});
+    if (st.ctx->has_home)
+        for (const char *name : {"bun", "node", "pnpm", "nub", "uv"}) {
+            const std::string path = runtime_binary_path(st.ctx->home, name);
+            info(name, path.empty() ? "not installed" : "installed", path.empty() ? std::string("agent runtime install ") + name : path);
+        }
+    head("MCP servers");
+    {
+        std::vector<std::string> warnings, names;
+        for (const McpServerConfig &m : collect_mcp_servers(*st.ctx, warnings)) names.push_back(m.name);
+        info("Configured", join_names(names, "none"), "agent mcp add NAME adds one; they run in the sandbox");
+    }
+    head("Skills");
+    {
+        const size_t global = st.ctx->has_home ? count_folders(st.ctx->home.skills) : 0;
+        const size_t project = count_folders((fs::path(st.workspace) / ".agents" / "skills").string());
+        info("Installed", std::to_string(global) + " for every project, " + std::to_string(project) + " in this one",
+             "agent skill add owner/repo/skill");
+    }
+
+    cat("Engines and GPU");
+    head("Backend");
+    add("backend", "GPU backend", c.backend, "cpu, vulkan or cuda: what the engines are asked to use. Applies to models loaded from now on",
+        {"cpu", "vulkan", "cuda"});
+    info("This engine", st.engine.name + " " + st.engine.version, st.engine.path);
+    head("Engines installed");
+    if (auto engines = load_engines(st.ctx->engines_path); engines.ok)
+        for (const EngineEntry &e : engines.value) info(e.name, e.version + (file_exists(e.path) ? "" : "  (file missing)"), e.path);
+    head("This computer");
+    info("CPU cores", std::to_string(c.hardware.cpu_cores));
+    info("RAM", size_text(total_ram_bytes()));
+
+    cat("Models on disk");
+    head("Installed models");
+    if (catalog.ok)
+        for (const auto &m : catalog.value)
+            info(m.name, size_text(m.size) + (m.name == c.default_model ? "   (opens by default)" : ""), m.path);
+    if (!catalog.ok || catalog.value.empty()) info("None yet", "", "agent model pull <Hugging Face link, owner/repo or a file>");
+
+    cat("Storage");
+    head("Disk use");
+    info("Models", size_text(folder_bytes(models_dir(*st.ctx))));
+    if (st.ctx->has_home) {
+        info("Cache", size_text(folder_bytes(st.ctx->home.cache)), "agent clean removes partial downloads and caches");
+        info("Logs", size_text(folder_bytes(st.ctx->home.logs)));
+        info("Runtimes", size_text(folder_bytes(st.ctx->home.runtimes)));
+        info("Log files", st.ctx->home.logs, "Engine and chat logs, for bug reports");
+    }
+    info("This project", size_text(folder_bytes((fs::path(st.workspace) / "memory").string())), "Conversations and memory of this project");
+
+    cat("About");
+    head("agent.cpp");
+    info("Version", std::string(kCliVersion), "agent update checks for a newer one");
+    info("Source", "github.com/amitverma-cf/agent.cpp");
+    info("Licence", "MIT");
+    info("Set up again", "agent setup", "Asks for the folder, the optional runtimes and a model");
+    info("Icons", icons_name(), "AGENT_ICONS=nerd|ascii|unicode before starting agent");
+    return s;
+}
+
+std::string tui_set_setting(ChatState &st, const std::string &key, const std::string &value) {
+    CliConfig &c = st.ctx->config;
+    auto persist = [&]() -> std::string {
+        if (auto r = save_config(st.ctx->config_path, c); !r.ok) return "could not save config.json: " + r.error.message;
+        return {};
+    };
+    auto reload = [&]() { return reload_model(st) ? std::string() : std::string("the model did not reload; try /model NAME"); };
+    auto whole = [&](long lowest, long &out) -> std::string {
+        char *end = nullptr;
+        const long v = std::strtol(value.c_str(), &end, 10);
+        if (value.empty() || *end != 0 || v < lowest || v > 1048576) return "a whole number of at least " + std::to_string(lowest);
+        out = v;
+        return {};
+    };
+
+    if (key == "model") {
+        if (value == st.model.name) return {};
+        switch_model(st, value);
+        return st.model.name == value ? std::string() : std::string("could not load " + value + "; see the messages above");
+    }
+    if (key == "default_model") {
+        c.default_model = value;
+        return persist();
+    }
+    if (key == "mode") {
+        ChatMode m;
+        if (!parse_chat_mode(value, m)) return "choose ask, plan or auto";
+        st.mode = m;
+        return {};
+    }
+    if (key == "thinking") {
+        st.think.show = value == "on";
+        return {};
+    }
+    if (key == "use_tools") {
+        st.no_tools = value == "off";
+        return reload();
+    }
+    if (key == "auto_approve") {
+        st.auto_approve = value == "on";
+        return {};
+    }
+    if (key == "always_allowed") {
+        std::vector<std::string> tools;
+        size_t from = 0;
+        while (from <= value.size()) {
+            const size_t comma = value.find(',', from);
+            std::string name = value.substr(from, comma == std::string::npos ? std::string::npos : comma - from);
+            while (!name.empty() && name.front() == ' ') name.erase(0, 1);
+            while (!name.empty() && name.back() == ' ') name.pop_back();
+            if (!name.empty()) tools.push_back(name);
+            if (comma == std::string::npos) break;
+            from = comma + 1;
+        }
+        st.always_allowed = tools;
+        return save_always_allowed(st.workspace, tools) ? std::string() : std::string("could not save .agents/permissions.json");
+    }
+    if (key == "temperature") {
+        char *end = nullptr;
+        const float v = std::strtof(value.c_str(), &end);
+        if (value.empty() || end == value.c_str() || *end != 0 || v < 0.0f || v > 2.0f) return "a number from 0 to 2";
+        c.temperature = v;
+        if (auto e = persist(); !e.empty()) return e;
+        return reload();
+    }
+    if (key == "max_tokens" || key == "context_window") {
+        long v = 0;
+        if (auto e = whole(key == "max_tokens" ? 16 : 512, v); !e.empty()) return e;
+        if (key == "max_tokens") st.max_tokens = c.max_tokens = static_cast<int>(v);
+        else st.context_window = c.context_window = static_cast<int>(v);
+        if (auto e = persist(); !e.empty()) return e;
+        return reload();
+    }
+    if (key == "memory_budget_mb") {
+        long v = 0;
+        if (auto e = whole(0, v); !e.empty()) return e;
+        c.memory_budget_mb = v;
+        const uint64_t bytes = v > 0 ? static_cast<uint64_t>(v) << 20 : (total_ram_bytes() / 100 * 85);
+        set_budget(st.registry, ModelBudget{.ram_bytes = bytes});
+        return persist();
+    }
+    if (key == "engine_options") {
+        if (!value.empty()) {
+            simdjson::dom::parser parser;
+            simdjson::dom::element doc;
+            if (parser.parse(value).get(doc) || !doc.is_object()) return "a JSON object such as {\"flash_attn\": true}, or empty";
+        }
+        st.engine_options = value;
+        return reload();
+    }
+    if (key == "search_url") {
+        if (!value.empty() && value.find("{q}") == std::string::npos) return "the address needs {q} where the search text goes";
+        c.search_url = value;
+        if (auto e = persist(); !e.empty()) return e;
+        return reload();
+    }
+    if (key == "js_runtime") {
+        if (value != "bun" && value != "node" && value != "nub") return "choose bun, node or nub";
+        c.js_runtime = value;
+        return persist();
+    }
+    if (key == "backend") {
+        if (value != "cpu" && value != "vulkan" && value != "cuda") return "choose cpu, vulkan or cuda";
+        c.backend = value;
+        return persist();
+    }
+    return "this setting cannot be changed here";
+}
+#endif
+
 // --acp: the Agent Client Protocol, for editors (Zed and others): JSON-RPC 2.0, one message per line on stdio. initialize, session/new,
 // session/prompt (streams session/update notifications, asks session/request_permission). session/cancel is read between turns only.
 int run_acp(ChatState &st) {
@@ -1414,6 +1886,13 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
         };
         host.notice = [](void *) { return sandbox_notice(); };
         host.mode = [](void *u) { return std::string(chat_mode_name(static_cast<ChatState *>(u)->mode)); };
+        host.taskbar = [](void *u) { return tui_taskbar(*static_cast<ChatState *>(u)); };
+        host.delete_turn = [](void *u, int from_end) { return tui_delete_turn(*static_cast<ChatState *>(u), from_end); };
+        host.mic = [](void *u, bool start) { return tui_mic(*static_cast<ChatState *>(u), start); };
+        host.settings = [](void *u) { return tui_settings(*static_cast<ChatState *>(u)); };
+        host.set_setting = [](void *u, const std::string &key, const std::string &value) {
+            return tui_set_setting(*static_cast<ChatState *>(u), key, value);
+        };
         host.delete_session = [](void *u, const std::string &id, const std::string &workspace) {
             auto &c = *static_cast<ChatState *>(u);
             if (!delete_conversation(c, id, workspace)) return false;
@@ -1435,7 +1914,9 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
             if (int32_t *flag = g_cancel_flag.load()) std::atomic_ref<int32_t>(*flag).store(1, std::memory_order_relaxed);
         };
         g_tui = true;
+        start_stats(st.ctx->has_home ? st.ctx->home.root : st.workspace);
         const int rc = run_tui(host);
+        stop_stats();
         g_tui = false;
         g_err = saved_err;
         if (log) std::fclose(log);

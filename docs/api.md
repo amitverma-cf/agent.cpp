@@ -649,7 +649,7 @@ struct Config {
     EngineIsolation engine_isolation = EngineIsolation::Default;
     std::string engine_host_path;   // agent-engine-host; empty = found next to the program, else PATH
     int engine_timeout_ms = 0;      // per-request watchdog for process isolation; 0 = none
-    int engine_cancel_grace_ms = 2000;
+    int engine_cancel_grace_ms = 6000;
     int engine_max_restarts = 3;    // automatic host restarts per rolling minute
     std::string gpu_cache_dir;      // GPU driver caches when engine_sandbox.gpu is set; empty = <workspace>/cache/gpu
 };

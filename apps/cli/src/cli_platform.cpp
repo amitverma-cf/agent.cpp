@@ -178,6 +178,59 @@ HardwareInfo detect_hardware() {
     return hw;
 }
 
+bool cpu_sample(CpuSample &out) {
+#if defined(_WIN32)
+    FILETIME idle, kernel, user;
+    if (!GetSystemTimes(&idle, &kernel, &user)) return false;
+    auto to64 = [](const FILETIME &f) { return (static_cast<uint64_t>(f.dwHighDateTime) << 32) | f.dwLowDateTime; };
+    out.total = to64(kernel) + to64(user); // the kernel time includes the idle time
+    out.busy = out.total - to64(idle);
+    return true;
+#elif defined(__linux__)
+    std::ifstream in("/proc/stat");
+    std::string label;
+    uint64_t v[8] = {};
+    if (!(in >> label) || label != "cpu") return false;
+    for (uint64_t &x : v) in >> x;
+    uint64_t total = 0;
+    for (uint64_t x : v) total += x;
+    out.total = total;
+    out.busy = total - v[3] - v[4]; // minus idle and iowait
+    return true;
+#else
+    (void)out;
+    return false;
+#endif
+}
+
+bool memory_gb(double &used, double &total) {
+    constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+#if defined(_WIN32)
+    MEMORYSTATUSEX m{};
+    m.dwLength = sizeof(m);
+    if (!GlobalMemoryStatusEx(&m)) return false;
+    total = static_cast<double>(m.ullTotalPhys) / kGiB;
+    used = static_cast<double>(m.ullTotalPhys - m.ullAvailPhys) / kGiB;
+    return true;
+#elif defined(__linux__)
+    std::ifstream in("/proc/meminfo");
+    std::string key, unit;
+    uint64_t value = 0, mem_total = 0, available = 0;
+    while (in >> key >> value >> unit) {
+        if (key == "MemTotal:") mem_total = value;
+        else if (key == "MemAvailable:") available = value;
+    }
+    if (!mem_total) return false;
+    total = static_cast<double>(mem_total) * 1024.0 / kGiB;
+    used = static_cast<double>(mem_total - available) * 1024.0 / kGiB;
+    return true;
+#else
+    (void)used;
+    (void)total;
+    return false;
+#endif
+}
+
 uint64_t total_ram_bytes() {
 #if defined(_WIN32)
     MEMORYSTATUSEX m{};
