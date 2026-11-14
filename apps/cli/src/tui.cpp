@@ -331,15 +331,75 @@ const char *const kTips[] = {
 const char *const kSpinner[] = {"\xE2\xA0\x8B", "\xE2\xA0\x99", "\xE2\xA0\xB9", "\xE2\xA0\xB8", "\xE2\xA0\xBC",
                                 "\xE2\xA0\xB4", "\xE2\xA0\xA6", "\xE2\xA0\xA7", "\xE2\xA0\x87", "\xE2\xA0\x8F"};
 
-// The big "agent.cpp" on the empty screen: block letters with shadows, 29 columns wide (a narrow terminal shows the plain name).
-const char *const kBanner[3] = {
-    "\xE2\x94\x8C\xE2\x94\x80\xE2\x94\x90\xE2\x94\x8C\xE2\x94\x80\xE2\x94\x90\xE2\x94\x8C\xE2\x94\x80\xE2\x94\x90\xE2\x94\x8C\xE2\x94\x90"
-    "\xE2\x94\x8C\xE2\x94\x8C\xE2\x94\xAC\xE2\x94\x90   "
-    "\xE2\x94\x8C\xE2\x94\x80\xE2\x94\x90\xE2\x94\x8C\xE2\x94\x80\xE2\x94\x90\xE2\x94\x8C\xE2\x94\x80\xE2\x94\x90",
-    "\xE2\x94\x9C\xE2\x94\x80\xE2\x94\xA4\xE2\x94\x82 \xE2\x94\xAC\xE2\x94\x9C\xE2\x94\xA4 \xE2\x94\x82\xE2\x94\x82\xE2\x94\x82 "
-    "\xE2\x94\x82    \xE2\x94\x82  \xE2\x94\x9C\xE2\x94\x80\xE2\x94\x98\xE2\x94\x9C\xE2\x94\x80\xE2\x94\x98",
-    "\xE2\x94\xB4 \xE2\x94\xB4\xE2\x94\x94\xE2\x94\x80\xE2\x94\x98\xE2\x94\x94\xE2\x94\x80\xE2\x94\x98\xE2\x94\x98\xE2\x94\x94\xE2\x94\x98 "
-    "\xE2\x94\xB4  \x2E \xE2\x94\x94\xE2\x94\x80\xE2\x94\x98\xE2\x94\xB4  \xE2\x94\xB4  "};
+// The "agent.cpp" logo: two rows of half-block letters, turquoise over pink (a narrow terminal shows the plain name).
+const char *const kBanner[2] = {"\xE2\x96\x84"
+                                "\xE2\x96\x80"
+                                "\xE2\x96\x88"
+                                " "
+                                "\xE2\x96\x88"
+                                "\xE2\x96\x80"
+                                "\xE2\x96\x80"
+                                " "
+                                "\xE2\x96\x88"
+                                "\xE2\x96\x80"
+                                "\xE2\x96\x80"
+                                " "
+                                "\xE2\x96\x88"
+                                "\xE2\x96\x84"
+                                " "
+                                "\xE2\x96\x88"
+                                " "
+                                "\xE2\x96\x80"
+                                "\xE2\x96\x88"
+                                "\xE2\x96\x80"
+                                " "
+                                " "
+                                " "
+                                "\xE2\x96\x88"
+                                "\xE2\x96\x80"
+                                "\xE2\x96\x80"
+                                " "
+                                "\xE2\x96\x88"
+                                "\xE2\x96\x80"
+                                "\xE2\x96\x88"
+                                " "
+                                "\xE2\x96\x88"
+                                "\xE2\x96\x80"
+                                "\xE2\x96\x88",
+                                "\xE2\x96\x88"
+                                "\xE2\x96\x80"
+                                "\xE2\x96\x88"
+                                " "
+                                "\xE2\x96\x88"
+                                "\xE2\x96\x84"
+                                "\xE2\x96\x88"
+                                " "
+                                "\xE2\x96\x88"
+                                "\xE2\x96\x88"
+                                "\xE2\x96\x84"
+                                " "
+                                "\xE2\x96\x88"
+                                " "
+                                "\xE2\x96\x80"
+                                "\xE2\x96\x88"
+                                " "
+                                " "
+                                "\xE2\x96\x88"
+                                " "
+                                " "
+                                "\xE2\x96\x84"
+                                " "
+                                "\xE2\x96\x88"
+                                "\xE2\x96\x84"
+                                "\xE2\x96\x84"
+                                " "
+                                "\xE2\x96\x88"
+                                "\xE2\x96\x80"
+                                "\xE2\x96\x80"
+                                " "
+                                "\xE2\x96\x88"
+                                "\xE2\x96\x80"
+                                "\xE2\x96\x80"};
 
 // The last folder name of a path, for the project headings.
 std::string base_name(std::string_view path) {
@@ -351,7 +411,7 @@ std::string base_name(std::string_view path) {
 class ChatApp : public rtxui::Component<ChatApp> {
   public:
     explicit ChatApp(const TuiHost &host_) : host(host_) {
-        for (size_t i = 0; i < 3; ++i) banner.push_back({kBanner[i], i < 2 ? "banner pink" : "banner neon"});
+        for (size_t i = 0; i < 2; ++i) banner.push_back({kBanner[i], i == 0 ? "banner neon" : "banner pink"});
         tip = kTips[static_cast<size_t>(std::time(nullptr) / 60) % (sizeof kTips / sizeof *kTips)];
         Bind(rows);
         Bind(banner);
@@ -480,7 +540,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
     }
 
     // ---- icons, the bottom bar, the hint line, dialogs
-    std::string ico_copy = icons().copy, ico_del = icons().del, ico_mic = icons().mic, ico_back = icons().back, ico_menu = icons().menu,
+    std::string ico_copy = icons().copy, ico_del = icons().del, ico_mic = "mic", ico_back = icons().back, ico_menu = icons().menu,
                 ico_settings = icons().settings, mic_class = "mic", hint;
     bool has_messages = false;
     std::string tb_cpu, tb_ram, tb_files, tb_engine, tb_models, tb_mode, tb_ctx;
@@ -1427,7 +1487,6 @@ class ChatApp : public rtxui::Component<ChatApp> {
           <div if="{show_welcome}" class="welcome">
             <div class="small-brand">agent.cpp</div>
             <for each="{banner}" as="ln"><div class="{ln.cls}">{ln.text}</div></for>
-            <div class="tag">local agents · tools · memory · voice · graphs</div>
             <div class="warn" if="{has_notice}">{notice}</div>
           </div>
           <for each="{rows}" as="r">
@@ -1543,7 +1602,6 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .banner { white-space: pre; }
       .pink { color: #ffb3d1; font-weight: bold; }
       .neon { color: #40e0d0; }
-      .tag { color: #8a8a8a; margin-top: 1; }
       .warn { color: #ffb3d1; margin-top: 1; }
       .row { display: flex; flex-direction: row; margin-bottom: 1; }
       .row .mark { width: 2; color: #40e0d0; }
@@ -1571,9 +1629,9 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .home .composer { width: 76%; align-self: center; padding-left: 0; padding-right: 0; }
       .box { display: flex; flex-direction: row; border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
       .box.active { border-color: #40e0d0; }
-      .mic { color: #8a8a8a; width: 3; }
-      .mic:hover { color: #40e0d0; }
-      .mic.rec { color: #ffb3d1; font-weight: bold; }
+      .mic { color: #ffffff; background-color: #4a4a4a; width: 5; padding-left: 1; padding-right: 1; margin-right: 1; }
+      .mic:hover { background-color: #40e0d0; color: #000000; }
+      .mic.rec { background-color: #ffb3d1; color: #000000; font-weight: bold; }
       .box input { flex-grow: 1; background-color: #000000; color: #ffffff; padding-left: 0; }
       .box input:focus, .box input:hover { background-color: #000000; color: #ffffff; }
       .box input::part(cursor), .box input:focus::part(cursor), .box input::part(cursor-focused),
@@ -1637,7 +1695,6 @@ class ChatApp : public rtxui::Component<ChatApp> {
         .tb.models, .tb.engine { display: none; }
       }
       @media (max-width: 49) {
-        .tag { display: none; }
         .row .mark { width: 1; }
         .assistant .mark { display: none; }
         .tb.cpu, .tb.mode { display: none; }
