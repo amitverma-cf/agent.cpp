@@ -758,58 +758,6 @@ class ChatApp : public rtxui::Component<ChatApp> {
         }
     }
     // Once a second, whether or not an answer is running.
-    // The logo glitches now and then: for a few frames a row slips sideways, some cells turn to static and a row takes the other
-    // colour; then it snaps back. The frames are short and rare, so the screen is quiet the rest of the time.
-    unsigned glitch_rng = 2463534242u;
-    int glitch_burst = 0;
-    bool glitched = false;
-    unsigned Rand() {
-        glitch_rng ^= glitch_rng << 13;
-        glitch_rng ^= glitch_rng >> 17;
-        glitch_rng ^= glitch_rng << 5;
-        return glitch_rng;
-    }
-    static std::vector<std::string> Cells(std::string_view text) {
-        std::vector<std::string> out;
-        for (size_t i = 0; i < text.size();) {
-            const unsigned char c = static_cast<unsigned char>(text[i]);
-            const size_t n = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
-            out.emplace_back(text.substr(i, n));
-            i += n;
-        }
-        return out;
-    }
-    void ResetLogo() {
-        for (size_t i = 0; i < 3 && i < banner.size(); ++i) banner[i] = {kBanner[i], i < 2 ? "banner pink" : "banner neon"};
-    }
-    void GlitchTick() {
-        if (glitch_burst == 0 && Rand() % 40 == 0) glitch_burst = 2 + static_cast<int>(Rand() % 3);
-        if (glitch_burst > 0) {
-            ResetLogo();
-            static const char *const kStatic[] = {"\xE2\x96\x91", "\xE2\x96\x92", "\xE2\x96\x93"}; // light, medium, dark shade
-            const size_t row = Rand() % 3;
-            auto cells = Cells(kBanner[row]);
-            const int shift = (Rand() % 2 ? 1 : -1) * static_cast<int>(1 + Rand() % 2);
-            if (shift > 0) cells.insert(cells.begin(), static_cast<size_t>(shift), " ");
-            else
-                for (int k = 0; k < -shift && !cells.empty() && cells.front() == " "; ++k) cells.erase(cells.begin());
-            for (int k = 0; k < 3 && !cells.empty(); ++k) {
-                const size_t at = Rand() % cells.size();
-                if (cells[at] != " ") cells[at] = kStatic[Rand() % 3];
-            }
-            std::string text;
-            for (const auto &cell : cells) text += cell;
-            banner[row].text = text;
-            banner[Rand() % 3].cls = Rand() % 2 ? "banner neon" : "banner pink";
-            glitched = true;
-            --glitch_burst;
-        } else if (glitched) {
-            ResetLogo();
-            glitched = false;
-        }
-        rtxui::PostDelayedTask([this] { GlitchTick(); }, std::chrono::milliseconds(90));
-    }
-
     void StatsTick() {
         RefreshTaskbar();
         ComputeHint();
@@ -1877,7 +1825,6 @@ int run_tui(const TuiHost &host) {
     g_screen = &screen;
     rtxui::PostTask([] {
         if (g_app) g_app->StatsTick();
-        if (g_app) g_app->GlitchTick();
     });
     screen.SetInline(false);
     screen.Loop();
