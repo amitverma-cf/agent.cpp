@@ -8,10 +8,6 @@ agent.cpp is a local-first agent runtime. Chat with a model that can read your f
 speak, draw, turn a picture into a 3D mesh, or wire all of that into a graph that runs on a schedule. Nothing leaves your
 computer, and you do not need Python, Node or a cloud account.
 
-That is the real chat screen (Qwen3.5-9B Coder at Q2 on a 4-core CPU with no GPU), laid out like a chat app: the logo, a New chat button and your sessions on the left, grouped by project (pick one and the agent switches to that folder), Settings under them, the conversation in the middle with how long every answer took, and below it the mic, the input and a bottom bar with CPU, RAM, the engine, the model, the mode and the context.
-
-> Status: pre-1.0. Flags, APIs and file formats can still change. Targets Windows 11 and Linux.
-
 ## What you can do with it
 
 | I want to | Use | Engine |
@@ -26,9 +22,6 @@ That is the real chat screen (Qwen3.5-9B Coder at Q2 on a 4-core CPU with no GPU
 | run any ONNX model | `agent task generic` | ONNX Runtime |
 | embed, rerank, classify | `agent task embed` / `rerank` / `classify` | llama.cpp |
 | run a repeatable multi-step workflow | `agent run flow.json` | any |
-
-Voice is a pipeline (speech recognition, then the model, then speech synthesis). There is no single speech-to-speech model
-engine yet.
 
 ## Install
 
