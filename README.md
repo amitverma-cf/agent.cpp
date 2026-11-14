@@ -37,13 +37,13 @@ engine yet.
 **Linux** (x86_64, aarch64):
 
 ```sh
-curl -fsSL https://agent.qozu.fyi | sh
+curl -fsSL https://agent.qozu.fyi/install.sh | sh
 ```
 
 **Windows** (x64, arm64), in PowerShell:
 
 ```powershell
-irm https://agent.qozu.fyi | iex
+irm https://agent.qozu.fyi/install.ps1 | iex
 ```
 
 The script picks the archive for your machine (the Vulkan build for GPUs when a Vulkan driver is present; `AGENT_VARIANT=cpu` forces the

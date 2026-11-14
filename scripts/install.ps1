@@ -1,4 +1,4 @@
-# Installs the agent CLI on Windows:  irm https://agent.qozu.fyi | iex
+# Installs the agent CLI on Windows:  irm https://agent.qozu.fyi/install.ps1 | iex
 #
 # Picks the release archive that fits this machine (x64 or arm64; the Vulkan build on x64 when a Vulkan driver is present), checks its
 # SHA-256 against the release's SHA256SUMS, unpacks it to %LOCALAPPDATA%\Programs\agent-cpp and adds that folder to your user PATH.

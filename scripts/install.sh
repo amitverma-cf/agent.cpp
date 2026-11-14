@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs the agent CLI on Linux:  curl -fsSL https://agent.qozu.fyi | sh
+# Installs the agent CLI on Linux:  curl -fsSL https://agent.qozu.fyi/install.sh | sh
 #
 # Picks the release archive that fits this machine (x86_64 or aarch64; the Vulkan build when a Vulkan driver is present), checks its
 # SHA-256 against the release's SHA256SUMS, unpacks it to ~/.local/share/agent-cpp and links `agent` into ~/.local/bin.
@@ -15,7 +15,7 @@ BIN="$PREFIX/bin"
 say() { printf '%s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
 
-[ "$(uname -s)" = "Linux" ] || die "this installer is for Linux (for Windows: irm https://agent.qozu.fyi | iex)"
+[ "$(uname -s)" = "Linux" ] || die "this installer is for Linux (for Windows: irm https://agent.qozu.fyi/install.ps1 | iex)"
 case "$(uname -m)" in
     x86_64 | amd64) arch=x86_64 ;;
     aarch64 | arm64) arch=aarch64 ;;

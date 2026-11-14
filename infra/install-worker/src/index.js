@@ -1,22 +1,17 @@
-// agent.qozu.fyi serves the two install scripts of the project and nothing else (no pages, no docs).
-//   curl -fsSL https://agent.qozu.fyi | sh        (Linux)
-//   irm https://agent.qozu.fyi | iex              (Windows PowerShell)
-// The scripts are read from the repository's main branch, so changing them needs no redeploy.
+// agent.qozu.fyi only redirects to the two install scripts in the repository (no pages, no docs, nothing is proxied or stored here).
+//   curl -fsSL https://agent.qozu.fyi/install.sh | sh        (Linux)
+//   irm https://agent.qozu.fyi/install.ps1 | iex             (Windows PowerShell)
+// "/" picks one by User-Agent, so the bare address works too.
 const RAW = "https://raw.githubusercontent.com/amitverma-cf/agent.cpp/main/scripts/";
 
 export default {
-  async fetch(request) {
-    const url = new URL(request.url);
-    if (request.method !== "GET" && request.method !== "HEAD") return new Response("method not allowed\n", { status: 405 });
+  fetch(request) {
+    const { pathname } = new URL(request.url);
     let file;
-    if (url.pathname === "/install.sh") file = "install.sh";
-    else if (url.pathname === "/install.ps1") file = "install.ps1";
-    else if (url.pathname === "/") file = /powershell|windowspowershell/i.test(request.headers.get("user-agent") || "") ? "install.ps1" : "install.sh";
+    if (pathname === "/install.sh") file = "install.sh";
+    else if (pathname === "/install.ps1") file = "install.ps1";
+    else if (pathname === "/") file = /powershell/i.test(request.headers.get("user-agent") || "") ? "install.ps1" : "install.sh";
     else return new Response("not found\n", { status: 404 });
-    const upstream = await fetch(RAW + file, { cf: { cacheTtl: 300, cacheEverything: true } });
-    if (!upstream.ok) return new Response("the install script is not available right now\n", { status: 502 });
-    return new Response(request.method === "HEAD" ? null : upstream.body, {
-      headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "public, max-age=300" },
-    });
+    return new Response(null, { status: 302, headers: { location: RAW + file, "cache-control": "public, max-age=300" } });
   },
 };

@@ -15,7 +15,7 @@ and not supported in v1.0.0.
 
 ## Install a release
 
-`curl -fsSL https://agent.qozu.fyi | sh` (Linux) or `irm https://agent.qozu.fyi | iex` (Windows PowerShell) installs the latest release; see the
+`curl -fsSL https://agent.qozu.fyi/install.sh | sh` (Linux) or `irm https://agent.qozu.fyi/install.ps1 | iex` (Windows PowerShell) installs the latest release; see the
 [README](../README.md#install). Set `AGENT_VERSION=v1.0.0` to pin a version.
 
 ## Build
