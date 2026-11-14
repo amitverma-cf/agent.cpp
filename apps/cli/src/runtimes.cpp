@@ -249,7 +249,8 @@ Result<std::string> install_runtime(const HomeLayout &home, std::string_view nam
     opts.progress_user_data = progress.user;
 
     if (name == "pnpm") { // the pnpm package from the npm registry, run by the private node; verified by the registry's SHA-512
-        const std::string v = version.empty() || version == "latest" ? "latest" : std::string(version);
+        // pnpm 11 and newer ship a different layout (no bin/pnpm.cjs): "latest" means the newest 10.x, which this code can run.
+        const std::string v = version.empty() || version == "latest" ? "latest-10" : std::string(version);
         auto meta = agent::hub::http_get_text("https://registry.npmjs.org/pnpm/" + v, http);
         if (!meta.ok) return fail<std::string>(meta.error.code, "cannot read pnpm's registry entry: " + meta.error.message);
         simdjson::dom::parser parser;

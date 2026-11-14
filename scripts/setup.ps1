@@ -3,8 +3,8 @@
 #
 #   agent setup [--yes] [--runtimes | --no-runtimes] [--model LINK | --no-model] [--home DIR]
 #
-# What it does: asks where agent.cpp keeps its files (when this agent can move it), offers the optional private runtimes (bun and uv, for MCP
-# servers and skills), and downloads a model from a Hugging Face link or file. The GPU backend and the engines are not asked: they come with
+# What it does: asks where agent.cpp keeps its files (when this agent can move it), offers the optional private runtimes (JavaScript tooling of
+# your choice: bun, node with pnpm or nub, and uv, for MCP servers and skills; installed ones are checked and updated), and downloads a model from a Hugging Face link or file. The GPU backend and the engines are not asked: they come with
 # the build that was installed. With --yes, or without a console, nothing is asked.
 param([Parameter(ValueFromRemainingArguments = $true)] [string[]] $Rest)
 $ErrorActionPreference = 'Stop'
@@ -44,30 +44,82 @@ Write-Host "  $([string]([char]0x2500) * 28)" -ForegroundColor DarkGray
 Write-Host ''
 Step ((& $agent version 2>$null | Select-Object -First 1))
 
-# 1. Where the files live. Only an agent that knows `agent home` can move it.
+# 1. Where the files live. The folder is created and remembered even when the default is kept: the runtimes and models need it.
 & $agent home *> $null
 if ($LASTEXITCODE -eq 0) {
     $current = (& $agent home 2>$null | Select-Object -First 1)
-    if ($home_) { & $agent home $home_ *> $null; Step "Files go to $home_" }
+    $chosen = $current
+    if ($home_) { $chosen = $home_ }
     elseif ($ask) {
         $answer = Read-Host "  Where should agent.cpp keep its files (models, engines, skills, memory)? [$current]"
-        if ($answer -and $answer -ne $current) { & $agent home $answer *> $null; Step "Files go to $answer" } else { Step "Files go to $current" }
-    } else { Step "Files go to $current" }
+        if ($answer) { $chosen = $answer.Trim().Trim('"').Trim("'") }
+    }
+    & $agent home $chosen *> $null
+    if ($LASTEXITCODE -eq 0) { Step "Files go to $chosen" } else { Fail "Cannot use $chosen as the files folder." }
 }
 
-# 2. The optional private runtimes.
-if (-not $runtimes -and $ask) {
-    $answer = Read-Host '  Download the optional bun and uv runtimes, for MCP servers and skills? [y/N]'
-    $runtimes = if ($answer -match '^(y|yes)$') { 'y' } else { 'n' }
+# 2. The optional private runtimes: JavaScript tooling for MCP servers and skills (bun, node with pnpm, or nub) and uv for Python ones.
+# What is installed is checked first; an older one is updated, a current one is left alone.
+function Get-LatestRuntime($name) {
+    try {
+        switch ($name) {
+            'bun'  { return ((Invoke-RestMethod 'https://api.github.com/repos/oven-sh/bun/releases/latest').tag_name -replace '^bun-v?', '') }
+            'uv'   { return ((Invoke-RestMethod 'https://api.github.com/repos/astral-sh/uv/releases/latest').tag_name -replace '^v', '') }
+            'nub'  { return ((Invoke-RestMethod 'https://api.github.com/repos/nubjs/nub/releases/latest').tag_name -replace '^v', '') }
+            'pnpm' { return ((Invoke-RestMethod 'https://registry.npmjs.org/pnpm/latest-10').version) } # 11 and newer have another layout
+            'node' {
+                $text = (Invoke-WebRequest -UseBasicParsing 'https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt').Content
+                if ($text -is [byte[]]) { $text = [System.Text.Encoding]::UTF8.GetString($text) }
+                if ($text -match 'node-v([0-9.]+)-') { return $Matches[1] }
+            }
+        }
+    } catch { }
+    return ''
 }
-if ($runtimes -eq 'y') {
-    foreach ($r in 'bun', 'uv') {
-        Write-Host "  $([char]0x2193) Downloading $r" -ForegroundColor Cyan
-        & $agent runtime install $r *> $null
-        if ($LASTEXITCODE -eq 0) { Step "$r installed" } else { Info "$r could not be installed (agent runtime install $r)" }
+function Get-InstalledRuntime($name) {
+    $p = & $agent runtime path $name 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $p) { return '' }
+    if ($name -eq 'pnpm') { # a script run by node: its version is in the package.json two folders up
+        try { return ((Get-Content (Join-Path (Split-Path (Split-Path $p)) 'package.json') -Raw | ConvertFrom-Json).version) } catch { return '' }
     }
+    $v = (& $p --version 2>$null | Select-Object -First 1)
+    return ("$v" -replace '^[^0-9]*([0-9][0-9.]*).*$', '$1')
+}
+function Ensure-Runtime($name) {
+    $have = Get-InstalledRuntime $name
+    $newest = Get-LatestRuntime $name
+    $pin = @(); if ($name -eq 'pnpm' -and $newest) { $pin = @('--version', $newest) }
+    if (-not $have) {
+        Write-Host "  $([char]0x2193) Downloading $name" -ForegroundColor Cyan
+        $out = & $agent runtime install $name @pin 2>&1
+        if ($LASTEXITCODE -eq 0) { Step "$name installed" } else { Info "$name could not be installed: $($out | Select-Object -Last 1)" }
+        return
+    }
+    if ($newest -and $newest -ne $have) {
+        Write-Host "  $([char]0x2193) Updating $name $have to $newest" -ForegroundColor Cyan
+        $out = & $agent runtime install $name @pin 2>&1
+        if ($LASTEXITCODE -eq 0) { Step "$name updated to $newest" } else { Info "$name could not be updated: $($out | Select-Object -Last 1)" }
+    } else {
+        Step "$name $have is installed and up to date"
+    }
+}
+if (-not $runtimes -and $ask) {
+    $answer = Read-Host '  Install the optional runtimes for MCP servers and skills? [Y/n]'
+    $runtimes = if ($answer -match '^(n|no)$') { 'n' } else { 'y' }
+}
+if (-not $runtimes) { $runtimes = 'y' } # --yes and no console: the same default
+if ($runtimes -eq 'y') {
+    $js = 'bun'
+    if ($ask) {
+        Write-Host '  JavaScript tooling:  1) bun   2) node with pnpm   3) nub'
+        $pick = Read-Host '  Choose [1]'
+        $js = switch -Regex ($pick) { '^(2|node)$' { 'node' } '^(3|nub)$' { 'nub' } default { 'bun' } }
+    }
+    & $agent runtime use $js *> $null
+    if ($js -eq 'node') { Ensure-Runtime 'node'; Ensure-Runtime 'pnpm' } else { Ensure-Runtime $js }
+    Ensure-Runtime 'uv'
 } else {
-    Info 'Runtimes skipped: agent runtime install bun | uv adds them any time'
+    Info 'Runtimes skipped: agent runtime use bun | node | nub and agent runtime install uv add them any time'
 }
 
 # 3. A model: a link or a file, not a list.
