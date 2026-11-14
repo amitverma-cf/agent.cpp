@@ -83,8 +83,7 @@ agent            # opens the chat
 ```
 
 After the install script, `agent` is on your PATH (open a new terminal on Windows). `agent setup` offers a model that fits your machine, so
-there is no separate download step; `agent model pull NAME` adds more. Built from source, run `./build/agent` (`.\build\agent.exe` on
-On Windows use `.\build\agent.exe`. `agent --help` lists every command, and `agent <command> --help` explains one.
+there is no separate download step; `agent model pull NAME` adds more. Built from source, run `./build/agent` (`.\build\agent.exe` on Windows) instead of `agent`. `agent --help` lists every command, and `agent <command> --help` explains one.
 
 ## The command line
 
