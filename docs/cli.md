@@ -23,7 +23,7 @@ global home for one run. Everything is documented below; the same text is in `--
 ## agent setup
 
 ```sh
-agent setup                                      # asks four questions
+agent setup                                      # asks three questions: folder, backend, model
 agent setup --yes --model qwen2.5-0.5b           # no questions
 agent setup --no-models --caps llama,sdcpp --backend cpu
 ```
