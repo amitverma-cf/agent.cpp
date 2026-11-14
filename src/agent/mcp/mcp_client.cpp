@@ -151,7 +151,7 @@ class McpServer {
     std::shared_ptr<std::string> workspace;
     std::vector<std::unique_ptr<RemoteTool>> tools;
     std::string protocol_version;
-    bool modern_ = false;       // 2026-07-28 revision: per-request _meta instead of initialize
+    bool modern_ = false;                 // 2026-07-28 revision: per-request _meta instead of initialize
     std::string call_method_, call_name_; // Mcp-Method / Mcp-Name headers of the request in flight (HTTP)
     std::string server_info;
     std::vector<std::string> secret_values; // inserted into the environment; kept out of logs and tool results
@@ -316,9 +316,10 @@ void McpServer::answer_server_request(std::string_view method, simdjson::dom::el
 
 // Modern revision: the version, capabilities and client identity travel in the params' _meta.
 static std::string with_meta(std::string_view params_json) {
-    const std::string meta = std::string("\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"") + std::string(kModernVersion) +
-                             "\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agent.cpp\","
-                             "\"version\":\"0.1.0\"}}";
+    const std::string meta =
+        std::string("\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"") + std::string(kModernVersion) +
+        "\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"agent.cpp\","
+        "\"version\":\"0.1.0\"}}";
     std::string_view rest = params_json;
     while (!rest.empty() && rest.front() == ' ') rest.remove_prefix(1);
     if (rest.size() < 2 || rest.front() != '{') return "{" + meta + "}";
@@ -341,7 +342,8 @@ Result<simdjson::dom::element> McpServer::request(std::string_view method_in, st
         simdjson::padded_string padded(params_in);
         simdjson::dom::element pe;
         std::string_view nm;
-        if (pp.parse(padded).get(pe) == simdjson::SUCCESS && (pe["name"].get(nm) == simdjson::SUCCESS || pe["uri"].get(nm) == simdjson::SUCCESS))
+        if (pp.parse(padded).get(pe) == simdjson::SUCCESS &&
+            (pe["name"].get(nm) == simdjson::SUCCESS || pe["uri"].get(nm) == simdjson::SUCCESS))
             call_name_ = std::string(nm);
         return request_http(method, params_json);
     }
@@ -474,7 +476,8 @@ Result<void> McpServer::start() {
                 has_prompts = caps["prompts"].get(extra) == simdjson::SUCCESS;
             }
         } else if (disc.error.message.find("-32022") != std::string::npos) {
-            return fail(ErrorCode::ProviderInitFailed, prefix() + ": the server does not speak protocol " + std::string(kModernVersion) + " (" + disc.error.message + ")");
+            return fail(ErrorCode::ProviderInitFailed,
+                        prefix() + ": the server does not speak protocol " + std::string(kModernVersion) + " (" + disc.error.message + ")");
         }
         // Any other error: a server of the earlier revisions.
     }
@@ -730,7 +733,8 @@ std::vector<std::string> sse_messages(std::string_view body) {
 Result<HttpReply> McpServer::post(std::string_view body) {
     std::vector<std::pair<std::string, std::string>> headers = {{"Content-Type", "application/json"},
                                                                 {"Accept", "application/json, text/event-stream"}};
-    if (!protocol_version.empty() && !modern_ && call_method_ != "server/discover") headers.emplace_back("MCP-Protocol-Version", protocol_version);
+    if (!protocol_version.empty() && !modern_ && call_method_ != "server/discover")
+        headers.emplace_back("MCP-Protocol-Version", protocol_version);
     if (!session_id_.empty()) headers.emplace_back("Mcp-Session-Id", session_id_);
     if (modern_ || call_method_ == "server/discover") {
         headers.emplace_back("MCP-Protocol-Version", std::string(kModernVersion));
@@ -802,7 +806,8 @@ Result<simdjson::dom::element> McpServer::request_http(std::string_view method, 
                 return failure(ErrorCode::ParseError, prefix() + ": response to " + std::string(method) + " has neither result nor error");
             std::string_view result_type;
             if (modern_ && result["resultType"].get(result_type) == simdjson::SUCCESS && result_type == "input_required")
-                return failure(kRemoteError, prefix() + ": " + std::string(method) + " needs more input from the client (multi round-trip requests are not supported)");
+                return failure(kRemoteError, prefix() + ": " + std::string(method) +
+                                                 " needs more input from the client (multi round-trip requests are not supported)");
             return R{.ok = true, .value = result, .error = {}};
         }
     }

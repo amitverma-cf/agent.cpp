@@ -185,8 +185,7 @@ TEST_CASE("mcp: a 2026-07-28 server needs no handshake", "[mcp][http]") {
                  "\"inputSchema\":{\"type\":\"object\"}}]}");
         else if (has(b, "tools/call") && req.get_header_value("Mcp-Name") == "echo")
             json("{\"resultType\":\"complete\",\"content\":[{\"type\":\"text\",\"text\":\"modern ok\"}]}");
-        else
-            res.status = 400;
+        else res.status = 400;
     });
     const int port = svr.bind_to_any_port("127.0.0.1");
     REQUIRE(port > 0);

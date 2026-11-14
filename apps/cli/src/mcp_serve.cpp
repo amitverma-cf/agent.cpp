@@ -59,7 +59,8 @@ int mcp_serve(const CommandLine &cl, Context &ctx) {
 
         if (method == "server/discover") {
             send("{\"jsonrpc\":\"2.0\",\"id\":" + id +
-                 ",\"result\":{\"resultType\":\"complete\",\"supportedVersions\":[\"2026-07-28\",\"2025-06-18\"],\"capabilities\":{\"tools\":{}},"
+                 ",\"result\":{\"resultType\":\"complete\",\"supportedVersions\":[\"2026-07-28\",\"2025-06-18\"],\"capabilities\":{"
+                 "\"tools\":{}},"
                  "\"_meta\":{\"io.modelcontextprotocol/serverInfo\":{\"name\":\"agent.cpp\",\"version\":\"" +
                  std::string(kCliVersion) + "\"}},\"ttlMs\":0,\"cacheScope\":\"private\"}}");
         } else if (method == "initialize") {
@@ -78,7 +79,8 @@ int mcp_serve(const CommandLine &cl, Context &ctx) {
                          "\",\"inputSchema\":" +
                          (t.parameter_schema.empty() ? std::string("{\"type\":\"object\"}") : std::string(t.parameter_schema)) + "}";
             }
-            send("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"resultType\":\"complete\",\"ttlMs\":0,\"cacheScope\":\"private\",\"tools\":[" + tools + "]}}");
+            send("{\"jsonrpc\":\"2.0\",\"id\":" + id +
+                 ",\"result\":{\"resultType\":\"complete\",\"ttlMs\":0,\"cacheScope\":\"private\",\"tools\":[" + tools + "]}}");
         } else if (method == "tools/call") {
             std::string_view name;
             simdjson::dom::element params, arguments;
@@ -94,7 +96,8 @@ int mcp_serve(const CommandLine &cl, Context &ctx) {
             auto result = execute_tool(session.value, name, args);
             const bool failed = !result.ok;
             const std::string text = failed ? result.error.message : result.value;
-            send("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"resultType\":\"complete\",\"content\":[{\"type\":\"text\",\"text\":\"" + json_escape(text) +
+            send("{\"jsonrpc\":\"2.0\",\"id\":" + id +
+                 ",\"result\":{\"resultType\":\"complete\",\"content\":[{\"type\":\"text\",\"text\":\"" + json_escape(text) +
                  "\"}],\"isError\":" + (failed ? "true" : "false") + "}}");
         } else {
             send(error_reply(id, -32601, "method not found: " + std::string(method)));
