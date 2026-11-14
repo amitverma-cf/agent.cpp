@@ -334,7 +334,7 @@ TEST_CASE("cli: small helpers", "[cli]") {
     CHECK(mime_for_path("A.PNG") == "image/png");
     CHECK(mime_for_path("x.wav") == "audio/wav");
     CHECK(mime_for_path("x.unknown") == "application/octet-stream");
-    CHECK(starter_pack().size() == 4);
+    CHECK(starter_pack().size() == 5);
 
     HardwareInfo hw;
     CHECK(suggest_backend(hw) == "cpu");

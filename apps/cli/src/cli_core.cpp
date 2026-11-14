@@ -537,7 +537,7 @@ std::string suggest_backend(const HardwareInfo &hw) {
 // -------------------------- config.json --------------------------
 
 std::span<const std::string_view> starter_pack() {
-    static constexpr std::string_view kPack[] = {"llama", "audiocpp", "sdcpp", "onnx"};
+    static constexpr std::string_view kPack[] = {"llama", "audiocpp", "sdcpp", "onnx", "trellis"};
     return kPack;
 }
 

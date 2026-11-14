@@ -32,7 +32,7 @@ Setup chooses the global home (see [workspace.md](workspace.md)), detects your C
 built or downloaded and records them in `engines.json`, then lists the models your machine can run. It downloads nothing unless
 you pick a model, and each model it downloads is smoke-tested with a short real run.
 
-Options: `--home DIR`, `--model NAME|owner/repo[:quant]` (repeatable), `--no-models`, `--yes`, `--caps llama,audiocpp,sdcpp,onnx`,
+Options: `--home DIR`, `--model NAME|owner/repo[:quant]` (repeatable), `--no-models`, `--yes`, `--caps llama,audiocpp` (default: every engine, without asking),
 `--engines-dir DIR`, `--models-dir DIR`, `--workspace DIR`, `--backend cpu|cuda|vulkan`, `--js-runtime bun|node|nub`,
 `--download-engines`, `--install-runtimes`. Inside the chat, `/setup` asks the same questions.
 

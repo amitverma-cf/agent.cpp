@@ -67,7 +67,7 @@ std::string suggest_backend(const HardwareInfo &hw);
 
 // -------------------------- config.json --------------------------
 
-// ROADMAP §6 #9 starter pack, minus trellis (no engine yet).
+// Every engine: setup enables all of them unless --caps names a subset.
 std::span<const std::string_view> starter_pack();
 
 struct CliConfig {

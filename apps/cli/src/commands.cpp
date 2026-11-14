@@ -380,7 +380,8 @@ int cmd_setup(const CommandLine &cl, Context &ctx) {
         for (std::string_view c : starter_pack()) caps_default += (caps_default.empty() ? "" : ",") + std::string(c);
 
     if (interactive) std::fprintf(stderr, "Press Enter to accept the [default].\n");
-    cfg.capabilities = split_list(ask_value(interactive, "Engines to enable (starter pack: llama,audiocpp,sdcpp,onnx)", caps_default));
+    // Every engine is enabled without asking; --caps llama,audiocpp picks a subset.
+    cfg.capabilities = split_list(caps_default);
     if (cfg.capabilities.empty()) {
         std::fprintf(stderr, "error: no engines selected\n");
         return 2;
