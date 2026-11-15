@@ -293,8 +293,8 @@ agent engine rm sdcpp                 # forgets the entry; the file stays
 ```
 
 `add` loads the plugin, prints its name, version and capabilities, and records it in `engines.json`; a plugin with the wrong ABI or
-missing libraries is rejected with the reason. No release is published yet, so build the engines from source (see the
-[README](../README.md#install)).
+missing libraries is rejected with the reason. Engines also ship in the release archives; to build one from source, see the
+[README](../README.md#build-from-source).
 
 ## agent skill
 

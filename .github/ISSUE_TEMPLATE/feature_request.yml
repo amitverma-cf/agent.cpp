@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Please write the request yourself, as CONTRIBUTING.md asks. Describe the problem first; the solution can come second.
-        agent.cpp is pre-1.0, and the scope is small on purpose. Requests that fit the existing design are the easiest to accept.
+        The scope of agent.cpp is small on purpose. Requests that fit the existing design are the easiest to accept.
 
   - type: textarea
     id: problem

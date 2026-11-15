@@ -483,7 +483,7 @@ if(AGENT_INSTALL)
         INSTALL_DESTINATION ${AGENT_CMAKE_INSTALL_DIR}
         PATH_VARS AGENT_INSTALL_ENGINEDIR AGENT_INSTALL_TESTINGDIR CMAKE_INSTALL_BINDIR
     )
-    # Pre-1.0: minor versions may break the API.
+    # A request for a minor version accepts any patch release of it.
     write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/agent-cppConfigVersion.cmake
         VERSION ${PROJECT_VERSION}
         COMPATIBILITY SameMinorVersion

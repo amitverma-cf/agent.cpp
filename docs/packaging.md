@@ -86,7 +86,7 @@ target_link_libraries(my_app PRIVATE agent-cpp::store_sqlite)  # SQLite KV store
 target_link_libraries(my_app PRIVATE agent-cpp::hub)           # Hugging Face downloads (if built)
 ```
 
-Configure with `-DCMAKE_PREFIX_PATH=<prefix>`. Pre-1.0, a request for version `0.1` accepts any `0.1.x`
+Configure with `-DCMAKE_PREFIX_PATH=<prefix>`. A request for version `1.0` accepts any `1.0.x`
 (`SameMinorVersion`). The package also sets:
 
 - `agent-cpp_ENGINE_DIR`: `<prefix>/lib/agent/engines`
@@ -261,7 +261,7 @@ Not done yet:
 
 ## Releases
 
-The git tag `v0.1.2` matches the version in `CMakeLists.txt`. The CI and release workflows in `.github/workflows/` are
+The git tag `v1.0.0` matches the version in `CMakeLists.txt`. The CI and release workflows in `.github/workflows/` are
 manual-dispatch only; nothing runs on a push. Build from source as described in [getting-started.md](getting-started.md#build),
 or use the Linux tarball script above, which is run by hand.
 

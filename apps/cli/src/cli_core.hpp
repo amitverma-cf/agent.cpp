@@ -79,7 +79,7 @@ struct CliConfig {
     std::string models_dir;    // empty = agent::hub::default_models_dir()
     std::string default_model; // catalogue name or path; empty = first chat model in models.json
     std::vector<std::string> capabilities;
-    std::string backend = "cpu"; // cpu | cuda | vulkan (recorded; prebuilt downloads do not exist yet)
+    std::string backend = "cpu"; // cpu | cuda | vulkan (recorded)
     HardwareInfo hardware;
     int context_window = 8192;
     int max_tokens = 2048;
