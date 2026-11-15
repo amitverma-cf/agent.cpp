@@ -767,7 +767,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
     // The line between the input and the bottom bar: what the next useful key or command is, for what is going on right now.
     void ComputeHint() {
         if (confirm_open) hint = "Enter or y confirms, Esc cancels";
-        else if (asking) hint = "y allows this once, a always allows this tool, n refuses";
+        else if (asking) hint = "y allows this once, A (capital) always allows this tool, n refuses";
         else if (recording) hint = "Listening: click the microphone again to stop";
         else if (busy) hint = "Esc stops the answer; the wheel or PageUp scrolls";
         else if (!follow) hint = "End jumps to the newest message";
@@ -1204,7 +1204,13 @@ class ChatApp : public rtxui::Component<ChatApp> {
 
     // ---- sending a line to the host
 
-    void SetInput(const std::string &s) { input = s; }
+    // Text set from code (a recalled message, a command chosen in the palette, a value to edit) lands with the cursor at its start;
+    // the next key first sends End to the input line, so typing and Backspace work at the end of the new text.
+    bool cursor_to_end = false;
+    void SetInput(const std::string &s) {
+        input = s;
+        cursor_to_end = !s.empty();
+    }
 
     void Submit(const std::string &line) {
         if (worker.joinable()) worker.join();
@@ -1283,6 +1289,10 @@ class ChatApp : public rtxui::Component<ChatApp> {
     }
 
     bool OnEvent(Event e) override {
+        if (cursor_to_end) {
+            cursor_to_end = false;
+            if (!input.empty() && !e.is<Event::Mouse>()) Component<ChatApp>::OnEvent(Event::End());
+        }
         if (confirm_open) {
             const int c = Letter(e);
             if (e == Event::Return() || c == 'y' || c == 'Y') ConfirmYes();
@@ -1310,7 +1320,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             int a = 0;
             if (c == 'y' || c == 'Y') a = 1;
             else if (c == 'n' || c == 'N') a = 2;
-            else if (c == 'a' || c == 'A') a = 3;
+            else if (c == 'A') a = 3; // a capital letter: a typed sentence must not allow a tool for good
             if (e == Event::Escape() || e == Event::CtrlC()) a = 2;
             if (a && g_sync) {
                 std::lock_guard<std::mutex> lock(g_sync->mu);

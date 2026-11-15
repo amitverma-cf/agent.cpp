@@ -609,6 +609,9 @@ void run_one_turn(ChatState &st, const std::string &text, std::span<const Media>
                            : run_turn_with_media(*st.lease, st.memory, text, media, true, on_token, &st);
     g_generating.store(false);
     g_last_turn_failed = !r.ok;
+    // A failed turn with attachments leaves its message in the history; every later turn would send the same media and fail again.
+    if (!r.ok && !media.empty() && st.memory.history.size() > before)
+        st.memory.history.erase(st.memory.history.begin() + static_cast<std::ptrdiff_t>(before), st.memory.history.end());
     if (!r.ok) {
         ensure_newline();
         if (r.error.code == ErrorCode::Cancelled) out("[cancelled]\n");
@@ -751,6 +754,7 @@ void switch_model(ChatState &st, const std::string &spec) {
         out("note: --engine-options belong to the first model and are not used for " + st.model.name + "\n");
         st.engine_options.clear();
     }
+    st.engine_options = catalog_engine_options(*st.ctx, st.model.path, st.engine_options); // the new model brings its own projector
     bool cached = false;
     for (const LoadedModelInfo &info : loaded_models(st.registry)) cached = cached || info.name == st.model.name;
     out((cached ? "switching to " : "loading ") + st.model.path + (cached ? " (already loaded)\n" : " ...\n"));
@@ -1571,7 +1575,8 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
 
     cat("Chat");
     head("Tools and permissions");
-    add("mode", "Mode", chat_mode_name(st.mode), "ask: asks before changes   plan: only reads   auto: never asks", {"ask", "plan", "auto"});
+    add("mode", "Mode", chat_mode_name(st.mode), "ask: asks before commands, deletes and moves   plan: only reads   auto: never asks",
+        {"ask", "plan", "auto"});
     add("use_tools", "Use tools", st.no_tools ? "off" : "on",
         "Off: the model only talks (files, commands and the web are not offered). Reloads the model", {"on", "off"});
     add("auto_approve", "Approve without asking", st.auto_approve ? "on" : "off",
@@ -1751,7 +1756,7 @@ std::string tui_set_setting(ChatState &st, const std::string &key, const std::st
     }
     if (key == "max_tokens" || key == "context_window") {
         long v = 0;
-        if (auto e = whole(key == "max_tokens" ? 16 : 512, v); !e.empty()) return e;
+        if (auto e = whole(key == "max_tokens" ? 16 : 2048, v); !e.empty()) return e;
         if (key == "max_tokens") st.max_tokens = c.max_tokens = static_cast<int>(v);
         else st.context_window = c.context_window = static_cast<int>(v);
         if (auto e = persist(); !e.empty()) return e;
