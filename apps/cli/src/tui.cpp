@@ -560,6 +560,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
                 ico_menu = icons().menu, ico_settings = icons().settings, mic_class = "mic", hint;
     bool has_messages = false;
     std::string tb_cpu, tb_ram, tb_files, tb_engine, tb_models, tb_mode, tb_ctx;
+    int delete_armed = -1;
     bool confirm_open = false, show_keys = false, toast_open = false, recording = false, transcribing = false;
     std::string confirm_title, confirm_text, confirm_kind, toast_text;
     int confirm_row = 0, next_row_id = 0;
@@ -1331,6 +1332,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         // Choosing a session with the keyboard: type to filter, Up/Down, Enter opens, Delete removes, Esc closes.
         if (side_focus) {
             const int letter = Letter(e);
+            if (e != Event::Delete()) delete_armed = -1;
             if (e == Event::ArrowDown()) MoveSide(1);
             else if (e == Event::ArrowUp()) MoveSide(-1);
             else if (e == Event::Return()) {
@@ -1344,7 +1346,16 @@ class ChatApp : public rtxui::Component<ChatApp> {
                 side_filter.clear();
                 RebuildSide();
             } else if (e == Event::Delete()) {
-                DeleteSelected();
+                // The first press arms the row and says so; a second press on the same row removes it. Any other key disarms.
+                if (delete_armed == side_sel) {
+                    delete_armed = -1;
+                    DeleteSelected();
+                } else {
+                    delete_armed = side_sel;
+                    Toast("Press Delete again to remove this conversation for good");
+                }
+                Refresh();
+                return true;
             } else if (e == Event::Backspace()) {
                 if (!side_filter.empty()) side_filter.pop_back();
                 RebuildSide();

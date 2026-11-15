@@ -1534,7 +1534,7 @@ bool handle_line(ChatState &st, const std::string &line) {
             out("no tool is allowed for good in this project any more\n");
             break;
         }
-        if (st.always_allowed.empty()) out("no tool is allowed for good in this project (answer 'a' to a question to allow one)\n");
+        if (st.always_allowed.empty()) out("no tool is allowed for good in this project (answer A, the capital letter, to a question to allow one)\n");
         for (const std::string &t : st.always_allowed) out("always allowed: " + t + "\n");
         break;
     }
@@ -1873,7 +1873,16 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
     auto catalog = agent::hub::list_models(catalog_path(*st.ctx));
     if (catalog.ok)
         for (const auto &m : catalog.value) models.push_back(m.name);
-    std::vector<std::string> switchable = models;
+    // Embedding, reranking and speech models cannot chat; they stay out of the list the Model row cycles through.
+    std::vector<std::string> switchable;
+    for (const std::string &m : models) {
+        std::string low = m;
+        for (char &ch : low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        bool other = false;
+        for (const char *w : {"embed", "bge-", "minilm", "rerank", "e5-", "gte-", "whisper", "tts", "mmproj", "vae", "parakeet"})
+            if (low.find(w) != std::string::npos) other = true;
+        if (!other) switchable.push_back(m);
+    }
     if (std::find(switchable.begin(), switchable.end(), st.model.name) == switchable.end()) switchable.push_back(st.model.name);
     char temperature[16];
     std::snprintf(temperature, sizeof(temperature), "%g", static_cast<double>(c.temperature));
