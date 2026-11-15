@@ -152,6 +152,7 @@ outside the conversation:
 | Tool | What it does |
 |---|---|
 | `agent_run` | runs `agent task`, `agent run`, `agent model`, `agent engine`, `agent skill`, `agent mcp`, `agent doctor`, `agent schedule` or `agent wake`: images, video, 3D meshes, speech, transcripts, embeddings, ONNX models, graphs, downloads. Generated files are listed by `/open` |
+| `settings` | reads and changes the chat's safe settings when you ask in plain words ("make it faster", "more creative", "longer answers"): temperature, longest answer, context window, KV cache, speculative decoding, draft model, MTP and mode. It asks first, applies the change when the answer is finished and says what changed; the model reloads for most of them. Local only, the web address and the other privacy switches are never changed by the agent |
 | `remember`, `recall` | lasting notes about the user or the project. Notes that share words with a new message are put in front of it automatically |
 | `todo` | a checklist for a request with several steps, rewritten as the work moves on |
 
@@ -161,6 +162,28 @@ file, so the model can read or search it.
 
 How the agent presents itself comes from `SOUL.md`, `IDENTITY.md` and `ROLE.md`, plain Markdown files in the project folder or in the
 agent home, added to the system prompt next to `AGENTS.md`.
+
+### Speed
+
+What makes answers come faster, in the order to try it (all of it is under Settings, Model, Speed, or just ask: "make it faster"):
+
+- **A smaller model, a shorter answer limit and a smaller context window** are the surest levers. Every token costs a pass over the whole model,
+  and a long conversation costs more per token. Lower the longest answer and the context window (Settings, Model) if you do not need them.
+- **KV cache type** (`kv_cache` in `config.json`: `auto`, `f16`, `q8_0`, `q4_0`). A smaller cache type uses less memory and reads less per token,
+  which helps long conversations. `auto` picks `q4_0` or `q8_0` by the model's shape (on models that run through llama.cpp's own engine, see MTP below,
+  `auto` is llama.cpp's default, `f16`). The very small models are the ones that go wrong at `q4_0`, so leave `auto` unless you need the memory.
+- **Speculative decoding** (`speculative`: `off`, `prompt_lookup`, `draft`). The model guesses the next few tokens and checks them in one pass; every guess that
+  matches is a token it did not have to generate alone. `prompt_lookup` (the default) guesses by copying from text already in the conversation, so it pays when
+  the answer repeats something: quoting, rewriting a file, editing code. It works at the default temperature and with tools; when nothing repeats it costs nothing.
+  `draft` lets a small model of the same family guess (set `draft_model` to an installed model; a model with another vocabulary cannot draft). It pays when the small
+  model is much faster than the big one and often right; on a CPU with few cores it often does not. Measure with your own models: the line under each answer
+  shows what the guesses did (`lookup on, 31 of 40 drafted tokens kept`).
+- **MTP** (`mtp`, on by default). A model whose file carries a multi-token-prediction head (Qwen3.5 builds made with it) drafts for itself. The line under
+  the answer says `MTP on` and how many guesses were kept. On a few CPU cores the extra passes can cost more than they save for open-ended writing
+  (measured numbers are in [benchmarks](benchmarks.md)); switch `mtp` off then.
+
+Changing any of these reloads the model. The line under each answer shows tokens per second, and the bar at the bottom shows `context 951/8192 tokens`: the
+prompt (the whole conversation as the model reads it) against the model's window. It drops when the conversation is shortened or a new one starts.
 
 ### The web
 
