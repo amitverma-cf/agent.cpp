@@ -1204,13 +1204,12 @@ class ChatApp : public rtxui::Component<ChatApp> {
 
     // ---- sending a line to the host
 
-    // Text set from code (a recalled message, a command chosen in the palette, a value to edit) lands with the cursor at its start;
-    // the next key first sends End to the input line, so typing and Backspace work at the end of the new text.
-    bool cursor_to_end = false;
-    bool slash_pending = false; // Ctrl+P put a "/" in the input line
+    // Text set from code (a recalled message, a command chosen in the palette, a value to edit) lands with the cursor at its start. A moment
+    // later, once the input line has taken the text, End moves the cursor behind it, so typing and Backspace work at the end.
     void SetInput(const std::string &s) {
         input = s;
-        cursor_to_end = !s.empty();
+        if (s.empty()) return;
+        rtxui::PostDelayedTask([this] { Component<ChatApp>::OnEvent(Event::End()); }, std::chrono::milliseconds(40));
     }
 
     void Submit(const std::string &line) {
@@ -1290,26 +1289,6 @@ class ChatApp : public rtxui::Component<ChatApp> {
     }
 
     bool OnEvent(Event e) override {
-        if (slash_pending) {
-            slash_pending = false;
-            const int letter = Letter(e);
-            if (std::getenv("AGENT_TUI_DEBUG")) {
-                std::FILE *d = std::fopen("/tmp/tuidbg.txt", "a");
-                if (d) {
-                    std::fputs(("slash_pending letter=" + std::to_string(letter) + " input=[" + input + "]" + std::string(1, 10)).c_str(),
-                               d);
-                    std::fclose(d);
-                }
-            }
-            if ((input == "/" || input.empty()) && letter >= 32 && letter < 127 && !show_settings && !asking && !confirm_open) {
-                SetInput("/" + std::string(1, static_cast<char>(letter)));
-                return true;
-            }
-        }
-        if (cursor_to_end) {
-            cursor_to_end = false;
-            if (!input.empty() && !e.is<Event::Mouse>()) Component<ChatApp>::OnEvent(Event::End());
-        }
         if (confirm_open) {
             const int c = Letter(e);
             if (e == Event::Return() || c == 'y' || c == 'Y') ConfirmYes();
@@ -1407,9 +1386,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             return true;
         }
         if (Is(e, "commands") && !busy) {
-            // The slash shows at once; the next letter is added after it (the input line would otherwise replace the shown text).
             SetInput("/");
-            slash_pending = true;
             return true;
         }
         if (Is(e, "quit") && !busy) {
