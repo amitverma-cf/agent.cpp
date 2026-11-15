@@ -1295,221 +1295,225 @@ class ChatApp : public rtxui::Component<ChatApp> {
             const int letter = Letter(e);
             if (std::getenv("AGENT_TUI_DEBUG")) {
                 std::FILE *d = std::fopen("/tmp/tuidbg.txt", "a");
-                if (d) { std::fprintf(d, "slash_pending letter=%d input=[%s]
-", letter, input.c_str()); std::fclose(d); } }
+                if (d) {
+                    std::fputs(("slash_pending letter=" + std::to_string(letter) + " input=[" + input + "]" + std::string(1, 10)).c_str(),
+                               d);
+                    std::fclose(d);
+                }
+            }
             if ((input == "/" || input.empty()) && letter >= 32 && letter < 127 && !show_settings && !asking && !confirm_open) {
-                        SetInput("/" + std::string(1, static_cast<char>(letter)));
-                        return true;
-            }
-                }
-                if (cursor_to_end) {
-                    cursor_to_end = false;
-                    if (!input.empty() && !e.is<Event::Mouse>()) Component<ChatApp>::OnEvent(Event::End());
-                }
-                if (confirm_open) {
-                    const int c = Letter(e);
-                    if (e == Event::Return() || c == 'y' || c == 'Y') ConfirmYes();
-                    else if (e == Event::Escape() || c == 'n' || c == 'N') ConfirmNo();
-                    else if (e.is<Event::Mouse>()) return Component<ChatApp>::OnEvent(e);
-                    return true;
-                }
-                if (show_keys) {
-                    if (e == Event::Escape() || Is(e, "help") || e == Event::F1() || e == Event::Return() || Letter(e) == '?') CloseKeys();
-                    else if (e.is<Event::Mouse>()) return Component<ChatApp>::OnEvent(e);
-                    return true;
-                }
-                if (!asking && !show_settings &&
-                    (Is(e, "help") || e == Event::F1() || (!busy && input.empty() && !side_focus && Letter(e) == '?'))) {
-                    show_keys = true;
-                    return true;
-                }
-                if (show_settings && !asking) return SettingsKey(e);
-                if (!asking && !busy && host.settings && !side_focus && Is(e, "settings")) {
-                    OpenSettings();
-                    return true;
-                }
-                if (asking) {
-                    const int c = Letter(e);
-                    int a = 0;
-                    if (c == 'y' || c == 'Y') a = 1;
-                    else if (c == 'n' || c == 'N') a = 2;
-                    else if (c == 'A') a = 3; // a capital letter: a typed sentence must not allow a tool for good
-                    if (e == Event::Escape() || e == Event::CtrlC()) a = 2;
-                    if (a && g_sync) {
-                        std::lock_guard<std::mutex> lock(g_sync->mu);
-                        g_sync->answer = a;
-                        g_sync->cv.notify_all();
-                    }
-                    return c != 0 || a != 0;
-                }
-                // Choosing a session with the keyboard: type to filter, Up/Down, Enter opens, Delete removes, Esc closes.
-                if (side_focus) {
-                    const int letter = Letter(e);
-                    if (e == Event::ArrowDown()) MoveSide(1);
-                    else if (e == Event::ArrowUp()) MoveSide(-1);
-                    else if (e == Event::Return()) {
-                        side_focus = false;
-                        side_filter.clear();
-                        Pick(std::to_string(side_sel));
-                        RebuildSide();
-                    } else if (e == Event::Escape() || Is(e, "sessions")) {
-                        side_focus = false;
-                        side_drawer = false;
-                        side_filter.clear();
-                        RebuildSide();
-                    } else if (e == Event::Delete()) {
-                        DeleteSelected();
-                    } else if (e == Event::Backspace()) {
-                        if (!side_filter.empty()) side_filter.pop_back();
-                        RebuildSide();
-                    } else if (letter >= 32 && letter < 127) {
-                        side_filter += static_cast<char>(letter);
-                        RebuildSide();
-                        MoveSide(0);
-                    } else if (e.is<Event::Mouse>()) {
-                        return Component<ChatApp>::OnEvent(e);
-                    }
-                    Refresh();
-                    return true;
-                }
-                if (Is(e, "sessions")) {
-                    if (sessions.empty() || busy) return true;
-                    side_focus = true;
-                    side_hide = false;
-                    side_drawer = true;
-                    side_sel = 0;
-                    for (size_t i = 0; i < sessions.size(); ++i)
-                        if (sessions[i].active) side_sel = static_cast<int>(i);
-                    RebuildSide();
-                    Refresh();
-                    return true;
-                }
-                if (Is(e, "new_chat")) {
-                    if (!busy) NewChat();
-                    return true;
-                }
-                if (Is(e, "sidebar")) {
-                    ToggleSide();
-                    return true;
-                }
-                if (e == Event::CtrlC() || e == Event::Escape()) {
-                    if (busy) {
-                        if (host.cancel) host.cancel(host.user);
-                    } else if (e == Event::CtrlC()) {
-                        if (g_screen) g_screen->Exit();
-                    } else if (!input.empty()) {
-                        SetInput("");
-                    }
-                    return true;
-                }
-                if (Is(e, "commands") && !busy) {
-                    // The slash shows at once; the next letter is added after it (the input line would otherwise replace the shown text).
-                    SetInput("/");
-                    slash_pending = true;
-                    return true;
-                }
-                if (Is(e, "quit") && !busy) {
-                    if (g_screen) g_screen->Exit();
-                    return true;
-                }
-                if (e == Event::PageUp()) return Scroll(-12);
-                if (e == Event::PageDown()) return Scroll(12);
-                if (auto mouse = e.get_if<Event::Mouse>()) {
-                    // The wheel scrolls the conversation by hand: while the answer streams the offset is pinned to the end, and the component
-                    // would scroll from there.
-                    if (mouse->button() == Event::Mouse::WheelUp) return Scroll(-3);
-                    if (mouse->button() == Event::Mouse::WheelDown) return Scroll(3);
-                    return Component<ChatApp>::OnEvent(e);
-                }
-                if (input.empty() && e == Event::Home()) {
-                    follow = false;
-                    QueryElement("#t").SetScrollY(0);
-                    Refresh();
-                    return true;
-                }
-                if (input.empty() && e == Event::End()) {
-                    follow = true;
-                    ScrollToEnd();
-                    Refresh();
-                    return true;
-                }
-                if ((busy || (input.empty() && history.empty())) && e == Event::ArrowUp()) return Scroll(-2);
-                if ((busy || (input.empty() && history.empty())) && e == Event::ArrowDown()) return Scroll(2);
-
-                // The command palette: arrows move, Tab completes.
-                const std::vector<size_t> found = busy ? std::vector<size_t>() : PaletteMatches();
-                if (!found.empty()) {
-                    if (e == Event::ArrowDown()) {
-                        selected = (selected + 1) % found.size();
-                        return true;
-                    }
-                    if (e == Event::ArrowUp()) {
-                        selected = (selected + found.size() - 1) % found.size();
-                        return true;
-                    }
-                    const std::string chosen = host.commands[found[selected % found.size()]].name;
-                    if (e == Event::Tab() || (e == Event::Return() && input != chosen)) {
-                        SetInput(chosen + " ");
-                        selected = 0;
-                        return true;
-                    }
-                } else if (!busy && (e == Event::ArrowUp() || e == Event::ArrowDown()) && !history.empty()) {
-                    if (e == Event::ArrowUp() && history_at > 0) {
-                        if (history_at == history.size()) draft = input;
-                        SetInput(history[--history_at]);
-                    } else if (e == Event::ArrowDown() && history_at < history.size()) {
-                        ++history_at;
-                        SetInput(history_at == history.size() ? draft : history[history_at]);
-                    }
-                    return true;
-                }
-                if (Letter(e) != 0 || e == Event::Backspace()) selected = 0;
-
-                if (e == Event::Return()) {
-                    if (prompting && g_sync) {
-                        // The line typed is the answer to the question the worker is waiting on; an empty line takes the default.
-                        const std::string answer = input.empty() ? prompt_default : input;
-                        AddRow({TuiKind::User, "", answer.empty() ? std::string("(default)") : answer, "row user", 0});
-                        SetInput("");
-                        {
-                            std::lock_guard<std::mutex> lock(g_sync->mu);
-                            g_sync->prompt_answer = answer;
-                            g_sync->prompt_done = true;
-                            g_sync->cv.notify_all();
-                        }
-                        Settle();
-                        return true;
-                    }
-                    if (!busy) {
-                        const std::string line = input;
-                        SetInput("");
-                        if (line.find_first_not_of(" \t") == std::string::npos) return true;
-                        if (history.empty() || history.back() != line) history.push_back(line);
-                        history_at = history.size();
-                        Emit(TuiKind::User, line);
-                        Submit(line);
-                    }
-                    return true; // an answer is running: no second message yet
-                }
-                return Component<ChatApp>::OnEvent(e); // the rest goes to the input
-            }
-
-            bool Scroll(int rows) { // negative: up
-                auto t = QueryElement("#t");
-                if (rows < 0) follow = false;
-                int current = t.scroll_y();
-                if (current >= kPinned) current = known_bottom; // pinned to the end: start from where the bottom was
-                if (rows > 0 && current + rows >= known_bottom) {
-                    follow = true; // back at the bottom: follow the newest output again
-                    ScrollToEnd();
-                } else {
-                    t.SetScrollY(std::max(0, std::min(current + rows, known_bottom)));
-                }
-                Refresh();
+                SetInput("/" + std::string(1, static_cast<char>(letter)));
                 return true;
             }
+        }
+        if (cursor_to_end) {
+            cursor_to_end = false;
+            if (!input.empty() && !e.is<Event::Mouse>()) Component<ChatApp>::OnEvent(Event::End());
+        }
+        if (confirm_open) {
+            const int c = Letter(e);
+            if (e == Event::Return() || c == 'y' || c == 'Y') ConfirmYes();
+            else if (e == Event::Escape() || c == 'n' || c == 'N') ConfirmNo();
+            else if (e.is<Event::Mouse>()) return Component<ChatApp>::OnEvent(e);
+            return true;
+        }
+        if (show_keys) {
+            if (e == Event::Escape() || Is(e, "help") || e == Event::F1() || e == Event::Return() || Letter(e) == '?') CloseKeys();
+            else if (e.is<Event::Mouse>()) return Component<ChatApp>::OnEvent(e);
+            return true;
+        }
+        if (!asking && !show_settings &&
+            (Is(e, "help") || e == Event::F1() || (!busy && input.empty() && !side_focus && Letter(e) == '?'))) {
+            show_keys = true;
+            return true;
+        }
+        if (show_settings && !asking) return SettingsKey(e);
+        if (!asking && !busy && host.settings && !side_focus && Is(e, "settings")) {
+            OpenSettings();
+            return true;
+        }
+        if (asking) {
+            const int c = Letter(e);
+            int a = 0;
+            if (c == 'y' || c == 'Y') a = 1;
+            else if (c == 'n' || c == 'N') a = 2;
+            else if (c == 'A') a = 3; // a capital letter: a typed sentence must not allow a tool for good
+            if (e == Event::Escape() || e == Event::CtrlC()) a = 2;
+            if (a && g_sync) {
+                std::lock_guard<std::mutex> lock(g_sync->mu);
+                g_sync->answer = a;
+                g_sync->cv.notify_all();
+            }
+            return c != 0 || a != 0;
+        }
+        // Choosing a session with the keyboard: type to filter, Up/Down, Enter opens, Delete removes, Esc closes.
+        if (side_focus) {
+            const int letter = Letter(e);
+            if (e == Event::ArrowDown()) MoveSide(1);
+            else if (e == Event::ArrowUp()) MoveSide(-1);
+            else if (e == Event::Return()) {
+                side_focus = false;
+                side_filter.clear();
+                Pick(std::to_string(side_sel));
+                RebuildSide();
+            } else if (e == Event::Escape() || Is(e, "sessions")) {
+                side_focus = false;
+                side_drawer = false;
+                side_filter.clear();
+                RebuildSide();
+            } else if (e == Event::Delete()) {
+                DeleteSelected();
+            } else if (e == Event::Backspace()) {
+                if (!side_filter.empty()) side_filter.pop_back();
+                RebuildSide();
+            } else if (letter >= 32 && letter < 127) {
+                side_filter += static_cast<char>(letter);
+                RebuildSide();
+                MoveSide(0);
+            } else if (e.is<Event::Mouse>()) {
+                return Component<ChatApp>::OnEvent(e);
+            }
+            Refresh();
+            return true;
+        }
+        if (Is(e, "sessions")) {
+            if (sessions.empty() || busy) return true;
+            side_focus = true;
+            side_hide = false;
+            side_drawer = true;
+            side_sel = 0;
+            for (size_t i = 0; i < sessions.size(); ++i)
+                if (sessions[i].active) side_sel = static_cast<int>(i);
+            RebuildSide();
+            Refresh();
+            return true;
+        }
+        if (Is(e, "new_chat")) {
+            if (!busy) NewChat();
+            return true;
+        }
+        if (Is(e, "sidebar")) {
+            ToggleSide();
+            return true;
+        }
+        if (e == Event::CtrlC() || e == Event::Escape()) {
+            if (busy) {
+                if (host.cancel) host.cancel(host.user);
+            } else if (e == Event::CtrlC()) {
+                if (g_screen) g_screen->Exit();
+            } else if (!input.empty()) {
+                SetInput("");
+            }
+            return true;
+        }
+        if (Is(e, "commands") && !busy) {
+            // The slash shows at once; the next letter is added after it (the input line would otherwise replace the shown text).
+            SetInput("/");
+            slash_pending = true;
+            return true;
+        }
+        if (Is(e, "quit") && !busy) {
+            if (g_screen) g_screen->Exit();
+            return true;
+        }
+        if (e == Event::PageUp()) return Scroll(-12);
+        if (e == Event::PageDown()) return Scroll(12);
+        if (auto mouse = e.get_if<Event::Mouse>()) {
+            // The wheel scrolls the conversation by hand: while the answer streams the offset is pinned to the end, and the component
+            // would scroll from there.
+            if (mouse->button() == Event::Mouse::WheelUp) return Scroll(-3);
+            if (mouse->button() == Event::Mouse::WheelDown) return Scroll(3);
+            return Component<ChatApp>::OnEvent(e);
+        }
+        if (input.empty() && e == Event::Home()) {
+            follow = false;
+            QueryElement("#t").SetScrollY(0);
+            Refresh();
+            return true;
+        }
+        if (input.empty() && e == Event::End()) {
+            follow = true;
+            ScrollToEnd();
+            Refresh();
+            return true;
+        }
+        if ((busy || (input.empty() && history.empty())) && e == Event::ArrowUp()) return Scroll(-2);
+        if ((busy || (input.empty() && history.empty())) && e == Event::ArrowDown()) return Scroll(2);
 
-            std::string_view view = R"html(
+        // The command palette: arrows move, Tab completes.
+        const std::vector<size_t> found = busy ? std::vector<size_t>() : PaletteMatches();
+        if (!found.empty()) {
+            if (e == Event::ArrowDown()) {
+                selected = (selected + 1) % found.size();
+                return true;
+            }
+            if (e == Event::ArrowUp()) {
+                selected = (selected + found.size() - 1) % found.size();
+                return true;
+            }
+            const std::string chosen = host.commands[found[selected % found.size()]].name;
+            if (e == Event::Tab() || (e == Event::Return() && input != chosen)) {
+                SetInput(chosen + " ");
+                selected = 0;
+                return true;
+            }
+        } else if (!busy && (e == Event::ArrowUp() || e == Event::ArrowDown()) && !history.empty()) {
+            if (e == Event::ArrowUp() && history_at > 0) {
+                if (history_at == history.size()) draft = input;
+                SetInput(history[--history_at]);
+            } else if (e == Event::ArrowDown() && history_at < history.size()) {
+                ++history_at;
+                SetInput(history_at == history.size() ? draft : history[history_at]);
+            }
+            return true;
+        }
+        if (Letter(e) != 0 || e == Event::Backspace()) selected = 0;
+
+        if (e == Event::Return()) {
+            if (prompting && g_sync) {
+                // The line typed is the answer to the question the worker is waiting on; an empty line takes the default.
+                const std::string answer = input.empty() ? prompt_default : input;
+                AddRow({TuiKind::User, "", answer.empty() ? std::string("(default)") : answer, "row user", 0});
+                SetInput("");
+                {
+                    std::lock_guard<std::mutex> lock(g_sync->mu);
+                    g_sync->prompt_answer = answer;
+                    g_sync->prompt_done = true;
+                    g_sync->cv.notify_all();
+                }
+                Settle();
+                return true;
+            }
+            if (!busy) {
+                const std::string line = input;
+                SetInput("");
+                if (line.find_first_not_of(" \t") == std::string::npos) return true;
+                if (history.empty() || history.back() != line) history.push_back(line);
+                history_at = history.size();
+                Emit(TuiKind::User, line);
+                Submit(line);
+            }
+            return true; // an answer is running: no second message yet
+        }
+        return Component<ChatApp>::OnEvent(e); // the rest goes to the input
+    }
+
+    bool Scroll(int rows) { // negative: up
+        auto t = QueryElement("#t");
+        if (rows < 0) follow = false;
+        int current = t.scroll_y();
+        if (current >= kPinned) current = known_bottom; // pinned to the end: start from where the bottom was
+        if (rows > 0 && current + rows >= known_bottom) {
+            follow = true; // back at the bottom: follow the newest output again
+            ScrollToEnd();
+        } else {
+            t.SetScrollY(std::max(0, std::min(current + rows, known_bottom)));
+        }
+        Refresh();
+        return true;
+    }
+
+    std::string_view view = R"html(
     <div class="shell">
       <div class="{side_class}">
         <div class="sback" onclick="ToggleSide">{ico_back}</div>
@@ -1758,118 +1762,118 @@ class ChatApp : public rtxui::Component<ChatApp> {
       }
     </style>
   )html";
-        };
+};
 
-        // ------------------------------------------------------------------ markdown on its own (tests)
+// ------------------------------------------------------------------ markdown on its own (tests)
 
-        class MarkdownProbe : public rtxui::Component<MarkdownProbe> {
-          public:
-            explicit MarkdownProbe(std::string_view markdown) : content(markdown) { Bind(content); }
-            std::string content;
-            std::string_view view = R"html(<div><markdown content="{content}"/></div>)html";
-        };
+class MarkdownProbe : public rtxui::Component<MarkdownProbe> {
+  public:
+    explicit MarkdownProbe(std::string_view markdown) : content(markdown) { Bind(content); }
+    std::string content;
+    std::string_view view = R"html(<div><markdown content="{content}"/></div>)html";
+};
 
-    } // namespace
+} // namespace
 
-    std::string render_chat_text(const TuiHost &host, int width, int height) {
-        auto app = rtxui::Ref<ChatApp>::New(host);
-        rtxui::HeadlessScreen screen(app, width, height);
-        return screen.Text();
+std::string render_chat_text(const TuiHost &host, int width, int height) {
+    auto app = rtxui::Ref<ChatApp>::New(host);
+    rtxui::HeadlessScreen screen(app, width, height);
+    return screen.Text();
+}
+
+std::string render_markdown_text(std::string_view markdown, int width) {
+    rtxui::HeadlessScreen screen(rtxui::Ref<MarkdownProbe>::New(markdown), width, 60);
+    return screen.Text();
+}
+
+void tui_emit(TuiKind kind, std::string_view text) {
+    if (!g_app) return;
+    rtxui::PostTask([kind, t = std::string(text)] {
+        if (g_app) g_app->Emit(kind, t);
+    });
+}
+
+bool tui_prompt(std::string_view question, std::string_view default_value, std::string &answer) {
+    if (!g_app || !g_sync) return false;
+    {
+        std::lock_guard<std::mutex> lock(g_sync->mu);
+        g_sync->prompt_done = false;
     }
-
-    std::string render_markdown_text(std::string_view markdown, int width) {
-        rtxui::HeadlessScreen screen(rtxui::Ref<MarkdownProbe>::New(markdown), width, 60);
-        return screen.Text();
-    }
-
-    void tui_emit(TuiKind kind, std::string_view text) {
+    rtxui::PostTask([q = std::string(question), d = std::string(default_value)] {
         if (!g_app) return;
-        rtxui::PostTask([kind, t = std::string(text)] {
-            if (g_app) g_app->Emit(kind, t);
-        });
-    }
+        g_app->prompt_default = d;
+        g_app->prompt_line = q + (d.empty() ? "" : " [" + d + "]");
+        g_app->prompting = true;
+        g_app->Refresh();
+    });
+    Sync *sync = g_sync;
+    std::unique_lock<std::mutex> lock(sync->mu);
+    sync->cv.wait(lock, [&] { return sync->prompt_done; });
+    answer = sync->prompt_answer;
+    lock.unlock();
+    rtxui::PostTask([] {
+        if (!g_app) return;
+        g_app->prompting = false;
+        g_app->Refresh();
+    });
+    return true;
+}
 
-    bool tui_prompt(std::string_view question, std::string_view default_value, std::string &answer) {
-        if (!g_app || !g_sync) return false;
+bool tui_ask(std::string_view question, bool *always) {
+    if (!g_app || !g_sync) return false;
+    Sync *sync = g_sync;
+    {
+        std::lock_guard<std::mutex> lock(sync->mu);
+        sync->answer = 0;
+    }
+    rtxui::PostTask([q = std::string(question)] {
+        if (!g_app) return;
+        g_app->question = q;
+        g_app->asking = true;
+        g_app->Refresh();
+    });
+    std::unique_lock<std::mutex> lock(sync->mu);
+    sync->cv.wait(lock, [&] { return sync->answer != 0; });
+    const int a = sync->answer;
+    lock.unlock();
+    rtxui::PostTask([] {
+        if (!g_app) return;
+        g_app->asking = false;
+        g_app->Refresh();
+    });
+    if (a == 3 && always) *always = true;
+    return a == 1 || a == 3;
+}
+
+int run_tui(const TuiHost &host) {
+    Sync sync;
+    g_sync = &sync;
+    auto app = rtxui::Ref<ChatApp>::New(host);
+    g_app = app.get();
+    rtxui::Screen screen(app);
+    g_screen = &screen;
+    rtxui::PostTask([] {
+        if (g_app) g_app->StatsTick();
+    });
+    screen.SetInline(false);
+    screen.Loop();
+
+    // The worker may be inside the model or waiting for an answer: cancel it, answer "no" to a pending question, and let it finish.
+    if (app->worker.joinable()) {
+        if (host.cancel) host.cancel(host.user);
         {
-            std::lock_guard<std::mutex> lock(g_sync->mu);
-            g_sync->prompt_done = false;
+            std::lock_guard<std::mutex> lock(sync.mu);
+            sync.answer = 2;
+            sync.prompt_answer.clear();
+            sync.prompt_done = true;
+            sync.cv.notify_all();
         }
-        rtxui::PostTask([q = std::string(question), d = std::string(default_value)] {
-            if (!g_app) return;
-            g_app->prompt_default = d;
-            g_app->prompt_line = q + (d.empty() ? "" : " [" + d + "]");
-            g_app->prompting = true;
-            g_app->Refresh();
-        });
-        Sync *sync = g_sync;
-        std::unique_lock<std::mutex> lock(sync->mu);
-        sync->cv.wait(lock, [&] { return sync->prompt_done; });
-        answer = sync->prompt_answer;
-        lock.unlock();
-        rtxui::PostTask([] {
-            if (!g_app) return;
-            g_app->prompting = false;
-            g_app->Refresh();
-        });
-        return true;
+        app->worker.join();
     }
-
-    bool tui_ask(std::string_view question, bool *always) {
-        if (!g_app || !g_sync) return false;
-        Sync *sync = g_sync;
-        {
-            std::lock_guard<std::mutex> lock(sync->mu);
-            sync->answer = 0;
-        }
-        rtxui::PostTask([q = std::string(question)] {
-            if (!g_app) return;
-            g_app->question = q;
-            g_app->asking = true;
-            g_app->Refresh();
-        });
-        std::unique_lock<std::mutex> lock(sync->mu);
-        sync->cv.wait(lock, [&] { return sync->answer != 0; });
-        const int a = sync->answer;
-        lock.unlock();
-        rtxui::PostTask([] {
-            if (!g_app) return;
-            g_app->asking = false;
-            g_app->Refresh();
-        });
-        if (a == 3 && always) *always = true;
-        return a == 1 || a == 3;
-    }
-
-    int run_tui(const TuiHost &host) {
-        Sync sync;
-        g_sync = &sync;
-        auto app = rtxui::Ref<ChatApp>::New(host);
-        g_app = app.get();
-        rtxui::Screen screen(app);
-        g_screen = &screen;
-        rtxui::PostTask([] {
-            if (g_app) g_app->StatsTick();
-        });
-        screen.SetInline(false);
-        screen.Loop();
-
-        // The worker may be inside the model or waiting for an answer: cancel it, answer "no" to a pending question, and let it finish.
-        if (app->worker.joinable()) {
-            if (host.cancel) host.cancel(host.user);
-            {
-                std::lock_guard<std::mutex> lock(sync.mu);
-                sync.answer = 2;
-                sync.prompt_answer.clear();
-                sync.prompt_done = true;
-                sync.cv.notify_all();
-            }
-            app->worker.join();
-        }
-        g_screen = nullptr;
-        g_app = nullptr;
-        g_sync = nullptr;
-        return 0;
-    }
+    g_screen = nullptr;
+    g_app = nullptr;
+    g_sync = nullptr;
+    return 0;
+}
 
 } // namespace agent::cli
