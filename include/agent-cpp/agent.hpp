@@ -562,6 +562,11 @@ struct Config {
     // node; the llama engine also sizes its continuous-batching sequence slots from it.
     int max_parallel_subagents = 4;
 
+    // A tool result longer than this many bytes goes into the history as its beginning and its end with a note of what was left out; the
+    // whole text is kept in <workspace_dir>/.agents/results/ and the note names the file, so the model can read or grep the part it
+    // needs. Long logs, listings and pages otherwise fill a small context window for almost no information. 0 = off (the default).
+    size_t tool_result_limit = 0;
+
     LogFn logger = nullptr;
     void *logger_user_data = nullptr;
 

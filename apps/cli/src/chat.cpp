@@ -642,6 +642,7 @@ Result<void> open_session(ChatState &st) {
     // A chat has one conversation: one sequence slot. The default of four (for parallel sub-agents) made the memory estimate count the
     // cache four times, and a 9B model was refused on a machine that runs it.
     cfg.max_parallel_subagents = 1;
+    cfg.tool_result_limit = 6000; // long tool output is shortened for the model; the whole text stays in .agents/results/
     cfg.temperature = st.ctx->config.temperature;
     cfg.enable_file_logging = true;
     cfg.logger = log_fn;

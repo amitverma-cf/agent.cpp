@@ -6,7 +6,10 @@
 
 #include <agent-cpp/agent.hpp>
 #include <atomic>
+#include <cctype>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <simdjson.h>
 
@@ -23,6 +26,45 @@ struct ActiveMemoryGuard {
     ActiveMemoryGuard(const ActiveMemoryGuard &) = delete;
     ActiveMemoryGuard &operator=(const ActiveMemoryGuard &) = delete;
 };
+
+// Keeps the first ~60% and the last ~30% of `limit` bytes of a long tool result (cut at line ends) and saves the whole text, so the
+// model sees the shape of the output and can fetch what it needs. Returns the text unchanged when it is short or cannot be saved.
+std::string shorten_tool_result(const Session &session, std::string text, std::string_view tool) {
+    const size_t limit = session.config.tool_result_limit;
+    if (limit == 0 || text.size() <= limit || session.config.workspace_dir.empty()) return text;
+    namespace fs = std::filesystem;
+    static std::atomic<unsigned> counter{0};
+    std::error_code ec;
+    const fs::path dir = fs::path(session.config.workspace_dir) / ".agents" / "results";
+    fs::create_directories(dir, ec);
+    if (ec) return text;
+    std::string label(tool);
+    for (char &c : label)
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_') c = '_';
+    const std::string name = label + "-" + std::to_string(++counter) + ".txt";
+    {
+        std::ofstream file(dir / name, std::ios::binary);
+        if (!file) return text;
+        file.write(text.data(), static_cast<std::streamsize>(text.size()));
+        if (!file) return text;
+    }
+    const size_t head_bytes = limit * 6 / 10;
+    const size_t tail_bytes = limit * 3 / 10;
+    size_t head_end = text.rfind('\n', head_bytes);
+    if (head_end == std::string::npos || head_end < head_bytes / 2) head_end = head_bytes;
+    size_t tail_start = text.find('\n', text.size() - tail_bytes);
+    if (tail_start == std::string::npos || tail_start + 1 >= text.size()) tail_start = text.size() - tail_bytes;
+    else ++tail_start;
+    size_t lines = 0;
+    for (size_t i = head_end; i < tail_start; ++i)
+        if (text[i] == '\n') ++lines;
+    std::string out = text.substr(0, head_end);
+    out += "\n[... " + std::to_string(tail_start - head_end) + " bytes (" + std::to_string(lines) + " lines) left out of " +
+           std::to_string(text.size()) + " bytes; the whole result is in .agents/results/" + name +
+           " : read it with read_file or search it with grep ...]\n";
+    out += text.substr(tail_start);
+    return out;
+}
 
 } // namespace
 
@@ -523,6 +565,7 @@ Result<std::string> run_turn_with_media(Session &session, Conversation &state, s
 
                 // text = the message content (attachment notes / "Error: ..." included).
                 ToolResult result = tools::execute_for_message(session, tcv.name, tcv.arguments);
+                result.text = shorten_tool_result(session, std::move(result.text), tcv.name);
 
                 fire_tool_hooks(session, state, ToolHook::When::Post, tcv.name, tcv.arguments, result.text);
 
