@@ -1534,7 +1534,8 @@ bool handle_line(ChatState &st, const std::string &line) {
             out("no tool is allowed for good in this project any more\n");
             break;
         }
-        if (st.always_allowed.empty()) out("no tool is allowed for good in this project (answer A, the capital letter, to a question to allow one)\n");
+        if (st.always_allowed.empty())
+            out("no tool is allowed for good in this project (answer A, the capital letter, to a question to allow one)\n");
         for (const std::string &t : st.always_allowed) out("always allowed: " + t + "\n");
         break;
     }
