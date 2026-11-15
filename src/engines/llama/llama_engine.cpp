@@ -2090,8 +2090,7 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     // Speculation off turns every kind of drafting off. A draft model (options.speculative "draft") also runs on llama.cpp's engine.
     const bool use_draft_model = mode == Mode::Generate && want_draft && !draft_model.empty();
     if (want_draft && draft_model.empty() && mode == Mode::Generate)
-        std::fprintf(stderr, "llama: options.speculative is \"draft\" but options.draft_model is empty; no draft model is used
-");
+        std::fprintf(stderr, "llama: options.speculative is \"draft\" but options.draft_model is empty; no draft model is used\n");
     if (!speculative) use_mtp = false;
     if (mode == Mode::Generate && ((use_mtp && upstream::gguf_has_mtp(model_str)) || native_decision || use_draft_model)) {
         upstream::Settings us;
