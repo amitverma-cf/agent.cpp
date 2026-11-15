@@ -680,6 +680,22 @@ Result<CatalogEntry> pull_model(std::string_view spec_text, const PullOptions &o
         entry.mmproj = proj_path;
         entry.mmproj_file = p.path;
     }
+    // Voice presets and config files the engine reads from the model's folder (audio.cpp: embeddings/alba.safetensors).
+    for (const RemoteFile &c : select_companions(ri, file.value.path)) {
+        const std::string companion_path = std::filesystem::absolute(repo_dir / c.path, ec).lexically_normal().string();
+        if (!(std::filesystem::is_regular_file(companion_path, ec) && (c.size == 0 || file_size_or_zero(companion_path) == c.size))) {
+            const std::string url = opts.http.endpoint + "/" + encode_path(spec.value.repo) + "/resolve/" +
+                                    encode_path(spec.value.revision) + "/" + encode_path(c.path);
+            DownloadOptions dl{.expected_size = c.size,
+                               .expected_sha256 = c.sha256,
+                               .on_progress = opts.on_progress,
+                               .progress_user_data = opts.progress_user_data,
+                               .cancel = opts.cancel};
+            auto r = download_file(url, companion_path, opts.http, dl);
+            if (!r.ok) return fail<CatalogEntry>(r.error.code, r.error.message);
+        }
+        entry.companions.push_back(c.path);
+    }
     if (shards.value.size() > 1) entry.size = total_size;
     if (entry.size == 0) entry.size = file_size_or_zero(entry.path);
 

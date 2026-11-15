@@ -63,6 +63,12 @@ Result<std::vector<RemoteFile>> split_set(const RepoInfo &info, const RemoteFile
 // A model file that is itself a projector never gets another one. Fails when `want` matches nothing.
 Result<std::optional<RemoteFile>> select_mmproj(const RepoInfo &info, std::string_view model_file, std::string_view want = "auto");
 
+// The files an engine needs next to a model file besides the file itself. audio.cpp loads the voices of a text-to-speech model from
+// `embeddings/NAME.safetensors` beside the GGUF (PocketTTS: PocketTTS-GGUF/english/embeddings/alba.safetensors), so a repo that has an
+// `embeddings/` folder next to the model gets that folder (at most 256 MiB) and the small config / tokenizer files (.json, .yaml, .yml,
+// .txt, .model, .tiktoken, at most 8 MiB each) of the model's own folder. Other repos have none. Pure function.
+std::vector<RemoteFile> select_companions(const RepoInfo &info, std::string_view model_file);
+
 // -------------------------- Licence policy --------------------------
 
 // True for licences that restrict use (non-commercial, research-only, no-derivatives ...). Policy
@@ -87,6 +93,9 @@ struct CatalogEntry {
     std::string license;
     std::string mmproj;      // local path of the multimodal projector pulled with the model; empty if none
     std::string mmproj_file; // its path inside the repo
+    // Files an engine needs next to the model besides the model itself (audio.cpp voice presets in embeddings/*.safetensors, the
+    // tokenizer and config files of the same folder), as paths inside the repo; they were fetched with the model.
+    std::vector<std::string> companions;
 };
 
 // engine_options with "mmproj": <path> added (llama's multimodal projector), unless it already has one

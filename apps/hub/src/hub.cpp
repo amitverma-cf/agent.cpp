@@ -294,6 +294,36 @@ Result<std::optional<RemoteFile>> select_mmproj(const RepoInfo &info, std::strin
     return fail<R>(ErrorCode::KeyNotFound, "hub: " + info.repo + " has no mmproj matching '" + std::string(want) + "'");
 }
 
+std::vector<RemoteFile> select_companions(const RepoInfo &info, std::string_view model_file) {
+    std::vector<RemoteFile> out;
+    const size_t slash = model_file.rfind('/');
+    const std::string dir = slash == std::string_view::npos ? std::string() : std::string(model_file.substr(0, slash + 1));
+    const std::string voices = dir + "embeddings/";
+    const auto starts = [](std::string_view s, std::string_view p) { return s.size() > p.size() && s.substr(0, p.size()) == p; };
+    bool has_voices = false;
+    for (const RemoteFile &f : info.files)
+        if (starts(f.path, voices) && f.path != model_file) has_voices = true;
+    if (!has_voices) return out;
+    uint64_t voice_bytes = 0;
+    for (const RemoteFile &f : info.files) {
+        if (f.path == model_file) continue;
+        if (starts(f.path, voices)) {
+            if (voice_bytes + f.size > (256ull << 20)) continue;
+            voice_bytes += f.size;
+            out.push_back(f);
+            continue;
+        }
+        if (!starts(f.path, dir) || f.path.find('/', dir.size()) != std::string::npos || f.size > (8ull << 20)) continue;
+        static constexpr std::string_view kExt[] = {".json", ".yaml", ".yml", ".txt", ".model", ".tiktoken"};
+        for (std::string_view e : kExt)
+            if (ends_with_ci(f.path, e)) {
+                out.push_back(f);
+                break;
+            }
+    }
+    return out;
+}
+
 Result<RepoInfo> parse_repo_info(std::string_view json) {
     simdjson::dom::parser parser;
     simdjson::dom::element doc;
@@ -535,6 +565,14 @@ std::string catalog_to_json(std::span<const CatalogEntry> entries) {
             out += ", \"mmproj_file\": ";
             append_json_string(out, e.mmproj_file);
         }
+        if (!e.companions.empty()) {
+            out += ", \"companions\": [";
+            for (size_t i = 0; i < e.companions.size(); ++i) {
+                if (i) out += ", ";
+                append_json_string(out, e.companions[i]);
+            }
+            out += "]";
+        }
         out += "}";
     }
     out += first ? "]\n}\n" : "\n  ]\n}\n";
@@ -561,6 +599,12 @@ Result<std::vector<CatalogEntry>> catalog_from_json(std::string_view json) {
         e.license = get_string_field(m, "license");
         e.mmproj = get_string_field(m, "mmproj");
         e.mmproj_file = get_string_field(m, "mmproj_file");
+        simdjson::dom::array companions;
+        if (!m["companions"].get(companions))
+            for (simdjson::dom::element c : companions) {
+                std::string_view v;
+                if (!c.get(v)) e.companions.emplace_back(v);
+            }
         if (e.name.empty()) return fail<R>(ErrorCode::ParseError, "hub: models.json entry without a name");
         out.push_back(std::move(e));
     }

@@ -184,3 +184,57 @@ TEST_CASE("hub http: download_file writes, verifies size and resumes a partial f
 
     fs::remove_all(dir, ec);
 }
+
+TEST_CASE("select_companions takes the voice presets next to an audio.cpp model", "[hub][companions]") {
+    auto info = parse_repo_info(R"({"id":"a/audio","siblings":[
+        {"rfilename":"PocketTTS-GGUF/english/pocket-tts-english-q8_0.gguf","size":100},
+        {"rfilename":"PocketTTS-GGUF/english/embeddings/alba.safetensors","size":10},
+        {"rfilename":"PocketTTS-GGUF/english/embeddings/marius.safetensors","size":10},
+        {"rfilename":"PocketTTS-GGUF/english/config.yaml","size":5},
+        {"rfilename":"PocketTTS-GGUF/english/other.gguf","size":50},
+        {"rfilename":"PocketTTS-GGUF/french/embeddings/jean.safetensors","size":10},
+        {"rfilename":"README.md","size":5}]})");
+    REQUIRE(info.ok);
+    const auto found = select_companions(info.value, "PocketTTS-GGUF/english/pocket-tts-english-q8_0.gguf");
+    REQUIRE(found.size() == 3);
+    CHECK(found[0].path == "PocketTTS-GGUF/english/embeddings/alba.safetensors");
+    CHECK(found[1].path == "PocketTTS-GGUF/english/embeddings/marius.safetensors");
+    CHECK(found[2].path == "PocketTTS-GGUF/english/config.yaml");
+
+    auto plain = parse_repo_info(R"({"id":"a/llm","siblings":[{"rfilename":"m.gguf","size":1},{"rfilename":"config.json","size":1}]})");
+    REQUIRE(plain.ok);
+    CHECK(select_companions(plain.value, "m.gguf").empty()); // no embeddings folder: not an audio.cpp repo
+}
+
+TEST_CASE("pull_model fetches the voice file next to a text-to-speech model and records it", "[hub][companions]") {
+    TestServer s;
+    const std::string repo_json = R"({"id":"fake/audio","siblings":[
+        {"rfilename":"PocketTTS-GGUF/english/pocket.gguf","size":4},
+        {"rfilename":"PocketTTS-GGUF/english/embeddings/alba.safetensors","size":5}]})";
+    s.svr.Get("/api/models/fake/audio", [&](const httplib::Request &, httplib::Response &res) { res.set_content(repo_json, "application/json"); });
+    s.svr.Get("/fake/audio/resolve/main/PocketTTS-GGUF/english/pocket.gguf",
+              [](const httplib::Request &, httplib::Response &res) { res.set_content("GGUF", "application/octet-stream"); });
+    s.svr.Get("/fake/audio/resolve/main/PocketTTS-GGUF/english/embeddings/alba.safetensors",
+              [](const httplib::Request &, httplib::Response &res) { res.set_content("VOICE", "application/octet-stream"); });
+    s.start();
+
+    const fs::path dir = fs::temp_directory_path() / "agent-test-companions";
+    fs::remove_all(dir);
+    PullOptions opts;
+    opts.models_dir = dir.string();
+    opts.http = options();
+    opts.http.endpoint = "http://127.0.0.1:" + std::to_string(s.port);
+    opts.allow_restricted_license = true;
+    auto pulled = pull_model("fake/audio:PocketTTS-GGUF/english/pocket.gguf", opts);
+    REQUIRE(pulled.ok);
+    const fs::path voice = fs::path(pulled.value.path).parent_path() / "embeddings" / "alba.safetensors";
+    CHECK(fs::exists(voice));
+    REQUIRE(pulled.value.companions.size() == 1);
+    CHECK(pulled.value.companions[0] == "PocketTTS-GGUF/english/embeddings/alba.safetensors");
+
+    auto listed = list_models((dir / "models.json").string()); // recorded in the catalogue
+    REQUIRE(listed.ok);
+    REQUIRE(listed.value.size() == 1);
+    CHECK(listed.value[0].companions == pulled.value.companions);
+    fs::remove_all(dir);
+}
