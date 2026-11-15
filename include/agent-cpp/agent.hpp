@@ -149,6 +149,7 @@ struct TokenUsage {
     uint64_t kv_bytes = 0; // size of the engine's whole KV cache (an estimate for hybrid models)
     float prefill_ms = 0;  // time decoding the prompt
     float decode_ms = 0;   // time generating
+    int retries = 0;       // extra attempts a remote engine made for this request
 };
 
 enum class DType { Float32, Float16, Int8, Int32, Int64, UInt8 };

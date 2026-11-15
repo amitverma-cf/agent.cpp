@@ -399,7 +399,8 @@ Result<InferResponse> to_infer_response(const agent_response &resp, Arena &arena
                                                 .kv_type = stats.kv_type,
                                                 .kv_bytes = stats.kv_bytes,
                                                 .prefill_ms = stats.prefill_ms,
-                                                .decode_ms = stats.decode_ms},
+                                                .decode_ms = stats.decode_ms,
+                                                .retries = stats.retries},
                             .output_tensors = tensors});
 }
 

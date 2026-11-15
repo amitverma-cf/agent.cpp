@@ -192,6 +192,7 @@ typedef struct agent_run_stats {
     uint64_t kv_bytes;     /* size of the whole KV cache (an estimate for hybrid models) */
     float prefill_ms;      /* time spent decoding the prompt */
     float decode_ms;       /* time spent generating the reply */
+    int32_t retries;       /* extra attempts a remote engine needed for this request (0 = none) */
 } agent_run_stats;
 
 typedef struct agent_response {
