@@ -93,6 +93,8 @@ struct CliConfig {
     // The address of a search service for the web_search tool, with {q} where the query goes, for example a SearXNG instance:
     // "http://localhost:8080/search?format=json&q={q}". Empty = the model has no web_search tool.
     std::string search_url;
+    // Local only: the web tools (web_fetch, web_search) and downloads started by the agent are refused, so nothing leaves the computer.
+    bool local_only = false;
     // Keyboard shortcuts the user changed in the settings: action -> key ("settings" -> "ctrl+o"). An action that is not here has its default.
     std::map<std::string, std::string> shortcuts;
 };

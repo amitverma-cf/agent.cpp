@@ -582,6 +582,7 @@ std::string config_to_json(const CliConfig &c) {
     out += "  \"memory_budget_mb\": " + std::to_string(c.memory_budget_mb) + ",\n";
     out += "  \"js_runtime\": \"" + c.js_runtime + "\",\n";
     out += "  \"search_url\": " + json_str(c.search_url) + ",\n";
+    out += std::string("  \"local_only\": ") + (c.local_only ? "true" : "false") + ",\n";
     out += "  \"shortcuts\": {";
     for (auto it = c.shortcuts.begin(); it != c.shortcuts.end(); ++it)
         out += (it == c.shortcuts.begin() ? "" : ", ") + json_str(it->first) + ": " + json_str(it->second);
@@ -615,6 +616,7 @@ Result<CliConfig> config_from_json(std::string_view json) {
     c.memory_budget_mb = get_int(doc, "memory_budget_mb", 0);
     if (c.memory_budget_mb < 0) return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: memory_budget_mb must be >= 0");
     c.search_url = std::string(get_str(doc, "search_url"));
+    if (bool local_only = false; !doc["local_only"].get(local_only)) c.local_only = local_only;
     if (simdjson::dom::object shortcuts; !doc["shortcuts"].get(shortcuts))
         for (auto field : shortcuts)
             if (field.value.is_string()) c.shortcuts[std::string(field.key)] = std::string(field.value.get_string().value_unsafe());

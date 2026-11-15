@@ -234,7 +234,12 @@ std::string system_prompt(const ChatState &st) {
         " The computer runs Linux: run_command uses sh. To work with files prefer the file tools (list_dir, read_file, write_file) over "
         "shell commands. If a command fails, change the approach or tell the user what went wrong; never repeat the same failing command.";
 #endif
-    return std::string(kSystemPrompt) + platform +
+    const char *habits = " When the user states a lasting preference, a fact about themselves or the project, or corrects you, save it "
+                         "with remember without "
+                         "being asked. When a request is ambiguous, ask with ask_user instead of guessing. For a request with several "
+                         "steps keep a checklist "
+                         "with todo.";
+    return std::string(kSystemPrompt) + platform + habits +
            load_project_rules(st.workspace, st.ctx->has_home ? st.ctx->home.root : st.ctx->config_dir);
 }
 
@@ -475,6 +480,10 @@ std::string run_agent_command(ChatState &st, std::vector<std::string> args, bool
     if (std::find_if(std::begin(allowed), std::end(allowed), [&](const char *a) { return args[0] == a; }) == std::end(allowed))
         return "the command '" + args[0] + "' is not available here; use task, run, model, engine, doctor, skill, mcp, schedule or wake";
     auto has = [&](const std::string &flag) { return std::find(args.begin(), args.end(), flag) != args.end(); };
+    if (st.ctx->config.local_only &&
+        (args[0] == "mcp" || args[0] == "skill" || (args[0] == "model" && args.size() > 1 && args[1] != "ls" && args[1] != "info") ||
+         (args[0] == "engine" && args.size() > 1 && (args[1] == "pull" || args[1] == "add"))))
+        return "local only is on (Settings, The web): commands that download are refused";
     if (st.ctx->has_home && !has("--home")) args.insert(args.end(), {"--home", st.ctx->home.root});
     if ((args[0] == "task" || args[0] == "run") && !has("--workspace")) args.insert(args.end(), {"--workspace", st.workspace});
     std::string command = shell_quote(self_executable());
@@ -648,6 +657,28 @@ Result<std::string> todo_cb(std::string_view args, void *) {
     return ok(std::to_string(done) + "/" + std::to_string(total) + " done\n" + text);
 }
 
+// A question from the agent to the user, shown in the chat as a line to answer: the agent asks instead of guessing.
+constexpr std::string_view kAskUserSchema =
+    R"({"type":"object","properties":{"question":{"type":"string","description":"one precise question"}},"required":["question"]})";
+
+Result<std::string> ask_user_cb(std::string_view args, void *) {
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded(args);
+    simdjson::dom::element doc;
+    std::string_view question;
+    if (parser.parse(padded).get(doc) || doc["question"].get(question) || question.empty())
+        return fail<std::string>(ErrorCode::InvalidConfig, "ask_user needs a question");
+#if defined(AGENT_CLI_HAS_TUI)
+    if (g_tui) {
+        std::string answer;
+        if (!tui_prompt(question, "", answer))
+            return ok(std::string("(the user did not answer; decide yourself and say what you assumed)"));
+        return ok(answer.empty() ? std::string("(no answer)") : answer);
+    }
+#endif
+    return ok(std::string("(no one to ask in this mode; decide yourself and say what you assumed)"));
+}
+
 Result<void> open_session(ChatState &st) {
     const std::string previous = st.lease ? st.lease.name : std::string();
     release_model(st.lease);
@@ -673,13 +704,13 @@ Result<void> open_session(ChatState &st) {
     }
     install_cli_hooks(cfg, *st.ctx);
     if (st.no_tools) cfg.auto_default_tools = false;
-    if (!st.no_tools)
+    if (!st.no_tools && !st.ctx->config.local_only)
         cfg.tools.push_back(Tool{.name = "web_fetch",
                                  .description = "Fetch a web page and return its text (HTML is reduced to readable text, at most 20000 "
                                                 "characters). The user is asked first.",
                                  .parameter_schema = kWebFetchSchema,
                                  .callback = web_fetch_cb});
-    if (!st.no_tools && !st.ctx->config.search_url.empty())
+    if (!st.no_tools && !st.ctx->config.local_only && !st.ctx->config.search_url.empty())
         cfg.tools.push_back(
             Tool{.name = "web_search",
                  .description = "Search the web and return the results as the search service gave them. The user is asked first.",
@@ -706,6 +737,11 @@ Result<void> open_session(ChatState &st) {
                                  .parameter_schema = kRememberSchema,
                                  .callback = remember_cb,
                                  .user_data = &st});
+        cfg.tools.push_back(Tool{.name = "ask_user",
+                                 .description = "Ask the user one precise question and wait for the answer. Use it when the request is "
+                                                "ambiguous or a choice is theirs to make, instead of guessing.",
+                                 .parameter_schema = kAskUserSchema,
+                                 .callback = ask_user_cb});
         cfg.tools.push_back(Tool{.name = "todo",
                                  .description =
                                      "Keep a checklist for a request with several steps. Send the whole list every time with each item "
@@ -1864,6 +1900,9 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
     head("Reading the answer");
     add("thinking", "Show reasoning", st.think.show ? "on" : "off", "Show the <think> blocks of reasoning models", {"off", "on"});
     head("The web");
+    add("local_only", "Local only", c.local_only ? "on" : "off",
+        "On refuses web_fetch, web_search and model downloads asked for by the agent: nothing leaves the computer. Reloads the model",
+        {"off", "on"});
     add("search_url", "Web search address", c.search_url,
         "A search service with {q} in it, for example http://localhost:8080/search?format=json&q={q}. Empty: no web_search tool. Reloads "
         "the model");
@@ -2055,6 +2094,11 @@ std::string tui_set_setting(ChatState &st, const std::string &key, const std::st
             if (parser.parse(value).get(doc) || !doc.is_object()) return "a JSON object such as {\"flash_attn\": true}, or empty";
         }
         st.engine_options = value;
+        return reload();
+    }
+    if (key == "local_only") {
+        c.local_only = value == "on";
+        if (auto e = persist(); !e.empty()) return e;
         return reload();
     }
     if (key == "search_url") {
