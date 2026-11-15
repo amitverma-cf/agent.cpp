@@ -162,7 +162,7 @@ constexpr TuiShortcut kShortcutActions[] = {
     {"commands", "List the commands", "ctrl+p"},
     {"help", "Show the keyboard shortcuts", "f1"},
     {"clear_input", "Clear the input line", "ctrl+u"},
-    {"copy_last", "Copy the last answer", "alt+c"},
+    {"copy_last", "Copy the last answer", "alt+y"},
     {"delete_last", "Delete the last message and its answers", "alt+d"},
     {"quit", "Quit", "ctrl+d"},
 };
