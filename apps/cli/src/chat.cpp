@@ -2,11 +2,15 @@
 // asks before tools the default permission policy rates Ask, persists the conversation in the
 // workspace's SQLite store, and opens generated artifacts with the OS default app.
 
+#include "catalog_browse.hpp"
 #include "chat_extras.hpp"
+#include "chat_memory.hpp"
+#include "chat_models.hpp"
 #include "commands.hpp"
 #include "edit_journal.hpp"
 #include "mcp_config.hpp"
 #include "model_detect.hpp"
+#include "registries.hpp"
 #include "runtimes.hpp"
 #include "schedule.hpp"
 #include "secrets.hpp"
@@ -14,6 +18,7 @@
 #include "speed.hpp"
 #include "tui.hpp"
 #include "voice.hpp"
+#include "workflows.hpp"
 
 #include <agent-cpp/hub.hpp>
 #include <agent-cpp/store_sqlite.hpp>
@@ -27,6 +32,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <simdjson.h>
 #include <thread>
 
@@ -247,7 +253,24 @@ std::string system_prompt(const ChatState &st) {
         "chats, check recall and the saved notes first. When the user asks to make answers faster, slower, more creative, steadier or "
         "longer, or asks about a small helper model or MTP, use the settings tool (action get first, then set); never claim a "
         "speed feature the settings tool does not list.";
-    return std::string(kSystemPrompt) + platform + habits +
+    const char *honesty =
+        " After remember or forget, answer with one short sentence and do nothing else unless asked. To delete a note use forget, and say "
+        "it was removed only when forget says so. For what was said in earlier chats call recall with the topic: it searches the notes "
+        "and the saved conversations and says how many chats it searched. Never claim that a file was written, changed or deleted, or "
+        "that a tool ran, unless a tool result in this conversation shows it; after write_file check the result and, when it matters, "
+        "read the file back. Questions about the user's own files, folders, settings, models or installed tools are answered with "
+        "list_dir, read_file or agent_run, never with web_fetch or web_search: the web is only for facts that are not on this computer. "
+        "Skills and MCP servers: agent_run [\"skill\",\"browse\"] and [\"mcp\",\"browse\"] list well-known ones; [\"skill\",\"search\","
+        "\"WORDS\"] and [\"mcp\",\"search\",\"WORDS\"] search the catalogues; [\"skill\",\"add\",\"owner/repo/skill\"], "
+        "[\"mcp\",\"add\",\"NAME\"] (a name from the browse list) and [\"mcp\",\"add\",\"NAME\",\"--run\",\"npx -y PACKAGE\"] (or "
+        "\"--url\",\"https://...\") install them; [\"skill\",\"ls\"] and [\"mcp\",\"ls\"] list what is installed; rm, on and off remove, "
+        "or switch them. Their tools and instructions are there from the next message. Workflows: to keep a described process, call "
+        "workflow_save with a short name and the graph as JSON; run it later, in any chat, with agent_run [\"run\",\"NAME\"]; "
+        "agent_run [\"workflow\",\"ls\"] lists them. When a run ends with \"status: interrupted\" it waits for the user: show what is "
+        "pending with ask_user, then continue with agent_run [\"run\",\"NAME\",\"--resume\",\"THREAD\",\"--input\",\"ANSWER\"] (THREAD "
+        "is in the output; the answer approve lets pending tool calls run).";
+    const auto models = installed_models(catalog_path(*st.ctx));
+    return std::string(kSystemPrompt) + platform + habits + honesty + installed_models_prompt(models) + workflows_prompt(*st.ctx) +
            load_project_rules(st.workspace, st.ctx->has_home ? st.ctx->home.root : st.ctx->config_dir);
 }
 
@@ -373,23 +396,55 @@ Result<void> acquire_current(ChatState &st) {
     return ok();
 }
 
+// Makes the session's MCP servers and skills match the files: the servers of the home's mcp/mcp.json and mcp.d and of the project's
+// .agents/mcp.json and mcp.d (each runs sandboxed in its own data folder, its keys put in its environment only as it starts), and the
+// skills of <home>/skills and <workspace>/.agents/skills. Runs when a model loads and before every message, so a server or a skill
+// added in Settings, by a command or by writing the file shows up in the next message. `quiet`: no notes (the load prints to stderr).
+std::string sync_extensions(ChatState &st, Session &session, bool at_load) {
+    std::string report; // what changed, for the agent_run result: the agent must not claim a server that did not start
+    // The chat may work in a folder other than where it was started, and .agents/ may appear while it runs.
+    if (st.ctx->project_root.empty()) st.ctx->project_root = find_project_root(st.workspace);
+    std::vector<std::string> warnings;
+    const auto servers = collect_mcp_servers(*st.ctx, warnings);
+    auto say = [&](const std::string &line) {
+        report += line + "\n";
+        if (at_load) std::fprintf(g_err, "%s\n", line.c_str());
+        else out(line + "\n");
+    };
+    if (at_load)
+        for (const std::string &w : warnings) say("[mcp] warning: " + w);
+    const auto connected = list_mcp_servers(session);
+    for (const std::string &name : connected)
+        if (std::none_of(servers.begin(), servers.end(), [&](const McpServerConfig &c) { return c.name == name; })) {
+            disconnect_mcp_server(session, name);
+            say("[mcp] " + name + " stopped");
+        }
+    for (const McpServerConfig &server : servers) {
+        if (std::find(connected.begin(), connected.end(), server.name) != connected.end()) continue;
+        auto result = connect_mcp_server(session, server);
+        if (result.ok) say("[mcp] " + server.name + ": " + std::to_string(result.value.size()) + " tool(s)");
+        else say("[mcp] " + server.name + " not started: " + result.error.message);
+    }
+    for (const std::string &dir : skill_dirs(*st.ctx, st.workspace)) {
+        std::error_code ec;
+        if (fs::is_directory(dir, ec)) load_skills_dir(session, dir);
+    }
+    for (auto it = session.skills.begin(); it != session.skills.end();) { // a skill switched off or removed
+        std::error_code ec;
+        it = fs::exists(fs::path(it->second.path) / "SKILL.md", ec) ? std::next(it) : session.skills.erase(it);
+    }
+    return report;
+}
+
+std::string sync_extensions(ChatState &st) { return st.lease ? sync_extensions(st, *st.lease, false) : std::string(); }
+
 // ModelSpec::on_load: share the chat's store and show tool results.
 Result<void> on_model_loaded(Session &session, const ModelSpec &, void *user_data) {
     auto *st = static_cast<ChatState *>(user_data);
     session.config.memory = st->store.config.memory;
     session.memory_state = st->store.memory_state;
     register_event_hook(session, EventType::OnToolResult, on_tool_result, st);
-
-    // MCP servers from the home's mcp/mcp.json and the project's .agents/mcp.json. Each runs sandboxed in its own data
-    // folder, and the keys it is bound to are put in its environment only now, as it starts.
-    std::vector<std::string> warnings;
-    const auto servers = collect_mcp_servers(*st->ctx, warnings);
-    for (const std::string &w : warnings) std::fprintf(g_err, "[mcp] warning: %s\n", w.c_str());
-    for (const McpServerConfig &server : servers) {
-        auto connected = connect_mcp_server(session, server);
-        if (connected.ok) std::fprintf(g_err, "[mcp] %s: %zu tool(s)\n", server.name.c_str(), connected.value.size());
-        else std::fprintf(g_err, "[mcp] %s not started: %s\n", server.name.c_str(), connected.error.message.c_str());
-    }
+    sync_extensions(*st, session, true);
     return ok();
 }
 
@@ -458,7 +513,7 @@ Result<std::string> web_search_cb(std::string_view args, void *user) {
 // and the files it names ("media: MIME PATH") are added to the artifacts that /open lists. The user is asked first (see check_tool).
 
 constexpr std::string_view kAgentRunSchema =
-    R"({"type":"object","properties":{"args":{"type":"array","items":{"type":"string"},"description":"The arguments of the agent command as separate strings, for example [\"task\",\"image_gen\",\"--model\",\"sdxs-512\",\"--text\",\"a red lighthouse\"], [\"task\",\"asr\",\"--model\",\"parakeet\",\"--file\",\"talk.wav\"], [\"run\",\"flow.json\"], [\"model\",\"ls\"] or [\"engine\",\"ls\"]. The first word is task, run, model, engine, doctor, skill, mcp, schedule or wake."}},"required":["args"]})";
+    R"({"type":"object","properties":{"args":{"type":"array","items":{"type":"string"},"description":"The arguments of the agent command as separate strings, for example [\"task\",\"image_gen\",\"--model\",\"sdxs-512\",\"--text\",\"a red lighthouse\"], [\"task\",\"asr\",\"--model\",\"parakeet\",\"--file\",\"talk.wav\"], [\"run\",\"flow.json\"], [\"model\",\"ls\"] or [\"engine\",\"ls\"]. The first word is task, run, model, engine, doctor, skill, mcp, workflow, schedule or wake. A saved workflow runs by name: [\"run\",\"daily-report\"]."}},"required":["args"]})";
 
 std::string shell_quote(const std::string &s) {
 #if defined(_WIN32)
@@ -486,14 +541,40 @@ std::string self_executable() {
 std::string run_agent_command(ChatState &st, std::vector<std::string> args, bool &failed) {
     failed = true;
     if (args.empty()) return "no command given";
-    static const char *const allowed[] = {"task", "run", "model", "engine", "doctor", "skill", "mcp", "schedule", "wake"};
+    static const char *const allowed[] = {"task", "run",      "model",   "engine",   "doctor", "skill",
+                                          "mcp",  "workflow", "runtime", "schedule", "wake"};
     if (std::find_if(std::begin(allowed), std::end(allowed), [&](const char *a) { return args[0] == a; }) == std::end(allowed))
-        return "the command '" + args[0] + "' is not available here; use task, run, model, engine, doctor, skill, mcp, schedule or wake";
+        return "the command '" + args[0] +
+               "' is not available here; use task, run, model, engine, doctor, skill, mcp, workflow, runtime, schedule or wake";
     auto has = [&](const std::string &flag) { return std::find(args.begin(), args.end(), flag) != args.end(); };
     if (st.ctx->config.local_only &&
         (args[0] == "mcp" || args[0] == "skill" || (args[0] == "model" && args.size() > 1 && args[1] != "ls" && args[1] != "info") ||
          (args[0] == "engine" && args.size() > 1 && (args[1] == "pull" || args[1] == "add"))))
         return "local only is on (Settings, The web): commands that download are refused";
+    if (args[0] == "run" && args.size() > 1) args[1] = resolve_graph_arg(*st.ctx, args[1]); // the name of a saved workflow
+    if ((args[0] == "skill" || args[0] == "mcp") && args.size() > 1 && (args[1] == "add" || args[1] == "rm")) {
+        // The user was asked about this agent_run call; the command itself must not wait for a yes on a terminal.
+        if (args[1] == "add" && !has("--yes")) args.push_back("--yes");
+    }
+    if ((args[0] == "mcp" || args[0] == "skill") && !has("--workspace")) args.insert(args.end(), {"--workspace", st.workspace});
+    std::string model_note;
+    if (args[0] == "task" && args.size() > 1) {
+        // A model name that is not installed (a guess) becomes the installed model for the task.
+        for (size_t i = 2; i + 1 < args.size(); ++i) {
+            if (args[i] != "--model" && args[i] != "-m") continue;
+            bool found = true;
+            const std::string chosen = model_for_task(installed_models(catalog_path(*st.ctx)), args[1], args[i + 1], found);
+            if (!found) {
+                failed = true;
+                return "No model for this is installed on this computer (" + capability_for_task(args[1]) +
+                       "). A model can be downloaded first: ask the user which one they want, or look for one on Hugging Face.";
+            }
+            if (chosen != args[i + 1]) {
+                model_note = "(there is no model named '" + args[i + 1] + "'; used the installed model '" + chosen + "')\n";
+                args[i + 1] = chosen;
+            }
+        }
+    }
     if (st.ctx->has_home && !has("--home")) args.insert(args.end(), {"--home", st.ctx->home.root});
     if ((args[0] == "task" || args[0] == "run") && !has("--workspace")) args.insert(args.end(), {"--workspace", st.workspace});
     std::string command = shell_quote(self_executable());
@@ -506,6 +587,11 @@ std::string run_agent_command(ChatState &st, std::vector<std::string> args, bool
         fs::temp_directory_path(tmp_ec) / ("agent-run-" + std::to_string(++run_counter) + "-" +
                                            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".err");
     command += " 2>" + shell_quote(err_file.string());
+#if defined(_WIN32)
+    command += " <NUL"; // the command never reads the chat's terminal: a question it would ask is answered "no"
+#else
+    command += " </dev/null";
+#endif
 #if defined(_WIN32)
     std::FILE *pipe = _popen(command.c_str(), "r");
 #else
@@ -552,7 +638,13 @@ std::string run_agent_command(ChatState &st, std::vector<std::string> args, bool
         }
         at = end == std::string::npos ? output.size() : end;
     }
-    return output.empty() ? std::string(failed ? "the command failed" : "done") : output;
+    if (failed) output = beginner_error(output);
+    if (args[0] == "skill" || args[0] == "mcp") { // new tools and skills are there for the next message; say if a server did not start
+        const std::string report = sync_extensions(st);
+        if (report.find("not started") != std::string::npos) failed = true;
+        if (!report.empty()) output += (output.empty() || output.back() == '\n' ? "" : "\n") + report;
+    }
+    return model_note + (output.empty() ? std::string(failed ? "the command failed" : "done") : output);
 }
 
 Result<std::string> agent_run_cb(std::string_view args, void *user) {
@@ -580,7 +672,9 @@ Result<std::string> agent_run_cb(std::string_view args, void *user) {
 constexpr std::string_view kRememberSchema =
     R"({"type":"object","properties":{"key":{"type":"string","description":"a short name for the note"},"value":{"type":"string","description":"the text to keep"}},"required":["key","value"]})";
 constexpr std::string_view kRecallSchema =
-    R"({"type":"object","properties":{"key":{"type":"string","description":"the name the note was kept under"}},"required":["key"]})";
+    R"({"type":"object","properties":{"key":{"type":"string","description":"the name a note was kept under"},"query":{"type":"string","description":"words to look for in the notes and in the earlier chats of this project"}}})";
+constexpr std::string_view kForgetSchema =
+    R"({"type":"object","properties":{"key":{"type":"string","description":"the exact name of the note"},"text":{"type":"string","description":"words that describe the note when its name is not known"}}})";
 
 Result<std::string> remember_cb(std::string_view args, void *user) {
     auto *st = static_cast<ChatState *>(user);
@@ -591,14 +685,25 @@ Result<std::string> remember_cb(std::string_view args, void *user) {
     if (parser.parse(padded).get(doc) || doc["key"].get(key) || doc["value"].get(value) || key.empty())
         return fail<std::string>(ErrorCode::InvalidConfig, "remember needs a key and a value");
     if (!st->lease) return fail<std::string>(ErrorCode::InvalidConfig, "no model is loaded");
-    if (auto r = store_memory(*st->lease, "note:" + std::string(key), value); !r.ok)
-        return fail<std::string>(r.error.code, r.error.message);
-    // The list of note names: the memory store has no listing, and the pack below needs to find the notes.
-    std::string index;
-    if (auto have = retrieve_memory(*st->lease, "note_index"); have.ok) index = std::move(have.value);
-    const std::string line = "\n" + std::string(key) + "\n";
-    if (("\n" + index).find(line) == std::string::npos) store_memory(*st->lease, "note_index", index + std::string(key) + "\n");
-    return ok("kept note '" + std::string(key) + "'");
+    if (auto r = note_keep(*st->lease, key, value); !r.ok) return fail<std::string>(r.error.code, r.error.message);
+    return ok("kept note '" + std::string(key) + "'. Confirm in one short sentence; do nothing else unless asked.");
+}
+
+Result<std::string> forget_cb(std::string_view args, void *user) {
+    auto *st = static_cast<ChatState *>(user);
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded(args);
+    simdjson::dom::element doc;
+    std::string_view key, text;
+    if (parser.parse(padded).get(doc)) return fail<std::string>(ErrorCode::InvalidConfig, "forget needs a key or a text");
+    if (doc["key"].get(key)) key = {};
+    if (doc["text"].get(text)) text = {};
+    if (key.empty() && text.empty()) return fail<std::string>(ErrorCode::InvalidConfig, "forget needs a key or a text");
+    if (!st->lease) return fail<std::string>(ErrorCode::InvalidConfig, "no model is loaded");
+    bool removed = false;
+    const std::string answer = note_forget(*st->lease, key, text, removed);
+    if (!removed) return fail<std::string>(ErrorCode::KeyNotFound, answer);
+    return ok(answer);
 }
 
 Result<std::string> recall_cb(std::string_view args, void *user) {
@@ -606,12 +711,31 @@ Result<std::string> recall_cb(std::string_view args, void *user) {
     simdjson::dom::parser parser;
     simdjson::padded_string padded(args);
     simdjson::dom::element doc;
-    std::string_view key;
-    if (parser.parse(padded).get(doc) || doc["key"].get(key)) return fail<std::string>(ErrorCode::InvalidConfig, "recall needs a key");
+    std::string_view key, query;
+    if (parser.parse(padded).get(doc)) return fail<std::string>(ErrorCode::InvalidConfig, "recall needs a key or a query");
+    if (doc["key"].get(key)) key = {};
+    if (doc["query"].get(query)) query = {};
     if (!st->lease) return fail<std::string>(ErrorCode::InvalidConfig, "no model is loaded");
-    auto r = retrieve_memory(*st->lease, "note:" + std::string(key));
-    if (!r.ok) return ok("no note named '" + std::string(key) + "'");
-    return ok(std::move(r.value));
+    return ok(recall_text(*st->lease, key, query, st->memory.id));
+}
+
+// A reusable workflow: the graph is checked, then kept as <home>/graphs/NAME.json and run later by name.
+constexpr std::string_view kWorkflowSaveSchema =
+    R"({"type":"object","properties":{"name":{"type":"string","description":"a short name: letters, digits, - and _, for example daily-report"},"graph":{"type":"object","description":"the graph, see the tool description"}},"required":["name","graph"]})";
+
+Result<std::string> workflow_save_cb(std::string_view args, void *user) {
+    auto *st = static_cast<ChatState *>(user);
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded(args);
+    simdjson::dom::element doc, graph;
+    std::string_view name;
+    if (parser.parse(padded).get(doc) || doc["name"].get(name) || doc["graph"].get(graph))
+        return fail<std::string>(ErrorCode::InvalidConfig, "workflow_save needs a name and a graph");
+    std::string json;
+    std::string_view as_text;
+    if (graph.is_string() && !graph.get(as_text)) json = std::string(as_text);
+    else json = simdjson::to_string(graph);
+    return workflow_save(*st->ctx, name, json);
 }
 
 // What the agent knows from earlier chats that fits this message: the notes kept with `remember` whose name or text shares words with
@@ -809,7 +933,8 @@ Result<void> open_session(ChatState &st) {
         cfg.tools.push_back(Tool{.name = "remember",
                                  .description =
                                      "Keep a lasting fact about the user or the project (a preference, a name, a correction) under a "
-                                     "short name. Notes that match a later message are shown to the agent automatically.",
+                                     "short name. Notes that match a later message are shown to the agent automatically. Afterwards "
+                                     "answer with one short sentence and do nothing else unless asked.",
                                  .parameter_schema = kRememberSchema,
                                  .callback = remember_cb,
                                  .user_data = &st});
@@ -825,10 +950,33 @@ Result<void> open_session(ChatState &st) {
                                  .parameter_schema = kTodoSchema,
                                  .callback = todo_cb});
         cfg.tools.push_back(Tool{.name = "recall",
-                                 .description = "Read back a note kept with remember.",
+                                 .description = "Read back a note kept with remember, or search the notes and the saved earlier chats of "
+                                                "this project for words (what did we talk about before). It reports how many chats it "
+                                                "searched.",
                                  .parameter_schema = kRecallSchema,
                                  .callback = recall_cb,
                                  .user_data = &st});
+        cfg.tools.push_back(Tool{.name = "forget",
+                                 .description = "Delete a note kept with remember, by its exact name or by words from it. It says what was "
+                                                "removed; if it removed nothing, say so.",
+                                 .parameter_schema = kForgetSchema,
+                                 .callback = forget_cb,
+                                 .user_data = &st});
+        cfg.tools.push_back(
+            Tool{.name = "workflow_save",
+                 .description =
+                     "Keep a described process as a named workflow that can be run later in any chat with agent_run [\"run\",\"NAME\"]. "
+                     "graph is a JSON object: {\"description\":\"...\",\"entry\":\"first\",\"nodes\":[...],\"edges\":[...]}. Node kinds: "
+                     "{\"name\",\"kind\":\"agent\",\"prompt\",\"input_key\",\"output_key\",\"allowed_tools\":[...],\"interrupt_before_"
+                     "tools\":bool}, "
+                     "{\"kind\":\"tool\",\"tool\",\"args\"}, {\"kind\":\"parallel\",\"branches\":[entry node names]}, "
+                     "{\"kind\":\"loop\",\"body\":entry node name,\"max_iterations\":N,\"until\":{\"key\",\"equals\"}}, "
+                     "{\"kind\":\"sequential\",\"steps\":[entry node names]}, {\"kind\":\"wait\",\"seconds\":N}. Edges: "
+                     "{\"from\",\"to\"} (to may be \"__end__\") or {\"from\",\"route\":{\"key\",\"cases\":{value:node},\"default\"}}; a "
+                     "node has at most one outgoing edge. The graph is checked; the result lists what is wrong.",
+                 .parameter_schema = kWorkflowSaveSchema,
+                 .callback = workflow_save_cb,
+                 .user_data = &st});
     }
     cfg.secret_resolver = cli_resolve_secrets;
     cfg.secret_user_data = st.secrets.get();
@@ -961,6 +1109,7 @@ void run_one_turn(ChatState &st, const std::string &text, std::span<const Media>
     const auto turn_started = std::chrono::steady_clock::now();
     st.streamed_bytes = 0;
     clear_cancel(*st.lease);
+    sync_extensions(st); // servers and skills added since the last message
     g_generating.store(true);
     auto r = media.empty() ? run_turn(*st.lease, st.memory, text, true, on_token, &st)
                            : run_turn_with_media(*st.lease, st.memory, text, media, true, on_token, &st);
@@ -1914,6 +2063,74 @@ std::string join_names(const std::vector<std::string> &names, const char *none) 
     return out.empty() ? std::string(none) : out;
 }
 
+// The results of the last search in Settings > Skills / MCP servers; they are rows until the next search.
+struct BrowseResults {
+    std::vector<SkillHit> skills;
+    std::vector<McpHit> mcp;
+} g_browse;
+
+// Settings keys of the skills and MCP categories. nullopt: not one of them. The text returned is shown under the list.
+std::optional<std::string> browse_setting(ChatState &st, const std::string &key, const std::string &value) {
+    auto text = [](const Result<std::string> &r) { return r.ok ? r.value : r.error.message; };
+    const bool local = st.ctx->config.local_only;
+    const auto http = agent::hub::http_options_from_env();
+    auto after = [&](std::string message) {
+        sync_extensions(st);
+        return message;
+    };
+    if (key.rfind("skill.on.", 0) == 0) return after(text(skill_set_enabled(*st.ctx, st.workspace, key.substr(9), value == "on")));
+    if (key.rfind("mcp.on.", 0) == 0) return after(text(mcp_set_enabled(*st.ctx, st.workspace, key.substr(7), value == "on")));
+    if (key == "skill_remove") return value.empty() ? std::string() : after(text(skill_remove_named(*st.ctx, st.workspace, value)));
+    if (key == "mcp_remove") return value.empty() ? std::string() : after(text(mcp_remove_named(*st.ctx, st.workspace, value)));
+    const bool wants_network = key.rfind("skill.add.", 0) == 0 || key == "skill_id" || key == "skill_search" || key == "mcp_search" ||
+                               key.rfind("mcp.reg.", 0) == 0 || key == "mcp_custom" || key.rfind("mcp.add.", 0) == 0;
+    if (!wants_network) return std::nullopt;
+    if (local) return std::string("Local only is on (Settings, The web): nothing is downloaded or connected");
+    if (key.rfind("skill.add.", 0) == 0 || key == "skill_id") {
+        const std::string id = key == "skill_id" ? value : key.substr(10);
+        if (value == "not installed" || id.empty()) return std::string();
+        return after(text(skill_install_id(*st.ctx, st.workspace, id)));
+    }
+    if (key == "skill_search") {
+        if (value.empty()) return std::string();
+        auto body = agent::hub::http_get_text(skill_search_url(value), http);
+        if (!body.ok) return "The search failed: " + body.error.message;
+        auto hits = parse_skill_search(body.value);
+        if (!hits.ok) return hits.error.message;
+        g_browse.skills = std::move(hits.value);
+        if (g_browse.skills.size() > 12) g_browse.skills.resize(12);
+        return g_browse.skills.empty() ? "Nothing found for '" + value + "'"
+                                       : std::to_string(g_browse.skills.size()) + " results are listed below";
+    }
+    if (key == "mcp_search") {
+        if (value.empty()) return std::string();
+        auto body = agent::hub::http_get_text(mcp_search_url(value, 12), http);
+        if (!body.ok) return "The search failed: " + body.error.message;
+        auto hits = parse_mcp_search(body.value);
+        if (!hits.ok) return hits.error.message;
+        g_browse.mcp.clear();
+        for (McpHit &h : hits.value)
+            if (mcp_entry_for(h).ok) g_browse.mcp.push_back(std::move(h));
+        return g_browse.mcp.empty() ? "Nothing that can start here was found for '" + value + "'"
+                                    : std::to_string(g_browse.mcp.size()) + " results are listed below";
+    }
+    if (key.rfind("mcp.reg.", 0) == 0) {
+        const size_t at = static_cast<size_t>(std::atoi(key.c_str() + 8));
+        if (value == "not added" || at >= g_browse.mcp.size()) return std::string();
+        auto entry = mcp_entry_for(g_browse.mcp[at]);
+        if (!entry.ok) return entry.error.message;
+        return after(text(mcp_add_entry_json(*st.ctx, st.workspace, entry.value.server_name, entry.value.json)));
+    }
+    if (key == "mcp_custom") {
+        if (value.empty()) return std::string();
+        auto spec = parse_mcp_spec(value);
+        if (!spec.ok) return spec.error.message;
+        return after(text(mcp_add_spec(*st.ctx, st.workspace, spec.value)));
+    }
+    if (value == "not added") return std::string();
+    return after(text(mcp_add_curated(*st.ctx, st.workspace, key.substr(8))));
+}
+
 // Every setting of the chat, by category. The first group is the category in the sidebar, the second a heading inside it.
 std::vector<TuiSetting> tui_settings(ChatState &st) {
     std::vector<TuiSetting> s;
@@ -1936,16 +2153,10 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
     auto catalog = agent::hub::list_models(catalog_path(*st.ctx));
     if (catalog.ok)
         for (const auto &m : catalog.value) models.push_back(m.name);
-    // Embedding, reranking and speech models cannot chat; they stay out of the list the Model row cycles through.
+    // Every model that can hold a conversation (local, vision, remote api); speech, image and embedding models stay out.
     std::vector<std::string> switchable;
-    for (const std::string &m : models) {
-        std::string low = m;
-        for (char &ch : low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-        bool other = false;
-        for (const char *w : {"embed", "bge-", "minilm", "rerank", "e5-", "gte-", "whisper", "tts", "mmproj", "vae", "parakeet"})
-            if (low.find(w) != std::string::npos) other = true;
-        if (!other) switchable.push_back(m);
-    }
+    for (const InstalledModel &m : installed_models(catalog_path(*st.ctx)))
+        if (can_chat(m)) switchable.push_back(m.name);
     if (std::find(switchable.begin(), switchable.end(), st.model.name) == switchable.end()) switchable.push_back(st.model.name);
     char temperature[16];
     std::snprintf(temperature, sizeof(temperature), "%g", static_cast<double>(c.temperature));
@@ -2021,7 +2232,7 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
         "A search service with {q} in it, for example http://localhost:8080/search?format=json&q={q}. Empty: no web_search tool. Reloads "
         "the model");
 
-    cat("Tools and MCP");
+    cat("Tooling");
     head("JavaScript and Python tooling");
     add("js_runtime", "JavaScript tooling", c.js_runtime, "For MCP servers and skills. Install it with: agent runtime use <name>",
         {"bun", "node", "nub"});
@@ -2030,18 +2241,64 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
             const std::string path = runtime_binary_path(st.ctx->home, name);
             info(name, path.empty() ? "not installed" : "installed", path.empty() ? std::string("agent runtime install ") + name : path);
         }
-    head("MCP servers");
+
+    cat("Skills");
     {
-        std::vector<std::string> warnings, names;
-        for (const McpServerConfig &m : collect_mcp_servers(*st.ctx, warnings)) names.push_back(m.name);
-        info("Configured", join_names(names, "none"), "agent mcp add NAME adds one; they run in the sandbox");
+        const auto installed = list_skills(*st.ctx, st.workspace);
+        head("Installed (Left and Right switch one on or off)");
+        for (const SkillInstalled &k : installed)
+            add("skill.on." + k.name, k.name, k.enabled ? "on" : "off",
+                (k.description.empty() ? std::string() : k.description + "  ") + "(" + k.where + ")", {"on", "off"});
+        if (installed.empty()) info("None yet", "", "Pick one below, or ask the agent: find a skill for commit messages and add it");
+        head("Remove");
+        add("skill_remove", "Remove a skill", "", "Press Enter and type the name of an installed skill");
+        head("Well-known skills (Right installs)");
+        for (const CuratedSkill &c : curated_skills()) {
+            const std::string id(c.id), leaf = id.substr(id.rfind('/') + 1);
+            const bool have = std::any_of(installed.begin(), installed.end(), [&](const SkillInstalled &k) { return k.name == leaf; });
+            if (have) info(leaf, "installed", std::string(c.description));
+            else add("skill.add." + id, leaf, "not installed", std::string(c.description) + "  (" + id + ")", {"not installed", "install"});
+        }
+        head("Find more");
+        add("skill_search", "Search skills.sh", "", "Press Enter and type words, for example: commit messages. The results appear below");
+        add("skill_id", "Add by name", "", "Press Enter and type owner/repo/skill, for example anthropics/skills/pdf");
+        if (!g_browse.skills.empty()) {
+            head("Search results (Right installs)");
+            for (const SkillHit &h : g_browse.skills)
+                add("skill.add." + h.id, h.skill_id, "not installed", h.id + "  " + std::to_string(h.installs) + " installs",
+                    {"not installed", "install"});
+        }
     }
-    head("Skills");
+
+    cat("MCP servers");
     {
-        const size_t global = st.ctx->has_home ? count_folders(st.ctx->home.skills) : 0;
-        const size_t project = count_folders((fs::path(st.workspace) / ".agents" / "skills").string());
-        info("Installed", std::to_string(global) + " for every project, " + std::to_string(project) + " in this one",
-             "agent skill add owner/repo/skill");
+        const auto installed = list_mcp(*st.ctx, st.workspace);
+        head("Installed (Left and Right switch one on or off)");
+        for (const McpInstalled &m : installed) {
+            if (m.removable) add("mcp.on." + m.name, m.name, m.enabled ? "on" : "off", m.detail + "  (" + m.where + ")", {"on", "off"});
+            else info(m.name, "on", m.detail + "  (" + m.where + ": edit that file to change it)");
+        }
+        if (installed.empty()) info("None yet", "", "Pick one below, or ask the agent: connect an MCP server that reads files");
+        head("Remove");
+        add("mcp_remove", "Remove a server", "", "Press Enter and type the name of a server added here");
+        head("Well-known servers (Right adds)");
+        for (const CuratedMcp &c : curated_mcp()) {
+            const bool have = std::any_of(installed.begin(), installed.end(), [&](const McpInstalled &m) { return m.name == c.id; });
+            if (have) info(std::string(c.id), "added", std::string(c.description));
+            else add("mcp.add." + std::string(c.id), std::string(c.id), "not added", std::string(c.description), {"not added", "add"});
+        }
+        head("Add your own");
+        add("mcp_custom", "Package, command or address", "",
+            "Press Enter and type, for example: @modelcontextprotocol/server-filesystem   or   uvx mcp-server-time   or   "
+            "https://example.com/mcp");
+        add("mcp_search", "Search the official registry", "", "Press Enter and type words, for example: sqlite. The results appear below");
+        if (!g_browse.mcp.empty()) {
+            head("Search results (Right adds)");
+            for (size_t k = 0; k < g_browse.mcp.size(); ++k) {
+                const McpHit &h = g_browse.mcp[k];
+                add("mcp.reg." + std::to_string(k), h.name, "not added", h.description.substr(0, 110), {"not added", "add"});
+            }
+        }
     }
 
     cat("Engines and GPU");
@@ -2102,6 +2359,7 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
 }
 
 std::string tui_set_setting(ChatState &st, const std::string &key, const std::string &value) {
+    if (auto handled = browse_setting(st, key, value)) return *handled;
     CliConfig &c = st.ctx->config;
     auto persist = [&]() -> std::string {
         if (auto r = save_config(st.ctx->config_path, c); !r.ok) return "could not save config.json: " + r.error.message;

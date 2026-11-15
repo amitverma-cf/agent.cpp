@@ -131,7 +131,18 @@ void add_file(const std::string &path, const std::string &data_root, const Conte
         if (ctx.has_home) { // npx / uvx run on the private bun / uv when they are installed
             const LauncherRewrite launcher =
                 rewrite_launcher(s, ctx.home, ctx.config.js_runtime); // caches stay in the server's own folder (its working directory)
-            if (!launcher.note.empty()) warnings.push_back(launcher.note);
+            if (!launcher.note.empty()) {
+                warnings.push_back(launcher.note);
+                // The system npx / uvx writes its package cache under HOME, which the sandbox does not allow: keep it in the data folder.
+                if (s.sandbox.enabled) {
+                    const std::string cache_dir = (fs::path(data_dir) / "cache").string();
+                    s.env.emplace("npm_config_cache", cache_dir);
+                    s.env.emplace("UV_CACHE_DIR", cache_dir);
+                    s.env.emplace("XDG_CACHE_HOME", cache_dir);
+                    s.env.emplace("BUN_INSTALL_CACHE_DIR", cache_dir);
+                    fs::create_directories(cache_dir, ec);
+                }
+            }
         }
         // A project entry replaces a global one with the same name.
         out.erase(std::remove_if(out.begin(), out.end(), [&](const McpServerConfig &e) { return e.name == s.name; }), out.end());

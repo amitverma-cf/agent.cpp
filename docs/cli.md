@@ -132,8 +132,9 @@ agent's: they are not sandboxed and do not ask.
 
 ### Modes, thinking, permissions
 
-- `/mode plan` lets the agent only read (no file changes, no commands); `/mode auto` never asks; `/mode ask` (default) asks before changes. The
-  status line shows the mode when it is not `ask`.
+- `/mode plan` lets the agent only read (no file changes, no commands); `/mode auto` never asks; `/mode ask` (default) asks before `run_command`, `delete_path`, `move_path`,
+  `agent_run`, `web_fetch` and `web_search`. `write_file` and `append_file` do **not** ask: they are shown in the transcript and put back with `/undo` (`/diff`
+  lists them), and `/mode plan` refuses them. The status line shows the mode when it is not `ask`.
 - `/thinking [on|off]` shows or hides the `<think>...</think>` blocks of reasoning models (hidden by default).
 - Answering `a` to a permission question allows that tool for good **in this project**: it is kept in `<workspace>/.agents/permissions.json`.
   `/permissions` lists them and `/permissions clear` forgets them. The question shows the call's arguments, one per line.
@@ -151,7 +152,7 @@ outside the conversation:
 
 | Tool | What it does |
 |---|---|
-| `agent_run` | runs `agent task`, `agent run`, `agent model`, `agent engine`, `agent skill`, `agent mcp`, `agent doctor`, `agent schedule` or `agent wake`: images, video, 3D meshes, speech, transcripts, embeddings, ONNX models, graphs, downloads. Generated files are listed by `/open` |
+| `agent_run` | runs `agent task`, `agent run`, `agent model`, `agent engine`, `agent skill`, `agent mcp`, `agent workflow`, `agent runtime`, `agent doctor`, `agent schedule` or `agent wake`: images, video, 3D meshes, speech, transcripts, embeddings, ONNX models, graphs, downloads. Generated files are listed by `/open` |
 | `settings` | reads and changes the chat's safe settings when you ask in plain words ("make it faster", "more creative", "longer answers"): temperature, longest answer, context window, KV cache, speculative decoding, draft model, MTP and mode. It asks first, applies the change when the answer is finished and says what changed; the model reloads for most of them. Local only, the web address and the other privacy switches are never changed by the agent |
 | `remember`, `recall` | lasting notes about the user or the project. Notes that share words with a new message are put in front of it automatically |
 | `todo` | a checklist for a request with several steps, rewritten as the work moves on |
@@ -352,8 +353,26 @@ agent skill ls
 agent skill rm pdf
 ```
 
-A skill is text the model follows, with optional helper files. `add` shows the source, the file count, size and any scripts, and asks
+```sh
+agent skill browse                  # a built-in list of well-known skills with one line each
+agent skill on|off NAME             # switch an installed skill on or off (SKILL.md is renamed SKILL.md.off)
+```
+
+A skill is text the model follows, with optional helper files. Installed skills are offered to the agent in the chat from the next message. `add` shows the source, the file count, size and any scripts, and asks
 before downloading (at most 200 files and 20 MiB). Scripts only run through `run_command` in the sandbox, after approval.
+
+## agent workflow
+
+```sh
+agent workflow save daily-report graph.json   # check the graph and keep it as <home>/graphs/daily-report.json
+agent workflow ls | show NAME | rm NAME
+agent run daily-report                        # a bare name runs the saved workflow, from any folder
+```
+
+In the chat the agent saves a workflow it was asked for with the `workflow_save` tool and runs it with `agent_run ["run","NAME"]`; the names of
+the saved workflows are in its system prompt. A run that ends `status: interrupted` is waiting (a wait node, a request for input, or an agent
+node with `interrupt_before_tools` that reached a tool call the policy rates "ask": `run_command`, `delete_path`, `move_path`). The agent shows
+the question with `ask_user` and continues with `agent run NAME --resume THREAD --input ANSWER`; `approve` lets the pending tool calls run.
 
 ## agent mcp
 
@@ -363,6 +382,19 @@ agent mcp add io.example/files [--project] [--yes]
 agent mcp ls
 agent mcp rm files
 ```
+
+```sh
+agent mcp browse                              # well-known servers: filesystem, memory, fetch, git, time, playwright, github, ...
+agent mcp add filesystem [--folder DIR]       # a server from that list
+agent mcp add NAME --run "npx -y PACKAGE"     # any package or command (also uvx ...), or: --url https://host/mcp
+agent mcp on|off NAME                         # a server added with `add` is switched with its file (NAME.json.disabled)
+```
+
+In the chat, Settings > Skills and Settings > MCP servers do the same from the keyboard (installed items with on/off, a well-known list, search,
+adding by name, package or address), and so does the agent when asked in plain words (`agent_run`). Servers and skills added in a chat are
+loaded before the next message; a server that cannot start is reported in the result of the command. A project's `.agents/mcp.json` is read
+for the chat's workspace even when `.agents/` was created after the program started. Without the private bun / uv runtime
+(`agent runtime install bun`), `npx` / `uvx` of the system keep their package cache in the server's own data folder.
 
 ```sh
 agent mcp serve [--workspace DIR] [--read-only]     # the agent's tools as an MCP server on stdin/stdout, for an editor or another agent

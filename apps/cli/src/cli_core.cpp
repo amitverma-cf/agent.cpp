@@ -57,10 +57,14 @@ constexpr SubSpec kEngineSubs[] = {{"ls", 0, 0}, {"add", 1, 1}, {"rm", 1, 1}, {"
 constexpr std::string_view kEngineValue[] = {"tag", "repo"};
 
 constexpr SubSpec kSecretSubs[] = {{"set", 1, 1}, {"ls", 0, 0}, {"rm", 1, 1}, {"bind", 2, 2}, {"unbind", 2, 2}};
-constexpr SubSpec kMcpSubs[] = {{"ls", 0, 0}, {"search", 1, 1}, {"add", 1, 1}, {"rm", 1, 1}, {"serve", 0, 0}};
-constexpr std::string_view kMcpValue[] = {"workspace"};
+constexpr SubSpec kMcpSubs[] = {{"ls", 0, 0},    {"search", 1, 1}, {"add", 1, 1}, {"rm", 1, 1},
+                                {"serve", 0, 0}, {"browse", 0, 0}, {"on", 1, 1},  {"off", 1, 1}};
+constexpr std::string_view kMcpValue[] = {"workspace", "run", "url", "folder"};
 constexpr std::string_view kMcpBool[] = {"project", "yes", "read-only"};
-constexpr SubSpec kSkillSubs[] = {{"ls", 0, 0}, {"search", 1, 1}, {"add", 1, 1}, {"rm", 1, 1}};
+constexpr SubSpec kWorkflowSubs[] = {{"ls", 0, 0}, {"save", 2, 2}, {"show", 1, 1}, {"rm", 1, 1}};
+constexpr SubSpec kSkillSubs[] = {{"ls", 0, 0},     {"search", 1, 1}, {"add", 1, 1}, {"rm", 1, 1},
+                                  {"browse", 0, 0}, {"on", 1, 1},     {"off", 1, 1}};
+constexpr std::string_view kSkillValue[] = {"workspace"};
 constexpr std::string_view kSkillBool[] = {"project", "yes"};
 constexpr SubSpec kSandboxSubs[] = {{"ls", 0, 0}, {"grant", 1, 1}, {"revoke", 1, 1}};
 constexpr std::string_view kSandboxValue[] = {"for"};
@@ -105,7 +109,8 @@ constexpr CommandSpec kCommands[] = {
     {"secret", kSecretSubs, 0, 0, kSecretValue, kSecretBool},
     {"doctor", {}, 0, 0, {}, {}},
     {"mcp", kMcpSubs, 0, 0, kMcpValue, kMcpBool},
-    {"skill", kSkillSubs, 0, 0, {}, kSkillBool},
+    {"workflow", kWorkflowSubs, 0, 0, {}, {}},
+    {"skill", kSkillSubs, 0, 0, kSkillValue, kSkillBool},
     {"sandbox", kSandboxSubs, 0, 0, kSandboxValue, kSandboxBool},
     {"schedule", kScheduleSubs, 0, 0, kScheduleValue, kScheduleBool},
     {"wake", {}, 0, 0, kWakeValue, kWakeBool},
@@ -305,9 +310,13 @@ std::string usage_all() {
            "        [--download-engines] [--install-runtimes]\n"
            "  runtime ls|use|install|path|rm   the private JavaScript and Python runtimes (bun, node, pnpm, nub, uv) kept in the home\n"
            "        runtime use bun|node|nub   choose the JavaScript tooling; runtime install NAME|js   download one\n"
-           "  skill search|add|ls|rm     skills from skills.sh (add owner/repo/skill [--yes] [--project]); a skill is text the model "
+           "  skill browse|search|add|ls|rm|on|off   skills: a built-in list or skills.sh (add owner/repo/skill [--yes]); a skill is text "
+           "the model "
            "follows\n"
-           "  mcp search|add|ls|rm       MCP servers from the official registry (add NAME [--yes] [--project]); they run in the sandbox\n"
+           "  mcp browse|search|add|ls|rm|on|off   MCP servers: a built-in list, the official registry or your own (add NAME [--run \"npx "
+           "-y "
+           "PKG\"|--url URL] [--yes]); they run in the sandbox\n"
+           "  workflow ls|save|show|rm   graphs saved by name under the home (graphs/NAME.json); run one with: agent run NAME\n"
            "  wake [--dry-run]           resume the graph runs paused at a wait node whose time has come (start it with agent schedule)\n"
            "  schedule ls|add|rm         run an agent command on a schedule with cron / Task Scheduler: add NAME (--every 15m|--daily "
            "09:00|--cron EXPR) -- run graph.json --yes\n"
@@ -376,6 +385,7 @@ constexpr CommandBlurb kOverview[] = {
     {"voice", "talk to the agent with a microphone and speakers"},
     {"engine", "list, add, download and remove engine plugins"},
     {"skill", "search and install skills"},
+    {"workflow", "agent graphs saved by name: ls, save, show, rm (run one with agent run NAME)"},
     {"mcp", "search and install MCP servers"},
     {"sandbox", "folders that tools may use outside the workspace"},
     {"secret", "API keys in the OS credential store"},

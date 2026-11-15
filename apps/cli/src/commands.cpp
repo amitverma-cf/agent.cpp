@@ -8,6 +8,7 @@
 #include "runtimes.hpp"
 #include "status_view.hpp"
 #include "waiting.hpp"
+#include "workflows.hpp"
 
 #include <agent-cpp/engine_abi.h>
 #include <agent-cpp/hub.hpp>
@@ -413,6 +414,15 @@ bool place_model(const std::string &models_dir, const std::string &catalog, agen
     fs::create_directories(target.parent_path(), ec);
     fs::rename(current, target, ec);
     if (ec) return false;
+    // Voice presets and config files stay next to the model, where the engine looks for them.
+    const fs::path old_dir = current.parent_path();
+    const fs::path model_dir_in_repo = fs::path(entry.file).parent_path();
+    for (const std::string &companion : entry.companions) {
+        const fs::path below = fs::path(companion).lexically_relative(model_dir_in_repo);
+        if (below.empty() || *below.begin() == "..") continue;
+        fs::create_directories((target.parent_path() / below).parent_path(), ec);
+        fs::rename(old_dir / below, target.parent_path() / below, ec);
+    }
     entry.path = target.string();
     if (!entry.mmproj.empty()) {
         const fs::path old_projector = fs::weakly_canonical(fs::path(entry.mmproj), ec);
@@ -701,7 +711,7 @@ const char *status_name(GraphRunStatus s) {
 
 // agent run graph.json [--set key=value ...] [--thread ID] [--resume ID [--input TEXT]]
 int cmd_run(const CommandLine &cl, Context &ctx) {
-    const std::string &graph_path = cl.positionals[0];
+    const std::string graph_path = resolve_graph_arg(ctx, cl.positionals[0]); // a file, or the name of a saved workflow
     g_run_yes = cl.has("yes");
 
     // Engine/model hints come from the file; flags override them.

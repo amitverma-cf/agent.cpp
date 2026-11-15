@@ -80,13 +80,14 @@ PathGateDecision cli_path_gate(const PathAccessRequest &request, void *context);
 // Sets the hooks every CLI session shares: MCP servers started by npx / npm / node / uvx run on the private runtimes of the
 // chosen js_runtime (Config::mcp_launcher). `ctx` must outlive the session.
 void install_cli_hooks(Config &cfg, Context &ctx);
-int cmd_skill(const CommandLine &cl, Context &ctx);  // skill_cmd.cpp
-int cmd_update(const CommandLine &cl, Context &ctx); // script_cmd.cpp: runs scripts/install.sh|ps1
-int mcp_serve(const CommandLine &cl, Context &ctx);  // mcp_serve.cpp
-int cmd_doctor(const CommandLine &cl, Context &ctx); // doctor_cmd.cpp
-int cmd_clean(const CommandLine &cl, Context &ctx);  // doctor_cmd.cpp
-int cmd_init(const CommandLine &cl, Context &ctx);   // creates .agents/ in a project
-int cmd_task(const CommandLine &cl, Context &ctx);   // task.cpp
-int cmd_voice(const CommandLine &cl, Context &ctx);  // voice.cpp
+int cmd_skill(const CommandLine &cl, Context &ctx);    // skill_cmd.cpp
+int cmd_workflow(const CommandLine &cl, Context &ctx); // workflow_cmd.cpp
+int cmd_update(const CommandLine &cl, Context &ctx);   // script_cmd.cpp: runs scripts/install.sh|ps1
+int mcp_serve(const CommandLine &cl, Context &ctx);    // mcp_serve.cpp
+int cmd_doctor(const CommandLine &cl, Context &ctx);   // doctor_cmd.cpp
+int cmd_clean(const CommandLine &cl, Context &ctx);    // doctor_cmd.cpp
+int cmd_init(const CommandLine &cl, Context &ctx);     // creates .agents/ in a project
+int cmd_task(const CommandLine &cl, Context &ctx);     // task.cpp
+int cmd_voice(const CommandLine &cl, Context &ctx);    // voice.cpp
 
 } // namespace agent::cli

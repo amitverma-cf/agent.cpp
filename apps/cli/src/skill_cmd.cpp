@@ -1,5 +1,6 @@
 // agent skill: search skills.sh, install a skill's files from its GitHub repository, list and remove them.
 
+#include "catalog_browse.hpp"
 #include "commands.hpp"
 #include "doctor.hpp"
 #include "registries.hpp"
@@ -25,13 +26,15 @@ void list_dir(const char *label, const std::string &dir) {
     if (dir.empty() || !fs::is_directory(dir, ec)) return;
     std::vector<std::string> names;
     for (const auto &e : fs::directory_iterator(dir, ec))
-        if (e.is_directory(ec) && !e.path().filename().string().starts_with(".") && fs::exists(e.path() / "SKILL.md", ec))
+        if (e.is_directory(ec) && !e.path().filename().string().starts_with(".") &&
+            (fs::exists(e.path() / "SKILL.md", ec) || fs::exists(e.path() / "SKILL.md.off", ec)))
             names.push_back(e.path().filename().string());
     std::sort(names.begin(), names.end());
     if (names.empty()) return;
     std::printf("%s (%s)\n", label, dir.c_str());
     for (const std::string &n : names)
-        std::printf("  %s%s\n", n.c_str(), fs::exists(fs::path(dir) / n / ".source.json", ec) ? "   (from skills.sh)" : "");
+        std::printf("  %s%s%s\n", n.c_str(), fs::exists(fs::path(dir) / n / ".source.json", ec) ? "   (from skills.sh)" : "",
+                    fs::exists(fs::path(dir) / n / "SKILL.md.off", ec) ? "   (switched off)" : "");
 }
 
 } // namespace
@@ -41,6 +44,20 @@ int cmd_skill(const CommandLine &cl, Context &ctx) {
     if (sub == "ls" || sub.empty()) {
         list_dir("global", ctx.has_home ? ctx.home.skills : std::string());
         list_dir("this project", ctx.project_root.empty() ? std::string() : (fs::path(ctx.project_root) / ".agents" / "skills").string());
+        return 0;
+    }
+    const std::string workspace = workspace_dir(ctx, cl.get("workspace"));
+    if (sub == "browse") {
+        std::printf("Well-known skills (add one with: agent skill add ID):\n");
+        for (const CuratedSkill &s : curated_skills())
+            std::printf("  %-48s %.*s\n", std::string(s.id).c_str(), static_cast<int>(s.description.size()), s.description.data());
+        std::printf("\nMore skills: agent skill search WORDS\n");
+        return 0;
+    }
+    if (sub == "on" || sub == "off") {
+        auto done = skill_set_enabled(ctx, workspace, cl.positionals[0], sub == "on");
+        if (!done.ok) return report_error(done.error);
+        std::printf("%s\n", done.value.c_str());
         return 0;
     }
     const auto http = agent::hub::http_options_from_env();
@@ -106,7 +123,7 @@ int cmd_skill(const CommandLine &cl, Context &ctx) {
         const std::string dir = skills_dir_for(cl, ctx);
         std::error_code ec;
         const fs::path target = fs::path(dir) / name;
-        if (dir.empty() || !fs::exists(target / "SKILL.md", ec)) {
+        if (dir.empty() || !(fs::exists(target / "SKILL.md", ec) || fs::exists(target / "SKILL.md.off", ec))) {
             std::fprintf(stderr, "agent skill rm: no skill '%s' in %s\n", name.c_str(), dir.c_str());
             return 1;
         }

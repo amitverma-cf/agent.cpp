@@ -1,5 +1,6 @@
 // agent mcp: the MCP servers configured for this home and project.
 
+#include "catalog_browse.hpp"
 #include "commands.hpp"
 #include "mcp_config.hpp"
 #include "registries.hpp"
@@ -47,6 +48,15 @@ int mcp_ls(Context &ctx) {
     return 0;
 }
 
+int mcp_browse() {
+    std::printf("Well-known MCP servers (add one with: agent mcp add NAME):\n");
+    for (const CuratedMcp &c : curated_mcp())
+        std::printf("  %-20s %.*s\n", std::string(c.id).c_str(), static_cast<int>(c.description.size()), c.description.data());
+    std::printf("\nAny other: agent mcp add NAME --run \"npx -y PACKAGE\"   or   agent mcp add NAME --url https://host/mcp\n");
+    std::printf("More servers: agent mcp search WORDS\n");
+    return 0;
+}
+
 int mcp_search(const std::string &query) {
     auto body = agent::hub::http_get_text(mcp_search_url(query, 30), agent::hub::http_options_from_env());
     if (!body.ok) return report_error(body.error);
@@ -67,12 +77,39 @@ int mcp_search(const std::string &query) {
 
 int mcp_add(const CommandLine &cl, Context &ctx) {
     const bool project = cl.has("project");
+    const std::string workspace = workspace_dir(ctx, cl.get("workspace"));
+    const std::string wanted = cl.positionals[0];
+    if (cl.has("run") || cl.has("url")) {
+        auto spec = parse_mcp_spec(cl.has("url") ? cl.get("url") : cl.get("run"), wanted);
+        if (!spec.ok) return report_error(spec.error);
+        std::printf("%s: %s", spec.value.name.c_str(), spec.value.url.empty() ? spec.value.command.c_str() : spec.value.url.c_str());
+        for (const std::string &a : spec.value.args) std::printf(" %s", a.c_str());
+        std::printf("\nIt will run in the sandbox: it writes only in its own data folder.\n");
+        if (!cl.has("yes") && !ask_yes_no("Add it?")) {
+            std::printf("cancelled\n");
+            return 1;
+        }
+        auto done = mcp_add_spec(ctx, workspace, spec.value);
+        if (!done.ok) return report_error(done.error);
+        std::printf("%s\n", done.value.c_str());
+        return 0;
+    }
+    for (const CuratedMcp &c : curated_mcp())
+        if (c.id == wanted) {
+            if (!cl.has("yes") && !ask_yes_no("Add " + wanted + "?")) {
+                std::printf("cancelled\n");
+                return 1;
+            }
+            auto done = mcp_add_curated(ctx, workspace, wanted, cl.get("folder"));
+            if (!done.ok) return report_error(done.error);
+            std::printf("%s\n", done.value.c_str());
+            return 0;
+        }
     if (project ? ctx.project_root.empty() : !ctx.has_home) {
         std::fprintf(stderr, "agent mcp add: %s\n",
                      project ? "this folder has no .agents project (run `agent init`)" : "no home is set (run `agent setup`)");
         return 1;
     }
-    const std::string wanted = cl.positionals[0];
     auto body = agent::hub::http_get_text(mcp_search_url(wanted, 30), agent::hub::http_options_from_env());
     if (!body.ok) return report_error(body.error);
     auto hits = parse_mcp_search(body.value);
@@ -114,26 +151,26 @@ int mcp_add(const CommandLine &cl, Context &ctx) {
     return 0;
 }
 
+int mcp_switch(const CommandLine &cl, Context &ctx, bool on) {
+    auto done = mcp_set_enabled(ctx, workspace_dir(ctx, cl.get("workspace")), cl.positionals[0], on);
+    if (!done.ok) return report_error(done.error);
+    std::printf("%s\n", done.value.c_str());
+    return 0;
+}
+
 int mcp_rm(const CommandLine &cl, Context &ctx) {
-    for (bool project : {false, true}) {
-        if (project ? ctx.project_root.empty() : !ctx.has_home) continue;
-        const std::string path = mcp_dropin_path(ctx, project, cl.positionals[0]);
-        std::error_code ec;
-        if (fs::remove(path, ec)) {
-            std::printf("removed '%s' (%s)\n", cl.positionals[0].c_str(), path.c_str());
-            return 0;
-        }
-    }
-    std::fprintf(stderr,
-                 "agent mcp rm: '%s' was not added with `agent mcp add`. Servers written by hand are removed by editing mcp.json.\n",
-                 cl.positionals[0].c_str());
-    return 1;
+    auto done = mcp_remove_named(ctx, workspace_dir(ctx, cl.get("workspace")), cl.positionals[0]);
+    if (!done.ok) return report_error(done.error);
+    std::printf("%s\n", done.value.c_str());
+    return 0;
 }
 
 } // namespace
 
 int cmd_mcp(const CommandLine &cl, Context &ctx) {
     const std::string &sub = cl.subcommand;
+    if (sub == "browse") return mcp_browse();
+    if (sub == "on" || sub == "off") return mcp_switch(cl, ctx, sub == "on");
     if (sub == "search") return mcp_search(cl.positionals[0]);
     if (sub == "add") return mcp_add(cl, ctx);
     if (sub == "rm") return mcp_rm(cl, ctx);

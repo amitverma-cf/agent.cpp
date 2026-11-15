@@ -114,6 +114,7 @@ int main(int argc, char **argv) {
     if (cl.command == "mcp") return cmd_mcp(cl, ctx);
     if (cl.command == "runtime") return cmd_runtime(cl, ctx);
     if (cl.command == "skill") return cmd_skill(cl, ctx);
+    if (cl.command == "workflow") return cmd_workflow(cl, ctx);
     if (cl.command == "sandbox") return cmd_sandbox(cl, ctx);
     if (cl.command == "schedule") return cmd_schedule(cl, ctx);
     if (cl.command == "wake") return cmd_wake(cl, ctx);

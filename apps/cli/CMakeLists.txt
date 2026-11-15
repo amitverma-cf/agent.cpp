@@ -4,6 +4,10 @@ add_library(agent_cli_core STATIC
     src/cli_core.cpp
     src/edit_journal.cpp
     src/chat_extras.cpp
+    src/chat_models.cpp
+    src/catalog_browse.cpp
+    src/chat_memory.cpp
+    src/workflows.cpp
     src/model_detect.cpp
     src/cli_platform.cpp
     src/home.cpp
@@ -99,6 +103,7 @@ add_executable(agent_cli_bin
     src/mcp_cmd.cpp
     src/runtime_cmd.cpp
     src/skill_cmd.cpp
+    src/workflow_cmd.cpp
     src/sandbox_cmd.cpp
     src/schedule_cmd.cpp
     src/wake_cmd.cpp
