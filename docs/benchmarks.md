@@ -178,3 +178,18 @@ an LLM (Voxtral answers "a fox" about the clip; asked to "transcribe" it refuses
 
 **Not supported:** video input (the llama engine has no video capability; frames can be sent as images), and images or audio into an
 embedding model (embed mode rejects `mmproj`). Julia (a native decision model) is answered through llama.cpp's `/v1/systemone` handler, called in process.
+
+## Speed settings in the chat (4 vCPU shared VM, CPU only, one run per cell, noisy)
+
+Generation tokens/s read from the line under the answer, chat defaults (tools on, about 2400 prompt tokens). "repeat" asks to copy a sentence five times, "open" asks for a 120-word explanation, 160 tokens at most.
+
+| Model | Setting | repeat | open |
+|---|---|---|---|
+| Qwen2.5-0.5B, temperature 0 | off / prompt lookup | 4 (first run, noisy) / 99 | 62 / 48 |
+| Qwen2.5-0.5B, temperature 0.7 | off / prompt lookup | 55 / 82 | 54 / 46 |
+| Qwen3.5-2B, temperature 0.7 | off | 14 | 29 |
+| | prompt lookup | 43 | 14 (1 of 8 drafts kept) |
+| | MTP | 29 (111 of 120 kept) | 10 (27 of 105 kept) |
+| | draft model Qwen3.5-0.8B | 14 (117 of 132 kept) | 8 (45 of 120 kept) |
+
+Prompt lookup now works at temperature 0.7 with tools on (110 of 120 drafted tokens kept on the repeat prompt). Everything helps only when the answer repeats text; on open writing prompt lookup is neutral to slightly negative, and MTP and the draft model were slower than plain decoding on this machine. The Qwen3.5-4B build did not fit on the box's disk, so the 2B MTP build was used.
