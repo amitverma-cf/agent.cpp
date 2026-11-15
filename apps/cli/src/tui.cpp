@@ -1207,6 +1207,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
     // Text set from code (a recalled message, a command chosen in the palette, a value to edit) lands with the cursor at its start;
     // the next key first sends End to the input line, so typing and Backspace work at the end of the new text.
     bool cursor_to_end = false;
+    bool slash_pending = false; // Ctrl+P put a "/" in the input line
     void SetInput(const std::string &s) {
         input = s;
         cursor_to_end = !s.empty();
@@ -1289,6 +1290,14 @@ class ChatApp : public rtxui::Component<ChatApp> {
     }
 
     bool OnEvent(Event e) override {
+        if (slash_pending) {
+            slash_pending = false;
+            const int letter = Letter(e);
+            if (input == "/" && letter >= 32 && letter < 127 && !show_settings && !asking && !confirm_open) {
+                SetInput("/" + std::string(1, static_cast<char>(letter)));
+                return true;
+            }
+        }
         if (cursor_to_end) {
             cursor_to_end = false;
             if (!input.empty() && !e.is<Event::Mouse>()) Component<ChatApp>::OnEvent(Event::End());
@@ -1390,9 +1399,10 @@ class ChatApp : public rtxui::Component<ChatApp> {
             return true;
         }
         if (Is(e, "commands") && !busy) {
-            // The same as typing "/": the input line then has its cursor after it and the palette takes the next letters.
-            SetInput("");
-            return Component<ChatApp>::OnEvent(Event(Event::Keyboard::From('/')));
+            // The slash shows at once; the next letter is added after it (the input line would otherwise replace the shown text).
+            SetInput("/");
+            slash_pending = true;
+            return true;
         }
         if (Is(e, "quit") && !busy) {
             if (g_screen) g_screen->Exit();
