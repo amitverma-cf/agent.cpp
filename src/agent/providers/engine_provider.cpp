@@ -400,7 +400,10 @@ Result<InferResponse> to_infer_response(const agent_response &resp, Arena &arena
                                                 .kv_bytes = stats.kv_bytes,
                                                 .prefill_ms = stats.prefill_ms,
                                                 .decode_ms = stats.decode_ms,
-                                                .retries = stats.retries},
+                                                .retries = stats.retries,
+                                                .spec_kind = stats.spec_kind,
+                                                .spec_drafted = stats.spec_drafted,
+                                                .spec_accepted = stats.spec_accepted},
                             .output_tensors = tensors});
 }
 

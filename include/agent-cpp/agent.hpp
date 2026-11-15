@@ -150,6 +150,9 @@ struct TokenUsage {
     float prefill_ms = 0;  // time decoding the prompt
     float decode_ms = 0;   // time generating
     int retries = 0;       // extra attempts a remote engine made for this request
+    int spec_kind = 0;     // AGENT_SPEC_*: speculative decoding that ran (0 = none)
+    int spec_drafted = 0;  // draft tokens proposed for this reply
+    int spec_accepted = 0; // of those, the ones the model agreed with
 };
 
 enum class DType { Float32, Float16, Int8, Int32, Int64, UInt8 };

@@ -27,9 +27,11 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <exception>
 #include <filesystem>
@@ -57,6 +59,13 @@ llama_token sample_token(common_sampler *sampler, llama_context *ctx, int32_t id
     const llama_token token = common_sampler_sample(sampler, ctx, idx);
     common_sampler_accept(sampler, token, true);
     return token;
+}
+
+// Copies the measurements into the response, as far as the host's agent_response reaches (an older host has a shorter struct).
+void put_stats(agent_response *resp, const agent_run_stats &s) {
+    if (!AGENT_HAS_FIELD(resp, agent_response, stats)) return;
+    const size_t room = static_cast<size_t>(resp->struct_size) - offsetof(agent_response, stats);
+    std::memcpy(&resp->stats, &s, std::min(room, sizeof(s)));
 }
 
 // The tokens that followed the most recent earlier occurrence of the last `n` tokens of `history`, at most `max_draft`.
@@ -587,7 +596,9 @@ struct CallOutput {
 enum class Mode { Generate, Embed, Rerank, Tools };
 
 struct Instance {
-    std::unique_ptr<upstream::Engine> up; // llama.cpp's own engine, for models whose GGUF has an MTP head
+    std::unique_ptr<upstream::Engine> up; // llama.cpp's own engine, for models whose GGUF has an MTP head, or with a draft model
+    int up_spec_kind = 0;                 // agent_spec_kind of the drafting `up` does (MTP head or draft model)
+    int up_context = 0;                   // the context window `up` was created with
     Batcher batcher;
     Mode mode = Mode::Generate;
     std::mutex pool_mu;     // serializes embed / rerank decodes (they use every sequence slot)
@@ -1737,12 +1748,14 @@ int32_t generate(Instance &inst, const agent_request *req, const std::vector<lla
     }
     int32_t status = AGENT_OK;
     llama_token tok = 0;
-    // Prompt-lookup speculation: greedy, no tools (no grammar), text only, and a model whose cache can be cut back.
-    const bool can_speculate = b.spec_enabled && temperature <= 0.0f && !chunks && !req->tools_json.size;
+    // Prompt-lookup speculation: text only, and a model whose cache can be cut back. Sampling is fine: each position is sampled from
+    // the model's own distribution after the tokens before it were accepted (grammar included), and a draft token counts only
+    // when that sample equals it, so the output has the same distribution as plain decoding (greedy: the same tokens).
+    const bool can_speculate = b.spec_enabled && !chunks;
     std::vector<llama_token> history;
     if (can_speculate) history = tokens;
     std::deque<llama_token> ahead; // tokens already sampled (accepted drafts and the one after them), to be processed in order
-    uint64_t spec_rounds = 0, spec_accepted = 0;
+    uint64_t spec_rounds = 0, spec_accepted = 0, spec_drafted = 0;
     const auto t_prefill = std::chrono::steady_clock::now();
     const bool prefilled =
         chunks ? b.prefill_media(seq, inst.mtmd.get(), chunks, sampler, tok) : b.prefill(seq, tokens, reused, sampler, tok, req->cancel);
@@ -1786,6 +1799,7 @@ int32_t generate(Instance &inst, const agent_request *req, const std::vector<lla
                         break;
                     }
                     ++spec_rounds;
+                    spec_drafted += draft.size();
                     spec_accepted += accepted.size();
                     for (llama_token t : accepted) ahead.push_back(t);
                     ahead.push_back(next);
@@ -1813,6 +1827,9 @@ int32_t generate(Instance &inst, const agent_request *req, const std::vector<lla
         stats->kv_bytes = b.kv_bytes;
         stats->prefill_ms = ms(t_prefill, t_first_token);
         stats->decode_ms = ms(t_first_token, t_done);
+        stats->spec_kind = can_speculate ? AGENT_SPEC_PROMPT_LOOKUP : AGENT_SPEC_NONE;
+        stats->spec_drafted = static_cast<int32_t>(spec_drafted);
+        stats->spec_accepted = static_cast<int32_t>(spec_accepted);
     }
     common_sampler_free(sampler);
     b.release_seq(seq, status == AGENT_OK);
@@ -1976,7 +1993,10 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     bool json_output = false;
     std::vector<std::pair<std::string, float>> loras; // options.lora: adapter file and scale
     bool use_mtp = true;                              // options.mtp: drive the GGUF's MTP head when it has one
-    bool speculative = true;                          // options.speculative: prompt-lookup speculation (greedy requests only)
+    bool speculative = true;                          // options.speculative: prompt-lookup speculation ("off" / "prompt_lookup" / "draft")
+    bool want_draft = false;                          // options.speculative = "draft": a small model drafts (needs options.draft_model)
+    std::string draft_model;                          // options.draft_model: path of the small GGUF
+    int draft_max = 4;                                // options.draft_max: tokens a draft model proposes per step
     int n_batch_opt = 0, n_ubatch_opt = 0;            // options.batch / options.ubatch (0 = llama.cpp default)
     Mode mode = Mode::Generate;
     enum llama_pooling_type pooling = LLAMA_POOLING_TYPE_UNSPECIFIED;
@@ -2017,7 +2037,23 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         }
         if (bool flag = true; !options["prefix_cache"].get_bool().get(flag)) prefix_cache = flag;
         if (bool flag = true; !options["mtp"].get_bool().get(flag)) use_mtp = flag;
-        if (bool flag = true; !options["speculative"].get_bool().get(flag)) speculative = flag;
+        if (simdjson::ondemand::value sv_opt; !options["speculative"].get(sv_opt)) {
+            simdjson::ondemand::json_type vt{};
+            if (sv_opt.type().get(vt)) vt = simdjson::ondemand::json_type::null;
+            if (vt == simdjson::ondemand::json_type::boolean) {
+                bool flag = true;
+                if (!sv_opt.get_bool().get(flag)) speculative = flag;
+            } else if (std::string_view mode_name; vt == simdjson::ondemand::json_type::string && !sv_opt.get_string().get(mode_name)) {
+                if (mode_name == "off") speculative = false;
+                else if (mode_name == "draft") want_draft = true;
+                else if (mode_name != "prompt_lookup" && mode_name != "on") {
+                    std::snprintf(err, err_cap, "llama: options.speculative must be \"off\", \"prompt_lookup\" or \"draft\"");
+                    return AGENT_ERR_INVALID_CONFIG;
+                }
+            }
+        }
+        if (!options["draft_model"].get_string().get(t)) draft_model = std::string(t);
+        draft_max = std::max(1, json_number<int>(options, "draft_max", draft_max));
         n_batch_opt = json_number<int>(options, "batch", 0);   // tokens decoded per call; smaller = smaller compute buffer
         n_ubatch_opt = json_number<int>(options, "ubatch", 0); // tokens per micro-batch (the compute buffer scales with it)
         if (!options["mode"].get_string().get(t)) {
@@ -2051,8 +2087,20 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
     // Nothing names a model: llama.cpp looks for the head's tensors in the file.
     const bool native_decision =
         mode == Mode::Generate && upstream::gguf_is_decision(model_str); // System One model: only llama.cpp's engine runs it
-    if (mode == Mode::Generate && ((use_mtp && upstream::gguf_has_mtp(model_str)) || native_decision)) {
+    // Speculation off turns every kind of drafting off. A draft model (options.speculative "draft") also runs on llama.cpp's engine.
+    const bool use_draft_model = mode == Mode::Generate && want_draft && !draft_model.empty();
+    if (want_draft && draft_model.empty() && mode == Mode::Generate)
+        std::fprintf(stderr, "llama: options.speculative is \"draft\" but options.draft_model is empty; no draft model is used
+");
+    if (!speculative) use_mtp = false;
+    if (mode == Mode::Generate && ((use_mtp && upstream::gguf_has_mtp(model_str)) || native_decision || use_draft_model)) {
         upstream::Settings us;
+        if (use_draft_model) {
+            us.draft_model = draft_model;
+            us.draft_max = draft_max;
+            us.mtp = false;
+        }
+        us.mtp = us.mtp && use_mtp;
         us.model = model_str;
         us.mmproj = mmproj;
         us.context = n_ctx;
@@ -2066,6 +2114,8 @@ int32_t llama_create(agent_str config_json, void **out_instance, char *err, size
         if (up) {
             auto *inst = new Instance();
             inst->mode = Mode::Generate;
+            inst->up_spec_kind = up->mtp_active() ? AGENT_SPEC_MTP : up->draft_active() ? AGENT_SPEC_DRAFT_MODEL : AGENT_SPEC_NONE;
+            inst->up_context = n_ctx;
             inst->up = std::move(up);
             *out_instance = inst;
             return AGENT_OK;
@@ -2371,6 +2421,18 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
         agent_response_reset(resp);
         resp->message.role = agent_str{"assistant", 9};
         resp->usage = agent_usage{r.prompt_tokens, r.completion_tokens};
+        {
+            agent_run_stats st{};
+            st.cached_tokens = r.cached_tokens;
+            st.kv_tokens = r.prompt_tokens + r.completion_tokens;
+            st.kv_max_tokens = inst->up_context;
+            st.prefill_ms = static_cast<float>(r.prompt_ms);
+            st.decode_ms = static_cast<float>(r.predicted_ms);
+            st.spec_kind = inst->up_spec_kind;
+            st.spec_drafted = r.drafted;
+            st.spec_accepted = r.accepted;
+            put_stats(resp, st);
+        }
         out.part = agent_part{};
         out.part.kind = AGENT_PART_TEXT;
         out.part.text = agent_str{out.content.data(), out.content.size()};
@@ -2482,7 +2544,7 @@ int32_t llama_run(void *instance, const agent_request *req, agent_response *resp
     agent_response_reset(resp);
     resp->message.role = agent_str{"assistant", 9};
     resp->usage = agent_usage{n_prompt, completion};
-    if (AGENT_HAS_FIELD(resp, agent_response, stats)) resp->stats = run_stats;
+    put_stats(resp, run_stats);
     out.part = agent_part{};
     out.part.kind = AGENT_PART_TEXT;
     out.part.text = agent_str{out.content.data(), out.content.size()};

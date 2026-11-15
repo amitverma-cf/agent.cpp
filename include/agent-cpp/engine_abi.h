@@ -182,6 +182,14 @@ enum agent_kv_type {
     AGENT_KV_Q4_0 = 4,
 };
 
+/* Speculative decoding in use (agent_run_stats::spec_kind). */
+enum agent_spec_kind {
+    AGENT_SPEC_NONE = 0,
+    AGENT_SPEC_PROMPT_LOOKUP = 1, /* drafts copied from text already in the conversation */
+    AGENT_SPEC_DRAFT_MODEL = 2,   /* a small model drafts, the big one checks */
+    AGENT_SPEC_MTP = 3,           /* the model's own multi-token-prediction head drafts */
+};
+
 /* Optional measurements of one request. An engine fills what it knows and leaves the rest 0; the host
  * shows them (per-turn line, stats). Present only when AGENT_HAS_FIELD(response, agent_response, stats). */
 typedef struct agent_run_stats {
@@ -193,6 +201,9 @@ typedef struct agent_run_stats {
     float prefill_ms;      /* time spent decoding the prompt */
     float decode_ms;       /* time spent generating the reply */
     int32_t retries;       /* extra attempts a remote engine needed for this request (0 = none) */
+    int32_t spec_kind;     /* agent_spec_kind: how the reply was drafted ahead, if it was */
+    int32_t spec_drafted;  /* draft tokens proposed for this reply */
+    int32_t spec_accepted; /* of those, the tokens the model agreed with (each one saved a decode step) */
 } agent_run_stats;
 
 typedef struct agent_response {

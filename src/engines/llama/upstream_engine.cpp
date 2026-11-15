@@ -86,6 +86,7 @@ struct Engine::Impl {
     std::unique_ptr<server_routes> routes;
     std::thread loop;
     bool mtp = false;
+    bool draft = false;
 };
 
 Engine::Engine() : impl_(std::make_unique<Impl>()) {}
@@ -100,6 +101,7 @@ Engine::~Engine() {
 }
 
 bool Engine::mtp_active() const { return impl_->mtp; }
+bool Engine::draft_active() const { return impl_->draft; }
 
 int Engine::count_tokens(const std::string &text) const {
     const llama_model *model = llama_get_model(impl_->ctx->get_llama_context());
@@ -126,6 +128,9 @@ std::unique_ptr<Engine> Engine::create(const Settings &s, std::string &error) {
         for (const auto &[path, scale] : s.loras) args.insert(args.end(), {"--lora-scaled", path, std::to_string(scale)});
         if (!s.kv_type.empty() && s.kv_type != "auto") args.insert(args.end(), {"-ctk", s.kv_type, "-ctv", s.kv_type});
         im.mtp = s.mtp && gguf_has_mtp(s.model);
+        im.draft = !im.mtp && !s.draft_model.empty();
+        if (im.draft)
+            args.insert(args.end(), {"--spec-type", "draft-simple", "-md", s.draft_model, "--spec-draft-n-max", std::to_string(std::max(1, s.draft_max))});
         if (im.mtp) args.insert(args.end(), {"--spec-type", "draft-mtp", "--spec-draft-n-max", std::to_string(std::max(1, s.draft_max))});
 
         std::vector<char *> argv;
@@ -173,7 +178,8 @@ void read_usage(const njson &j, Result &out) {
         out.cached_tokens = t.value("cache_n", out.cached_tokens);
         out.drafted = t.value("draft_n", out.drafted);
         out.accepted = t.value("draft_n_accepted", out.accepted);
-        out.prompt_tokens = t.value("prompt_n", out.prompt_tokens);
+        // prompt_n counts only the tokens decoded now; the cached ones came from an earlier turn. The window use is both.
+        out.prompt_tokens = std::max(out.prompt_tokens, t.value("prompt_n", 0) + out.cached_tokens);
         out.completion_tokens = t.value("predicted_n", out.completion_tokens);
     }
 }
@@ -386,6 +392,7 @@ struct Engine::Impl {};
 Engine::Engine() {}
 Engine::~Engine() {}
 bool Engine::mtp_active() const { return false; }
+bool Engine::draft_active() const { return false; }
 int Engine::count_tokens(const std::string &text) const { return static_cast<int>(text.size() / 4 + 1); }
 bool Engine::chat(const std::string &, const volatile int32_t *, const std::function<void(const std::string &)> &, Result &,
                   std::string &error) {
