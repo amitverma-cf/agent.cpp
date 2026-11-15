@@ -163,6 +163,12 @@ Other review notes: a failed `AssignProcessToJobObject` (e.g. a parent job that 
 Windows 7) degrades to a warning and the child runs without limits; `SandboxPolicy::gpu` has no
 meaning (no device files).
 
+## The api engine runs outside the host
+
+The `api` engine (remote OpenAI-compatible chat, [guide](guides/remote-models.md)) needs outbound network access and a bun child process, both
+of which the engine host policy denies. It is loaded in the CLI process instead of the host (`isolation: inprocess` is forced for it in
+`load_engine_for`); it holds no model and opens no model files, and Local only refuses to load it. Every other engine keeps the host profile.
+
 ## Verifying
 
 `tests/unit/test_sandbox.cpp` (Linux; Landlock and seccomp cases SKIP when unavailable):

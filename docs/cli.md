@@ -220,6 +220,7 @@ agent model pull https://huggingface.co/Qwen/Qwen3-4B-GGUF   # a repository page
 agent model pull C:\Downloads\model.gguf                   # an existing file
 agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M [--name qwen] [--allow-restricted]
 agent model pull owner/repo:* [--include int8]    # every file of a folder model (TRELLIS)
+agent model add-api numes-glm --base-url https://api.numes.ai/api/v1 --model dealignai/glm-5.3-flash-uncensored-fp8 --key-env NUMES_API_KEY
 agent model ls
 agent model rm qwen [--keep-file]
 ```
@@ -231,6 +232,11 @@ installed is not fetched again. An embedding or reranker model is detected too; 
 (the `.part` file is kept), are checked against the published hash, and refuse models with restrictive licences unless
 `--allow-restricted` is passed (a terminal asks for confirmation). Vision, audio and OCR repos also fetch their multimodal projector, record it
 and use it automatically. The first chat model pulled becomes the default.
+
+`add-api NAME --base-url URL --model ID [--key-env VAR] [--max-tries N]` registers a remote OpenAI-compatible model instead of a file: the
+requests are made by the optional `api` engine through a bun child process, the key is read from the environment variable `VAR`
+(default `NUMES_API_KEY`), failed requests are retried with backoff and the chat footer shows the retries. It is refused to start when
+Local only is on. See [remote models](guides/remote-models.md).
 
 Pulled files go to a folder of their engine, so the files of two engines are never mixed: `models/llama/owner/repo/file.gguf`,
 `models/sdcpp/...`, `models/onnx/...`. A registry name knows its engine; for `owner/repo` the engine follows the quant or file

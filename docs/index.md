@@ -46,6 +46,7 @@ The command is the quickest way to try the project. The library is the same code
 | [Usage guide](guide.md) | Sessions, turns, tools, permissions, graphs, events, memory, errors |
 | [API reference](api.md) | The public types and functions in `agent.hpp` |
 | [Guide: embedding the library](guides/getting-started-library.md) | `find_package(agent-cpp)`, a first program with the llama plugin under process isolation |
+| [Guide: remote models](guides/remote-models.md) | the optional `api` engine: an OpenAI-compatible service through a bun child, retries, sandbox choice |
 | [Guide: writing an engine plugin](guides/writing-an-engine.md) | ABI 2 walkthrough: `struct_size` rules, tasks, parts, streaming, progress, cancel, isolation, packaging ([template](../examples/08-engine-plugin-template)) |
 | [Guide: writing a tool](guides/writing-a-tool.md) | `Tool`, the permission gate, event hooks and per-node `ToolHook`s, MCP servers |
 | [Guide: writing a graph](guides/writing-a-graph.md) | C++ builders and `agent.json`, state scopes, checkpointers, interrupts, fork, a model per node |
