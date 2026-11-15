@@ -115,7 +115,9 @@ if ($runtimes -eq 'y') {
         $pick = Read-Host '  Choose [1]'
         $js = switch -Regex ($pick) { '^(2|node)$' { 'node' } '^(3|nub)$' { 'nub' } default { 'bun' } }
     }
+    $ErrorActionPreference = 'Continue' # the agent prints progress on stderr; that is not a failure
     & $agent runtime use $js *> $null
+    $ErrorActionPreference = 'Stop'
     if ($js -eq 'node') { Ensure-Runtime 'node'; Ensure-Runtime 'pnpm' } else { Ensure-Runtime $js }
     Ensure-Runtime 'uv'
 } else {
