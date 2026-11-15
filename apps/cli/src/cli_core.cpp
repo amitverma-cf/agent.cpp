@@ -76,8 +76,9 @@ constexpr std::string_view kUpdateBool[] = {"check", "yes", "allow-unsigned"};
 constexpr std::string_view kSecretValue[] = {"identity"};
 constexpr std::string_view kSecretBool[] = {"stdin"};
 
-constexpr SubSpec kModelSubs[] = {{"ls", 0, 0}, {"info", 1, 1}, {"pull", 1, 1}, {"rm", 1, 1}};
-constexpr std::string_view kModelValue[] = {"name", "quant", "mmproj", "include", "task", "engine"};
+constexpr SubSpec kModelSubs[] = {{"ls", 0, 0}, {"info", 1, 1}, {"pull", 1, 1}, {"rm", 1, 1}, {"add-api", 1, 1}};
+constexpr std::string_view kModelValue[] = {"name",   "quant",    "mmproj", "include", "task",
+                                            "engine", "base-url", "model",  "key-env", "max-tries"};
 constexpr std::string_view kModelBool[] = {"allow-restricted", "keep-file", "no-mmproj"};
 
 constexpr std::string_view kChatValue[] = {"model",      "engine",         "resume", "workspace", "ctx",
@@ -268,6 +269,10 @@ std::string format_turn_footer(const TokenUsage &u) {
                           static_cast<double>(u.completion_tokens - 1) / (static_cast<double>(u.decode_ms) / 1000.0));
         out.append(buf, static_cast<size_t>(n));
     }
+    if (u.retries > 0) {
+        n = std::snprintf(buf, sizeof(buf), " | %d %s", u.retries, u.retries == 1 ? "retry" : "retries");
+        out.append(buf, static_cast<size_t>(n));
+    }
     if (u.kv_max_tokens > 0) {
         n = std::snprintf(buf, sizeof(buf), " | KV %d/%d", u.kv_tokens, u.kv_max_tokens);
         out.append(buf, static_cast<size_t>(n));
@@ -317,6 +322,8 @@ std::string usage_all() {
            "        (vision / audio / OCR repos: the projector is fetched too, recorded, and used automatically)\n"
            "  model info <repo>          list a Hugging Face repo: quants with sizes, projectors, licence\n"
            "        (pick a file, then: model pull owner/repo:QUANT)\n"
+           "  model add-api <name> --base-url URL --model ID [--key-env VAR] [--max-tries N]\n"
+           "                             a remote OpenAI-compatible model (engine api, runs on bun); the key stays in the environment\n"
            "  model ls                   list downloaded models (models.json)\n"
            "  model rm <name> [--keep-file]\n"
            "  chat                       interactive chat with streaming and tools (full-screen in a terminal)\n"
@@ -925,6 +932,8 @@ std::vector<std::string> split_list(std::string_view list) {
 // -------------------------- Model / engine resolution --------------------------
 
 std::string_view engine_for_model(std::string_view model_path) {
+    // A remote model (agent model add-api) is a small descriptor file: <name>.api.json.
+    if (lower(std::filesystem::path(model_path).filename().string()).ends_with(".api.json")) return "api";
     const std::string ext = lower(std::filesystem::path(model_path).extension().string());
     if (ext == ".gguf") return "llama";
     if (ext == ".onnx") return "onnx";

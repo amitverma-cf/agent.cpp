@@ -20,6 +20,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <simdjson.h>
 
 namespace agent::cli {
 
@@ -138,7 +141,38 @@ std::vector<ModelRef> catalog_refs(const Context &ctx) {
     return out;
 }
 
+namespace {
+
+// The options of a remote model: its descriptor (<models>/api/NAME.api.json, written by `agent model add-api`) with keys the user
+// passed in --engine-options winning, plus what only the CLI knows: the private bun runtime, a folder for the bridge script,
+// and whether Local only is on (the engine then refuses to start).
+std::string api_engine_options(const Context &ctx, std::string_view descriptor_path, std::string engine_options) {
+    std::string text;
+    {
+        std::ifstream in{std::string(descriptor_path), std::ios::binary};
+        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    simdjson::dom::parser parser;
+    simdjson::dom::element doc;
+    if (!text.empty() && !parser.parse(text).get(doc)) {
+        simdjson::dom::object obj;
+        if (!doc.get(obj))
+            for (auto field : obj) engine_options = with_option(engine_options, std::string_view(field.key), simdjson::minify(field.value));
+    }
+    if (ctx.has_home) {
+        if (const std::string bun = runtime_binary_path(ctx.home, "bun"); !bun.empty())
+            engine_options = with_option(engine_options, "bun", "\"" + json_escape(bun) + "\"");
+        engine_options =
+            with_option(engine_options, "bridge_dir", "\"" + json_escape((fs::path(ctx.home.runtimes) / "api-bridge").string()) + "\"");
+    }
+    if (ctx.config.local_only) engine_options = with_option(engine_options, "local_only", "true");
+    return engine_options;
+}
+
+} // namespace
+
 std::string catalog_engine_options(const Context &ctx, std::string_view model_path, std::string engine_options) {
+    if (engine_for_model(model_path) == "api") return api_engine_options(ctx, model_path, std::move(engine_options));
     auto cat = agent::hub::load_catalog(catalog_path(ctx));
     if (!cat.ok) return engine_options;
     for (const auto &e : cat.value)
@@ -174,6 +208,14 @@ Result<LoadedEngine> load_engine_for(const Context &ctx, std::string_view engine
     if (const EngineEntry *entry = find_engine_entry(engines.value, loaded.value.name)) {
         loaded.value.isolation = entry->isolation;
         loaded.value.backend = entry->backend;
+    }
+    if (loaded.value.name == "api") {
+        // The api engine starts a bun child and talks to the network, which the engine host's sandbox forbids; it holds no model and
+        // no files, so it runs in this process (docs/guides/remote-models.md).
+        loaded.value.isolation = "inprocess";
+        if (ctx.config.local_only)
+            return fail<LoadedEngine>(ErrorCode::InvalidConfig, "Local only is on: the api engine sends the conversation to a remote "
+                                                                "service. Turn it off in Settings or pick a local model");
     }
     return loaded;
 }
@@ -436,6 +478,62 @@ int cmd_model(const CommandLine &cl, Context &ctx) {
         return 0;
     }
 
+    if (cl.subcommand == "add-api") {
+        // A remote OpenAI-compatible model: a descriptor file in <models>/api/ plus a catalogue entry that points at it.
+        const std::string &name = cl.positionals[0];
+        const std::string base_url(cl.get("base-url")), model_id(cl.get("model"));
+        const std::string key_env(cl.get("key-env", "NUMES_API_KEY"));
+        const bool name_ok = !name.empty() && name.size() <= 64 && std::all_of(name.begin(), name.end(), [](unsigned char c) {
+            return std::isalnum(c) || c == '.' || c == '_' || c == '-';
+        });
+        if (!name_ok)
+            return report_error(Error{ErrorCode::InvalidConfig, "the name may use letters, digits, '.', '_' and '-' (at most 64)"});
+        if (base_url.rfind("http://", 0) != 0 && base_url.rfind("https://", 0) != 0)
+            return report_error(
+                Error{ErrorCode::InvalidConfig, "--base-url must start with http:// or https:// (for example https://api.example.com/v1)"});
+        if (model_id.empty()) return report_error(Error{ErrorCode::InvalidConfig, "--model ID is needed: the provider's model id"});
+        const bool key_ok =
+            !key_env.empty() && std::all_of(key_env.begin(), key_env.end(), [](unsigned char c) { return std::isalnum(c) || c == '_'; });
+        if (!key_ok)
+            return report_error(Error{ErrorCode::InvalidConfig,
+                                      "--key-env names an environment variable (letters, digits, '_'); the key itself is never stored"});
+        std::string json = "{\n  \"base_url\": \"" + json_escape(base_url) + "\",\n  \"model\": \"" + json_escape(model_id) +
+                           "\",\n  \"api_key_env\": \"" + json_escape(key_env) + "\"";
+        if (cl.has("max-tries")) {
+            const int tries = std::atoi(std::string(cl.get("max-tries")).c_str());
+            if (tries < 1 || tries > 20) return report_error(Error{ErrorCode::InvalidConfig, "--max-tries expects a number from 1 to 20"});
+            json += ",\n  \"max_tries\": " + std::to_string(tries);
+        }
+        json += "\n}\n";
+        const fs::path file = fs::path(dir) / "api" / (name + ".api.json");
+        std::error_code ec;
+        fs::create_directories(file.parent_path(), ec);
+        {
+            std::ofstream out(file, std::ios::binary | std::ios::trunc);
+            out << json;
+            if (!out.flush()) return report_error(Error{ErrorCode::FilesystemError, "cannot write " + file.string()});
+        }
+        auto cat = agent::hub::load_catalog(catalog);
+        if (!cat.ok) return report_error(cat.error);
+        std::erase_if(cat.value, [&](const agent::hub::CatalogEntry &e) { return e.name == name; });
+        agent::hub::CatalogEntry entry;
+        entry.name = name;
+        entry.repo = "api";
+        entry.file = model_id;
+        entry.path = file.string();
+        entry.size = json.size();
+        entry.license = "remote";
+        cat.value.push_back(std::move(entry));
+        if (auto r = agent::hub::save_catalog(catalog, cat.value); !r.ok) return report_error(r.error);
+        std::printf("added %s: %s at %s\n  chat with it: agent chat --model %s   (or /model %s in the chat)\n", name.c_str(),
+                    model_id.c_str(), base_url.c_str(), name.c_str(), name.c_str());
+        const char *key = std::getenv(key_env.c_str());
+        std::printf("  the key is read from the environment variable %s%s\n", key_env.c_str(),
+                    key && *key ? "" : " (it is not set in this shell)");
+        if (ctx.config.local_only) std::printf("  note: Local only is on; the model cannot be used until it is turned off\n");
+        return 0;
+    }
+
     if (cl.subcommand == "rm") {
         const std::string &name = cl.positionals[0];
         if (auto r = agent::hub::remove_model(name, catalog, !cl.has("keep-file")); !r.ok) return report_error(r.error);
@@ -578,6 +676,7 @@ Result<void> register_graph_model(const Context &ctx, ModelRegistry &registry, c
         for (const auto &entry : cat.value)
             if (entry.name == model.value.name && entry.path == model.value.path) spec = agent::hub::model_spec_from_entry(entry, base);
     spec.name = name;
+    spec.config.engine_options = catalog_engine_options(ctx, model.value.path, spec.config.engine_options);
     spec.config.engine = engine.value.name;
     spec.config.engine_isolation = cli_engine_isolation(inprocess, engine.value.isolation);
     spec.config.engine_sandbox.gpu = cli_engine_gpu(engine.value.backend);
