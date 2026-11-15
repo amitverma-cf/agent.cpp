@@ -1293,7 +1293,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         if (slash_pending) {
             slash_pending = false;
             const int letter = Letter(e);
-            if (input == "/" && letter >= 32 && letter < 127 && !show_settings && !asking && !confirm_open) {
+            if ((input == "/" || input.empty()) && letter >= 32 && letter < 127 && !show_settings && !asking && !confirm_open) {
                 SetInput("/" + std::string(1, static_cast<char>(letter)));
                 return true;
             }
