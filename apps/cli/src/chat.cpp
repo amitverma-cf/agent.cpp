@@ -1280,27 +1280,6 @@ bool handle_line(ChatState &st, const std::string &line) {
             }
         }
     }
-    {
-        // "/remember KEY text" and "/recall KEY": notes in the session memory.
-        const size_t b = line.find_first_not_of(" \t");
-        if (b != std::string::npos && (line.compare(b, 10, "/remember ") == 0 || line.compare(b, 8, "/recall ") == 0)) {
-            const bool keep = line.compare(b, 10, "/remember ") == 0;
-            const std::string rest = line.substr(b + (keep ? 10 : 8));
-            const size_t cut = rest.find(' ');
-            const std::string key = rest.substr(0, cut);
-            const std::string value = cut == std::string::npos ? std::string() : rest.substr(cut + 1);
-            if (!st.lease) out("[error] no model is loaded; switch with /model NAME\n");
-            else if (key.empty() || (keep && value.empty())) out(keep ? "usage: /remember KEY text\n" : "usage: /recall KEY\n");
-            else if (keep) {
-                auto r = store_memory(*st.lease, "note:" + key, value);
-                out(r.ok ? "kept note '" + key + "'\n" : "[error] " + r.error.message + "\n");
-            } else {
-                auto r = retrieve_memory(*st.lease, "note:" + key);
-                out(r.ok ? r.value + "\n" : "no note named '" + key + "'\n");
-            }
-            return true;
-        }
-    }
     const SlashCommand cmd = parse_slash_command(line);
     if (cmd.kind == SlashKind::None) {
         if (cmd.text.empty()) return true;
@@ -2117,8 +2096,6 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
             {"/image", "send an image or audio file"},
             {"/task", "run an engine capability: image, speech, 3D, embed, ONNX"},
             {"/run", "run a graph file"},
-            {"/remember", "keep a note: /remember KEY text"},
-            {"/recall", "read a note: /recall KEY"},
             {"/open", "list or open generated files"},
             {"/stats", "token and tool-call counters"},
             {"/diff", "what the tools changed in files"},
