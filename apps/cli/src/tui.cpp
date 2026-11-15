@@ -519,7 +519,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
     std::string main_title = "New chat", project_line, side_class = "side", app_class = "main home", tip;
     std::string md_css = std::string(kMarkdownCss);
     bool asking = false, prompting = false, busy = false;
-    bool show_welcome = true, show_palette = false;
+    bool show_welcome = true, show_palette = false, palette_open = false; // palette_open: Ctrl+P, the input line is still empty
     // ---- the shortcuts: action -> key name, the defaults with what the user changed on top
     std::map<std::string, std::string> keymap;
     bool set_capturing = false;
@@ -1237,8 +1237,11 @@ class ChatApp : public rtxui::Component<ChatApp> {
 
     // The palette is open while the user is typing a command name: the input starts with "/" and has no space yet.
     std::vector<size_t> PaletteMatches() const {
-        if (host.commands.empty() || input.empty() || input[0] != '/' || input.find(' ') != std::string::npos) return {};
-        return filter_commands(host.commands, input);
+        // Ctrl+P opens the palette without putting text in the input line: what is typed then is the part after the slash.
+        std::string query = input;
+        if (palette_open && (query.empty() || query[0] != '/')) query = "/" + query;
+        if (host.commands.empty() || query.empty() || query[0] != '/' || query.find(' ') != std::string::npos) return {};
+        return filter_commands(host.commands, query);
     }
 
     bool Digest() override {
@@ -1380,13 +1383,15 @@ class ChatApp : public rtxui::Component<ChatApp> {
                 if (host.cancel) host.cancel(host.user);
             } else if (e == Event::CtrlC()) {
                 if (g_screen) g_screen->Exit();
-            } else if (!input.empty()) {
+            } else if (!input.empty() || palette_open) {
+                palette_open = false;
                 SetInput("");
             }
             return true;
         }
         if (Is(e, "commands") && !busy) {
-            SetInput("/");
+            palette_open = true;
+            selected = 0;
             return true;
         }
         if (Is(e, "quit") && !busy) {
@@ -1430,6 +1435,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             }
             const std::string chosen = host.commands[found[selected % found.size()]].name;
             if (e == Event::Tab() || (e == Event::Return() && input != chosen)) {
+                palette_open = false;
                 SetInput(chosen + " ");
                 selected = 0;
                 return true;
@@ -1463,6 +1469,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             }
             if (!busy) {
                 const std::string line = input;
+                palette_open = false;
                 SetInput("");
                 if (line.find_first_not_of(" \t") == std::string::npos) return true;
                 if (history.empty() || history.back() != line) history.push_back(line);
