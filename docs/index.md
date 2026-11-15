@@ -31,7 +31,7 @@ The command is the quickest way to try the project. The library is the same code
 |---|---|
 | [Getting started](getting-started.md) | Install, first chat, build from source (Linux, Windows), first library program |
 | [The `agent` CLI](cli.md) | `setup`, `init`, `doctor`, `clean`, `secret`, `engine`, `model`, `chat`, `run`, `voice`, `task`, `mcp`, `skill`, `runtime`, `sandbox` |
-| [Workspace layout](workspace.md) | The global home `.agent.cpp-workspace`, project `.agents/` folders, SQLite files, runtimes |
+| [Workspace layout](workspace.md) | The one folder `~/.agent.cpp`, project `.agents/` folders, SQLite files, runtimes |
 | [Installing and packaging](packaging.md) | `cmake --install`, `find_package(agent-cpp)`, the Linux tarball script |
 | [Examples](../examples/README.md) | Image critique loop, RAG over a folder of docs, graph JSON examples |
 | [Guide: choosing the parts to use](guides/choosing-parts.md) | Build switches for graph, MCP, RAG, models and each engine; `find_package` components |

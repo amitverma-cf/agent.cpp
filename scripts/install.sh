@@ -2,11 +2,12 @@
 # Installs the agent CLI on Linux:  curl -fsSL https://agent.qozu.fyi/install.sh | sh
 #
 # Picks the release archive that fits this machine (x86_64 or aarch64; the Vulkan build when a Vulkan driver is present), checks its
-# SHA-256 against the release's SHA256SUMS, unpacks it to ~/.local/share/agent-cpp and links `agent` into ~/.local/bin.
+# SHA-256 against the release's SHA256SUMS and unpacks it to ~/.agent.cpp/app. Everything agent.cpp keeps (the program, engines, models,
+# skills, memory) lives under that one folder, ~/.agent.cpp.
 # It then runs the setup script (scripts/setup.sh) and opens the chat (AGENT_NO_START=1 only installs). Run again, it updates: the same
 # version is left alone, a newer one replaces it in place (`agent update` does exactly this).
 # Environment: AGENT_VERSION (a tag such as v1.0.0; default: the latest release), AGENT_VARIANT (cpu or vulkan; default: detected),
-#              AGENT_PREFIX (default ~/.local), AGENT_REPO (default amitverma-cf/agent.cpp), NO_COLOR.
+#              AGENT_HOME (the one folder for everything, default ~/.agent.cpp), AGENT_REPO (default amitverma-cf/agent.cpp), NO_COLOR.
 set -eu
 
 # `agent update` starts this script and exits; on a system that locks running programs the old process must be gone first.
@@ -16,9 +17,9 @@ if [ -n "${AGENT_WAIT_PID:-}" ]; then
 fi
 
 REPO="${AGENT_REPO:-amitverma-cf/agent.cpp}"
-PREFIX="${AGENT_PREFIX:-$HOME/.local}"
-DEST="$PREFIX/share/agent-cpp"
-BIN="$PREFIX/bin"
+ROOT="${AGENT_HOME:-$HOME/.agent.cpp}"
+DEST="$ROOT/app"
+BIN="$DEST"
 
 # ---- output: turquoise accents, grey detail, pastel pink for problems; plain text when not a terminal or NO_COLOR is set
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
@@ -105,18 +106,26 @@ fetch_progress "$base/$name" "$tmp/$name" || die "The download failed."
 step "Checksum verified (SHA-256)"
 
 rm -rf "$DEST.new"
-mkdir -p "$DEST.new" "$BIN"
+mkdir -p "$DEST.new" "$ROOT"
 tar -xzf "$tmp/$name" -C "$DEST.new" --strip-components=1
 rm -rf "$DEST"
 mv "$DEST.new" "$DEST"
-ln -sf "$DEST/agent" "$BIN/agent"
+: > "$ROOT/.agent-root"
 step "Installed to $DEST"
+# An older install put the program in ~/.local/share/agent-cpp and a link in ~/.local/bin: one folder is enough now.
+if [ -L "$HOME/.local/bin/agent" ] && [ "$(readlink "$HOME/.local/bin/agent")" = "$HOME/.local/share/agent-cpp/agent" ]; then rm -f "$HOME/.local/bin/agent"; fi
+rm -rf "$HOME/.local/share/agent-cpp"
 printf '%s' "$name" > "$DEST/.version"
 step "Command: $BIN/agent"
 fi
 case ":$PATH:" in
     *":$BIN:"*) ;;
-    *) info "Add $BIN to your PATH to type just 'agent' in new shells:" ; info "  export PATH=\"$BIN:\$PATH\"" ;;
+    *)
+        # The shell profile is the one thing outside the folder: it gets a PATH line, once.
+        for profile in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do
+            if [ -f "$profile" ] && ! grep -q "$BIN" "$profile" 2>/dev/null; then printf '\nexport PATH="%s:$PATH"  # agent.cpp\n' "$BIN" >> "$profile"; added=1; fi
+        done
+        if [ -n "${added:-}" ]; then step "Added $BIN to your PATH (open a new terminal to type just agent)"; else info "Add $BIN to your PATH:  export PATH=\"$BIN:\$PATH\""; fi ;;
 esac
 
 # Setup is its own script (scripts/setup.sh), fetched from the repository so it can be improved without a new release. It runs here, through

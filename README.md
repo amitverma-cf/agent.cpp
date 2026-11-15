@@ -22,7 +22,8 @@ irm https://agent.qozu.fyi/install.ps1 | iex
 ```
 
 The installer picks the build for the machine (Vulkan when a GPU driver is present, CPU otherwise), verifies its checksum, and runs a
-short setup that suggests and downloads a model sized for the hardware. Running it again updates the installation.
+short setup that suggests and downloads a model sized for the hardware. Running it again updates the installation. Everything lives in
+one folder, `~/.agent.cpp` (`%USERPROFILE%\.agent.cpp` on Windows): program, engines, models, skills and memory.
 
 ## Chat
 

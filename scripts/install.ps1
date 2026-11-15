@@ -1,7 +1,7 @@
 # Installs the agent CLI on Windows:  irm https://agent.qozu.fyi/install.ps1 | iex
 #
 # Picks the release archive that fits this machine (x64 or arm64; the Vulkan build on x64 when a Vulkan driver is present), checks its
-# SHA-256 against the release's SHA256SUMS, unpacks it to %LOCALAPPDATA%\Programs\agent-cpp and adds that folder to your user PATH.
+# SHA-256 against the release's SHA256SUMS, unpacks it to %USERPROFILE%\.agent.cpp\app and adds that folder to your user PATH. Everything agent.cpp keeps lives under %USERPROFILE%\.agent.cpp.
 # It then runs the setup script (scripts/setup.ps1) and opens the chat (AGENT_NO_START=1 only installs). Run again, it updates: the same
 # version is left alone, a newer one replaces it in place (`agent update` does exactly this).
 # Environment: AGENT_VERSION (a tag such as v1.0.0; default: the latest release), AGENT_VARIANT (cpu or vulkan; default: detected),
@@ -60,7 +60,8 @@ try {
     Step "Windows $arch  $([char]0x00B7)  $variant build$detected"
     Step "Release $version"
 
-    $dest = Join-Path $env:LOCALAPPDATA 'Programs\agent-cpp'
+    $root = if ($env:AGENT_HOME) { $env:AGENT_HOME } else { Join-Path $env:USERPROFILE '.agent.cpp' }
+    $dest = Join-Path $root 'app'
     $versionFile = Join-Path $dest '.version'
     if ($env:AGENT_CHECK) { # agent update --check: only look
         if ((Test-Path $versionFile) -and ((Get-Content $versionFile -Raw).Trim() -eq $name)) { Step "Up to date ($version)" } else { Step "An update is available: $version" }
@@ -99,17 +100,21 @@ try {
     if ((Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower() -ne $want) { Fail "SHA-256 mismatch for $name. Nothing was installed." }
     Step 'Checksum verified (SHA-256)'
 
-    $dest = Join-Path $env:LOCALAPPDATA 'Programs\agent-cpp'
     $stage = Join-Path $tmp 'stage'
     Expand-Archive -Path $zip -DestinationPath $stage
     $inner = Get-ChildItem $stage | Select-Object -First 1
     if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
     New-Item -ItemType Directory -Path (Split-Path $dest) -Force | Out-Null
     Move-Item $inner.FullName $dest
+    New-Item -ItemType File -Path (Join-Path $root '.agent-root') -Force | Out-Null
     Step "Installed to $dest"
+    # An older install lived in %LOCALAPPDATA%\Programs\agent-cpp: one folder is enough now.
+    $old = Join-Path $env:LOCALAPPDATA 'Programs\agent-cpp'
+    if (Test-Path $old) { Remove-Item -Recurse -Force $old -ErrorAction SilentlyContinue }
     Set-Content -Path $versionFile -Value $name -NoNewline
 
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $userPath = (($userPath -split ';') | Where-Object { $_ -and $_ -ne (Join-Path $env:LOCALAPPDATA 'Programs\agent-cpp') }) -join ';'
     if (($userPath -split ';') -notcontains $dest) {
         [Environment]::SetEnvironmentVariable('Path', ($userPath.TrimEnd(';') + ';' + $dest), 'User')
         Step 'Added to your PATH (open a new terminal to type just agent)'

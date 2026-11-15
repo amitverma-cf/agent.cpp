@@ -20,8 +20,8 @@ fs::path temp_root(const char *name) {
 } // namespace
 
 TEST_CASE("home: layout puts every area under one root", "[home]") {
-    const HomeLayout h = home_layout((fs::path("base") / ".agent.cpp-workspace").string());
-    const fs::path root = fs::path("base") / ".agent.cpp-workspace";
+    const HomeLayout h = home_layout((fs::path("base") / ".agent.cpp").string());
+    const fs::path root = fs::path("base") / ".agent.cpp";
     CHECK(h.root == root.string());
     CHECK(h.config == (root / "config.json").string());
     CHECK(h.engines == (root / "engines").string());
@@ -32,7 +32,7 @@ TEST_CASE("home: layout puts every area under one root", "[home]") {
     CHECK(h.runtimes == (root / "runtimes").string());
     CHECK(h.cache == (root / "cache").string());
     CHECK(h.workspaces == (root / "workspaces").string());
-    CHECK(fs::path(default_home_suggestion()).filename() == ".agent.cpp-workspace");
+    CHECK(fs::path(default_home_suggestion()).filename() == ".agent.cpp");
 }
 
 TEST_CASE("home: flag beats environment beats the pointer file", "[home]") {
@@ -50,7 +50,7 @@ TEST_CASE("home: flag beats environment beats the pointer file", "[home]") {
 TEST_CASE("home: the pointer file keeps backslashes and quotes in a path", "[home]") {
     const fs::path dir = temp_root("escape");
     const std::string pointer = (dir / "home.json").string();
-    const std::string path = R"(C:\Users\a "b"\.agent.cpp-workspace)";
+    const std::string path = R"(C:\Users\a "b"\.agent.cpp)";
     REQUIRE(save_home_pointer(pointer, path).ok);
     CHECK(resolve_home_root("", "", pointer) == path);
     fs::remove_all(dir);
@@ -58,7 +58,7 @@ TEST_CASE("home: the pointer file keeps backslashes and quotes in a path", "[hom
 
 TEST_CASE("home: creating the layout makes every folder and is repeatable", "[home]") {
     const fs::path dir = temp_root("create");
-    const HomeLayout h = home_layout((dir / ".agent.cpp-workspace").string());
+    const HomeLayout h = home_layout((dir / ".agent.cpp").string());
     REQUIRE(create_home_layout(h).ok);
     for (const std::string *d : {&h.engines, &h.models, &h.skills, &h.mcp, &h.plugins, &h.runtimes, &h.cache, &h.logs, &h.workspaces})
         CHECK(fs::is_directory(*d));

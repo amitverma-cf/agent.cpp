@@ -49,21 +49,35 @@ std::string default_home_suggestion() {
     return (fs::path(base) / std::string(kHomeFolderName)).string();
 }
 
-std::string home_pointer_path() { return (fs::path(default_config_dir()) / "home.json").string(); }
+std::string install_root() {
+    const std::string exe_dir = executable_dir();
+    if (exe_dir.empty()) return {};
+    const fs::path app(exe_dir);
+    if (app.filename() != "app") return {};
+    std::error_code ec;
+    const fs::path root = app.parent_path();
+    return fs::is_regular_file(root / ".agent-root", ec) ? root.string() : std::string();
+}
+
+// With an install the pointer lives inside it, so the whole thing stays in one folder; otherwise in the platform config folder.
+std::string home_pointer_path() {
+    if (const std::string root = install_root(); !root.empty()) return (fs::path(root) / "home.json").string();
+    return (fs::path(default_config_dir()) / "home.json").string();
+}
 
 std::string resolve_home_root(std::string_view flag, std::string_view env_home, const std::string &pointer_path) {
     if (!flag.empty()) return std::string(flag);
     if (!env_home.empty()) return std::string(env_home);
     std::error_code ec;
-    if (pointer_path.empty() || !fs::is_regular_file(pointer_path, ec)) return {};
+    if (pointer_path.empty() || !fs::is_regular_file(pointer_path, ec)) return install_root(); // no pointer: the install folder itself
     std::ifstream in(pointer_path, std::ios::binary);
     if (!in) return {};
     std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     simdjson::dom::parser parser;
     simdjson::dom::element doc;
-    if (parser.parse(text).get(doc)) return {};
+    if (parser.parse(text).get(doc)) return install_root();
     std::string_view home;
-    if (doc["home"].get(home)) return {};
+    if (doc["home"].get(home)) return install_root();
     return std::string(home);
 }
 

@@ -433,7 +433,7 @@ with `--resume`. Together with `schedule add wake --every 15m -- wake` this give
 
 ## Files and layout
 
-One global home (default `.agent.cpp-workspace` in the user folder, chosen at setup and remembered in `home.json` in the platform
+One global home (default `.agent.cpp` in the user folder, the same folder the program is installed in, remembered in `home.json` in the platform
 config folder; `--home` and `$AGENT_HOME` override it) holds `config.json`, `engines.json`, `models/`, `engines/`, `skills/`, `mcp/`,
 `runtimes/`, `cache/`, `logs/` and `workspaces/default/` (file tools, `memory/db.sqlite3`, `artifacts/`). Each project can have
 a `.agents/` folder. Full layout and the contents of `config.json` and `engines.json`: [workspace.md](workspace.md).

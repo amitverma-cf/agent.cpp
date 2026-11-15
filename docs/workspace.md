@@ -4,14 +4,21 @@ agent.cpp keeps its files in two places and nowhere else: one **global home** an
 folder inside each project. Nothing is installed globally, and the agent never needs `npm` or `python` on the
 machine (see "Runtimes" below).
 
-## The global home: `.agent.cpp-workspace`
+## One folder: `~/.agent.cpp`
 
-The location is chosen during `agent setup`. The choice is remembered in a small pointer file, `home.json`, in the
-platform's config folder (`%APPDATA%\agent` on Windows, `~/.config/agent` elsewhere). `--home DIR` and `$AGENT_HOME`
-override it for a single run.
+The installer puts everything in one folder, `~/.agent.cpp` (`%USERPROFILE%\.agent.cpp` on Windows): the program in `app/`, and next to
+it the files below. Nothing is stored anywhere else; the only change outside the folder is a PATH entry for `app/`. Removing the folder
+removes agent.cpp. Set `AGENT_HOME` before installing to use another folder, and `agent home DIR` moves the data to a different place
+later (a small `home.json` in the install folder remembers it). `--home DIR` and `$AGENT_HOME` override it for a single run. A program
+that does not run from an install (a build tree, a package) falls back to a pointer file in the platform config folder.
+
+Older versions used three folders (the program in `~/.local/share/agent-cpp`, the files in `~/.agent.cpp-workspace`, the pointer in
+`~/.config/agent`). The installer removes the old program folder; the old files folder keeps working through its pointer, or can be moved
+to `~/.agent.cpp/`.
 
 | Folder / file | What it holds |
 |---|---|
+| `app/` | the program: `agent`, `agent-engine-host` and the bundled engines. Replaced on update |
 | `config.json`, `engines.json` | settings; the engine plugins in use |
 | `engines/` | engine plugins, one folder per engine and version |
 | `models/` | `models.json` and the model files, one folder per engine (`llama/`, `sdcpp/`, `onnx/`, `audiocpp/`): `models/llama/owner/repo/file.gguf`; projectors sit beside their model. Models pulled earlier stay where they are |
@@ -69,8 +76,8 @@ PATH.
 ```json
 {
   "version": 1,
-  "workspace": "/home/me/.agent.cpp-workspace/workspaces/default",
-  "models_dir": "/home/me/.agent.cpp-workspace/models",
+  "workspace": "/home/me/.agent.cpp/workspaces/default",
+  "models_dir": "/home/me/.agent.cpp/models",
   "default_model": "qwen2.5-0.5b-instruct-q4_k_m",
   "capabilities": ["llama", "audiocpp", "sdcpp", "onnx"],
   "backend": "cpu",

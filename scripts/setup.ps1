@@ -31,7 +31,7 @@ for ($i = 0; $i -lt $Rest.Count; $i++) {
 $agent = $env:AGENT_BIN
 if (-not $agent) { $cmd = Get-Command agent -ErrorAction SilentlyContinue; if ($cmd) { $agent = $cmd.Source } }
 if (-not $agent) {
-    $fallback = Join-Path $env:LOCALAPPDATA 'Programs\agent-cpp\agent.exe'
+    $fallback = Join-Path $env:USERPROFILE '.agent.cpp\app\agent.exe'
     if (Test-Path $fallback) { $agent = $fallback }
 }
 if (-not $agent) { Fail 'agent is not installed. Install it first: irm https://agent.qozu.fyi/install.ps1 | iex' }

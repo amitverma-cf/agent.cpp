@@ -36,7 +36,7 @@ done
 
 agent="${AGENT_BIN:-}"
 [ -n "$agent" ] || agent="$(command -v agent 2>/dev/null || true)"
-[ -n "$agent" ] || { [ -x "$HOME/.local/bin/agent" ] && agent="$HOME/.local/bin/agent"; }
+[ -n "$agent" ] || { [ -x "$HOME/.agent.cpp/app/agent" ] && agent="$HOME/.agent.cpp/app/agent"; }
 [ -n "$agent" ] || die "agent is not installed. Install it first: curl -fsSL https://agent.qozu.fyi/install.sh | sh"
 
 ask=""

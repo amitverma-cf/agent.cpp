@@ -16,7 +16,7 @@
 
 namespace agent::cli {
 
-inline constexpr std::string_view kHomeFolderName = ".agent.cpp-workspace";
+inline constexpr std::string_view kHomeFolderName = ".agent.cpp";
 inline constexpr std::string_view kProjectFolderName = ".agents";
 
 struct HomeLayout {
@@ -36,10 +36,15 @@ struct HomeLayout {
 
 HomeLayout home_layout(std::string_view root);
 
-// <user home>/.agent.cpp-workspace
+// <user home>/.agent.cpp
 std::string default_home_suggestion();
 // <platform config folder>/home.json
 std::string home_pointer_path();
+
+// The folder the running program was installed into: <root>/app/agent with a ".agent-root" marker in <root>. The installer puts the
+// program, the engines, the models and every other file under that one root, so it is also the default home. Empty when the program
+// does not run from such an install (a build tree, a package manager).
+std::string install_root();
 
 // The home to use: flag, then the AGENT_HOME value, then the one recorded in the pointer file. Empty when none.
 std::string resolve_home_root(std::string_view flag, std::string_view env_value, const std::string &pointer_path);
