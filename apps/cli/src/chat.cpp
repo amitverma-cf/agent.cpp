@@ -215,7 +215,7 @@ struct ChatState {
     bool use_tui = false; // the full-screen interface (a terminal, and not --plain)
 
     std::shared_ptr<SecretContext> secrets;  // names and bindings; values are read only when an MCP server starts
-    std::vector<std::string> declined; // tool calls (name + arguments) the user refused in the turn that is running: not asked again
+    std::vector<std::string> declined;       // tool calls (name + arguments) the user refused in the turn that is running: not asked again
     std::vector<std::string> always_allowed; // tools the user allowed for good in this project (.agents/permissions.json)
     ChatMode mode = ChatMode::Ask;
     ThinkFilter think;
@@ -2250,7 +2250,8 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
     cat("Chat");
     head("Tools and permissions");
     add("mode", "Mode (this session)", chat_mode_name(st.mode),
-        "For this session only, not saved: the next chat starts in ask.   ask: asks before commands, deletes and moves   plan: only reads   auto: never asks",
+        "For this session only, not saved: the next chat starts in ask.   ask: asks before commands, deletes and moves   plan: only reads  "
+        " auto: never asks",
         {"ask", "plan", "auto"});
     add("use_tools", "Use tools", st.no_tools ? "off" : "on",
         "Off: the model only talks (files, commands and the web are not offered). Reloads the model", {"on", "off"});

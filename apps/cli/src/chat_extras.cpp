@@ -227,7 +227,8 @@ std::string strip_think(std::string_view text) {
     // A closing tag before any opening one: the reasoning started in the prompt.
     const size_t first_close = s.find(kClose);
     const size_t first_open = s.find(kOpen);
-    if (first_close != std::string::npos && (first_open == std::string::npos || first_close < first_open)) s.erase(0, first_close + kClose.size());
+    if (first_close != std::string::npos && (first_open == std::string::npos || first_close < first_open))
+        s.erase(0, first_close + kClose.size());
     std::string out;
     size_t at = 0;
     for (;;) {

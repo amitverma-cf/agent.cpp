@@ -1271,7 +1271,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
         const size_t first = selected >= 8 ? selected - 7 : 0;
         for (size_t i = first; i < found.size() && i < first + 8; ++i) {
             const TuiCommand &c = host.commands[found[i]];
-            matches.push_back({std::string(i == selected ? "\xE2\x96\xB8 " : "  ") + c.name, c.help, i == selected ? "pitem current" : "pitem"});
+            matches.push_back(
+                {std::string(i == selected ? "\xE2\x96\xB8 " : "  ") + c.name, c.help, i == selected ? "pitem current" : "pitem"});
         }
         show_palette = !matches.empty();
         return Component<ChatApp>::Digest();
