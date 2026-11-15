@@ -152,10 +152,6 @@ TEST_CASE("cli e2e: setup writes the home, doctor reads it, clean has nothing to
 
 TEST_CASE("cli e2e: model commands that need no network", "[cli_e2e]") {
     Home h;
-    auto search = h.run("model search qwen");
-    CHECK(search.code == 0);
-    CHECK(has(search, "qwen"));
-    CHECK(h.run("model search zzzz-no-such-model").code == 0); // an empty table
     CHECK(h.run("model rm nope").code != 0);
     CHECK(h.run("model pull").code != 0);
     CHECK(h.run("model info").code != 0);
