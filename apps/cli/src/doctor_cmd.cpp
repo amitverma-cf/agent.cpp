@@ -29,8 +29,17 @@ int cmd_doctor(const CommandLine &, Context &ctx) {
 
     std::printf("\nengines:\n");
     auto engines = load_engines(ctx.engines_path);
-    if (!engines.ok || engines.value.empty()) std::printf("  none registered: run `agent setup`\n");
-    else
+    if (!engines.ok || engines.value.empty()) {
+        // Nothing is registered in engines.json, but the plugins that ship with the program are found next to it and used as they are.
+        const std::vector<std::string> dirs = engine_search_dirs();
+        bool any = false;
+        for (const char *name : {"llama", "audiocpp", "sdcpp", "onnx", "trellis", "api"})
+            if (const std::string p = find_plugin(name, dirs); !p.empty()) {
+                std::printf("  %-10s ok       %s  (found next to the program)\n", name, p.c_str());
+                any = true;
+            }
+        if (!any) std::printf("  none found: run `agent setup`\n");
+    } else
         for (const EngineEntry &e : engines.value)
             std::printf("  %-10s %s  %s\n", e.name.c_str(), file_exists(e.path) ? "ok     " : "MISSING", e.path.c_str());
 

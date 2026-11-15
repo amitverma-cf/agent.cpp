@@ -234,11 +234,14 @@ std::string system_prompt(const ChatState &st) {
         " The computer runs Linux: run_command uses sh. To work with files prefer the file tools (list_dir, read_file, write_file) over "
         "shell commands. If a command fails, change the approach or tell the user what went wrong; never repeat the same failing command.";
 #endif
-    const char *habits = " When the user states a lasting preference, a fact about themselves or the project, or corrects you, save it "
-                         "with remember without "
-                         "being asked. When a request is ambiguous, ask with ask_user instead of guessing. For a request with several "
-                         "steps keep a checklist "
-                         "with todo.";
+    const char *habits =
+        " When the user states a lasting preference, a fact about themselves or the project, or corrects you, save it "
+        "with remember without "
+        "being asked. When a request is ambiguous, ask with ask_user instead of guessing. For a request with several "
+        "steps keep a checklist "
+        "with todo. When the user mentions their files, a folder or a document without a path, look in the workspace first "
+        "(list_dir, then read what matches) before asking; ask only when nothing matches. For questions about earlier "
+        "chats, check recall and the saved notes first.";
     return std::string(kSystemPrompt) + platform + habits +
            load_project_rules(st.workspace, st.ctx->has_home ? st.ctx->home.root : st.ctx->config_dir);
 }
