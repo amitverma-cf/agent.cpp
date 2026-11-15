@@ -1293,6 +1293,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
         if (slash_pending) {
             slash_pending = false;
             const int letter = Letter(e);
+            if (std::getenv("AGENT_TUI_DEBUG")) { std::FILE *d = std::fopen("/tmp/tuidbg.txt", "a"); if (d) { std::fprintf(d, "slash_pending letter=%d input=[%s]
+", letter, input.c_str()); std::fclose(d); } }
             if ((input == "/" || input.empty()) && letter >= 32 && letter < 127 && !show_settings && !asking && !confirm_open) {
                 SetInput("/" + std::string(1, static_cast<char>(letter)));
                 return true;
