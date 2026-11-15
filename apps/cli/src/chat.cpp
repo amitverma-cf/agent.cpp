@@ -270,7 +270,8 @@ PermissionDecision check_tool(std::string_view name, std::string_view arguments,
     }
     if (st->mode == ChatMode::Auto) return PermissionDecision::Allow;
     PermissionDecision d = tools::default_permission_policy(name, arguments, nullptr);
-    if ((name == "web_fetch" || name == "web_search") && d == PermissionDecision::Allow) d = PermissionDecision::Ask; // the network
+    if ((name == "web_fetch" || name == "web_search" || name == "agent_run") && d == PermissionDecision::Allow)
+        d = PermissionDecision::Ask; // the network, other models
     if (d == PermissionDecision::Ask && std::find(st->always_allowed.begin(), st->always_allowed.end(), name) != st->always_allowed.end())
         return PermissionDecision::Allow;
     return d;
@@ -437,6 +438,107 @@ Result<std::string> web_search_cb(std::string_view args, void *user) {
     return ok(cut_text(page.value, 8000));
 }
 
+// ---- the agent's own commands as a tool: "draw a lighthouse", "transcribe talk.wav", "run flow.json" from a chat message.
+// The command runs as `agent <args>` in a child process (its own engine, its own memory), the output comes back as the tool result,
+// and the files it names ("media: MIME PATH") are added to the artifacts that /open lists. The user is asked first (see check_tool).
+
+constexpr std::string_view kAgentRunSchema =
+    R"({"type":"object","properties":{"args":{"type":"array","items":{"type":"string"},"description":"The arguments of the agent command as separate strings, for example [\"task\",\"image_gen\",\"--model\",\"sdxs-512\",\"--text\",\"a red lighthouse\"], [\"task\",\"asr\",\"--model\",\"parakeet\",\"--file\",\"talk.wav\"], [\"run\",\"flow.json\"], [\"model\",\"ls\"] or [\"engine\",\"ls\"]. The first word is task, run, model, engine, doctor, skill, mcp, schedule or wake."}},"required":["args"]})";
+
+std::string shell_quote(const std::string &s) {
+#if defined(_WIN32)
+    std::string r = "\"";
+    for (const char c : s) r += c == '"' ? std::string("\\\"") : std::string(1, c);
+    return r + "\"";
+#else
+    std::string r = "'";
+    for (const char c : s) r += c == '\'' ? std::string("'\\''") : std::string(1, c);
+    return r + "'";
+#endif
+}
+
+std::string self_executable() {
+    std::error_code ec;
+#if defined(_WIN32)
+    return (fs::path(executable_dir()) / "agent.exe").string();
+#else
+    const fs::path p = fs::read_symlink("/proc/self/exe", ec);
+    return ec ? std::string("agent") : p.string();
+#endif
+}
+
+// Runs `agent ARGS...`; the text is what the command printed. `failed` is set when it did not succeed.
+std::string run_agent_command(ChatState &st, std::vector<std::string> args, bool &failed) {
+    failed = true;
+    if (args.empty()) return "no command given";
+    static const char *const allowed[] = {"task", "run", "model", "engine", "doctor", "skill", "mcp", "schedule", "wake"};
+    if (std::find_if(std::begin(allowed), std::end(allowed), [&](const char *a) { return args[0] == a; }) == std::end(allowed))
+        return "the command '" + args[0] + "' is not available here; use task, run, model, engine, doctor, skill, mcp, schedule or wake";
+    auto has = [&](const std::string &flag) { return std::find(args.begin(), args.end(), flag) != args.end(); };
+    if (st.ctx->has_home && !has("--home")) args.insert(args.end(), {"--home", st.ctx->home.root});
+    if ((args[0] == "task" || args[0] == "run") && !has("--workspace")) args.insert(args.end(), {"--workspace", st.workspace});
+    std::string command = shell_quote(self_executable());
+    for (const std::string &a : args) command += " " + shell_quote(a);
+    command += " 2>&1";
+#if defined(_WIN32)
+    std::FILE *pipe = _popen(command.c_str(), "r");
+#else
+    std::FILE *pipe = popen(command.c_str(), "r");
+#endif
+    if (!pipe) return "cannot start the command";
+    std::string output;
+    char buf[4096];
+    while (std::fgets(buf, sizeof(buf), pipe)) {
+        output += buf;
+        if (output.size() > 24 * 1024) {
+            output.resize(24 * 1024);
+            output += "\n[cut]\n";
+            break;
+        }
+    }
+#if defined(_WIN32)
+    const int status = _pclose(pipe);
+#else
+    const int status = pclose(pipe);
+#endif
+    failed = status != 0;
+    // "media: image/png /path/file.png 1234 bytes": the file is an artifact now (/open lists it).
+    size_t at = 0;
+    while ((at = output.find("media: ", at)) != std::string::npos) {
+        const size_t end = output.find('\n', at);
+        const std::string line = output.substr(at + 7, end == std::string::npos ? std::string::npos : end - at - 7);
+        const size_t sp = line.find(' ');
+        const size_t tail = line.rfind(" bytes");
+        if (sp != std::string::npos && tail != std::string::npos && tail > sp) {
+            const size_t size_at = line.rfind(' ', tail - 1);
+            if (size_at != std::string::npos && size_at > sp)
+                st.artifacts.push_back(Media{line.substr(0, sp), line.substr(sp + 1, size_at - sp - 1)});
+        }
+        at = end == std::string::npos ? output.size() : end;
+    }
+    return output.empty() ? std::string(failed ? "the command failed" : "done") : output;
+}
+
+Result<std::string> agent_run_cb(std::string_view args, void *user) {
+    auto *st = static_cast<ChatState *>(user);
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded(args);
+    simdjson::dom::element doc;
+    simdjson::dom::array list;
+    if (parser.parse(padded).get(doc) || doc["args"].get(list))
+        return fail<std::string>(ErrorCode::InvalidConfig, "agent_run needs args, a list of strings");
+    std::vector<std::string> words;
+    for (simdjson::dom::element e : list) {
+        std::string_view w;
+        if (e.get(w)) return fail<std::string>(ErrorCode::InvalidConfig, "every item of args must be a string");
+        words.emplace_back(w);
+    }
+    bool failed = false;
+    std::string text = run_agent_command(*st, std::move(words), failed);
+    if (failed) return fail<std::string>(ErrorCode::InvalidConfig, cut_text(text, 4000));
+    return ok(std::move(text));
+}
+
 Result<void> open_session(ChatState &st) {
     const std::string previous = st.lease ? st.lease.name : std::string();
     release_model(st.lease);
@@ -475,6 +577,18 @@ Result<void> open_session(ChatState &st) {
                  .parameter_schema = kWebSearchSchema,
                  .callback = web_search_cb,
                  .user_data = &st.ctx->config.search_url});
+    if (!st.no_tools)
+        cfg.tools.push_back(Tool{.name = "agent_run",
+                                 .description =
+                                     "Run an agent command and return what it printed: images, video, 3D meshes, speech, transcripts, "
+                                     "embeddings, ONNX models, graphs (agent run FILE.json), model downloads and listings. For "
+                                     "example [\"task\",\"image_gen\",\"--model\",\"NAME\",\"--text\",\"prompt\"]. Use "
+                                     "[\"model\",\"ls\"] and [\"engine\",\"ls\"] to see what is installed. Capabilities of "
+                                     "task: text_gen, ocr, asr, tts, vad, diarize, image_gen, image_edit, video_gen, mesh_gen, "
+                                     "embed, rerank, decide, classify, generic. The user is asked first.",
+                                 .parameter_schema = kAgentRunSchema,
+                                 .callback = agent_run_cb,
+                                 .user_data = &st});
     cfg.secret_resolver = cli_resolve_secrets;
     cfg.secret_user_data = st.secrets.get();
     cfg.context_window = st.context_window;
@@ -1084,6 +1198,40 @@ bool handle_line(ChatState &st, const std::string &line) {
         if (b != std::string::npos && line[b] == '!' && line.size() > b + 1) {
             run_shell_line(st, line.substr(b + 1));
             return true;
+        }
+    }
+    {
+        // "/task CAPABILITY --model NAME --text ..." and "/run FILE.json" go straight to `agent task` and `agent run`.
+        const size_t b = line.find_first_not_of(" \t");
+        if (b != std::string::npos && line[b] == '/') {
+            std::vector<std::string> words;
+            size_t i = b + 1;
+            while (i < line.size()) {
+                while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) ++i;
+                if (i >= line.size()) break;
+                std::string w;
+                if (line[i] == '"' || line[i] == '\'') {
+                    const char q = line[i++];
+                    while (i < line.size() && line[i] != q) w += line[i++];
+                    if (i < line.size()) ++i;
+                } else {
+                    while (i < line.size() && line[i] != ' ' && line[i] != '\t') w += line[i++];
+                }
+                words.push_back(w);
+            }
+            if (!words.empty() && (words[0] == "task" || words[0] == "run")) {
+                if (words.size() < 2) {
+                    out(words[0] == "task"
+                            ? "usage: /task CAPABILITY [--model NAME] [--text TEXT] [--file FILE] [--doc TEXT] [--params JSON]\n"
+                            : "usage: /run FILE.json\n");
+                    return true;
+                }
+                bool failed = false;
+                out("running: agent " + words[0] + " ...\n");
+                out(run_agent_command(st, words, failed));
+                ensure_newline();
+                return true;
+            }
         }
     }
     const SlashCommand cmd = parse_slash_command(line);
@@ -1900,6 +2048,8 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
             {"/help", "list the commands"},
             {"/model", "show or switch the model"},
             {"/image", "send an image or audio file"},
+            {"/task", "run an engine capability: image, speech, 3D, embed, ONNX"},
+            {"/run", "run a graph file"},
             {"/open", "list or open generated files"},
             {"/stats", "token and tool-call counters"},
             {"/diff", "what the tools changed in files"},

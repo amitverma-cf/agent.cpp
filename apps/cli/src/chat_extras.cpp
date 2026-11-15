@@ -241,7 +241,7 @@ const char *chat_mode_name(ChatMode mode) { return mode == ChatMode::Plan ? "pla
 
 bool tool_changes_things(std::string_view tool) {
     return tool == "write_file" || tool == "append_file" || tool == "delete_path" || tool == "move_path" || tool == "create_dir" ||
-           tool == "run_command";
+           tool == "run_command" || tool == "agent_run";
 }
 
 std::vector<std::string> load_always_allowed(const std::string &workspace) {
