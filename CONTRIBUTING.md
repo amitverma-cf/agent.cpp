@@ -13,7 +13,7 @@ below (no hot-path allocations, no exceptions, `Result<T>`). [AGENTS.md](AGENTS.
 
 # Pull Requests
 
-Before submitting your PR:
+Before submitting the PR:
 - Search for existing PRs to prevent duplicating efforts.
 - **Understand the Architecture**: This is a zero-cost abstraction framework. Familiarize yourself with the project's core philosophies and design patterns.
 - **Memory Standards**: No heap allocations (`new`/`malloc`) are permitted in the hot-path. All per-turn memory must be managed via the `Arena` allocator (`Session::arena` / `Session::worker_arenas`).
@@ -21,9 +21,9 @@ Before submitting your PR:
   - `scripts/test.sh`: build and run the tests (`--with-engines`, `--all`).
   - `scripts/update-deps.sh`: the one dependency update script (`list`, `bump NAME`, `ort`).
   - `scripts/package.sh`: the Linux release tarball.
-  - `scripts/format.sh`: runs clang-format on the C++ files. Run it only when you are about to push, not while editing.
+  - `scripts/format.sh`: runs clang-format on the C++ files. Run it only when about to push, not while editing.
   - `scripts/setup-hooks.sh`: enables `.githooks`: format check, build and tests before a push. Nothing runs on commit.
-- **Test your changes**:
+- **Test the changes**:
   - Run all unit and integration tests: tests are written with [Catch2](https://github.com/catchorg/Catch2) (`tests/`), built as the `test_agent` executable, and registered individually with CTest via `catch_discover_tests`. Run all of them with `ctest --test-dir build --output-on-failure`, or filter to a subsystem with Catch2 tags, e.g. `./build/test_agent "[memory]"`.
   - Build with `-DAGENT_ENABLE_SANITIZERS=ON` (AddressSanitizer + UBSan) and run `ctest`.
   - For changes touching concurrency (parallel graph branches, memory backend), also run under valgrind `--tool=helgrind`.
@@ -31,9 +31,9 @@ Before submitting your PR:
   - Engine plugins and the engine host run in their own process, and the engine sandbox hides the build folder from them, so their .gcda files are not written. Configure with `-DCMAKE_CXX_FLAGS="--coverage -O2 -DAGENT_COVERAGE_RW_DIR=\"<build dir>\""` (this define makes the sandbox leave the build folder writable, coverage builds only) and build in Release mode: unoptimized ggml with gcov counters is too slow for the model tests. Run the model-backed tests (`AGENT_TEST_*_MODEL` variables, see `tests/unit`) one test case per process, so a slow one cannot discard the others' data. Last measurement on Linux: 80% of lines, 369 test cases passing, 29 skipped (OCR / video / TRELLIS / GPU / OS keychain).
 - **Atomic Changes**: Create separate PRs for each feature or fix.
 
-After submitting your PR:
+After submitting the PR:
 - Expect requests for modifications to ensure the code meets the project's standards for quality, performance, and long-term maintainability.
-- If your PR becomes stale, rebase it on top of the latest development branch.
+- If the PR becomes stale, rebase it on top of the latest development branch.
 
 # Coding Guidelines
 
@@ -55,4 +55,4 @@ After submitting your PR:
 
 - Documentation is a community effort.
 - Add documentation comments to public APIs.
-- Update the relevant documentation if your changes introduce new patterns.
+- Update the relevant documentation if the changes introduce new patterns.

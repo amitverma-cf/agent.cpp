@@ -2,7 +2,7 @@
 
 `#include <agent-cpp/agent.hpp>`
 
-Event hooks let you observe what a session does (turns, model calls, tool calls, compression, pruning, graph steps) without changing the code that does it. Register a C function pointer on a session; it is called on the thread that triggered the event.
+Event hooks observe what a session does (turns, model calls, tool calls, compression, pruning, graph steps) without changing the code that does it. Register a C function pointer on a session; it is called on the thread that triggered the event.
 
 For per-tool auditing inside one graph node, use `ToolHook` instead. See [Event hooks or tool hooks](#event-hooks-or-tool-hooks) below.
 
@@ -63,7 +63,7 @@ struct EventHook {
 };
 ```
 
-`EventHook` is the record the session stores. You do not create one yourself; use `register_event_hook`.
+`EventHook` is the record the session stores. It is not created directly; use `register_event_hook`.
 
 ---
 
@@ -75,7 +75,7 @@ void register_event_hook(Session &session, EventType type, EventHookFn callback,
 
 Adds a hook for one event type. Hooks for the same type are called in the order they were added. They stay for the life of the session; there is no way to remove one.
 
-A hook is called with `(event, user_data)`. `user_data` is the pointer you gave, so it must stay valid for as long as the session can fire events.
+A hook is called with `(event, user_data)`. `user_data` is the pointer that was registered, so it must stay valid for as long as the session can fire events.
 
 ---
 
@@ -130,7 +130,7 @@ agent::register_event_hook(session, agent::EventType::OnToolResult,
 
 ### Count model calls with user data
 
-The hook receives the pointer you pass to `register_event_hook`, so state can live in your own struct:
+The hook receives the pointer passed to `register_event_hook`, so state can live in an application struct:
 
 ```cpp
 struct Counter {

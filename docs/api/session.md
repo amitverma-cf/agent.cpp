@@ -2,7 +2,7 @@
 
 `#include <agent-cpp/agent.hpp>`
 
-A `Session` is the object everything else works through. It holds one loaded engine with its models, the workspace, the tool registry, the memory store and the statistics. Create one with `open_session` for the common case, or with `engine_config` and `init` when you need control over the configuration.
+A `Session` is the object everything else works through. It holds one loaded engine with its models, the workspace, the tool registry, the memory store and the statistics. Create one with `open_session` for the common case, or with `engine_config` and `init` when control is needed over the configuration.
 
 Sessions are **move-only**. Do not use one from two threads at once.
 
@@ -112,7 +112,7 @@ auto res = agent::init(cfg.value);
 
 `engine_config(engine, models, extra_options_json, base)`:
 
-- `engine` is one of the `engines::` constants, or the name you gave an engine with `engines::add`.
+- `engine` is one of the `engines::` constants, or the name given to an engine with `engines::add`.
 - `models` is a span of `ModelSlot{role, path}`.
 - `extra_options_json` is a JSON object merged into the engine options. Pass `{}` for none.
 - `base` supplies everything else. If `base.engine_options` is already set, pass the options through `extra_options_json` instead; setting both is an error.
@@ -127,7 +127,7 @@ auto res = agent::init(cfg.value);
 | `agent::engines::trellis` | `trellis` | Image to 3D mesh |
 | `agent::engines::onnx` | `onnx` | Any ONNX model |
 
-Engine plugins are found at run time in an `engines/` folder next to your program. `agent_deploy_engines()` in CMake copies only the engines your application uses into that folder. To look in other places, see [engines.md](engines.md).
+Engine plugins are found at run time in an `engines/` folder next to the program. `agent_deploy_engines()` in CMake copies only the engines the application uses into that folder. To look in other places, see [engines.md](engines.md).
 
 ---
 
@@ -154,7 +154,7 @@ The `AgentRuntime` must outlive every `Session`.
 
 ## Config
 
-`Config` holds every setting `init` reads. Set the fields you need and leave the rest at their defaults. After `init`, `session.config` is readable. Change only `session.config.tools` afterwards, and call `rebuild_tool_index` after you do (see [Tools after init](#tools-after-init)).
+`Config` holds every setting `init` reads. Set the needed fields and leave the rest at their defaults. After `init`, `session.config` is readable. Change only `session.config.tools` afterwards, and call `rebuild_tool_index` afterwards (see [Tools after init](#tools-after-init)).
 
 ```cpp
 struct Config {
@@ -197,7 +197,7 @@ struct Config {
 
 | Field | Default | Meaning |
 |---|---|---|
-| `tools` | `{}` | Your tools. Default tools are added after these during `init`. See [tools.md](tools.md). |
+| `tools` | `{}` | The tools. Default tools are added after these during `init`. See [tools.md](tools.md). |
 | `auto_default_tools` | `true` | Register the default tools (filesystem, terminal, context compressor, and so on). |
 | `lazy_tools` | `false` | Start with only `tool_search`, `load_tool` and `use_skill`; other tools are loaded when the model asks. |
 | `max_tool_call_rounds` | `10` | Tool-call rounds allowed in one `run_turn`. |
@@ -219,8 +219,8 @@ These apply when `provider` is `Engine`. See [engines.md](engines.md#isolation).
 
 | Field | Default | Meaning |
 |---|---|---|
-| `engine_isolation` | `EngineIsolation::Default` | `InProcess` loads the engine into your process. `Process` runs it in an `agent-engine-host` child. `Default` uses the isolation the engine was added with (`engines::add`, or its entry in an `engines.json`), otherwise `InProcess`. |
-| `engine_host_path` | `""` | Path of the `agent-engine-host` executable for `Process`. Empty = `AGENT_ENGINE_HOST`, then next to your program, then `../bin`, then `PATH`. |
+| `engine_isolation` | `EngineIsolation::Default` | `InProcess` loads the engine into the process. `Process` runs it in an `agent-engine-host` child. `Default` uses the isolation the engine was added with (`engines::add`, or its entry in an `engines.json`), otherwise `InProcess`. |
+| `engine_host_path` | `""` | Path of the `agent-engine-host` executable for `Process`. Empty = `AGENT_ENGINE_HOST`, then next to the program, then `../bin`, then `PATH`. |
 | `engine_timeout_ms` | `0` | For `Process`: a request running longer kills the host and fails with `EngineCrashed`. `0` = no limit. |
 | `engine_cancel_grace_ms` | `6000` | For `Process`: time an engine gets to stop after `request_cancel` before the host is killed. |
 | `engine_max_restarts` | `3` | For `Process`: automatic host restarts allowed per minute. |
@@ -277,7 +277,7 @@ struct Session {
 };
 ```
 
-Read `config`, `arena` and `stats` directly if you need to. Change `config.tools` only as described in [Tools after init](#tools-after-init). Everything else is managed by the library.
+Read `config`, `arena` and `stats` directly if needed. Change `config.tools` only as described in [Tools after init](#tools-after-init). Everything else is managed by the library.
 
 ---
 
@@ -349,7 +349,7 @@ Session-wide totals. See [stats.md](stats.md).
 
 ## Backend lifetime
 
-`AgentRuntime` calls these for you. Call them yourself only if you do not use `AgentRuntime`:
+`AgentRuntime` calls these. Call them directly only when `AgentRuntime` is not used:
 
 ```cpp
 void init_backend();   // once, at process start

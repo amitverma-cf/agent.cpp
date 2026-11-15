@@ -1,7 +1,7 @@
 # Guide: writing an engine plugin
 
 An engine plugin wraps an inference library (llama.cpp, audio.cpp, stable-diffusion.cpp, ONNX
-Runtime, your own) behind the C ABI in [`<agent-cpp/engine_abi.h>`](../../include/agent-cpp/engine_abi.h).
+Runtime, or a custom one) behind the C ABI in [`<agent-cpp/engine_abi.h>`](../../include/agent-cpp/engine_abi.h).
 The core loads it at runtime, in process or in a sandboxed `agent-engine-host`, and routes requests to
 it by capability. This guide walks through ABI 2 with a complete plugin,
 [`examples/04-custom-engine/reverse_engine.cpp`](../../examples/04-custom-engine/reverse_engine.cpp) (`agent-engine-reverse`):
@@ -57,7 +57,7 @@ extern "C" AGENT_ENGINE_EXPORT const agent_engine_v1 *agent_engine_get_v1(void) 
   for its per-instance output buffers. `AGENT_ENGINE_FLAG_NATIVE_TOOLS` means the engine formats
   `agent_request::tools_json` into the prompt itself; otherwise the core prepends plain-text tool
   instructions to the system message.
-- Build with hidden visibility so this is the only exported symbol and your copy of ggml / ONNX
+- Build with hidden visibility so this is the only exported symbol and the copy of ggml / ONNX
   Runtime cannot clash with another plugin's.
 
 Only C types cross the boundary: the host and the plugin may be built with different compilers and
@@ -133,8 +133,8 @@ message is a list of parts:
 
 Assistant messages carry `tool_calls`, tool messages a `tool_call_id`. `params_json` holds per-call
 parameters (`max_tokens`, `temperature`, plus anything engine-specific), `tools_json` the tool
-definitions (only for `TEXT_GEN`). Everything is borrowed for the duration of the call: copy what you
-keep.
+definitions (only for `TEXT_GEN`). Everything is borrowed for the duration of the call: copy whatever is
+kept.
 
 **Output.** Fill `resp->message` with parts (and `tool_calls` for a model that requests tools) and
 `resp->usage`. The memory is the engine's: it must stay valid until `free_response()` or the next
@@ -208,13 +208,13 @@ and a progress callback that raises the cancel flag at step 8 makes the call fai
 writer was compiled with. Fields are only ever appended, so a plugin built today keeps loading into
 later hosts and vice versa. The rules:
 
-1. **Set `struct_size = sizeof(agent_engine_v1)`** in your table (second field, after `abi_version`).
+1. **Set `struct_size = sizeof(agent_engine_v1)`** in the table (second field, after `abi_version`).
    The host refuses tables smaller than the v2 baseline (`AGENT_ENGINE_V2_SIZE`) and plugins with
    another `abi_version`.
 2. **Baseline fields need no check.** Everything in ABI 2 is the v2 baseline (`AGENT_REQUEST_V2_SIZE`,
    `AGENT_RESPONSE_V2_SIZE`); the host always passes requests and responses at least that large.
 3. **Check before touching anything newer**: `if (AGENT_HAS_FIELD(req, agent_request, new_field))`. A host
-   older than your header passes a smaller struct.
+   older than the header passes a smaller struct.
 4. **Never write `response->struct_size` and never write past it.** Clear the response with
    `agent_response_reset(resp)`, not `*resp = agent_response{}` (that zeroes `struct_size` and, against
    an older host's smaller struct, writes past its end). Do the same in `free_response()`.
@@ -231,7 +231,7 @@ The same plugin runs in two places, chosen per Session (`Config::engine_isolatio
 - **In process**: `dlopen`ed into the application. Fastest; a crash, `abort()` or `exit()` in the
   engine kills the application.
 - **Process**: loaded by `agent-engine-host`, which serves the ABI over pipes (tensors and BYTES of
-  64 KiB and more through shared memory). Your code does not change, but it runs under these conditions:
+  64 KiB and more through shared memory). The code does not change, but it runs under these conditions:
 
 | Under process isolation | What it means for the engine |
 |---|---|
@@ -242,7 +242,7 @@ The same plugin runs in two places, chosen per Session (`Config::engine_isolatio
 | stdout | redirected to stderr, so logging with `printf` cannot corrupt the protocol |
 | `register_engine` (an engine linked into the application) | cannot run out of process: there is no file for the host to load |
 
-Run your engine both ways in its tests; the guide driver does:
+Run the engine both ways in its tests; the guide driver does:
 
 ```cpp
     exercise(plugin, workspace, agent::EngineIsolation::InProcess, "in process");
@@ -280,7 +280,7 @@ An application that ships the installed plugin lists it in `agent_deploy_engines
 
 `agent_install_engine(<target> <libs>...)` also copies the runtime libraries a plugin loads through an
 `$ORIGIN` RPATH (ONNX Runtime, ...), keeping symlinks whose targets are listed too. Prefer
-linking your inference library statically (llama and sdcpp do), so the plugin is one file.
+linking the inference library statically (llama and sdcpp do), so the plugin is one file.
 
 Then register it with the CLI, which loads it once to validate the ABI and prints its capabilities:
 

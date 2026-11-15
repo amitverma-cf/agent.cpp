@@ -1,6 +1,6 @@
 # Architecture
 
-agent.cpp is a C++20 library and CLI for running language, speech and image models on your own machine. The design
+agent.cpp is a C++20 library and CLI for running language, speech and image models on the local machine. The design
 follows three rules, chosen for small edge hardware where an unexpected allocation or pause is a real problem:
 
 - **No virtual dispatch.** Providers, memory stores and tool backends are chosen from `constexpr` tables of function
@@ -48,7 +48,7 @@ never part of a public header.
 
 ```
 +-----------------------------------------------------------------------+
-|  Your program or the agent CLI                                         |
+|  The program or the agent CLI                                         |
 |  Config, Conversation, run_turn, run_graph, event hooks, tools         |
 +------------------------------------+----------------------------------+
                                      | calls
@@ -294,7 +294,7 @@ pool of `max_parallel_subagents` entries; when the pool is empty the call fails 
   before creating any folder.
 - **Native tools are not sandboxed.** A `Tool::callback` is a plain function pointer that runs in the application with the
   application's privileges. The permission gate decides whether it is called; the sandboxes do not apply to its own code.
-  Review a tool's code before you register it.
+  Review a tool's code before registering it.
 
 ---
 

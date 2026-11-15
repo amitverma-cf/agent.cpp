@@ -5,7 +5,7 @@
 This page is the reference for the `agent.json` format and the loader functions. An `agent.json` file describes a
 [graph](graph.md) declaratively: its nodes, its edges (static, or routed on a state value), its workflow nodes
 (sequential, parallel, loop, wait), the MCP servers to connect, and hints for the host about which engine and model to
-use. The loader turns the file into an ordinary `agent::Graph`, which you run with `run_graph` / `resume_graph`.
+use. The loader turns the file into an ordinary `agent::Graph`, which runs with `run_graph` / `resume_graph`.
 
 The loader is compiled only when **both** `AGENT_WITH_GRAPH` and `AGENT_WITH_MCP` are on (both default to ON). Build with
 `-DAGENT_WITH_GRAPH=OFF` or `-DAGENT_WITH_MCP=OFF` to leave it out. Examples are in
@@ -87,7 +87,7 @@ Keep the `LoadedGraph` alive while its `graph` is in use. Route tables, loop con
 | `nodes` | array, required, non-empty | | Nodes; see below |
 | `edges` | array | | Edges; see below |
 
-`"//"`, `"description"` and `"$schema"` are allowed on every object and ignored, so you can use them for comments. Other
+`"//"`, `"description"` and `"$schema"` are allowed on every object and ignored, so they can hold comments. Other
 unknown fields produce a **warning**, not an error. Typos still get noticed, and hosts such as the CLI can add their own
 fields.
 
@@ -179,7 +179,7 @@ top level (the nodes reachable from `entry`). Anything else is an error, for exa
 into the top-level flow. Two branches of the same parallel node may lead to a shared node. It then runs in both branches.
 
 A `sequential` node becomes a no-op Function node with an edge to its first step. The last step exits into a generated
-no-op node `<name>#done`, which carries the sequential node's outgoing edge. You will see `<name>#done` in the event log.
+no-op node `<name>#done`, which carries the sequential node's outgoing edge. `<name>#done` appears in the event log.
 
 ---
 

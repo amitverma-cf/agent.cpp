@@ -1,9 +1,9 @@
-# Choosing the parts you use
+# Choosing the parts to use
 
 libagent is modular. The core is small: sessions, the turn loop, tools, the OS sandbox, memory, events, skills and the permission gates. The
-larger parts are switches in CMake, and every engine is its own plugin you build, install or leave out.
+larger parts are switches in CMake, and every engine is its own plugin that is built, installed or left out.
 
-| Part | CMake option (default) | What you lose without it |
+| Part | CMake option (default) | What is lost without it |
 |---|---|---|
 | Graph runtime and `agent.json` | `AGENT_WITH_GRAPH` (ON) | `Graph`, `run_graph`, checkpoints, `load_graph_json` (JSON graphs also need MCP) |
 | MCP client | `AGENT_WITH_MCP` (ON) | `connect_mcp_server`, MCP servers in graphs |
@@ -24,10 +24,10 @@ A small embedded build, with a chat engine and nothing else:
 cmake -B build -DAGENT_WITH_GRAPH=OFF -DAGENT_WITH_MCP=OFF -DAGENT_WITH_RAG=OFF -DAGENT_WITH_MODELS=OFF -DAGENT_BUILD_CLI=OFF
 ```
 
-A program that links only the core still gets sessions, tools, skills, the sandbox and every engine you built; the declarations of a part you
+A program that links only the core still gets sessions, tools, skills, the sandbox and every engine that was built; the declarations of a part that
 left out are removed from `agent.hpp` (`#if AGENT_WITH_GRAPH` and so on), so using one is a compile error, not a link error.
 
-## Asking for parts from your project
+## Asking for parts from the project
 
 ```cmake
 find_package(agent-cpp REQUIRED COMPONENTS graph rag llama audiocpp)
@@ -35,12 +35,12 @@ target_link_libraries(my_app PRIVATE agent-cpp::agent)
 ```
 
 `find_package` fails, with the missing component named, when the installed build lacks a part (`graph`, `mcp`, `rag`, `models`) or an engine
-(`llama`, `audiocpp`, `sdcpp`, `trellis`, `onnx`). Ask only for what you use. In C++ the engines are `agent::engines::llama` and the like; add
-your own with `agent::engines::add`.
+(`llama`, `audiocpp`, `sdcpp`, `trellis`, `onnx`). Ask only for what is used. In C++ the engines are `agent::engines::llama` and the like; add
+a custom engine with `agent::engines::add`.
 
-## Shipping only the engines you use
+## Shipping only the engines in use
 
-Every engine is built by default, but your application ships just the ones you name:
+Every engine is built by default, but the application ships just the ones named:
 
 ```cmake
 find_package(agent-cpp REQUIRED COMPONENTS llama)
@@ -48,12 +48,12 @@ agent_deploy_engines(my_app llama)
 ```
 
 After each build that copies `agent-engine-llama` (plus the libraries it loads) into `engines/` next to `my_app`, adds it to `install()` and
-copies `agent-engine-host`. Engines you do not list are not copied or installed. The program finds `engines/` at run time, so the folder can
+copies `agent-engine-host`. Engines that are not listed are not copied or installed. The program finds `engines/` at run time, so the folder can
 move with the app; `agent::engines::search_path(dir)` adds another place to look.
 
 ## Using less at run time
 
-- **Tools:** `Config::auto_default_tools = false` and list only the tools you want; the file and terminal tools stay out.
+- **Tools:** `Config::auto_default_tools = false` and list only the wanted tools; the file and terminal tools stay out.
 - **Skills and MCP servers:** nothing loads unless `Config::skills_dir` or an MCP server is set.
 - **Sandbox:** engines and `run_command` run sandboxed by default (`Config::engine_sandbox`, `Config::tool_sandbox`); see [security-sandbox.md](../security-sandbox.md).
 - **Memory:** an in-memory store by default; link `agent-cpp::store_sqlite` for a persistent one.

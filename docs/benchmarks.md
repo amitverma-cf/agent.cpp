@@ -3,7 +3,7 @@
 Measured with `agent_bench` (`bench/`, option `AGENT_BUILD_BENCH`). **Read the caveat first: these
 numbers come from a shared 4-core VM that other jobs were using at the same time (load average about
 11 during the runs), so absolute figures are noisy and only meant to show orders of magnitude and
-shape.** Re-run on your own hardware before drawing conclusions.
+shape.** Re-run on the target hardware before drawing conclusions.
 
 ## Machine
 
@@ -149,11 +149,11 @@ plus the KV cache) and a q8 instead of the automatic KV type.
 
 **Graph suite:** Qwen3.5-4B Q5_K_M passes all 7 checks (pipeline 100 s, loop 23 s). TwIL-8B Q3 needed 186 s for the pipeline.
 
-**Speculation in our engine.** Hybrid models (Qwen3.5, LFM) cannot cut their recurrent state back, so the engine snapshots it before
+**Speculation in the llama engine.** Hybrid models (Qwen3.5, LFM) cannot cut their recurrent state back, so the engine snapshots it before
 verifying a draft and restores it (then decodes the accepted prefix again) when part of the draft is rejected. Qwen3.5-4B on a
 request that repeats its input: 10.6 s to 5.5 s (15 rounds, 113 drafted tokens accepted), identical text.
 
-**MTP, measured with upstream `llama-cli --spec-type draft-mtp` (our engine does not drive the MTP head).** Generation speed in
+**MTP, measured with upstream `llama-cli --spec-type draft-mtp` (the llama engine does not drive the MTP head).** Generation speed in
 tokens/s on the same model: output that repeats the input 12.3 plain, 15.6 n-gram, 18.6 MTP (n=3, +51%); an open question 15.3 plain,
 14.4 n-gram, 12.3 MTP (-20%). On four CPU cores the draft passes cost about as much as they save, so MTP pays only for predictable
 output. It is not a default here; prompt-lookup speculation costs nothing when there is nothing to look up.
@@ -162,7 +162,7 @@ output. It is not a default here; prompt-lookup speculation costs nothing when t
 parallel 84%, irrelevance (call nothing) 96%. The first run scored 0/25 on parallel calls: the engine had not enabled
 `parallel_tool_calls`, so the grammar allowed one call per reply. Fixed.
 
-**LoRA** (`ggml-org/LoRA-Qwen2.5-3B-Instruct-abliterated` on Qwen2.5-3B-Instruct Q4_K_M, greedy): our output at scale 1.0 is
+**LoRA** (`ggml-org/LoRA-Qwen2.5-3B-Instruct-abliterated` on Qwen2.5-3B-Instruct Q4_K_M, greedy): the engine output at scale 1.0 is
 identical to upstream `llama-completion` ("mutex works in two sentences, the first sentence is the first, ..."): the degraded text is
 that adapter on that base, not the engine. At scale 0.5 both give a normal answer.
 

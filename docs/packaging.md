@@ -106,7 +106,7 @@ find_package(agent-cpp 0.1 REQUIRED COMPONENTS graph rag llama)
 | `graph`, `mcp`, `rag`, `models` | this install was built with `AGENT_WITH_<NAME>=ON` (the library part is compiled in) |
 | `llama`, `audiocpp`, `sdcpp`, `trellis`, `onnx` | the plugin `agent-engine-<name>.*` is in `lib/agent/engines` |
 
-Each component sets `agent-cpp_<name>_FOUND`. Only list the components your program uses. `store_sqlite` and `hub` are
+Each component sets `agent-cpp_<name>_FOUND`. Only list the components the program uses. `store_sqlite` and `hub` are
 targets, not components: link them as shown above.
 
 The public headers do not include simdjson: it is compiled into `libagent` and is an implementation detail. Static packages
@@ -122,7 +122,7 @@ cmake --build /tmp/agent-consumer && /tmp/agent-consumer/consumer
 
 ## Without installing: `FetchContent` or `add_subdirectory`
 
-When agent.cpp is part of your build instead of an installed package, only the library is built unless you ask for more: the tests, the
+When agent.cpp is part of the build instead of an installed package, only the library is built unless more is requested: the tests, the
 examples, the CLI and the install rules are off (they default to on only when agent.cpp is the top-level project).
 
 ```cmake
@@ -131,7 +131,7 @@ FetchContent_Declare(agent-cpp
     GIT_REPOSITORY https://github.com/amitverma-cf/agent.cpp.git
     GIT_TAG        main                  # pin a commit for reproducible builds
     GIT_SHALLOW    TRUE
-    GIT_SUBMODULES vendor/simdjson vendor/llama.cpp)   # only what you build; add vendor/audio.cpp, ... for those engines
+    GIT_SUBMODULES vendor/simdjson vendor/llama.cpp)   # only what is built; add vendor/audio.cpp, ... for those engines
 set(AGENT_BUILD_HUB       OFF CACHE BOOL "" FORCE)  # ON needs OpenSSL
 set(AGENT_ENGINE_ONNX     OFF CACHE BOOL "" FORCE)  # downloads ONNX Runtime at configure time
 set(AGENT_ENGINE_SDCPP    OFF CACHE BOOL "" FORCE)
@@ -143,14 +143,14 @@ add_executable(my_app main.cpp)
 target_link_libraries(my_app PRIVATE agent-cpp::agent)
 ```
 
-The llama.cpp engine plugin is built in your build tree (`AGENT_ENGINE_LLAMA`, default on; set it `OFF` for a library without engines). To
+The llama.cpp engine plugin is built in the build tree (`AGENT_ENGINE_LLAMA`, default on; set it `OFF` for a library without engines). To
 run a program from the build tree, `agent_deploy_engines(my_app)` (from `cmake/agent-cppEngine.cmake`) puts the plugins and
-`agent-engine-host` next to it. The submodules you do not list are not cloned.
+`agent-engine-host` next to it. The submodules that are not listed are not cloned.
 
 ## vcpkg
 
 `ports/agent-cpp` is an overlay port of the library (core, SQLite store, optionally the downloader): engines are not part of it, they are
-plugins you build or download separately. It builds the commit named in its portfile; `scripts/update-vcpkg-port.sh [COMMIT]` pins it to
+plugins built or downloaded separately. It builds the commit named in its portfile; `scripts/update-vcpkg-port.sh [COMMIT]` pins it to
 another one (it computes both SHA512 values).
 
 ```sh
@@ -186,7 +186,7 @@ install(TARGETS my_app RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 1. After every build of `my_app`, it copies the named plugins and the runtime libraries they load into
    `<my_app folder>/engines/`. For `audiocpp`, the `libaudiocpp*` files come along; for `onnx`, `libonnxruntime*`.
-   Engines you do not name are not copied, so they never reach your release.
+   Engines that are not named are not copied, so they never reach the release.
 2. `cmake --install` installs the same files to `<bindir>/engines`.
 3. It copies `agent-engine-host` next to the program (and installs it to `<bindir>`), for `EngineIsolation::Process`.
 
@@ -199,7 +199,7 @@ Things to know:
 - Call `find_package` with the engine as a component, or the deploy function stops with an error. The engine plugin must be installed
   in `agent-cpp_ENGINE_DIR`.
 - The engine files are found at configure time. After installing a new engine, run CMake again.
-- The deploy function does not install your program or your own libraries. It also does not copy `libagent` when you built
+- The deploy function does not install the program or custom libraries. It also does not copy `libagent` when built
   with `BUILD_SHARED_LIBS=ON`; in that case the folder is only complete if `libagent` is installed next to the program or
   found through its RPATH. The default static build needs nothing else.
 - To ship an engine that is not in this tree, install its plugin into `lib/agent/engines` (see
@@ -250,7 +250,7 @@ By default ggml is built with `GGML_NATIVE=OFF`, which enables AVX, AVX2, FMA, F
 `-DAGENT_GGML_AMX=ON`.
 
 The binary links the system OpenSSL 3 (`libssl.so.3`, `libcrypto.so.3`), `libstdc++` and glibc of the build machine, so build
-on the oldest distribution you want to support.
+on the oldest supported distribution.
 
 Not done yet:
 

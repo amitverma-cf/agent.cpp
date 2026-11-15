@@ -23,7 +23,7 @@ template <> struct Result<void> {
 };
 ```
 
-Check `ok` before you read `value`. When `ok` is false, `value` is default-constructed and `error` describes the failure.
+Check `ok` before reading `value`. When `ok` is false, `value` is default-constructed and `error` describes the failure.
 
 ```cpp
 auto r = agent::run_turn(session, conv, "hello");

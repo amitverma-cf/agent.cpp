@@ -20,7 +20,7 @@ and test a change.
 
 ## Layout
 
-`src/agent/` holds four subsystems you will touch most: `providers/`, `memory/`, `tools/` and `executor/`. Engines are plugins under
+`src/agent/` holds four subsystems that most changes touch: `providers/`, `memory/`, `tools/` and `executor/`. Engines are plugins under
 `src/engines/`; the CLI is `apps/cli/`. [docs/architecture.md](docs/architecture.md) explains how they fit together.
 
 ## Build and test
@@ -29,7 +29,7 @@ and test a change.
 cmake -B build -G Ninja
 cmake --build build
 ctest --test-dir build --output-on-failure        # or ./build/test_agent "[tag]" for one subsystem
-scripts/format.sh                                 # clang-format; run it when you are about to push, not while editing
+scripts/format.sh                                 # clang-format; run it when about to push, not while editing
 ```
 
 Keep changes small and focused, add a test for new behavior, and update the docs under `docs/` and the comments in `agent.hpp` when the

@@ -39,7 +39,7 @@ Result<std::string> query_data_source(Session &session, std::string_view name, s
 ```
 
 `register_data_source` stores the source in `session.data_sources`, keyed by `ds.name`. `query_data_source` looks it up and calls its
-`query` function. Use these from your own code, for example in a graph node's `context_provider` ([graph.md](graph.md#per-run-context-context_provider)).
+`query` function. Use these from application code, for example in a graph node's `context_provider` ([graph.md](graph.md#per-run-context-context_provider)).
 
 Like `session.config.tools`, `session.data_sources` is not mutex-guarded. Register sources during setup, not while a turn runs on another
 thread. `query_data_source` is read-only and safe from any thread once registration is done.
@@ -121,7 +121,7 @@ agent::GraphNode answer{.name = "answer", .kind = agent::GraphNodeKind::Agent,
 
 | | `bind_data_source_tool` (model decides) | `context_provider` (always runs) |
 |---|---|---|
-| Who decides to query | The model, through a tool call | Your code, on every run of the node |
+| Who decides to query | The model, through a tool call | The code, on every run of the node |
 | Best for | Backends the model should reason about ("should I look this up?") | Context the model should always have |
 | Scope | `GraphNode::allowed_tools` | The node that sets `context_provider` |
 
@@ -142,8 +142,8 @@ Result<void> sqlite_vec_insert(DataSource &source, std::string_view text, std::s
 
 - The source is queried from disk on every call with `vec0`'s nearest-neighbour search. It does not go through the bounded write-back cache
   that `store_memory` uses ([memory.md](memory.md)), since that cache is sized for conversation-history data, not a growing index.
-- `dimensions` must match the output size of your embedding model.
-- **The library does not compute embeddings.** Run your own embedding model, locally or through an API, and pass the vectors in.
+- `dimensions` must match the output size of the embedding model.
+- **The library does not compute embeddings.** Run a separate embedding model, locally or through an API, and pass the vectors in.
 
 ```cpp
 // One-time setup.
@@ -175,7 +175,7 @@ auto res = agent::query_data_source(session, "product_docs", vector_query(query_
 ```
 
 Once registered, wire the source up like any other: `bind_data_source_tool` for model-initiated lookups, or a `context_provider` that
-embeds the user's message and injects the best matches. Either way, your code calls the embedding model first. The library's part starts
+embeds the user's message and injects the best matches. Either way, the code calls the embedding model first. The library's part starts
 at "here is a vector, find the nearest ones."
 
 For retrieval with chunking, embeddings, reranking and hybrid search in one pipeline, use the RAG API instead: [rag.md](rag.md).

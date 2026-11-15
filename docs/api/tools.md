@@ -66,7 +66,7 @@ agent::Tool snapshot{
     .parameter_schema = R"({"type":"object","properties":{}})",
     .user_data = &camera,
     .parts_callback = [](std::string_view, void *ud) -> agent::Result<agent::ToolResult> {
-        std::string path = static_cast<Camera *>(ud)->capture_png();   // your code
+        std::string path = static_cast<Camera *>(ud)->capture_png();   // the code
         agent::ToolResult r;
         r.text = "Captured a frame.";
         r.media.push_back({.path = path, .mime = "image/png"});
@@ -159,7 +159,7 @@ cfg.permission_user_data   = &state;
 - `Ask` calls `permission_prompt`. If `permission_prompt` is `nullptr`, `Ask` is treated as `Deny`.
 
 `tools::default_permission_policy` is an opt-in example. It returns `Ask` for `run_command`, `delete_path` and `move_path`,
-and `Allow` for everything else. It is not wired in automatically. Set it on `permission_check` if you want it.
+and `Allow` for everything else. It is not wired in automatically. Set it on `permission_check` to enable it.
 
 In a graph, `interrupt_before_tools` turns an `Ask` decision into a pause for human approval. See
 [graph.md](graph.md#interrupts-human-in-the-loop).
@@ -204,7 +204,7 @@ struct DbCtx {
 
 DbCtx db_ctx{ .connection_string = "postgresql://localhost/mydb" };
 
-// Your JSON parser: returns the "sql" field of the arguments object, or "" when it is missing.
+// The JSON parser: returns the "sql" field of the arguments object, or "" when it is missing.
 std::string parse_sql(std::string_view arguments);
 
 agent::Tool query_db{
@@ -481,7 +481,7 @@ cfg.tools = { my_custom_tool };   // only this tool is registered
 
 ## Tool factory functions
 
-You can create individual default tools manually, for example with a custom workspace context or to add them to a
+Individual default tools can be created manually, for example with a custom workspace context or to add them to a
 different session:
 
 ```cpp

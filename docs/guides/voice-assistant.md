@@ -1,7 +1,7 @@
 # Guide: a local voice assistant
 
-This guide sets up `agent voice`: you speak, a local model answers out loud. Everything runs on your
-machine: a VAD model finds where you speak, an ASR model writes it down, a llama.cpp chat model
+This guide sets up `agent voice`: speech goes in, a local model answers out loud. Everything runs on the
+machine: a VAD model finds where speech occurs, an ASR model writes it down, a llama.cpp chat model
 answers (with the same tools and permission prompts as `agent chat`), and a TTS model reads the answer out.
 The speech models all run in the audio.cpp engine.
 
@@ -71,8 +71,8 @@ Tips:
 
 - **Use the VAD.** Without `--vad-model` an energy gate decides what is speech. It works in a quiet room;
   fans, music or keyboard noise make it cut badly.
-- **Headphones** let you use `--barge-in`: the assistant keeps listening while it talks and stops when you
-  interrupt. With loudspeakers the microphone would hear the reply and interrupt it (there is no echo
+- **Headphones** allow `--barge-in`: the assistant keeps listening while it talks and stops when the user
+  interrupts. With loudspeakers the microphone would hear the reply and interrupt it (there is no echo
   cancellation), so barge-in is off by default and the loop is half-duplex.
 - **Short answers.** The voice system prompt asks for one to three plain sentences. Markdown, code blocks and
   tool-call markup are removed before speaking, and numbers and `+ - = % / x` are spelled out.

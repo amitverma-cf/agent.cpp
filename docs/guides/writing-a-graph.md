@@ -1,9 +1,9 @@
 # Guide: writing a graph
 
 A graph is a workflow of named nodes joined by edges: Agent nodes (a chat turn with their own system
-prompt, tool allowlist and conversation), Function nodes (your C++), Tool nodes (one tool call), and the
+prompt, tool allowlist and conversation), Function nodes (the C++), Tool nodes (one tool call), and the
 workflow nodes Sequential, Parallel and Loop. The runtime adds scoped state, checkpoints after every
-node, human-in-the-loop interrupts and time travel. You can build graphs in C++ or write them as
+node, human-in-the-loop interrupts and time travel. Graphs can be built in C++ or written them as
 `agent.json`; both produce the same `agent::Graph`.
 
 A complete small program is [`examples/03-graph-workflow/graph.cpp`](../../examples/03-graph-workflow/graph.cpp); JSON graphs to run with
@@ -143,7 +143,7 @@ keyed by `(thread_id, step)`. Where it goes is `GraphRun::checkpointer`:
 
 `GraphRun::durability` picks when: `Async` (default; a background writer, flushed before the call
 returns), `Sync` (before the next node starts) or `Exit` (only when the call returns). After
-`run_graph` returns, every checkpoint is stored whichever mode you pick; the modes differ only in what
+`run_graph` returns, every checkpoint is stored whichever mode is picked; the modes differ only in what
 a crash mid-run can lose.
 
 ```cpp
@@ -297,6 +297,6 @@ rules: [api/agent-json.md](../api/agent-json.md).
 - [ ] Parallel branches write distinct keys and use distinct conversations.
 - [ ] Interrupting Function nodes check `temp:human_input` before interrupting again.
 - [ ] Tools and Function nodes with side effects are idempotent (resume and fork re-run nodes).
-- [ ] A checkpointer that matches the lifetime you need (memory for tests, SQLite for anything resumable).
+- [ ] A checkpointer that matches the required lifetime (memory for tests, SQLite for anything resumable).
 
 Reference: [api/graph.md](../api/graph.md), [api/agent-json.md](../api/agent-json.md), [api/models.md](../api/models.md).

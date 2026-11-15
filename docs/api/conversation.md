@@ -4,14 +4,14 @@
 
 Inference has two layers:
 
-- **`infer`** is stateless. It takes the messages you pass and returns one model reply. It does not keep history and does not update the session statistics.
-- **`run_turn`** is the one you normally use. It keeps a `Conversation`, runs the tool-call loop, prunes and compresses history to fit the context window, and saves the history to the memory store.
+- **`infer`** is stateless. It takes the messages passed in and returns one model reply. It does not keep history and does not update the session statistics.
+- **`run_turn`** is the one normally used. It keeps a `Conversation`, runs the tool-call loop, prunes and compresses history to fit the context window, and saves the history to the memory store.
 
 ---
 
 ## Conversation
 
-A `Conversation` is one chat thread: its history, its statistics and the tools loaded for it. You own it and can fill its history before the first turn.
+A `Conversation` is one chat thread: its history, its statistics and the tools loaded for it. The caller owns it and can fill its history before the first turn.
 
 ```cpp
 struct Conversation {
@@ -69,7 +69,7 @@ Tool messages always stay with the assistant message that requested them. Prunin
 
 ## infer
 
-Runs one model call on the messages you give it. It does not change a `Conversation`, does not run tools, and does not fire the `OnInferenceSubmit` and `OnInferenceComplete` events. Use it for one-off prompts where history does not matter.
+Runs one model call on the messages given to it. It does not change a `Conversation`, does not run tools, and does not fire the `OnInferenceSubmit` and `OnInferenceComplete` events. Use it for one-off prompts where history does not matter.
 
 ```cpp
 Result<InferResponse> infer(Session &session, const InferRequest &request);
@@ -121,7 +121,7 @@ struct InferResponse {
 };
 ```
 
-The views point into `storage`, so a response stays valid after later calls for as long as you keep it.
+The views point into `storage`, so a response stays valid after later calls for as long as it is kept.
 
 ### Example: one reply
 
@@ -185,7 +185,7 @@ Result<std::string> run_turn_with_media(Session &session, Conversation &memory, 
 |---|---|
 | `session` | The session to run on |
 | `memory` | The conversation. Its history and stats are updated in place. |
-| `user_prompt` | Added as a `user` message. Pass `""` to add no user message: useful after you have appended tool results yourself, or when the system prompt sets the task. |
+| `user_prompt` | Added as a `user` message. Pass `""` to add no user message: useful after tool results have been appended by the caller, or when the system prompt sets the task. |
 | `media` | (`run_turn_with_media` only) Files attached to the user message, for engines that accept them. |
 | `stream` | When true, tokens are passed to `on_token` as they arrive. |
 | `on_token` | Called for each token when `stream` is true. |

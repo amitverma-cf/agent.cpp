@@ -1,12 +1,12 @@
 # Workspace layout
 
 agent.cpp keeps its files in two places and nowhere else: one **global home** and, optionally, an `.agents/`
-folder inside each project. Nothing is installed globally, and the agent never needs `npm` or `python` on your
+folder inside each project. Nothing is installed globally, and the agent never needs `npm` or `python` on the
 machine (see "Runtimes" below).
 
 ## The global home: `.agent.cpp-workspace`
 
-You choose where it goes during `agent setup`. The choice is remembered in a small pointer file, `home.json`, in the
+The location is chosen during `agent setup`. The choice is remembered in a small pointer file, `home.json`, in the
 platform's config folder (`%APPDATA%\agent` on Windows, `~/.config/agent` elsewhere). `--home DIR` and `$AGENT_HOME`
 override it for a single run.
 
@@ -57,9 +57,9 @@ chunks, `created_ms` on checkpoints, `ts` on graph events (`datetime(updated_at/
 
 ## Runtimes
 
-Many MCP servers are published as npm or Python packages. Instead of asking you to install Node or Python, agent.cpp
+Many MCP servers are published as npm or Python packages. Instead of requiring Node or Python, agent.cpp
 `agent runtime install bun` / `uv` downloads `bun` (a drop-in for `npx`) and `uv` (for Python tools, including their own Python) into `runtimes/`
-with a checksum, points their caches at `cache/`, and runs those servers there, sandboxed. Nothing touches your global
+with a checksum, points their caches at `cache/`, and runs those servers there, sandboxed. Nothing touches the global
 PATH.
 
 ## config.json and engines.json

@@ -51,16 +51,16 @@ agent chat --plain                # line mode, for pipes
 In a terminal this opens a full-screen chat laid out like a chat website, built with [RTXUI](https://github.com/ArthurSonzogni/RTXUI)
 (HTML and CSS for the terminal):
 
-- **Sidebar:** your saved conversations, grouped by project (the folder the agent works in). Click a session, or press `Ctrl+K`, move
+- **Sidebar:** the saved conversations, grouped by project (the folder the agent works in). Click a session, or press `Ctrl+K`, move
   with Up/Down and press Enter. Picking a session from another project switches the agent to that folder: its files, tools and memory
   change with it (the model is loaded again for the new folder). `Ctrl+N` starts a new chat, `Ctrl+B` hides the sidebar. The projects
   are remembered in `workspaces.txt` in the agent home.
-- **Conversation:** your messages in a frame, answers rendered as markdown (headings, lists, quotes, tables, framed code), tool calls as
+- **Conversation:** the messages in a frame, answers rendered as markdown (headings, lists, quotes, tables, framed code), tool calls as
   cyan lines, and under every answer a line with the model, the speed in tokens per second, the token counts and the time.
 - **Input:** at the bottom, with a command palette (type `/` or press `Ctrl+P`), history on Up/Down, and a footer with the speeds and how
   full the context window is.
 
-**The layout follows the width of the terminal** and changes the moment you resize it (a split pane, a phone over SSH, a tmux window):
+**The layout follows the width of the terminal** and changes the moment it is resized (a split pane, a phone over SSH, a tmux window):
 
 | Width | Layout |
 |---|---|
@@ -90,15 +90,15 @@ Options: `-m/--model`, `-e/--engine`, `--workspace DIR`, `--ctx N`, `--max-token
 (approve tool calls without asking), `--verbose` (show engine logs), `--inprocess`.
 
 The engine follows from the model file (`.gguf` uses `llama`, `.onnx` uses `onnx`, `.safetensors` and `.ckpt` use `sdcpp`) unless
-you pass `--engine`. Engines run in a separate `agent-engine-host` process, so a crash fails one turn and the next message restarts
+`--engine` is passed. Engines run in a separate `agent-engine-host` process, so a crash fails one turn and the next message restarts
 it ([isolation](api/engines.md#isolation)). Conversations are saved after every turn and the id is printed on exit. Tools that
-change files or run commands (`run_command`, `delete_path`, `move_path`) ask first; without a terminal they are denied unless you
-pass `--yes`.
+change files or run commands (`run_command`, `delete_path`, `move_path`) ask first; without a terminal they are denied unless
+`--yes` is passed.
 
 ### Rules for a project
 
-The rules you write for a project become part of the system prompt of every new conversation: `AGENTS.md` in the workspace, then
-`.agents/AGENTS.md`, then every `.agents/rules/*.md` in name order, then your own `AGENTS.md` in the agent home. At most 16 KiB are
+The rules written for a project become part of the system prompt of every new conversation: `AGENTS.md` in the workspace, then
+`.agents/AGENTS.md`, then every `.agents/rules/*.md` in name order, then the personal `AGENTS.md` in the agent home. At most 16 KiB are
 used; a file that does not fit is cut and says so. Nothing is read from outside these places.
 
 ### Without a terminal: `-p` and `--jsonl`
@@ -109,7 +109,7 @@ git diff | agent chat -p - -y                           # - reads the prompt fro
 ```
 
 `-p` (`--prompt`) prints only the answer on stdout; tool lines, permission lines and notes go to stderr, so the output can be piped.
-The exit code is 1 when the turn failed. Tool calls that need permission are denied unless you pass `-y`. The conversation is saved
+The exit code is 1 when the turn failed. Tool calls that need permission are denied unless `-y` is passed. The conversation is saved
 like any other (`--resume ID` continues it).
 
 `--jsonl` is the editor integration: one JSON object per line on stdin and on stdout, no terminal, no daemon (the program ends when
@@ -126,8 +126,8 @@ stdin closes). Send `{"type":"prompt","text":"..."}` (a `/command` works too) an
 ### In the message: `@file`, `!command`
 
 `@path` in a message adds the content of that file (relative to the workspace or absolute; text files up to 32 KiB each, 96 KiB in all) as a
-fenced block after your text, and the chat says which files it attached. A line that starts with `!` runs a shell command of your own in the
-project folder (`!git status`); its output is shown and added to the conversation, so the model can see it. These are your commands, not the
+fenced block after the text, and the chat says which files it attached. A line that starts with `!` runs a personal shell command in the
+project folder (`!git status`); its output is shown and added to the conversation, so the model can see it. These are the commands, not the
 agent's: they are not sandboxed and do not ask.
 
 ### Modes, thinking, permissions
@@ -142,7 +142,7 @@ agent's: they are not sandboxed and do not ask.
 ### Sessions
 
 `/rename TITLE` names the conversation in the sidebar. `/delete` asks, `/delete yes` removes the saved conversation for good and starts a
-new one. In the session picker (`Ctrl+K`) you can type to filter the list, and `Del` removes the highlighted conversation.
+new one. In the session picker (`Ctrl+K`) typing filters the list, and `Del` removes the highlighted conversation.
 
 ### The web
 
@@ -158,26 +158,26 @@ is `--params '{"json": true}'` or `--params '{"grammar": "..."}'`.
 
 ### The screen
 
-- **Sidebar:** the logo, a New chat button, your sessions (scrollable) and a Settings button. On a terminal narrower than 84 columns it is a
+- **Sidebar:** the logo, a New chat button, the sessions (scrollable) and a Settings button. On a terminal narrower than 84 columns it is a
   screen of its own, opened with the menu icon in the title bar (like a phone app); below 70 columns it fills the whole terminal.
 - **Title bar:** the session name and a trash icon that deletes the session, after a confirmation, from the list, the saved history and the
   memory.
-- **Messages:** every message of yours has a copy icon and a delete icon (the delete removes your message and the model's answers to it from
+- **Messages:** every user message has a copy icon and a delete icon (the delete removes the message and the model's answers to it from
   what the model sees, after a confirmation). Every answer has a copy icon, how fast it was written (tok/s, when the engine measured it) and
   how long the whole answer took. Copy goes to the clipboard through the terminal (OSC 52) and the system's clipboard tool.
-- **Input:** a `mic` box on the left of the input records until you click it again, then writes what you said into the input with the first speech
+- **Input:** a `mic` box on the left of the input records until it is clicked again, then writes what was said into the input with the first speech
   recognition model that is installed (`agent model pull <a speech model link>`). `/` lists commands, `@file` attaches a file, `!command` runs
-  a shell command. A line under the input suggests the next useful key or command while you type.
+  a shell command. A line under the input suggests the next useful key or command while typing.
 - **Bottom bar:** CPU use, RAM used and installed, the size of the files folder; and on the right the engine, the models held in RAM, the mode
   and the context used and available.
-- **Shortcuts:** `?` on an empty input, or F1, lists every keyboard shortcut; the sidebar reminds you of F1 under the Settings button. To change one, open the Settings, choose Shortcuts, press Enter on an action and then the keys you want (F1 to F12, Ctrl+letter, Alt+letter or Ctrl+Alt+letter; a key that is already used is refused). The choices are kept in `config.json` under `shortcuts`, and "Put the defaults back" clears them. (A terminal cannot report the Alt key alone.) Ctrl+O opens the
+- **Shortcuts:** `?` on an empty input, or F1, lists every keyboard shortcut; the sidebar shows F1 under the Settings button. To change one, open the Settings, choose Shortcuts, press Enter on an action and then the wanted keys (F1 to F12, Ctrl+letter, Alt+letter or Ctrl+Alt+letter; a key that is already used is refused). The choices are kept in `config.json` under `shortcuts`, and "Put the defaults back" clears them. (A terminal cannot report the Alt key alone.) Ctrl+O opens the
   settings; there, the categories are on the left, and each setting changes with Left and Right or by typing a new value.
 
 ### Look
 
 The chat uses four colours: black, white, turquoise and pastel pink, with white at reduced opacity for secondary text and lines. The window
 frame is turquoise; the input box turns turquoise while it takes input. Icons are Unicode symbols; `AGENT_ICONS=nerd` uses Nerd Font glyphs
-(install a [Nerd Font](https://www.nerdfonts.com) in your terminal first) and `AGENT_ICONS=ascii` plain characters.
+(install a [Nerd Font](https://www.nerdfonts.com) in the terminal first) and `AGENT_ICONS=ascii` plain characters.
 
 ### In an editor: `--acp`
 
@@ -198,8 +198,8 @@ now, and `/undo` puts back the files of the last tool call, newest first.
 
 ```sh
 agent model info owner/repo                       # quants, sizes, projectors, licence of any Hugging Face repo
-agent model pull https://huggingface.co/Qwen/Qwen3-4B-GGUF   # a repository page: the quant is chosen for you
-agent model pull C:\Downloads\model.gguf                   # a file you already have
+agent model pull https://huggingface.co/Qwen/Qwen3-4B-GGUF   # a repository page: the quant is chosen automatically
+agent model pull C:\Downloads\model.gguf                   # an existing file
 agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M [--name qwen] [--allow-restricted]
 agent model pull owner/repo:* [--include int8]    # every file of a folder model (TRELLIS)
 agent model ls
@@ -210,9 +210,9 @@ agent model rm qwen [--keep-file]
 file on this disk. There is no list of suggested models: the file itself says which engine runs it (llama.cpp, stable-diffusion.cpp,
 audio.cpp, ONNX Runtime or TRELLIS.2), and it is put in that engine's folder under `models/` and recorded in `models.json`. A file already
 installed is not fetched again. An embedding or reranker model is detected too; the command prints the `--engine-options` it needs. Downloads resume after Ctrl-C
-(the `.part` file is kept), are checked against the published hash, and refuse models with restrictive licences unless you pass
-`--allow-restricted` (on a terminal you are asked). Vision, audio and OCR repos also fetch their multimodal projector, record it
-and use it automatically. The first chat model you pull becomes the default.
+(the `.part` file is kept), are checked against the published hash, and refuse models with restrictive licences unless
+`--allow-restricted` is passed (a terminal asks for confirmation). Vision, audio and OCR repos also fetch their multimodal projector, record it
+and use it automatically. The first chat model pulled becomes the default.
 
 Pulled files go to a folder of their engine, so the files of two engines are never mixed: `models/llama/owner/repo/file.gguf`,
 `models/sdcpp/...`, `models/onnx/...`. A registry name knows its engine; for `owner/repo` the engine follows the quant or file
@@ -268,7 +268,7 @@ agent voice --asr-model ... --tts-model ... --input-wav question.wav --output-di
 
 A spoken loop: microphone, voice-activity detection, speech recognition, one chat turn (with tools), speech synthesis,
 speaker, until Ctrl-C. It chains separate models; there is no single speech-to-speech model. Speech runs on the `audiocpp`
-engine, the chat turn on the model you pick. Step-by-step with downloads: [guides/voice-assistant.md](guides/voice-assistant.md).
+engine, the chat turn on the selected model. Step-by-step with downloads: [guides/voice-assistant.md](guides/voice-assistant.md).
 
 | Flag | Meaning |
 |---|---|
@@ -281,7 +281,7 @@ engine, the chat turn on the model you pick. Step-by-step with downloads: [guide
 
 Without `--barge-in` the loop is half-duplex: sound heard while the agent speaks is dropped, so it never answers itself.
 Replies are cleaned for speech (markdown and code are dropped, symbols spelled out). Sound devices use miniaudio, loaded at run
-time; with no microphone `voice` tells you to use `--input-wav`, with no speaker replies go to `<workspace>/voice/`.
+time; with no microphone `voice` asks for `--input-wav`, with no speaker replies go to `<workspace>/voice/`.
 
 ## agent engine
 
@@ -306,7 +306,7 @@ agent skill rm pdf
 ```
 
 A skill is text the model follows, with optional helper files. `add` shows the source, the file count, size and any scripts, and asks
-before downloading (at most 200 files and 20 MiB). Scripts only run through `run_command` in the sandbox, after you approve.
+before downloading (at most 200 files and 20 MiB). Scripts only run through `run_command` in the sandbox, after approval.
 
 ## agent mcp
 
@@ -367,7 +367,7 @@ agent runtime path uv | rm bun
 
 Private copies of [bun](https://bun.sh), [uv](https://docs.astral.sh/uv/) (and optionally Node with pnpm, or nub) live in
 `<home>/runtimes/`, so servers written for `npx` and `uvx` run without Node or Python on the machine. Archives are checked against
-their published SHA-256; all caches stay in `<home>/cache`; nothing is written to your profile.
+their published SHA-256; all caches stay in `<home>/cache`; nothing is written to the profile.
 
 ## agent init, doctor, clean
 
@@ -391,7 +391,7 @@ agent update                # runs the installer script: a newer release replace
 agent completion bash       # also: zsh, fish, powershell
 ```
 
-Load a completion script in your shell, for
+Load a completion script in the shell, for
 example `source <(agent completion bash)`, `agent completion fish | source`, or `agent completion powershell | Out-String | Invoke-Expression`.
 
 ## agent schedule
@@ -415,7 +415,7 @@ with `--resume`. Together with `schedule add wake --every 15m -- wake` this give
 
 ## Files and layout
 
-One global home (default `.agent.cpp-workspace` in your user folder, chosen at setup and remembered in `home.json` in the platform
+One global home (default `.agent.cpp-workspace` in the user folder, chosen at setup and remembered in `home.json` in the platform
 config folder; `--home` and `$AGENT_HOME` override it) holds `config.json`, `engines.json`, `models/`, `engines/`, `skills/`, `mcp/`,
 `runtimes/`, `cache/`, `logs/` and `workspaces/default/` (file tools, `memory/db.sqlite3`, `artifacts/`). Each project can have
 a `.agents/` folder. Full layout and the contents of `config.json` and `engines.json`: [workspace.md](workspace.md).

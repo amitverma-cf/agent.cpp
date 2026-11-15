@@ -57,7 +57,7 @@ defined. Only the Windows shared-library build needs them. The CMake build does 
 | `AGENT_C_CANCELLED` | 2 | The turn or task was stopped with `agent_c_cancel`. |
 | `AGENT_C_BUFFER_TOO_SMALL` | 3 | The answer did not fit the buffer. `*needed` (when given) is the size required, including the NUL. |
 
-Errors are reported in the `err` buffer you pass, cut to `err_cap - 1` bytes plus the NUL.
+Errors are reported in the `err` buffer passed in, cut to `err_cap - 1` bytes plus the NUL.
 
 ## Sessions
 
@@ -107,7 +107,7 @@ Sends `prompt` and lets the model call tools as needed, the same as `agent::run_
 the answer as it is generated; tool calls are handled inside the call. The final answer is written to `reply` as a NUL-terminated string.
 
 If the answer does not fit `reply_cap`, it is cut, the call returns `AGENT_C_BUFFER_TOO_SMALL`, and `*needed` (when not `NULL`) is the
-size that would have fit. The turn itself has completed and is in the history, so you do not need to send the prompt again.
+size that would have fit. The turn itself has completed and is in the history, so the prompt does not need to be sent again.
 
 ```c
 char reply[4096];
@@ -162,7 +162,7 @@ Runs one engine task. `task` is one `AGENT_CAP_*` bit from `<agent-cpp/engine_ab
 are both optional and may be `NULL`.
 
 The engine's text answer goes to `text_out`. The path of the first file the engine wrote (a WAV, a PNG, a GLB) goes to `file_out`, which
-is empty when there is none. Either output may be `NULL` when you do not need it. The file is under the session's `artifacts` folder.
+is empty when there is none. Either output may be `NULL` when it is not needed. The file is under the session's `artifacts` folder.
 
 ```c
 #include <agent-cpp/engine_abi.h>

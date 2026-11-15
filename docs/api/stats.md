@@ -120,11 +120,11 @@ printf("tasks A and B used %d tokens\n",
 
 ## Estimating cost
 
-The library counts tokens, not money. Multiply by your provider's prices yourself. The prices below are placeholders:
+The library counts tokens, not money. Multiply by the provider's prices yourself. The prices below are placeholders:
 
 ```cpp
-const double price_in_per_million  = 0.0;   // your input price, per million tokens
-const double price_out_per_million = 0.0;   // your output price, per million tokens
+const double price_in_per_million  = 0.0;   // the input price, per million tokens
+const double price_out_per_million = 0.0;   // the output price, per million tokens
 
 auto st = agent::get_stats(session);
 double cost = st.total_prompt_tokens     / 1e6 * price_in_per_million

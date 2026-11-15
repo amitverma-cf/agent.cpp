@@ -1,41 +1,44 @@
 # agent.cpp documentation
 
-agent.cpp is a local, offline-first AI agent in two parts:
+agent.cpp is a local, offline-first AI agent. It comes in two forms that share one runtime:
 
-- **`agent`**, a command-line app for chat, one-shot tasks, declarative graphs and a voice loop. Models run on your
-  machine through engine plugins, and the CLI manages the engines, models, MCP servers and skills for you.
-- **`libagent`**, a C++20 runtime with one public header (`agent-cpp/agent.hpp`) for embedding the same agent loop,
-  tools, graphs and engines in your own program. It has no heap allocations in the per-turn path (a session-owned
-  bump-pointer `Arena`), dispatches through `constexpr` function-pointer tables, and reports errors with `Result<T>`.
+| | For | Start |
+|---|---|---|
+| **`agent`**, the command | Anyone who wants a private assistant in the terminal: full-screen chat, voice, image generation, workflows | [Getting started](getting-started.md), then the [CLI reference](cli.md) |
+| **`libagent`**, the C++ library | Developers embedding agents, tools, graphs and engines in a C++ program | [Embedding guide](guides/getting-started-library.md), then the [API reference](api.md) |
+
+The command is the quickest way to try the project. The library is the same code behind a single header,
+`agent-cpp/agent.hpp`, with no heap allocation in the per-turn path, `constexpr` function-pointer dispatch and `Result<T>` errors.
 
 ## Start here
 
-| If you want to | Read |
+| Goal | Read |
 |---|---|
-| chat with a local model in five minutes | [Getting started](getting-started.md), then the [README](../README.md) |
-| know every command and flag | [The `agent` CLI](cli.md) |
-| install or package the binaries and the CMake package | [Installing and packaging](packaging.md) |
-| embed the runtime in a C++ program | [Getting started](getting-started.md#use-the-library), [Guide: embedding the library](guides/getting-started-library.md) |
-| add a model engine | [Guide: writing an engine plugin](guides/writing-an-engine.md) |
-| write tools, graphs or workflows | [Guide: writing a tool](guides/writing-a-tool.md), [Guide: writing a graph](guides/writing-a-graph.md) |
-| see how it compares with llama.cpp, Ollama, LangChain or hosted APIs | [How agent.cpp compares](comparison.md) |
+| Chat with a local model in five minutes | [Getting started](getting-started.md#use-the-command) |
+| Look up a command or flag | [The `agent` CLI](cli.md) |
+| Talk to the agent by voice | [Voice assistant](guides/voice-assistant.md) |
+| Install or package the binaries and the CMake package | [Installing and packaging](packaging.md) |
+| Embed the runtime in a C++ program | [Embedding the library](guides/getting-started-library.md) |
+| Add a model engine | [Writing an engine plugin](guides/writing-an-engine.md) |
+| Write tools, graphs or workflows | [Writing a tool](guides/writing-a-tool.md), [writing a graph](guides/writing-a-graph.md) |
+| Compare with llama.cpp, Ollama, LangChain or hosted APIs | [How agent.cpp compares](comparison.md) |
 
 ## Documentation map
 
-### Using the CLI
+### The `agent` command
 
 | Document | What it covers |
 |---|---|
-| [Getting Started](getting-started.md) | Build from source (Linux, native Windows), install, first program |
+| [Getting started](getting-started.md) | Install, first chat, build from source (Linux, Windows), first library program |
 | [The `agent` CLI](cli.md) | `setup`, `init`, `doctor`, `clean`, `secret`, `engine`, `model`, `chat`, `run`, `voice`, `task`, `mcp`, `skill`, `runtime`, `sandbox` |
 | [Workspace layout](workspace.md) | The global home `.agent.cpp-workspace`, project `.agents/` folders, SQLite files, runtimes |
 | [Installing and packaging](packaging.md) | `cmake --install`, `find_package(agent-cpp)`, the Linux tarball script |
 | [Examples](../examples/README.md) | Image critique loop, RAG over a folder of docs, graph JSON examples |
-| [Guide: choosing the parts you use](guides/choosing-parts.md) | Build switches for graph, MCP, RAG, models and each engine; `find_package` components |
+| [Guide: choosing the parts to use](guides/choosing-parts.md) | Build switches for graph, MCP, RAG, models and each engine; `find_package` components |
 | [Guide: a local voice assistant](guides/voice-assistant.md) | `agent voice` with an audio.cpp VAD, ASR and TTS model |
 | [GPU engines](gpu.md) | What is built for GPUs, the sandbox cache folders, and the test checklist (untested so far) |
 
-### Embedding the SDK
+### The C++ library
 
 | Document | What it covers |
 |---|---|
@@ -83,7 +86,7 @@ agent.cpp is a local, offline-first AI agent in two parts:
 | [Benchmarks](benchmarks.md) | `agent_bench`: tokens/s, time to first token, peak RSS, process isolation overhead, parallel branches |
 | [Security policy](../SECURITY.md) | How to report a vulnerability |
 
-## Quick example (SDK)
+## Quick example (library)
 
 ```cpp
 #include <agent-cpp/agent.hpp>

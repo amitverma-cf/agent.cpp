@@ -120,7 +120,7 @@ agent::McpServerConfig gh{.name = "github", .command = "npx",
 ```
 
 - `Config::secret_resolver(text, who, secret_values, user_data)` expands each `${secret:NAME}` when the server starts.
-  Your resolver decides whether the secret exists and whether it is bound to that consumer (`"mcp:github"` here). The
+  The resolver decides whether the secret exists and whether it is bound to that consumer (`"mcp:github"` here). The
   resolver appends the values it inserted to `secret_values`.
 - Placeholders are read from `env` only. A `${secret:...}` in `args` is refused, because command lines are visible to
   every process of the user.

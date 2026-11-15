@@ -87,7 +87,7 @@ auto kind = agent::decide(vision_session.value, "What kind of document is this?"
 Cost: one prompt prefill and one short decode per option. Options of one token cost only the end-of-turn token. The model never generates
 text, so `temperature` and `max_tokens` do not apply.
 
-Scores reflect what a small model believes. Calibrate thresholds on your own data. A 0.5B model is fine for simple routing and yes/no
+Scores reflect what a small model believes. Calibrate thresholds on representative data. A 0.5B model is fine for simple routing and yes/no
 facts, and weaker for nuanced grading.
 
 ## Native decision models (System One)
@@ -98,7 +98,7 @@ session go to llama.cpp's own System One handler, in process. Choice and yes/no 
 options, and score questions as a score question over the levels. The probabilities come from the model, not from option scoring, so
 its calibration applies.
 
-This path has not been tested with a real decision model in this project. Verify the results on your own data before you rely on them.
+This path has not been tested with a real decision model in this project. Verify the results on representative data before relying on them.
 Other GGUFs use the option scoring described above.
 
 ## Engine protocol (`AGENT_CAP_DECIDE`)

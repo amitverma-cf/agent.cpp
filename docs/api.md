@@ -12,7 +12,7 @@ store, graph checkpointer and sqlite-vec, `agent::store`) and `<agent-cpp/agent_
 
 ## Pages
 
-Start with the guides if you are new. Use the reference pages for exact signatures.
+Newcomers should start with the guides. Use the reference pages for exact signatures.
 
 | Page | What it covers |
 |---|---|
@@ -61,7 +61,7 @@ int main() {
 }
 ```
 
-`open_session(engine, model_path)` is the shortest way to a session. The workspace is `.agent` unless you pass a `Config` with
+`open_session(engine, model_path)` is the shortest way to a session. The workspace is `.agent` unless a `Config` is passed with
 `workspace_dir` set. For several model files, engine options, or full control, build the `Config` with `engine_config()` and call
 `init()`. Both are described below.
 
@@ -77,7 +77,7 @@ The shipped engines are named by constants in `agent::engines`:
 | `agent::engines::trellis` | image to 3D mesh |
 | `agent::engines::onnx` | any ONNX model |
 
-The engine plugin is found at run time, next to your program (in an `engines/` folder), or in a folder added with
+The engine plugin is found at run time, next to the program (in an `engines/` folder), or in a folder added with
 `agent::engines::search_path(dir)`. In CMake, `agent_deploy_engines(my_app llama)` copies only the engines the application uses. See
 [engines.md](api/engines.md).
 
@@ -434,7 +434,7 @@ enum class AiProvider { Mock, Engine };   // llama.cpp, ONNX Runtime, ... are en
 enum class EngineIsolation { Default, InProcess, Process };
 ```
 
-- `InProcess`: the plugin is loaded into your process. It is the fastest, and a crash in the engine takes the process down.
+- `InProcess`: the plugin is loaded into the process. It is the fastest, and a crash in the engine takes the process down.
 - `Process`: the plugin runs in an `agent-engine-host` child process. A crash fails the in-flight call with `EngineCrashed`, and the next call
   restarts the host.
 - `Default`: the isolation listed for that engine in its `engines.json` manifest, else `InProcess`.
@@ -607,7 +607,7 @@ struct Config {
     std::string workspace_dir;      // required. No quotes, $, &, |, ;, or newlines.
 
     MemoryConfig memory;
-    std::vector<Tool> tools;        // your tools; the default tools are added by init()
+    std::vector<Tool> tools;        // the tools; the default tools are added by init()
 
     int context_window = 2048;
     int max_tokens = 512;
@@ -662,8 +662,7 @@ Tool-related defaults and the sandbox rules are in [tools.md](api/tools.md) and 
 ## Session
 
 A `Session` holds all state for one engine or mock provider: the config, arena, memory, tools, data sources, skills and stats. It is
-move-only. Do not copy it, and do not use it from several threads at once, except where a graph's parallel branches already do that for
-you.
+move-only. Do not copy it, and do not use it from several threads at once, except where a graph's parallel branches already do that.
 
 ```cpp
 struct Session {
@@ -726,7 +725,7 @@ options the same way.
 
 ### engine_config
 
-Builds a `Config` for an explicit engine from role-named model files, so you do not write the options JSON for model paths. Use it when you
+Builds a `Config` for an explicit engine from role-named model files, so the options JSON for model paths is not written by hand. Use it when
 need engine options that `open_session` cannot set, such as `{"mode":"embed"}`:
 
 ```cpp
@@ -847,7 +846,7 @@ Result<void> clear_memory(Session &session);   // deletes every key in the backe
 
 ```cpp
 Result<void> init_tools(Session &session);      // called by init(); loads skills when skills_dir is set
-void rebuild_tool_index(Session &session);      // after you change session.config.tools
+void rebuild_tool_index(Session &session);      // after changing session.config.tools
 
 // Dispatches a tool by name, through the allowed-tools check and the permission gate. KeyNotFound for an unknown name.
 // Media of a parts tool are listed as "[attached: <path> (<mime>)]" lines; a ToolResult with is_error fails with ToolError.

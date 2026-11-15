@@ -116,7 +116,7 @@ model and fails the acquire.
 
 A lease is the way to use a model. While any copy of a `ModelLease` exists, the model counts as in use, and **a model in use is never
 evicted**. All leases on one model share a single `Session`, so the usual session rule applies: one `run_turn` at a time. Lock
-`*lease.turn_mutex` around turns when several threads share a model. Graph Agent nodes do this for you.
+`*lease.turn_mutex` around turns when several threads share a model. Graph Agent nodes do this automatically.
 
 Keep leases short, for example one per turn or per graph node, so that idle models can be evicted.
 
@@ -162,7 +162,7 @@ The reservation counts against the budget from the moment loading starts. Bytes 
 - **VRAM (best effort).** When `engine_options` has a top-level `"gpu_layers"` above 0, the whole estimate counts against `vram_bytes`, and
   only the overhead counts against `ram_bytes`. Partial offload is not modelled. Without `gpu_layers > 0`, nothing is charged to VRAM.
 
-These are rough numbers, meant to keep a machine from running out of memory. Once you have measured a model, set `estimated_bytes`.
+These are rough numbers, meant to keep a machine from running out of memory. Once a model has been measured, set `estimated_bytes`.
 `loaded_models()` reports the estimates, and `process_rss_bytes()` gives a measured figure for in-process engines.
 
 ## Graph Agent nodes
@@ -196,7 +196,7 @@ agent::run_graph(session, agent::make_sequential("pipeline", {agent::make_graph(
   continuous batching. Nodes without a model keep it. With different models, every branch's model must fit at the same time. Set
   `ModelBudget::wait_ms` to let branches wait for each other instead of failing.
 
-You can also acquire a model yourself, for example from a Function node:
+A model can also be acquired directly, for example from a Function node:
 
 ```cpp
 agent::Result<void> summarize(agent::Session &, agent::GraphState &state, void *user_data) {
@@ -247,7 +247,7 @@ is missing, the catalogued `size` becomes `estimated_bytes`.
 
 ## Limitations
 
-- The estimates are heuristics. Prefer `estimated_bytes` once you have measured a model.
+- The estimates are heuristics. Prefer `estimated_bytes` once a model has been measured.
 - VRAM accounting is all-or-nothing on `gpu_layers > 0`, and no GPU query is made.
 - `process_rss_bytes()` does not include `agent-engine-host` children.
 - The registry is local to one process. There is no budget shared between processes.

@@ -1,8 +1,8 @@
 # Guide: embedding the library
 
-This guide builds a small C++ program on top of agent.cpp: a local chat model answers a question, calls a tool of
-yours through a permission gate, and runs the engine in its own sandboxed process. It walks through the three
-entry points you will use:
+This guide builds a small C++ program on top of agent.cpp: a local chat model answers a question, calls a custom tool
+through a permission gate, and runs the engine in its own sandboxed process. It walks through the three
+entry points used:
 
 - `agent::open_session(engine, model)`: one call for the common case, all defaults.
 - `agent::engine_config(engine, models, options, base)`: builds a `Config` for an engine and its model files.
@@ -26,7 +26,7 @@ cmake --install build --prefix $HOME/agent-cpp
 
 The prefix holds the library and headers, the engine host, and the plugins (layout in [packaging.md](../packaging.md)).
 
-## 2. Your project
+## 2. The project
 
 ```cmake
 cmake_minimum_required(VERSION 3.21)
@@ -40,7 +40,7 @@ add_executable(my_agent main.cpp)
 target_link_libraries(my_agent PRIVATE agent-cpp::agent)
 
 # Copies the llama plugin and agent-engine-host next to my_agent (in engines/ and in the build folder),
-# and installs them with the program. Engines you do not name are not copied.
+# and installs them with the program. Engines that are not named are not copied.
 agent_deploy_engines(my_agent llama)
 
 install(TARGETS my_agent RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
@@ -54,7 +54,7 @@ cmake --build build
 ```
 
 `agent-cpp::store_sqlite` (SQLite memory store, checkpointer, sqlite-vec) and `agent-cpp::hub` (Hugging Face downloads)
-are optional extra targets; link them only if you use them.
+are optional extra targets; link them only when used.
 
 ## 3. The program
 
@@ -131,8 +131,8 @@ The rest of the API follows the same pattern:
 
 - `engine_config` copies `base` and adds the engine name, the model files and (optionally) the engine's own options as a
   JSON object in `extra_options_json`. The engine options are engine-specific; see [api/engines.md](../api/engines.md).
-- `init` returns a `Result<Session>`. `run_turn` takes the session and a `Conversation`; keep as many conversations as you
-  like per session. Keep one `run_turn` in flight per session.
+- `init` returns a `Result<Session>`. `run_turn` takes the session and a `Conversation`; keep as many conversations
+  per session as needed. Keep one `run_turn` in flight per session.
 - A model that takes several files is opened the same way, with one `ModelSlot` per role, for example
   `{{"model", "sd.gguf"}, {"vae", "vae.gguf"}}` for the sdcpp engine.
 - The shortest form is `agent::open_session(agent::engines::llama, "models/qwen2.5-0.5b-instruct-q4_k_m.gguf")`. It
@@ -153,11 +153,11 @@ Things to know:
 ## 4. Run it
 
 The model path and the workspace are relative to the working directory. Put the model at
-`models/qwen2.5-0.5b-instruct-q4_k_m.gguf` in the folder you run the program from. The repository's download script
+`models/qwen2.5-0.5b-instruct-q4_k_m.gguf` in the folder the program runs from. The repository's download script
 fetches this file (and the others the examples use) into `./models` when it is run from that folder:
 
 ```sh
-cd ~/my_agent_run                                # any folder you like
+cd ~/my_agent_run                                # any folder
 ~/agent.cpp/examples/download-models.sh          # writes ./models (about 2.7 GB for all examples)
 ~/my_agent/build/my_agent                        # the program; the engine is found in build/engines/
 ```
@@ -165,7 +165,7 @@ cd ~/my_agent_run                                # any folder you like
 The first run creates `.agent/` in that folder. The output is the streamed answer, one `[tool] get_weather(...)` line for the tool call,
 and the number of tool calls.
 
-### Downloading the model from your program, with progress
+### Downloading the model from the program, with progress
 
 Link `agent-cpp::hub` (build with the downloader on, which needs OpenSSL) and let the program fetch what it needs. The download resumes
 after an interruption, is checked against the published sha256, and can be cancelled from another thread:

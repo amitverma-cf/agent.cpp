@@ -17,7 +17,7 @@ examples/download-models.sh                                                    #
 | Example | What it shows | Needs |
 |---|---|---|
 | [`hello`](01-hello-agent) | open a model, ask a question, stream the answer | llama, Qwen2.5-0.5B |
-| [`tools`](02-tools) | a tool of your own and the permission gate | llama, Qwen2.5-0.5B |
+| [`tools`](02-tools) | a custom tool and the permission gate | llama, Qwen2.5-0.5B |
 | [`graph`](03-graph-workflow) | two agents in a row; `graphs/` holds the same idea as JSON for `agent run` | llama, Qwen2.5-0.5B |
 | [`engine_host`](04-custom-engine) | write an engine plugin and drive it in process and under process isolation | nothing (builds its own plugin) |
 | [`rag`](05-rag-over-docs) | index a folder, retrieve, answer from the excerpts (run from the repository root) | llama, bge-small, Qwen2.5-0.5B |

@@ -1,8 +1,8 @@
 # Getting started
 
-Two ways in: run the **`agent`** command, or embed **`libagent`** in your own C++ program. Both start from one build.
+Two ways in. **The `agent` command** is a ready-to-use terminal assistant: install it, run `agent`, and chat. **`libagent`** is the C++ library behind it, for embedding in a program. The command needs no build; the library needs the install tree or a source build.
 
-## What you need
+## Requirements
 
 | | Linux | Windows 11 |
 |---|---|---|
@@ -61,7 +61,7 @@ target_link_libraries(my_app PRIVATE agent-cpp::agent)
 # optional: agent-cpp::store_sqlite (SQLite store, sqlite-vec), agent-cpp::hub (Hugging Face downloads)
 ```
 
-You can also `add_subdirectory` the repository and link the same targets. The install puts `bin/agent`, `bin/agent-engine-host`, the
+`add_subdirectory` also works with the repository and link the same targets. The install puts `bin/agent`, `bin/agent-engine-host`, the
 engine plugins in `lib/agent/engines/`, `libagent`, the headers and the CMake package; see [packaging.md](packaging.md).
 
 ### A conversation

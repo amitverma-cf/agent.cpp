@@ -190,7 +190,7 @@ struct RagHit {
 };
 ```
 
-- The store opens at the first `rag_index` or `rag_query`. `config.dimensions` is taken from that embedding when it is 0. You can also call
+- The store opens at the first `rag_index` or `rag_query`. `config.dimensions` is taken from that embedding when it is 0. It can also be created by calling
   `open_rag_index` yourself. A non-zero `config.dimensions` that does not match the embedder fails. Opening is not thread-safe. After that,
   the index is as thread-safe as its store.
 - `rag_index` chunks `text`, embeds every chunk, and stores the chunks as `<doc_id>#0`, `<doc_id>#1`, and so on. Re-indexing a `doc_id`

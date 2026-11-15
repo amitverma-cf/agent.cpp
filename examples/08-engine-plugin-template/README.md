@@ -40,13 +40,13 @@ cmake --install build --prefix /opt/agent
 | `agent-cpp_ENGINE_HOST` | the installed `agent-engine-host`, for process-isolation tests |
 | `agent-cpp_ENGINE_DIR` | `<prefix>/lib/agent/engines` |
 
-## Making it yours
+## Making it a real engine
 
 1. Rename the target to `agent-engine-<name>` and set the engine's `name`, `version` and `caps` in the
    `agent_engine_v1` table.
 2. Load the model in `create()` (`config_json` carries `model`, `context_window`, `max_tokens`,
    `temperature`, `parallel` and `options` = `Config::engine_options`), run it in `run()`.
-3. Link your inference library with `target_link_libraries(agent-engine-<name> PRIVATE ...)`. Prefer
+3. Link the inference library with `target_link_libraries(agent-engine-<name> PRIVATE ...)`. Prefer
    static linking; shared runtime libraries go next to the plugin (RPATH `$ORIGIN`) and are listed in
    `agent_install_engine`.
 4. Update the expected replies in `test/engine_test.cpp`.

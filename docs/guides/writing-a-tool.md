@@ -56,7 +56,7 @@ agent::Tool make_word_count_tool(WordCounter &counter) {
 }
 ```
 
-- `arguments` is the raw JSON object the model produced. `agent.hpp` has no JSON parser; use your own
+- `arguments` is the raw JSON object the model produced. `agent.hpp` has no JSON parser; use a separate
   (the example has a tiny `json_string` helper). Treat it as untrusted input: models produce invalid or
   hostile arguments.
 - Return `agent::ok(result)` or `agent::fail<std::string>(code, message)`. A failure does not end the
@@ -115,8 +115,8 @@ ready-made policy (Ask for `run_command`, `delete_path`, `move_path`). In a grap
 callback ([writing-a-graph.md](writing-a-graph.md#5-interrupts-human-in-the-loop)).
 
 The gate decides *whether* a call runs; the sandboxes decide what it can touch: file tools are confined
-to the workspace (`sandbox_filesystem`), `run_command` runs under an OS sandbox (`tool_sandbox`). Your
-own tool runs in your process with your privileges, so validate paths and commands yourself.
+to the workspace (`sandbox_filesystem`), `run_command` runs under an OS sandbox (`tool_sandbox`). The
+own tool runs in the process with the privileges, so validate paths and commands yourself.
 
 ## 3. Observing tool calls
 
@@ -177,7 +177,7 @@ process (stdio transport), lists its tools and registers each as an ordinary `To
 
 For example `{.name = "fs", .command = "npx", .args = {"-y", "@modelcontextprotocol/server-filesystem", "."}}`.
 The Session owns the server processes (stopped by `disconnect_mcp_server` or when the Session goes
-away). MCP servers are not sandboxed unless you set `McpServerConfig::sandbox`
+away). MCP servers are not sandboxed unless set `McpServerConfig::sandbox`
 ([security-sandbox.md](../security-sandbox.md)). In `agent.json`, list them under `mcp_servers`
 ([api/agent-json.md](../api/agent-json.md)). Details: [api/mcp.md](../api/mcp.md).
 
@@ -186,7 +186,7 @@ away). MCP servers are not sandboxed unless you set `McpServerConfig::sandbox`
 - [ ] Name, description and schema are clear enough for a small model; string views outlive the Session.
 - [ ] The callback validates its arguments and returns `fail(...)` instead of crashing or throwing.
 - [ ] Side effects are idempotent where possible (graph resumes and forks re-run tool calls).
-- [ ] Dangerous tools return `Ask` (or `Deny`) from your permission policy.
+- [ ] Dangerous tools return `Ask` (or `Deny`) from the permission policy.
 - [ ] Thread-safe if the tool may run in parallel graph branches.
 
 Reference: [api/tools.md](../api/tools.md) (built-in tools, factory functions, skills),

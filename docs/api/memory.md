@@ -2,14 +2,14 @@
 
 `#include <agent-cpp/agent.hpp>`
 
-Memory is the session's key-value store. The library uses it to save conversation history after each turn, and you can use it for your own data. Memory is a plain string-to-string store; it is not vector search (for that, see [rag.md](rag.md)).
+Memory is the session's key-value store. The library uses it to save conversation history after each turn, and it can hold application data. Memory is a plain string-to-string store; it is not vector search (for that, see [rag.md](rag.md)).
 
 Two backends exist:
 
 - **In-memory** (the default): built into the library, no dependencies, nothing survives the session.
 - **SQLite**: durable, from the optional `agent_store_sqlite` library. The agent CLI uses it.
 
-You can also supply your own backend with a `StoreOps` table.
+A custom backend can also be supplied with a `StoreOps` table.
 
 ---
 
@@ -111,7 +111,7 @@ base.memory.flush_interval_ms           = 200;
 
 ## API
 
-These work on a `Session`. The store is initialised by `init`, so you do not call `init_memory` yourself.
+These work on a `Session`. The store is initialised by `init`, so `init_memory` is not called directly.
 
 ```cpp
 Result<void>        init_memory(Session &session);                                       // called by init
@@ -168,7 +168,7 @@ The messages look like this:
 
 Tool calls appear as objects with `id`, `name` and `arguments`, and media appears as `media` entries with `path` and `mime`. Tensors are not saved.
 
-You can read the raw JSON at any time:
+The raw JSON can be read at any time:
 
 ```cpp
 auto r = agent::retrieve_memory(session, "history:" + conv.id);
@@ -179,9 +179,9 @@ The live `Conversation::history` is what the model sees. The stored JSON is a co
 
 ---
 
-## Your own keys
+## Custom keys
 
-Any other key is yours. Do not use keys that start with `history:` or `history_stats:`; those belong to the conversation saves.
+Any other key is free for application use. Do not use keys that start with `history:` or `history_stats:`; those belong to the conversation saves.
 
 ```cpp
 agent::store_memory(session, "cfg:max_depth", "5");
@@ -191,7 +191,7 @@ agent::store_memory(session, "milestone:research_done", "1");
 auto depth = agent::retrieve_memory(session, "cfg:max_depth");
 ```
 
-Values are plain strings. Store JSON text yourself if you need structure.
+Values are plain strings. Store JSON text for structured values.
 
 ---
 

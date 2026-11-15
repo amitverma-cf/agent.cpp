@@ -131,7 +131,7 @@ The builders return a flat graph, and they nest freely. Node names must be uniqu
   iteration. The iteration counter is a private per-thread key (`__loop:<name>`) that is cleared when the loop exits.
 
 ```cpp
-// Your functions. review_is_good is a GraphUntilFn; to_markdown and to_html are Function nodes.
+// The functions. review_is_good is a GraphUntilFn; to_markdown and to_html are Function nodes.
 agent::Result<bool> review_is_good(agent::Session &, const agent::GraphState &state, void *) {
     return agent::ok(agent::get_state(state, "review") == "APPROVED");
 }
@@ -191,7 +191,7 @@ agent::GraphNode plan{.name = "plan", .kind = agent::GraphNodeKind::Agent,
 agent::GraphNode act{.name = "act", .kind = agent::GraphNodeKind::Agent,
                      .system_prompt = "You are an executor. Use tools precisely.",
                      .allowed_tools = {"read_file", "write_file", "run_command"},
-                     .prompt = "Execute your plan now.", .history_key = "react"};
+                     .prompt = "Execute the plan now.", .history_key = "react"};
 agent::GraphNode report{.name = "report", .kind = agent::GraphNodeKind::Agent,
                         .system_prompt = "You are a concise reporter.",
                         .prompt = "Summarise what was done.", .output_key = "summary",
@@ -367,7 +367,7 @@ Result<void> delete_graph_thread(Session &, std::string_view thread_id, const Ch
 ```
 
 `CheckpointerOps` is a function-pointer table like `StoreOps` and `VectorStoreOps`. Its functions must be safe to call
-from several threads on one state. Select one per run with `GraphRun::checkpointer`. Set it on the `GraphRun` you pass to
+from several threads on one state. Select one per run with `GraphRun::checkpointer`. Set it on the `GraphRun` passed to
 `resume_graph` as well. Copies of a `Checkpointer` share its state and its Async writer.
 
 | Checkpointer | Where checkpoints go |
@@ -437,7 +437,7 @@ the event log starts with a `Fork` event. Then it continues like `resume_graph`,
 
 The source thread is not changed. `new_thread_id` must not have checkpoints yet (`InvalidConfig`; call
 `delete_graph_thread` first). A missing step returns `KeyNotFound`. Forking an interrupted checkpoint copies it and
-returns with `run.status == Interrupted`, so you answer it with `resume_graph(new_thread_id, ...)`. Forking a completed
+returns with `run.status == Interrupted`, so it is answered with `resume_graph(new_thread_id, ...)`. Forking a completed
 one copies it and runs nothing.
 
 ```cpp
@@ -499,7 +499,7 @@ On resume, each pending call is answered:
 The turn then continues, and the model sees the tool results. If the model asks for more tools later, the node pauses
 again.
 
-You can pass the decision explicitly with `resume_graph(..., PermissionDecision::Allow / Deny, human_input)`. With the
+The decision can be passed explicitly with `resume_graph(..., PermissionDecision::Allow / Deny, human_input)`. With the
 string-only overload, a `human_input` of `approve`, `approved`, `yes`, `y`, `allow` or `ok` (case-insensitive) counts as
 approval. Anything else is a denial.
 

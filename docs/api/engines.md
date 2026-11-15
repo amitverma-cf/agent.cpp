@@ -7,7 +7,7 @@ stable-diffusion.cpp, TRELLIS.2, ...). The core loads engines at runtime, so not
 compiled in. Each plugin carries its own copy of ggml or ONNX Runtime.
 
 This page covers how to choose an engine, how the core finds and runs one, and the option reference for each shipped
-engine. Writing your own engine is in [Writing an engine](#writing-an-engine).
+engine. Writing a custom engine is in [Writing an engine](#writing-an-engine).
 
 ## Choosing an engine
 
@@ -40,7 +40,7 @@ auto cfg     = agent::engine_config(agent::engines::llama, models, R"({"gpu_laye
 auto session = agent::init(cfg.value);
 ```
 
-`engine_config` returns a `Result<Config>`. Change any field of `cfg.value` before calling `init()` if you need to.
+`engine_config` returns a `Result<Config>`. Change any field of `cfg.value` before calling `init()` if needed.
 
 ## One-shot tasks
 
@@ -83,14 +83,14 @@ Every request carries one task, an `AGENT_CAP_*` bit. An engine declares the tas
 | `AGENT_CAP_CLASSIFY` | classification |
 | `AGENT_CAP_GENERIC` | raw named tensors in and out |
 
-## Your own engines
+## Custom engines
 
 `agent::engines::add(name, plugin_path)` gives a plugin file a name. Use that name in `engine_config()` or `open_session()`
 like a shipped engine. The plugin is loaded when a session first uses it. The optional third argument sets its isolation
 (`EngineIsolation::Process` runs it out of process).
 
 ```cpp
-agent::engines::add("echo", plugin_path);                  // plugin_path: the file your build produced
+agent::engines::add("echo", plugin_path);                  // plugin_path: the file the build produced
 auto session = agent::open_session("echo", "model.gguf");
 agent::engines::remove("echo");                            // forgets the name; a loaded plugin stays loaded until exit
 ```
@@ -99,10 +99,10 @@ agent::engines::remove("echo");                            // forgets the name; 
 search for plugins; call it before the first session. `load_engine_manifest` does the same for a whole `engines.json`.
 
 **Finding an engine.** `agent::engines::llama` (and `audiocpp`, `sdcpp`, `trellis`, `onnx`) are the names of the shipped engines. A name is
-resolved at run time, relative to your program, so an installed or moved application keeps working:
+resolved at run time, relative to the program, so an installed or moved application keeps working:
 
 1. an engine registered with `register_engine`, added with `engines::add`, or listed in a loaded `engines.json`;
-2. the file `agent-engine-<name>.so` (`.dll`, `.dylib`) in folders you added with `agent::engines::search_path(dir)`, then in
+2. the file `agent-engine-<name>.so` (`.dll`, `.dylib`) in folders added with `agent::engines::search_path(dir)`, then in
    `$AGENT_ENGINES_DIR`, then `<program folder>/engines/`, `<program folder>/../lib/agent/engines/`, `<program folder>/`,
    `<program folder>/../lib/`, and the working directory.
 
@@ -110,7 +110,7 @@ A value that looks like a path is loaded as given. When nothing is found the err
 
 In CMake, `agent_deploy_engines(my_app llama audiocpp)` copies exactly those plugins, and the libraries they load, into
 `<my_app folder>/engines/` after each build, adds them to `install()` (`<bindir>/engines`) and copies `agent-engine-host` next to the program.
-Engines you do not name never reach your release.
+Engines that are not named never reach the release.
 
 `init()` loads the plugin if `Config::engine` is a path, then calls the engine's `create()` with:
 
@@ -165,7 +165,7 @@ Engines are process-wide and stay loaded until exit. Loading the same plugin twi
 `load_engine_manifest("engines.json")` loads every plugin listed in a manifest and returns their names:
 
 ```json
-{"engines": [{"path": "<plugin file>"}, {"path": "<plugin file>", "isolation": "process"}]}   // placeholders for your plugin files
+{"engines": [{"path": "<plugin file>"}, {"path": "<plugin file>", "isolation": "process"}]}   // placeholders for the plugin files
 ```
 
 Relative paths resolve against the manifest's directory. Loading stops at the first plugin that fails.
@@ -776,5 +776,5 @@ A `TEXT` part `flush` ends the stream: an open segment is closed and returned, a
 starts a new stream. A stream holds at most 10 minutes of audio, so send `reset` before that. Without `streaming`,
 every call is a stream of its own.
 
-Licences: audio.cpp is Apache-2.0. The model weights keep their own licences, so check the model card before you
+Licences: audio.cpp is Apache-2.0. The model weights keep their own licences, so check the model card before
 ship one.

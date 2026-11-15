@@ -212,7 +212,7 @@ A JSON Schema for the file is in [`schemas/models.schema.json`](../../schemas/mo
 For `license: other`, only `license_name` can be checked. Llama and Gemma community licences, OpenRAIL and permissive licences are
 allowed. An unknown licence is allowed and recorded as `"unknown"`.
 
-Set `PullOptions::allow_restricted_license` (`--allow-restricted` in the CLI) only when you are entitled to use the model.
+Set `PullOptions::allow_restricted_license` (`--allow-restricted` in the CLI) only when the licence permits the intended use.
 
 ```cpp
 bool restricted = agent::hub::is_restricted_license("cc-by-nc-4.0");   // true
@@ -269,7 +269,7 @@ bool token_allowed_for_host(std::string_view host, std::string_view endpoint);
 bool host_bypasses_proxy(std::string_view host, std::string_view no_proxy);   // "*", "example.com", ".example.com"
 ```
 
-Gated repos: when the API answers 401 or 403, the error asks you to accept the licence on the model page and set `HF_TOKEN`. HTTP 407
+Gated repos: when the API answers 401 or 403, the error asks for the licence to be accepted on the model page and set `HF_TOKEN`. HTTP 407
 means the proxy wants credentials.
 
 ### Lower-level HTTP

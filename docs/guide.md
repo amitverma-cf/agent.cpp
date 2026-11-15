@@ -53,7 +53,7 @@ third argument to set the workspace, context window and so on.
 ## Choosing an engine
 
 An engine is a plugin that runs one family of models. `engine_config` takes the engine and one path per model role; the plugin
-installed with the library is found for you.
+installed with the library is found automatically.
 
 | Engine | Constant | Roles | Needs |
 |---|---|---|---|
@@ -73,7 +73,7 @@ const agent::ModelSlot onnx[] = {{"model", ".workspace/models/clip-vit-b32.onnx"
 auto cfg2 = agent::engine_config(agent::engines::onnx, onnx, R"({"threads": 4})", base);
 ```
 
-To use your own engine, `agent::engines::add("name", "path/to/agent-engine-name.so")` first and pass `"name"` to `engine_config`.
+To use a custom engine, `agent::engines::add("name", "path/to/agent-engine-name.so")` first and pass `"name"` to `engine_config`.
 The third argument is a JSON object of engine options (threads, voices, GPU layers). Engine details: [api/engines.md](api/engines.md).
 For tests without a model, `agent::AiProvider::Mock` returns fixed text.
 
@@ -81,7 +81,7 @@ For tests without a model, `agent::AiProvider::Mock` returns fixed text.
 
 ## Low-level inference: infer
 
-`infer` is stateless. You build an `InferRequest` with a span of `MessageView`s and get an `InferResponse` back. The response owns its memory (`InferResponse::storage`): its views stay valid as long as the response object lives, across later calls.
+`infer` is stateless. An `InferRequest` is built with a span of `MessageView`s and get an `InferResponse` back. The response owns its memory (`InferResponse::storage`): its views stay valid as long as the response object lives, across later calls.
 
 ```cpp
 agent::MessageView msg;
@@ -154,7 +154,7 @@ Each call:
 
 Tools are plain C function pointers. The callback receives the JSON arguments string and a `void*` user_data pointer, and returns `Result<std::string>`.
 
-For tools backed by a `DataSource` (RAG/SQL/vector search — see [data-sources.md](api/data-sources.md)), use `agent::bind_data_source_tool(session, source, ...)`: it retains the `shared_ptr<DataSource>` on the `Session` for you, so the tool's `user_data` can't outlive the data it points to.
+For tools backed by a `DataSource` (RAG/SQL/vector search — see [data-sources.md](api/data-sources.md)), use `agent::bind_data_source_tool(session, source, ...)`: it retains the `shared_ptr<DataSource>` on the `Session`, so the tool's `user_data` can't outlive the data it points to.
 
 ```cpp
 struct WeatherCtx { std::string api_key; };
@@ -183,7 +183,7 @@ cfg.auto_default_tools = false;
 cfg.tools = { weather };    // only this tool
 ```
 
-After `init()`, rebuild the O(1) dispatch index if you modify `session.config.tools` at runtime:
+After `init()`, rebuild the O(1) dispatch index after modifying `session.config.tools` at runtime:
 
 ```cpp
 session.config.tools.push_back(new_tool);
@@ -266,7 +266,7 @@ auto sess = agent::init(cfg);
 
 At `init()`, each skill's `name`+`description` (only — not the full body) is folded into the tools system prompt, and a `use_skill` tool is registered automatically. The model calls `use_skill({"name": "pdf-tools"})` to load a skill's full `SKILL.md` content only when it's actually relevant — this progressive-disclosure shape keeps unused skills' token cost to a couple of lines each.
 
-You can also drive this directly, e.g. from your own application code or a graph Agent node's `context_provider`:
+This can also be driven directly, e.g. from application code or a graph Agent node's `context_provider`:
 
 ```cpp
 auto res = agent::load_skills_dir(session, "my_skills");   // populate session.skills + register use_skill
@@ -286,7 +286,7 @@ Multi-step agents are graphs ([api/graph.md](api/graph.md)): named nodes joined 
 - `history_key` — by default each Agent node has its own conversation; nodes with the same `history_key` share one.
 - `input_key` / `prompt` and `output_key` — where the user message comes from and where the reply goes in the graph state.
 
-`Function` nodes run your C++ code against the state, `Tool` nodes call a tool directly, and routers (conditional edges) pick the next node from the state.
+`Function` nodes run the C++ code against the state, `Tool` nodes call a tool directly, and routers (conditional edges) pick the next node from the state.
 
 ```cpp
 agent::GraphNode research{.name = "research", .kind = agent::GraphNodeKind::Agent,
@@ -296,7 +296,7 @@ agent::GraphNode research{.name = "research", .kind = agent::GraphNodeKind::Agen
 agent::GraphNode write{.name = "write", .kind = agent::GraphNodeKind::Agent,
     .system_prompt = "You are a technical writer. Produce a clear, structured report.",
     .allowed_tools = {"write_file", "append_file"},
-    .prompt = "Write a comprehensive report based on your research.",
+    .prompt = "Write a comprehensive report based on the research.",
     .output_key = "report", .history_key = "report"};  // continues the research conversation
 
 agent::Graph g = agent::make_sequential("report_agent", {agent::make_graph(research), agent::make_graph(write)});
@@ -402,9 +402,9 @@ if (!load_res.ok) {
 }
 ```
 
-`save_conversation`/`load_conversation` are also available for calling directly if you want to snapshot or restore a `Conversation` outside the normal `run_turn` flow.
+`save_conversation`/`load_conversation` are also available for calling directly to snapshot or restore a `Conversation` outside the normal `run_turn` flow.
 
-You can also use the memory API directly for arbitrary key-value storage:
+The memory API can also be used directly for arbitrary key-value storage:
 
 ```cpp
 // Store
@@ -418,7 +418,7 @@ if (r.ok) printf("%s\n", r.value.c_str());
 agent::clear_memory(session);
 ```
 
-By default the store is in-memory (nothing persists past the `Session`). For durable storage, link the optional `agent_store_sqlite` library or plug in your own `StoreOps`. See [docs/api/memory.md](api/memory.md).
+By default the store is in-memory (nothing persists past the `Session`). For durable storage, link the optional `agent_store_sqlite` library or plug in a custom `StoreOps`. See [docs/api/memory.md](api/memory.md).
 
 ```cpp
 #include <agent-cpp/store_sqlite.hpp>
@@ -433,7 +433,7 @@ cfg.memory = {
 
 ## Context compression
 
-Compression is triggered automatically at 70% context fill, but you can also call it manually:
+Compression is triggered automatically at 70% context fill, and it can also be called manually:
 
 ```cpp
 // Compress, keeping the 6 most recent messages verbatim
@@ -484,7 +484,7 @@ Per-conversation stats are on `Conversation::stats` and are updated automaticall
 cfg.enable_file_logging = true;    // creates workspace_dir/logs/agent_YYYY-MM-DD_HH-MM-SS.log
 ```
 
-You can also supply a custom logger callback for real-time log capture:
+A custom logger callback can also be supplied callback for real-time log capture:
 
 ```cpp
 cfg.logger = [](agent::LogLevel lvl, std::string_view msg, void *) {

@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in this project, please report it privately. **Do not disclose it as a public issue.** This allows us to work on a fix before public exposure.
+Report a security vulnerability in this project privately. **Do not disclose it as a public issue.** This gives the maintainers time to prepare a fix before public exposure.
 
 Report it privately with GitHub's private security advisory form: https://github.com/amitverma-cf/agent.cpp/security/advisories/new
 
