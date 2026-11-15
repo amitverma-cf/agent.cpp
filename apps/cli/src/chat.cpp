@@ -539,6 +539,40 @@ Result<std::string> agent_run_cb(std::string_view args, void *user) {
     return ok(std::move(text));
 }
 
+// ---- notes that outlive the conversation: remember / recall over the session's key-value memory
+
+constexpr std::string_view kRememberSchema =
+    R"({"type":"object","properties":{"key":{"type":"string","description":"a short name for the note"},"value":{"type":"string","description":"the text to keep"}},"required":["key","value"]})";
+constexpr std::string_view kRecallSchema =
+    R"({"type":"object","properties":{"key":{"type":"string","description":"the name the note was kept under"}},"required":["key"]})";
+
+Result<std::string> remember_cb(std::string_view args, void *user) {
+    auto *st = static_cast<ChatState *>(user);
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded(args);
+    simdjson::dom::element doc;
+    std::string_view key, value;
+    if (parser.parse(padded).get(doc) || doc["key"].get(key) || doc["value"].get(value) || key.empty())
+        return fail<std::string>(ErrorCode::InvalidConfig, "remember needs a key and a value");
+    if (!st->lease) return fail<std::string>(ErrorCode::InvalidConfig, "no model is loaded");
+    if (auto r = store_memory(*st->lease, "note:" + std::string(key), value); !r.ok)
+        return fail<std::string>(r.error.code, r.error.message);
+    return ok("kept note '" + std::string(key) + "'");
+}
+
+Result<std::string> recall_cb(std::string_view args, void *user) {
+    auto *st = static_cast<ChatState *>(user);
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded(args);
+    simdjson::dom::element doc;
+    std::string_view key;
+    if (parser.parse(padded).get(doc) || doc["key"].get(key)) return fail<std::string>(ErrorCode::InvalidConfig, "recall needs a key");
+    if (!st->lease) return fail<std::string>(ErrorCode::InvalidConfig, "no model is loaded");
+    auto r = retrieve_memory(*st->lease, "note:" + std::string(key));
+    if (!r.ok) return ok("no note named '" + std::string(key) + "'");
+    return ok(std::move(r.value));
+}
+
 Result<void> open_session(ChatState &st) {
     const std::string previous = st.lease ? st.lease.name : std::string();
     release_model(st.lease);
@@ -589,6 +623,18 @@ Result<void> open_session(ChatState &st) {
                                  .parameter_schema = kAgentRunSchema,
                                  .callback = agent_run_cb,
                                  .user_data = &st});
+    if (!st.no_tools) {
+        cfg.tools.push_back(Tool{.name = "remember",
+                                 .description = "Keep a note under a short name so it can be recalled in later conversations.",
+                                 .parameter_schema = kRememberSchema,
+                                 .callback = remember_cb,
+                                 .user_data = &st});
+        cfg.tools.push_back(Tool{.name = "recall",
+                                 .description = "Read back a note kept with remember.",
+                                 .parameter_schema = kRecallSchema,
+                                 .callback = recall_cb,
+                                 .user_data = &st});
+    }
     cfg.secret_resolver = cli_resolve_secrets;
     cfg.secret_user_data = st.secrets.get();
     cfg.context_window = st.context_window;
@@ -1232,6 +1278,27 @@ bool handle_line(ChatState &st, const std::string &line) {
                 ensure_newline();
                 return true;
             }
+        }
+    }
+    {
+        // "/remember KEY text" and "/recall KEY": notes in the session memory.
+        const size_t b = line.find_first_not_of(" \t");
+        if (b != std::string::npos && (line.compare(b, 10, "/remember ") == 0 || line.compare(b, 8, "/recall ") == 0)) {
+            const bool keep = line.compare(b, 10, "/remember ") == 0;
+            const std::string rest = line.substr(b + (keep ? 10 : 8));
+            const size_t cut = rest.find(' ');
+            const std::string key = rest.substr(0, cut);
+            const std::string value = cut == std::string::npos ? std::string() : rest.substr(cut + 1);
+            if (!st.lease) out("[error] no model is loaded; switch with /model NAME\n");
+            else if (key.empty() || (keep && value.empty())) out(keep ? "usage: /remember KEY text\n" : "usage: /recall KEY\n");
+            else if (keep) {
+                auto r = store_memory(*st.lease, "note:" + key, value);
+                out(r.ok ? "kept note '" + key + "'\n" : "[error] " + r.error.message + "\n");
+            } else {
+                auto r = retrieve_memory(*st.lease, "note:" + key);
+                out(r.ok ? r.value + "\n" : "no note named '" + key + "'\n");
+            }
+            return true;
         }
     }
     const SlashCommand cmd = parse_slash_command(line);
@@ -2050,6 +2117,8 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
             {"/image", "send an image or audio file"},
             {"/task", "run an engine capability: image, speech, 3D, embed, ONNX"},
             {"/run", "run a graph file"},
+            {"/remember", "keep a note: /remember KEY text"},
+            {"/recall", "read a note: /recall KEY"},
             {"/open", "list or open generated files"},
             {"/stats", "token and tool-call counters"},
             {"/diff", "what the tools changed in files"},
