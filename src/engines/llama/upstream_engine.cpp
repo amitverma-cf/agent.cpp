@@ -130,7 +130,8 @@ std::unique_ptr<Engine> Engine::create(const Settings &s, std::string &error) {
         im.mtp = s.mtp && gguf_has_mtp(s.model);
         im.draft = !im.mtp && !s.draft_model.empty();
         if (im.draft)
-            args.insert(args.end(), {"--spec-type", "draft-simple", "-md", s.draft_model, "--spec-draft-n-max", std::to_string(std::max(1, s.draft_max))});
+            args.insert(args.end(), {"--spec-type", "draft-simple", "-md", s.draft_model, "--spec-draft-n-max",
+                                     std::to_string(std::max(1, s.draft_max))});
         if (im.mtp) args.insert(args.end(), {"--spec-type", "draft-mtp", "--spec-draft-n-max", std::to_string(std::max(1, s.draft_max))});
 
         std::vector<char *> argv;

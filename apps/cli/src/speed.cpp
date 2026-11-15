@@ -54,7 +54,8 @@ std::string check_setting_value(std::string_view key, std::string_view value) {
         return v == "off" || v == "prompt_lookup" || v == "draft" ? std::string() : "choose off, prompt lookup or draft model";
     }
     if (key == "mtp") return value == "on" || value == "off" ? std::string() : "choose on or off";
-    if (key == "draft_model") return value.find_first_of("\"\\n") == std::string_view::npos ? std::string() : "a model name from agent model ls";
+    if (key == "draft_model")
+        return value.find_first_of("\"\\n") == std::string_view::npos ? std::string() : "a model name from agent model ls";
     return {};
 }
 

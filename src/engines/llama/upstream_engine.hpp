@@ -26,9 +26,9 @@ struct Settings {
     int threads = 0;    // 0 = llama.cpp's choice
     int gpu_layers = -1;
     std::vector<std::pair<std::string, float>> loras;
-    std::string kv_type; // "", "f16", "q8_0" or "q4_0"
-    bool mtp = true;     // use the MTP head when the file has one
-    int draft_max = 3;   // tokens drafted per step
+    std::string kv_type;     // "", "f16", "q8_0" or "q4_0"
+    bool mtp = true;         // use the MTP head when the file has one
+    int draft_max = 3;       // tokens drafted per step
     std::string draft_model; // a small GGUF that drafts for the big one (speculative decoding with a draft model); empty = none
 };
 
@@ -63,7 +63,7 @@ class Engine {
     // POST /v1/systemone in process: `body` is a TypeSafe System One request; `out` gets the JSON answer.
     bool systemone(const std::string &body, std::string &out, std::string &error);
     bool mtp_active() const;
-    bool draft_active() const; // a draft model is in use
+    bool draft_active() const;                       // a draft model is in use
     int count_tokens(const std::string &text) const; // with the model's own tokenizer
 
   private:

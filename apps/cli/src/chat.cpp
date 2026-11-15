@@ -9,8 +9,8 @@
 #include "model_detect.hpp"
 #include "runtimes.hpp"
 #include "schedule.hpp"
-#include "settings_tool.hpp"
 #include "secrets.hpp"
+#include "settings_tool.hpp"
 #include "speed.hpp"
 #include "tui.hpp"
 #include "voice.hpp"
@@ -219,7 +219,7 @@ struct ChatState {
     std::vector<Media> artifacts;
     size_t streamed_bytes = 0;
     StreamFilter filter;
-    bool saved = false; // the conversation is in the store (resumable)
+    bool saved = false;      // the conversation is in the store (resumable)
     SettingsBridge settings; // what the settings tool uses (set up in open_session)
 };
 
@@ -285,7 +285,7 @@ PermissionDecision check_tool(std::string_view name, std::string_view arguments,
     if (st->mode == ChatMode::Auto) return PermissionDecision::Allow;
     PermissionDecision d = tools::default_permission_policy(name, arguments, nullptr);
     if ((name == "web_fetch" || name == "web_search" || name == "agent_run") && d == PermissionDecision::Allow)
-        d = PermissionDecision::Ask; // the network, other models
+        d = PermissionDecision::Ask;                                                     // the network, other models
     if (changes_settings && d == PermissionDecision::Allow) d = PermissionDecision::Ask; // changing a setting reloads the model
     if (d == PermissionDecision::Ask && std::find(st->always_allowed.begin(), st->always_allowed.end(), name) != st->always_allowed.end())
         return PermissionDecision::Allow;
@@ -1983,7 +1983,8 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
         if (!small.empty()) {
             small.insert(small.begin(), "(none)");
             add("draft_model", "Draft model", speed_setting_text(c, "draft_model"),
-                "A small installed model that guesses ahead; it must share the big model's vocabulary (same family). Reloads the model", small);
+                "A small installed model that guesses ahead; it must share the big model's vocabulary (same family). Reloads the model",
+                small);
         } else {
             info("Draft model", "none installed", "Pull a small model of the same family: agent model pull owner/repo");
         }
