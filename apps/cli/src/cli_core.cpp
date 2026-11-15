@@ -1,4 +1,5 @@
 #include "cli_core.hpp"
+#include "speed.hpp"
 
 #include <agent-cpp/engine_abi.h>
 #include <algorithm>
@@ -273,6 +274,7 @@ std::string format_turn_footer(const TokenUsage &u) {
         n = std::snprintf(buf, sizeof(buf), " | %d %s", u.retries, u.retries == 1 ? "retry" : "retries");
         out.append(buf, static_cast<size_t>(n));
     }
+    if (const std::string spec = speculation_note(u); !spec.empty()) (out += " | ") += spec;
     if (u.kv_max_tokens > 0) {
         n = std::snprintf(buf, sizeof(buf), " | KV %d/%d", u.kv_tokens, u.kv_max_tokens);
         out.append(buf, static_cast<size_t>(n));
@@ -590,6 +592,10 @@ std::string config_to_json(const CliConfig &c) {
     out += "  \"js_runtime\": \"" + c.js_runtime + "\",\n";
     out += "  \"search_url\": " + json_str(c.search_url) + ",\n";
     out += std::string("  \"local_only\": ") + (c.local_only ? "true" : "false") + ",\n";
+    out += "  \"kv_cache\": " + json_str(c.kv_cache) + ",\n";
+    out += "  \"speculative\": " + json_str(c.speculative) + ",\n";
+    out += "  \"draft_model\": " + json_str(c.draft_model) + ",\n";
+    out += std::string("  \"mtp\": ") + (c.mtp ? "true" : "false") + ",\n";
     out += "  \"shortcuts\": {";
     for (auto it = c.shortcuts.begin(); it != c.shortcuts.end(); ++it)
         out += (it == c.shortcuts.begin() ? "" : ", ") + json_str(it->first) + ": " + json_str(it->second);
@@ -624,6 +630,14 @@ Result<CliConfig> config_from_json(std::string_view json) {
     if (c.memory_budget_mb < 0) return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: memory_budget_mb must be >= 0");
     c.search_url = std::string(get_str(doc, "search_url"));
     if (bool local_only = false; !doc["local_only"].get(local_only)) c.local_only = local_only;
+    c.kv_cache = get_str(doc, "kv_cache", "auto");
+    c.speculative = get_str(doc, "speculative", "prompt_lookup");
+    c.draft_model = get_str(doc, "draft_model");
+    c.mtp = get_bool(doc, "mtp", true);
+    if (c.kv_cache != "auto" && c.kv_cache != "f16" && c.kv_cache != "q8_0" && c.kv_cache != "q4_0")
+        return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: kv_cache must be \"auto\", \"f16\", \"q8_0\" or \"q4_0\"");
+    if (c.speculative != "off" && c.speculative != "prompt_lookup" && c.speculative != "draft")
+        return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: speculative must be \"off\", \"prompt_lookup\" or \"draft\"");
     if (simdjson::dom::object shortcuts; !doc["shortcuts"].get(shortcuts))
         for (auto field : shortcuts)
             if (field.value.is_string()) c.shortcuts[std::string(field.key)] = std::string(field.value.get_string().value_unsafe());

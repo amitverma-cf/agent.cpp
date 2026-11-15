@@ -95,6 +95,12 @@ struct CliConfig {
     std::string search_url;
     // Local only: the web tools (web_fetch, web_search) and downloads started by the agent are refused, so nothing leaves the computer.
     bool local_only = false;
+    // Speed (llama models). KV cache: auto | f16 | q8_0 | q4_0. Speculative decoding: off | prompt_lookup | draft (a small installed model,
+    // draft_model, guesses ahead and the big one checks). mtp: use the model's multi-token-prediction head when its file has one.
+    std::string kv_cache = "auto";
+    std::string speculative = "prompt_lookup";
+    std::string draft_model;
+    bool mtp = true;
     // Keyboard shortcuts the user changed in the settings: action -> key ("settings" -> "ctrl+o"). An action that is not here has its default.
     std::map<std::string, std::string> shortcuts;
 };

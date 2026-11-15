@@ -9,7 +9,9 @@
 #include "model_detect.hpp"
 #include "runtimes.hpp"
 #include "schedule.hpp"
+#include "settings_tool.hpp"
 #include "secrets.hpp"
+#include "speed.hpp"
 #include "tui.hpp"
 #include "voice.hpp"
 
@@ -218,6 +220,7 @@ struct ChatState {
     size_t streamed_bytes = 0;
     StreamFilter filter;
     bool saved = false; // the conversation is in the store (resumable)
+    SettingsBridge settings; // what the settings tool uses (set up in open_session)
 };
 
 // The system prompt of a new conversation: ours, then the rules the user wrote for the project (AGENTS.md and .agents/rules).
@@ -272,7 +275,8 @@ PermissionDecision check_tool(std::string_view name, std::string_view arguments,
     if (g_acp) acp_tool_call(name, arguments);
     out("[tool] " + std::string(name) + " " + one_line(arguments, 300) + "\n");
     if (st->journal) st->journal->before_tool(name, arguments);
-    if (st->mode == ChatMode::Plan && tool_changes_things(name)) {
+    const bool changes_settings = name == "settings" && settings_call_changes(arguments);
+    if (st->mode == ChatMode::Plan && (tool_changes_things(name) || changes_settings)) {
         out("[plan mode] " + std::string(name) + " is not allowed; /mode ask or /mode auto lets the agent make changes\n");
         return PermissionDecision::Deny;
     }
@@ -280,6 +284,7 @@ PermissionDecision check_tool(std::string_view name, std::string_view arguments,
     PermissionDecision d = tools::default_permission_policy(name, arguments, nullptr);
     if ((name == "web_fetch" || name == "web_search" || name == "agent_run") && d == PermissionDecision::Allow)
         d = PermissionDecision::Ask; // the network, other models
+    if (changes_settings && d == PermissionDecision::Allow) d = PermissionDecision::Ask; // changing a setting reloads the model
     if (d == PermissionDecision::Ask && std::find(st->always_allowed.begin(), st->always_allowed.end(), name) != st->always_allowed.end())
         return PermissionDecision::Allow;
     return d;
@@ -699,6 +704,42 @@ Result<std::string> ask_user_cb(std::string_view args, void *) {
     return ok(std::string("(no one to ask in this mode; decide yourself and say what you assumed)"));
 }
 
+#if defined(AGENT_CLI_HAS_TUI)
+std::string tui_set_setting(ChatState &st, const std::string &key, const std::string &value);
+bool reload_model(ChatState &st);
+
+// The settings tool reads and changes settings through these, the same code as the Settings screen.
+std::string setting_text(ChatState &st, const std::string &key) {
+    const CliConfig &c = st.ctx->config;
+    if (key == "temperature") {
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%g", static_cast<double>(c.temperature));
+        return buf;
+    }
+    if (key == "max_tokens") return std::to_string(st.max_tokens);
+    if (key == "context_window") return std::to_string(st.context_window);
+    if (key == "mode") return chat_mode_name(st.mode);
+    if (key == "draft_model_choices") {
+        std::vector<std::pair<std::string, uint64_t>> installed;
+        if (auto catalog = agent::hub::list_models(catalog_path(*st.ctx)); catalog.ok)
+            for (const auto &m : catalog.value) installed.emplace_back(m.name, m.size);
+        std::string text;
+        for (const std::string &name : draft_model_candidates(installed, st.model.name)) text += (text.empty() ? "" : ", ") + name;
+        return text;
+    }
+    return speed_setting_text(c, key);
+}
+
+void init_settings_bridge(ChatState &st) {
+    st.settings.user = &st;
+    st.settings.get = [](void *u, const std::string &key) { return setting_text(*static_cast<ChatState *>(u), key); };
+    st.settings.apply = [](void *u, const std::string &key, const std::string &value) {
+        return tui_set_setting(*static_cast<ChatState *>(u), key, value);
+    };
+    st.settings.reload = [](void *u) { return reload_model(*static_cast<ChatState *>(u)); };
+}
+#endif
+
 Result<void> open_session(ChatState &st) {
     const std::string previous = st.lease ? st.lease.name : std::string();
     release_model(st.lease);
@@ -713,7 +754,14 @@ Result<void> open_session(ChatState &st) {
     cfg.engine_isolation = cli_engine_isolation(st.inprocess, st.engine.isolation);
     cfg.engine_sandbox.gpu = cli_engine_gpu(st.engine.backend);
     apply_sandbox_choice(cfg);
-    cfg.engine_options = st.engine_options;
+    {
+        std::string draft_path;
+        if (!st.ctx->config.draft_model.empty())
+            if (auto catalog = agent::hub::list_models(catalog_path(*st.ctx)); catalog.ok)
+                for (const auto &m : catalog.value)
+                    if (m.name == st.ctx->config.draft_model && m.path != st.model.path) draft_path = m.path;
+        cfg.engine_options = speed_engine_options(st.ctx->config, st.engine.name, st.engine_options, draft_path);
+    }
     cfg.model = st.model.path;
     cfg.workspace_dir = st.workspace;
     {
@@ -749,6 +797,12 @@ Result<void> open_session(ChatState &st) {
                                  .parameter_schema = kAgentRunSchema,
                                  .callback = agent_run_cb,
                                  .user_data = &st});
+#if defined(AGENT_CLI_HAS_TUI)
+    if (!st.no_tools) {
+        init_settings_bridge(st);
+        cfg.tools.push_back(settings_tool(&st.settings));
+    }
+#endif
     if (!st.no_tools) {
         cfg.tools.push_back(Tool{.name = "remember",
                                  .description =
@@ -892,6 +946,7 @@ std::string format_metrics(const ChatState &st, double elapsed = 0.0) {
         std::snprintf(buf, sizeof(buf), "%.1f s", seconds);
         out += (out.empty() ? "" : "  \xC2\xB7  ") + std::string(buf);
     }
+    if (const std::string spec = speculation_note(u); !spec.empty()) out += (out.empty() ? "" : "  ·  ") + spec;
     return out;
 }
 
@@ -936,6 +991,8 @@ void run_one_turn(ChatState &st, const std::string &text, std::span<const Media>
 #endif
     }
     remember_conversation(st);
+    // Settings the agent was asked to change are applied now, between answers (they reload the model).
+    if (const std::string changed = apply_pending_settings(st.settings); !changed.empty()) out(changed);
 }
 
 // ---- "!command": the user's own shell command in the project folder; the output goes into the conversation
@@ -1911,6 +1968,30 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
     add("max_tokens", "Longest answer (tokens)", std::to_string(st.max_tokens), "Where an answer is cut. Reloads the model");
     add("context_window", "Context window (tokens)", std::to_string(st.context_window),
         "How much of the conversation the model sees; more uses more memory. Reloads the model");
+    head("Speed");
+    add("speculative", "Speculative decoding", speed_setting_text(c, "speculative"),
+        "Faster answers when the model can guess ahead. off; prompt lookup reuses text already in the conversation (code, quotes); draft "
+        "model lets a small model guess. Reloads the model",
+        {"off", "prompt lookup", "draft model"});
+    {
+        std::vector<std::pair<std::string, uint64_t>> installed;
+        if (catalog.ok)
+            for (const auto &m : catalog.value) installed.emplace_back(m.name, m.size);
+        std::vector<std::string> small = draft_model_candidates(installed, st.model.name);
+        if (!small.empty()) {
+            small.insert(small.begin(), "(none)");
+            add("draft_model", "Draft model", speed_setting_text(c, "draft_model"),
+                "A small installed model that guesses ahead; it must share the big model's vocabulary (same family). Reloads the model", small);
+        } else {
+            info("Draft model", "none installed", "Pull a small model of the same family: agent model pull owner/repo");
+        }
+    }
+    add("mtp", "MTP drafting", speed_setting_text(c, "mtp"),
+        "For models whose file has a multi-token-prediction head: the model drafts for itself. Reloads the model", {"on", "off"});
+    add("kv_cache", "KV cache type", speed_setting_text(c, "kv_cache"),
+        "How the conversation cache is stored: q8_0 and q4_0 use less memory (faster on long conversations), f16 is the most exact, auto "
+        "chooses. Reloads the model",
+        {"auto", "f16", "q8_0", "q4_0"});
     head("Memory");
     add("memory_budget_mb", "Memory budget (MB)", std::to_string(c.memory_budget_mb),
         "0 lets it use 85% of the RAM. Models that do not fit are unloaded in turn");
@@ -2023,7 +2104,11 @@ std::string tui_set_setting(ChatState &st, const std::string &key, const std::st
         if (auto r = save_config(st.ctx->config_path, c); !r.ok) return "could not save config.json: " + r.error.message;
         return {};
     };
-    auto reload = [&]() { return reload_model(st) ? std::string() : std::string("the model did not reload; try /model NAME"); };
+    if (auto bad = check_setting_value(key, value); !bad.empty()) return bad; // the checks the settings tool shares
+    auto reload = [&]() {
+        if (settings_defer_reload(true)) return std::string(); // several changes at once: one reload at the end
+        return reload_model(st) ? std::string() : std::string("the model did not reload; try /model NAME");
+    };
     auto whole = [&](long lowest, long &out) -> std::string {
         char *end = nullptr;
         const long v = std::strtol(value.c_str(), &end, 10);
@@ -2059,6 +2144,11 @@ std::string tui_set_setting(ChatState &st, const std::string &key, const std::st
     if (key == "default_model") {
         c.default_model = value;
         return persist();
+    }
+    if (key == "kv_cache" || key == "speculative" || key == "draft_model" || key == "mtp") {
+        set_speed_setting(c, key, value);
+        if (auto e = persist(); !e.empty()) return e;
+        return reload();
     }
     if (key == "mode") {
         ChatMode m;

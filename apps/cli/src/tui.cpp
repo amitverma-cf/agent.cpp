@@ -752,7 +752,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         }
         tb_mode = tb.mode;
         if (tb.context_total > 0) {
-            tb_ctx = "ctx " + std::to_string(tb.context_used) + "/" + std::to_string(tb.context_total);
+            tb_ctx = "context " + std::to_string(tb.context_used) + "/" + std::to_string(tb.context_total) + " tokens";
             gauge_class = tb.context_used * 100 >= tb.context_total * 85 ? "gauge hot" : "gauge";
         } else {
             tb_ctx.clear();

@@ -15,6 +15,8 @@ add_library(agent_cli_core STATIC
     src/registries.cpp
     src/doctor.cpp
     src/status_view.cpp
+    src/speed.cpp
+    src/settings_tool.cpp
     src/schedule.cpp
     src/waiting.cpp
     src/audio.cpp
