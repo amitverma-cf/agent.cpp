@@ -453,6 +453,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
         Bind(box_class);
         Bind(md_css);
         Bind(main_title);
+        Bind(title_l);
+        Bind(title_s);
         Bind(project_line);
         Bind(side_class);
         Bind(app_class);
@@ -527,6 +529,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
                 caret = "\xE2\x9D\xAF";
     std::string notice;
     bool has_notice = false;
+    std::string title_l, title_s;
     std::string main_title = "New chat", project_line, side_class = "side", app_class = "main home", tip;
     std::string md_css = std::string(kMarkdownCss);
     bool asking = false, prompting = false, busy = false;
@@ -547,7 +550,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         key_rows.push_back({"? or F1", "Show this list", ""});
         key_rows.push_back({"@file", "Put a file's text in your message", ""});
         key_rows.push_back({"!command", "Run a shell command in your project", ""});
-        key_rows.push_back({"Esc / Ctrl+C", "Stop the answer, tool or /compact that is running", ""});
+        key_rows.push_back({"Esc, Ctrl+C", "Stop the answer, tool or /compact that is running", ""});
         key_rows.push_back({"PageUp, PageDown", "Scroll the conversation", ""});
         key_rows.push_back({"Home, End", "Oldest message, newest message", ""});
     }
@@ -1226,8 +1229,24 @@ class ChatApp : public rtxui::Component<ChatApp> {
         input = s;
         // The input element takes the new value at the next Digest. Keys that arrive in the same read as the Enter (a fast typist, a pasted
         // line, a test rig) are handled before that and would be added to the old text: push the value down now.
-        Digest();
-        if (s.empty()) return;
+        if (s.empty()) {
+            // Keys that came in the same read as the Enter wait until the input element has taken the empty value.
+            gate = true;
+            rtxui::PostDelayedTask(
+                [this] {
+                    // The input element may still hold the text it had (it takes the new value only when the bound text changed since the
+                    // last frame): empty it the way a person would.
+                    Component<ChatApp>::OnEvent(Event::End());
+                    for (int i = 0; i < 300; ++i) Component<ChatApp>::OnEvent(Event::Backspace());
+                    input.clear();
+                    gate = false;
+                    std::vector<Event> held;
+                    held.swap(held_keys);
+                    for (const Event &k : held) OnEvent(k);
+                },
+                std::chrono::milliseconds(30));
+            return;
+        }
         rtxui::PostDelayedTask([this] { Component<ChatApp>::OnEvent(Event::End()); }, std::chrono::milliseconds(40));
     }
 
@@ -1275,6 +1294,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
                 {std::string(i == selected ? "\xE2\x96\xB8 " : "  ") + c.name, c.help, i == selected ? "pitem current" : "pitem"});
         }
         show_palette = !matches.empty();
+        title_l = clip(main_title, 44);
+        title_s = clip(main_title, 22);
         return Component<ChatApp>::Digest();
     }
 
@@ -1313,7 +1334,14 @@ class ChatApp : public rtxui::Component<ChatApp> {
         MoveSide(0);
     }
 
+    bool gate = false;
+    std::vector<Event> held_keys;
+
     bool OnEvent(Event e) override {
+        if (gate && e.is<Event::Keyboard>()) {
+            held_keys.push_back(e);
+            return true;
+        }
         if (confirm_open) {
             const int c = Letter(e);
             if (e == Event::Return() || c == 'y' || c == 'Y') ConfirmYes();
@@ -1598,7 +1626,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
       <div class="{app_class}">
         <div class="top">
           <span class="burger" onclick="ToggleSide">{ico_menu}</span>
-          <span class="ttitle">{main_title}</span>
+          <span class="ttitle tl">{title_l}</span><span class="ttitle ts">{title_s}</span>
           <span class="act tdel" if="{has_messages}" onclick="AskDeleteSession">{ico_del}</span>
         </div>
         <div class="sp1"></div>
@@ -1715,6 +1743,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .home .top { display: none; }
       .ttitle { color: #ffffff; font-weight: bold; flex-grow: 1; flex-basis: 0; min-width: 0; overflow-x: hidden; white-space: nowrap; }
       .burger, .tdel { flex-shrink: 0; }
+      .ts { display: none; }
       .act { color: #8a8a8a; padding-left: 1; padding-right: 1; }
       .act:hover { color: #40e0d0; }
       .act.del:hover, .tdel:hover { color: #ffb3d1; }
@@ -1768,8 +1797,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .q { flex-grow: 1; white-space: pre-wrap; }
       .palette { border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
       .pitem { display: flex; flex-direction: row; color: #40e0d0; }
-      .pitem .pname { width: 16; }
-      .pitem .phelp { color: #ffffff; }
+      .pitem .pname { width: 16; flex-shrink: 0; }
+      .pitem .phelp { color: #ffffff; flex-grow: 1; flex-basis: 0; min-width: 0; }
       .current .pname { color: #ffb3d1; font-weight: bold; }
       .promptq { color: #ffb3d1; font-weight: bold; padding-left: 1; }
       .status { display: flex; flex-direction: row; padding-left: 2; padding-right: 2; color: #8a8a8a; border-top: solid; border-color: #4a4a4a; }
@@ -1779,7 +1808,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .sr .tb { padding-left: 1; padding-right: 0; color: #8a8a8a; }
       .gauge { color: #40e0d0; padding-left: 2; white-space: nowrap; }
       .gauge.hot { color: #ffb3d1; }
-      dialog::part(dialog-box) { border: round; border-color: #40e0d0; background-color: #000000; color: #ffffff; min-width: 56; max-width: 90; }
+      dialog::part(dialog-box) { border: round; border-color: #40e0d0; background-color: #000000; color: #ffffff; min-width: 50; max-width: 90; }
       dialog::part(dialog-header) { color: #40e0d0; border-color: #4a4a4a; }
       toast::part(toast) { border-color: #40e0d0; background-color: #000000; color: #ffffff; }
       .box input::part(placeholder) { color: #8a8a8a; }
@@ -1819,11 +1848,16 @@ class ChatApp : public rtxui::Component<ChatApp> {
         .home .composer { width: 100%; padding-left: 1; padding-right: 1; }
         .tb.models, .tb.engine { display: none; }
       }
+      @media (max-width: 55) {
+        .tl { display: none; }
+        .ts { display: block; }
+      }
       @media (max-width: 49) {
         .row .mark { width: 1; }
         .assistant .mark { display: none; }
         .tb.cpu { display: none; }
-        .kname { width: 10; }
+        .kname { width: 11; white-space: normal; }
+        dialog::part(dialog-box) { min-width: 28; }
       }
       @media (max-width: 35) {
         .banner { display: none; }
