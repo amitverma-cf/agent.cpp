@@ -557,6 +557,11 @@ Result<std::string> remember_cb(std::string_view args, void *user) {
     if (!st->lease) return fail<std::string>(ErrorCode::InvalidConfig, "no model is loaded");
     if (auto r = store_memory(*st->lease, "note:" + std::string(key), value); !r.ok)
         return fail<std::string>(r.error.code, r.error.message);
+    // The list of note names: the memory store has no listing, and the pack below needs to find the notes.
+    std::string index;
+    if (auto have = retrieve_memory(*st->lease, "note_index"); have.ok) index = std::move(have.value);
+    const std::string line = "\n" + std::string(key) + "\n";
+    if (("\n" + index).find(line) == std::string::npos) store_memory(*st->lease, "note_index", index + std::string(key) + "\n");
     return ok("kept note '" + std::string(key) + "'");
 }
 
@@ -571,6 +576,76 @@ Result<std::string> recall_cb(std::string_view args, void *user) {
     auto r = retrieve_memory(*st->lease, "note:" + std::string(key));
     if (!r.ok) return ok("no note named '" + std::string(key) + "'");
     return ok(std::move(r.value));
+}
+
+// What the agent knows from earlier chats that fits this message: the notes kept with `remember` whose name or text shares words with
+// it, best first, within a small budget. It goes in front of the message, so the agent follows what the user said before without asking.
+std::string memory_pack(ChatState &st, const std::string &prompt) {
+    if (!st.lease) return {};
+    auto index = retrieve_memory(*st.lease, "note_index");
+    if (!index.ok || index.value.empty()) return {};
+    auto lower = [](std::string s) {
+        for (char &c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+    std::vector<std::string> words;
+    {
+        std::string w;
+        for (const char c : lower(prompt) + " ") {
+            if (std::isalnum(static_cast<unsigned char>(c))) w += c;
+            else {
+                if (w.size() >= 4 && std::find(words.begin(), words.end(), w) == words.end()) words.push_back(w);
+                w.clear();
+            }
+        }
+    }
+    if (words.empty()) return {};
+    std::vector<std::pair<int, std::string>> found;
+    size_t from = 0;
+    while (from < index.value.size()) {
+        size_t end = index.value.find('\n', from);
+        if (end == std::string::npos) end = index.value.size();
+        const std::string key = index.value.substr(from, end - from);
+        from = end + 1;
+        if (key.empty()) continue;
+        auto value = retrieve_memory(*st.lease, "note:" + key);
+        if (!value.ok) continue;
+        const std::string haystack = lower(key + " " + value.value);
+        int score = 0;
+        for (const std::string &w : words)
+            if (haystack.find(w) != std::string::npos) ++score;
+        if (score > 0) found.emplace_back(score, "- " + key + ": " + one_line(value.value, 300) + "\n");
+    }
+    std::stable_sort(found.begin(), found.end(), [](const auto &a, const auto &b) { return a.first > b.first; });
+    std::string pack;
+    for (const auto &[score, line] : found) {
+        if (pack.size() + line.size() > 1200) break;
+        pack += line;
+    }
+    if (pack.empty()) return {};
+    return "[Notes kept from earlier chats; use them when they matter]\n" + pack + "[End of notes]\n\n";
+}
+
+constexpr std::string_view kTodoSchema =
+    R"({"type":"object","properties":{"items":{"type":"array","description":"the whole list, every time","items":{"type":"object","properties":{"content":{"type":"string"},"status":{"type":"string","enum":["pending","in_progress","completed"]}},"required":["content","status"]}}},"required":["items"]})";
+
+// The agent's own checklist for a multi-step request: one call writes the whole list, the result shows it.
+Result<std::string> todo_cb(std::string_view args, void *) {
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded(args);
+    simdjson::dom::element doc;
+    simdjson::dom::array list;
+    if (parser.parse(padded).get(doc) || doc["items"].get(list)) return fail<std::string>(ErrorCode::InvalidConfig, "todo needs items");
+    std::string text;
+    size_t done = 0, total = 0;
+    for (simdjson::dom::element e : list) {
+        std::string_view content, status;
+        if (e["content"].get(content) || e["status"].get(status)) continue;
+        ++total;
+        if (status == "completed") ++done;
+        text += (status == "completed" ? "[x] " : status == "in_progress" ? "[~] " : "[ ] ") + std::string(content) + "\n";
+    }
+    return ok(std::to_string(done) + "/" + std::to_string(total) + " done\n" + text);
 }
 
 Result<void> open_session(ChatState &st) {
@@ -625,10 +700,18 @@ Result<void> open_session(ChatState &st) {
                                  .user_data = &st});
     if (!st.no_tools) {
         cfg.tools.push_back(Tool{.name = "remember",
-                                 .description = "Keep a note under a short name so it can be recalled in later conversations.",
+                                 .description =
+                                     "Keep a lasting fact about the user or the project (a preference, a name, a correction) under a "
+                                     "short name. Notes that match a later message are shown to the agent automatically.",
                                  .parameter_schema = kRememberSchema,
                                  .callback = remember_cb,
                                  .user_data = &st});
+        cfg.tools.push_back(Tool{.name = "todo",
+                                 .description =
+                                     "Keep a checklist for a request with several steps. Send the whole list every time with each item "
+                                     "pending, in_progress or completed; one item is in progress while working on it.",
+                                 .parameter_schema = kTodoSchema,
+                                 .callback = todo_cb});
         cfg.tools.push_back(Tool{.name = "recall",
                                  .description = "Read back a note kept with remember.",
                                  .parameter_schema = kRecallSchema,
@@ -1292,7 +1375,7 @@ bool handle_line(ChatState &st, const std::string &line) {
             for (const std::string &n : attached) names += (names.empty() ? "" : ", ") + n;
             out("attached: " + names + "\n");
         }
-        run_one_turn(st, text, {});
+        run_one_turn(st, memory_pack(st, text) + text, {});
         return true;
     }
     if (cmd.kind == SlashKind::Exit) return false;

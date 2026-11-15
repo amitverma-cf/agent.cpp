@@ -1200,6 +1200,11 @@ std::string load_project_rules(const std::string &workspace, const std::string &
     const fs::path ws(workspace);
     files.emplace_back("AGENTS.md", ws / "AGENTS.md");
     files.emplace_back(".agents/AGENTS.md", ws / ".agents" / "AGENTS.md");
+    // How the agent presents itself: plain Markdown files in the project folder or in the agent home.
+    for (const char *persona : {"SOUL.md", "IDENTITY.md", "ROLE.md"}) {
+        files.emplace_back(persona, ws / persona);
+        if (!home_root.empty()) files.emplace_back(std::string("home ") + persona, fs::path(home_root) / persona);
+    }
     std::vector<fs::path> rules;
     for (const auto &entry : fs::directory_iterator(ws / ".agents" / "rules", ec))
         if (entry.is_regular_file(ec) && entry.path().extension() == ".md") rules.push_back(entry.path());
