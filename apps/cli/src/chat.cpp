@@ -244,7 +244,9 @@ std::string system_prompt(const ChatState &st) {
         "steps keep a checklist "
         "with todo. When the user mentions their files, a folder or a document without a path, look in the workspace first "
         "(list_dir, then read what matches) before asking; ask only when nothing matches. For questions about earlier "
-        "chats, check recall and the saved notes first.";
+        "chats, check recall and the saved notes first. When the user asks to make answers faster, slower, more creative, steadier or "
+        "longer, or asks about a small helper model or MTP, use the settings tool (action get first, then set); never claim a "
+        "speed feature the settings tool does not list.";
     return std::string(kSystemPrompt) + platform + habits +
            load_project_rules(st.workspace, st.ctx->has_home ? st.ctx->home.root : st.ctx->config_dir);
 }

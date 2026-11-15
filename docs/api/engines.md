@@ -360,11 +360,12 @@ request found in the cache.
 buffer, which is the part of a model's footprint that does not shrink with quantization. Weights are memory-mapped, so unused
 pages stay on disk; engine host processes run with `MALLOC_ARENA_MAX=2` and early trimming so freed memory goes back to the system.
 
-**Speculative decoding (`speculative`, default `true`).** Prompt-lookup drafting: when the last three tokens occurred earlier in
+**Speculative decoding (`speculative`, default `"prompt_lookup"`; also `true`, `false`, `"off"`, `"draft"`).** `"draft"` with `draft_model` (path of a small GGUF
+that shares the big model's vocabulary) and `draft_max` (default 4) runs the model on llama.cpp's own engine (`--spec-type draft-simple`), like MTP below; `"off"` turns every kind of drafting off, MTP included.
+Prompt-lookup drafting: when the last three tokens occurred earlier in
 the prompt or the reply, the tokens that followed them are proposed (up to 8), checked in one batched decode, and the longest
-prefix that the model itself would have produced is kept; the rest is cut from the KV cache. It is used only for greedy
-(`temperature` 0) requests without tools, on attention models that can drop the end of a sequence (not hybrid/recurrent ones such
-as LFM, and not sliding-window ones). It pays off when the output repeats the input (quoting, rewriting, code edits); otherwise it
+prefix that the model itself would have produced is kept; the rest is cut from the KV cache. It is used for text requests at any temperature, with or without tools: each position is sampled from the model's own distribution
+and a draft token counts only when that sample equals it, so the output distribution is unchanged (greedy: the same tokens). It needs a model whose cache can be cut back or restored (not sliding-window ones). The reply's stats carry `spec_kind`, `spec_drafted` and `spec_accepted`. It pays off when the output repeats the input (quoting, rewriting, code edits); otherwise it
 costs nothing but a little compute for rejected drafts. `AGENT_LLAMA_TRACE=1` reports rounds and accepted tokens.
 
 **LoRA adapters (`lora`).** `"lora": [{"path": "adapter.gguf", "scale": 1.0}]` applies GGUF LoRA adapters to the
