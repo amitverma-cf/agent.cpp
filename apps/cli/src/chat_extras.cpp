@@ -220,6 +220,36 @@ std::string filter_think(ThinkFilter &f, std::string_view token) {
     }
 }
 
+std::string strip_think(std::string_view text) {
+    constexpr std::string_view kOpen = "<think>";
+    constexpr std::string_view kClose = "</think>";
+    std::string s(text);
+    // A closing tag before any opening one: the reasoning started in the prompt.
+    const size_t first_close = s.find(kClose);
+    const size_t first_open = s.find(kOpen);
+    if (first_close != std::string::npos && (first_open == std::string::npos || first_close < first_open)) s.erase(0, first_close + kClose.size());
+    std::string out;
+    size_t at = 0;
+    for (;;) {
+        const size_t open = s.find(kOpen, at);
+        if (open == std::string::npos) {
+            out.append(s, at, std::string::npos);
+            break;
+        }
+        out.append(s, at, open - at);
+        const size_t close = s.find(kClose, open + kOpen.size());
+        if (close == std::string::npos) break; // unclosed: the rest is reasoning
+        at = close + kClose.size();
+        while (at < s.size() && (s[at] == '\n' || s[at] == ' ')) ++at;
+    }
+    if (out.size() != s.size()) {
+        size_t b = 0;
+        while (b < out.size() && (out[b] == '\n' || out[b] == ' ')) ++b;
+        out.erase(0, b);
+    }
+    return out;
+}
+
 std::string flush_think(ThinkFilter &f) {
     // What is held back outside a block was only a possible tag start: it is text after all. Inside a block it stays hidden.
     std::string rest = f.inside ? std::string() : f.pending;

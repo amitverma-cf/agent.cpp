@@ -650,6 +650,14 @@ TEST_CASE("tui: the palette lists commands by prefix", "[cli][tui]") {
     CHECK(std::string(commands[model[0]].name) == "/model");
     CHECK(filter_commands(commands, "/zzz").empty());
 }
+
+TEST_CASE("tui: Enter in the palette runs commands that need no argument", "[cli][tui]") {
+    CHECK_FALSE(tui_command_needs_argument("/help"));
+    CHECK_FALSE(tui_command_needs_argument("/compact"));
+    CHECK_FALSE(tui_command_needs_argument("/doctor"));
+    CHECK(tui_command_needs_argument("/model"));
+    CHECK(tui_command_needs_argument("/rename"));
+}
 #endif
 
 // ------------------------------------------------------------------ schedule: cron text

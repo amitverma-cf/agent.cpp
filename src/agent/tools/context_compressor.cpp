@@ -119,6 +119,7 @@ Result<void> compress_context(Session &session, Conversation &state, size_t keep
     }
 
     auto res = summarize(session, prompt);
+    if (!res.ok && res.error.code == ErrorCode::Cancelled) return fail(ErrorCode::Cancelled, "Cancelled.");
     if (!res.ok) {
         utils::log(session, LogLevel::Warning,
                    "compress_context: LLM summarization failed, skipping compression. "

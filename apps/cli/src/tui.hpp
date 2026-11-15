@@ -146,5 +146,7 @@ std::string summarize_tool_result(std::string_view result, int max_lines, int ma
 int context_percent(std::string_view footer);
 // The commands whose name starts with what the user typed ("/mo" -> "/model"); everything for "/".
 std::vector<size_t> filter_commands(std::span<const TuiCommand> commands, std::string_view typed);
+// Whether a palette command waits for an argument (/model, /rename, ...): Enter in the palette completes those and runs the others.
+bool tui_command_needs_argument(std::string_view name);
 
 } // namespace agent::cli

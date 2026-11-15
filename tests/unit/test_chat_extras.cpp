@@ -102,3 +102,12 @@ TEST_CASE("chat extras: modes, permissions file, conversation index", "[chat_ext
     CHECK(remove_conversation_id("a\n", "x") == "a\n");
     CHECK(remove_conversation_id("", "x").empty());
 }
+
+TEST_CASE("chat extras: a whole answer without its reasoning", "[chat_extras]") {
+    CHECK(strip_think("<think>let me see</think>\nThe answer is 4.") == "The answer is 4.");
+    CHECK(strip_think("Hi <think>x</think>there") == "Hi there");
+    CHECK(strip_think("plain text") == "plain text");
+    CHECK(strip_think("kept <think>never closed") == "kept ");
+    CHECK(strip_think("I think so\n</think>\nYes.") == "Yes.");
+    CHECK(strip_think("<think>a</think><think>b</think>done") == "done");
+}

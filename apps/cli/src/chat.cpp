@@ -215,6 +215,7 @@ struct ChatState {
     bool use_tui = false; // the full-screen interface (a terminal, and not --plain)
 
     std::shared_ptr<SecretContext> secrets;  // names and bindings; values are read only when an MCP server starts
+    std::vector<std::string> declined; // tool calls (name + arguments) the user refused in the turn that is running: not asked again
     std::vector<std::string> always_allowed; // tools the user allowed for good in this project (.agents/permissions.json)
     ChatMode mode = ChatMode::Ask;
     ThinkFilter think;
@@ -305,6 +306,14 @@ PermissionDecision check_tool(std::string_view name, std::string_view arguments,
         out("[plan mode] " + std::string(name) + " is not allowed; /mode ask or /mode auto lets the agent make changes\n");
         return PermissionDecision::Deny;
     }
+    if (st->ctx->config.local_only && (name == "web_fetch" || name == "web_search" || name == "agent_run")) {
+        out("[local only] " + std::string(name) + " is refused: nothing leaves this computer (turn Local only off in Settings)\n");
+        return PermissionDecision::Deny;
+    }
+    if (std::find(st->declined.begin(), st->declined.end(), std::string(name) + "\n" + std::string(arguments)) != st->declined.end()) {
+        out("[tool] " + std::string(name) + ": you already declined this exact call in this turn\n");
+        return PermissionDecision::Deny;
+    }
     if (st->mode == ChatMode::Auto) return PermissionDecision::Allow;
     PermissionDecision d = tools::default_permission_policy(name, arguments, nullptr);
     if ((name == "web_fetch" || name == "web_search" || name == "agent_run") && d == PermissionDecision::Allow)
@@ -315,7 +324,15 @@ PermissionDecision check_tool(std::string_view name, std::string_view arguments,
     return d;
 }
 
+bool prompt_tool_asked(std::string_view name, std::string_view arguments, void *user_data);
+
 bool prompt_tool(std::string_view name, std::string_view arguments, void *user_data) {
+    const bool allowed = prompt_tool_asked(name, arguments, user_data);
+    if (!allowed) static_cast<ChatState *>(user_data)->declined.push_back(std::string(name) + "\n" + std::string(arguments));
+    return allowed;
+}
+
+bool prompt_tool_asked(std::string_view name, std::string_view arguments, void *user_data) {
     auto *st = static_cast<ChatState *>(user_data);
     const std::string n(name);
     if (g_acp && !st->auto_approve) {
@@ -1110,6 +1127,7 @@ void run_one_turn(ChatState &st, const std::string &text, std::span<const Media>
     st.streamed_bytes = 0;
     clear_cancel(*st.lease);
     sync_extensions(st); // servers and skills added since the last message
+    st.declined.clear();
     g_generating.store(true);
     auto r = media.empty() ? run_turn(*st.lease, st.memory, text, true, on_token, &st)
                            : run_turn_with_media(*st.lease, st.memory, text, media, true, on_token, &st);
@@ -1124,7 +1142,7 @@ void run_one_turn(ChatState &st, const std::string &text, std::span<const Media>
         else out("[error] " + r.error.message + "\n");
         clear_cancel(*st.lease);
     } else if (st.streamed_bytes == 0) {
-        emit_assistant(r.value); // engine did not stream
+        emit_assistant(st.think.show ? r.value : strip_think(r.value)); // engine did not stream
     }
     emit_assistant(filter_stream(st.filter, flush_think(st.think)));
     emit_assistant(flush_stream(st.filter));
@@ -1353,7 +1371,14 @@ std::vector<TuiSession> tui_sessions(ChatState &st) {
     // The open project first: its conversations are read through the open store.
     if (st.lease) list_workspace_sessions(*st.lease, st.workspace, st.memory.id, st.workspace, sessions);
     const bool saved = std::any_of(sessions.begin(), sessions.end(), [](const TuiSession &s) { return s.active; });
-    if (!saved) sessions.insert(sessions.begin(), TuiSession{st.memory.id, conversation_title(st.memory), st.workspace, 0, true});
+    if (!saved) {
+        // A chat that has no message yet is not in the saved list; a name given with /rename is still its title.
+        std::string title = conversation_title(st.memory);
+        if (st.lease)
+            if (auto named = retrieve_memory(*st.lease, std::string(kTitlePrefix) + st.memory.id); named.ok && !named.value.empty())
+                title = named.value;
+        sessions.insert(sessions.begin(), TuiSession{st.memory.id, title, st.workspace, 0, true});
+    }
     for (const std::string &w : known_workspaces(*st.ctx)) {
         if (w == st.workspace) continue;
         std::error_code ec;
@@ -1378,7 +1403,8 @@ std::vector<TuiMessage> tui_history(const ChatState &st) {
         } else if (m.role == "assistant") {
             for (const ToolCall &call : m.tool_calls)
                 messages.push_back({TuiKind::Tool, "[tool] " + std::string(call.name) + " " + std::string(call.arguments)});
-            if (!m.content.empty()) messages.push_back({TuiKind::Assistant, m.content});
+            const std::string shown = st.think.show ? m.content : strip_think(m.content);
+            if (!shown.empty()) messages.push_back({TuiKind::Assistant, shown});
         } else if (m.role == "tool") {
             messages.push_back({TuiKind::Tool, "[result] " + m.content});
         }
@@ -1706,8 +1732,11 @@ bool handle_line(ChatState &st, const std::string &line) {
     case SlashKind::Stats: print_stats(st); break;
     case SlashKind::Compact: {
         const size_t before = st.memory.history.size();
+        clear_cancel(*st.lease);
         if (auto r = compress_context(*st.lease, st.memory, 6); !r.ok) {
-            out("[error] " + r.error.message + "\n");
+            out(r.error.code == ErrorCode::Cancelled ? "[cancelled] /compact stopped; the conversation is unchanged\n"
+                                                     : "[error] " + r.error.message + "\n");
+            clear_cancel(*st.lease);
             break;
         }
         if (auto r = save_conversation(*st.lease, st.memory); !r.ok) out("[error] " + r.error.message + "\n");
@@ -1909,6 +1938,12 @@ TuiTaskbar tui_taskbar(ChatState &st) {
     tb.context_total = st.context_window;
     const TokenUsage &u = st.memory.stats.last;
     tb.context_used = u.kv_tokens > 0 ? u.kv_tokens : u.prompt_tokens + u.completion_tokens;
+    if (tb.context_used == 0) {
+        // A conversation just opened has no turn behind it yet: estimate what its history takes (about four characters a token).
+        size_t bytes = 0;
+        for (const Message &m : st.memory.history) bytes += m.content.size();
+        tb.context_used = static_cast<int>(bytes / 4);
+    }
     return tb;
 }
 
@@ -2214,7 +2249,8 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
 
     cat("Chat");
     head("Tools and permissions");
-    add("mode", "Mode", chat_mode_name(st.mode), "ask: asks before commands, deletes and moves   plan: only reads   auto: never asks",
+    add("mode", "Mode (this session)", chat_mode_name(st.mode),
+        "For this session only, not saved: the next chat starts in ask.   ask: asks before commands, deletes and moves   plan: only reads   auto: never asks",
         {"ask", "plan", "auto"});
     add("use_tools", "Use tools", st.no_tools ? "off" : "on",
         "Off: the model only talks (files, commands and the web are not offered). Reloads the model", {"on", "off"});
@@ -2661,7 +2697,7 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
         };
         host.history = [](void *u) { return tui_history(*static_cast<ChatState *>(u)); };
         host.cancel = [](void *) {
-            if (!g_generating.load()) return;
+            // Whatever the worker is doing (answer, tool, /compact): the flag is read by the engine, the tools and the turn loop.
             if (int32_t *flag = g_cancel_flag.load()) std::atomic_ref<int32_t>(*flag).store(1, std::memory_order_relaxed);
         };
         g_tui = true;

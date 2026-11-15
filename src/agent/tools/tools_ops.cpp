@@ -4,6 +4,12 @@
 
 #include <agent-cpp/agent.hpp>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <optional>
+#include <thread>
 #include <filesystem>
 #include <system_error>
 
@@ -73,10 +79,55 @@ void absolutize_media(std::vector<Media> &media) {
     }
 }
 
+// Tools that touch the disk or the network can hang inside the operating system (a dead network share, a stalled server). They run on a
+// helper thread and the turn waits for them in short steps, so Esc / request_cancel and a time limit always get control back. A call
+// that is abandoned keeps running to its end in the background; its result is dropped.
+int guard_seconds(std::string_view name) {
+    if (name == "web_fetch" || name == "web_search") return 60;
+    if (name == "read_file" || name == "write_file" || name == "append_file" || name == "list_dir" || name == "create_dir" ||
+        name == "delete_path" || name == "move_path" || name == "file_info")
+        return 30;
+    return 0;
+}
+
+struct GuardedCall {
+    std::mutex mu;
+    std::condition_variable cv;
+    bool done = false;
+    std::string args;
+    std::optional<Result<std::string>> result;
+};
+
+Result<std::string> run_guarded(const Tool &tool, std::string_view name, std::string_view arguments, int seconds, const Session &session) {
+    auto call = std::make_shared<GuardedCall>();
+    call->args = std::string(arguments);
+    const Tool::CallbackFn fn = tool.callback;
+    void *const user = tool.user_data;
+    std::thread([call, fn, user] {
+        Result<std::string> r = fn(call->args, user);
+        std::lock_guard<std::mutex> lock(call->mu);
+        call->result = std::move(r);
+        call->done = true;
+        call->cv.notify_all();
+    }).detach();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+    std::unique_lock<std::mutex> lock(call->mu);
+    for (;;) {
+        if (call->cv.wait_for(lock, std::chrono::milliseconds(50), [&] { return call->done; })) return std::move(*call->result);
+        if (std::atomic_ref<int32_t>(*session.cancel_flag).load(std::memory_order_relaxed) != 0)
+            return fail<std::string>(ErrorCode::Cancelled, "Cancelled: " + std::string(name) + " was stopped by the user.");
+        if (std::chrono::steady_clock::now() >= deadline)
+            return fail<std::string>(ErrorCode::Cancelled, std::string(name) + " did not finish in " + std::to_string(seconds) +
+                                                               " seconds and was stopped; the path or address may be unreachable.");
+    }
+}
+
 Result<ToolResult> default_execute(Session &session, std::string_view name, std::string_view arguments) {
     // Only written when the Session moved: concurrent graph branches on one Session read it.
     if (session.session_ptr_cell && *session.session_ptr_cell != &session) *session.session_ptr_cell = &session;
 
+    if (std::atomic_ref<int32_t>(*session.cancel_flag).load(std::memory_order_relaxed) != 0)
+        return fail<ToolResult>(ErrorCode::Cancelled, "Cancelled before " + std::string(name) + " started.");
     auto it = session.tool_by_name.find(std::string(name));
     if (it == session.tool_by_name.end()) return fail<ToolResult>(ErrorCode::KeyNotFound, "Tool not found: " + std::string(name));
 
@@ -108,7 +159,8 @@ Result<ToolResult> default_execute(Session &session, std::string_view name, std:
         return res;
     }
     if (!tool.callback) return fail<ToolResult>(ErrorCode::InvalidConfig, "Tool '" + std::string(name) + "' has no callback.");
-    auto res = tool.callback(arguments, tool.user_data);
+    const int guard = guard_seconds(name);
+    auto res = guard > 0 ? run_guarded(tool, name, arguments, guard, session) : tool.callback(arguments, tool.user_data);
     if (!res.ok) return fail<ToolResult>(res.error.code, res.error.message);
     ToolResult out;
     out.text = std::move(res.value);

@@ -586,6 +586,8 @@ Result<std::string> run_turn_with_media(Session &session, Conversation &state, s
                 tool_msg.tensors = std::move(result.tensors);
                 state.history.push_back(std::move(tool_msg));
             }
+            // Esc / Ctrl+C during a tool: the calls that were left did not start (each answered "Cancelled"); the model is not asked again.
+            if (cancel_requested(session)) return fail<std::string>(ErrorCode::Cancelled, "Turn cancelled.");
             continue;
         }
 

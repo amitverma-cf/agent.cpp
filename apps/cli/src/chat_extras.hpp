@@ -28,6 +28,9 @@ struct ThinkFilter {
 };
 std::string filter_think(ThinkFilter &filter, std::string_view token);
 std::string flush_think(ThinkFilter &filter);
+// A whole answer without its reasoning: <think>...</think> blocks are cut out, an unclosed block runs to the end, and a closing tag with no
+// opening one (the template opened it) drops everything before it. Leading blank space after a block is trimmed.
+std::string strip_think(std::string_view text);
 
 // ask: tools that change things ask first (the default); plan: only reading is allowed; auto: nothing asks.
 enum class ChatMode { Ask, Plan, Auto };

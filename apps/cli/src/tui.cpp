@@ -98,6 +98,13 @@ int context_percent(std::string_view footer) {
     return static_cast<int>(std::min<long>(100, used * 100 / total));
 }
 
+bool tui_command_needs_argument(std::string_view name) {
+    static constexpr std::string_view kNeeds[] = {"/model", "/image", "/task", "/run", "/mode", "/thinking", "/rename", "/delete"};
+    for (const auto n : kNeeds)
+        if (n == name) return true;
+    return false;
+}
+
 std::vector<size_t> filter_commands(std::span<const TuiCommand> commands, std::string_view typed) {
     std::vector<size_t> matches;
     for (size_t i = 0; i < commands.size(); ++i)
@@ -154,6 +161,9 @@ constexpr TuiShortcut kShortcutActions[] = {
     {"sidebar", "Show or hide the sidebar", "ctrl+b"},
     {"commands", "List the commands", "ctrl+p"},
     {"help", "Show the keyboard shortcuts", "f1"},
+    {"clear_input", "Clear the input line", "ctrl+u"},
+    {"copy_last", "Copy the last answer", "alt+c"},
+    {"delete_last", "Delete the last message and its answers", "alt+d"},
     {"quit", "Quit", "ctrl+d"},
 };
 
@@ -475,6 +485,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         Bind(ico_settings);
         Bind(mic_class);
         Bind(hint);
+        Bind(hint_class);
         Bind(has_messages);
         Bind(tb_cpu);
         Bind(tb_ram);
@@ -536,7 +547,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         key_rows.push_back({"? or F1", "Show this list", ""});
         key_rows.push_back({"@file", "Put a file's text in your message", ""});
         key_rows.push_back({"!command", "Run a shell command in your project", ""});
-        key_rows.push_back({"Esc", "Stop the answer that is running", ""});
+        key_rows.push_back({"Esc / Ctrl+C", "Stop the answer, tool or /compact that is running", ""});
         key_rows.push_back({"PageUp, PageDown", "Scroll the conversation", ""});
         key_rows.push_back({"Home, End", "Oldest message, newest message", ""});
     }
@@ -557,7 +568,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
 
     // ---- icons, the bottom bar, the hint line, dialogs
     std::string ico_copy = icons().copy, ico_del = icons().del, ico_mic = std::string(icons().mic) + " mic", ico_back = icons().back,
-                ico_menu = icons().menu, ico_settings = icons().settings, mic_class = "mic", hint;
+                ico_menu = icons().menu, ico_settings = icons().settings, mic_class = "mic", hint, hint_class = "hint";
     bool has_messages = false;
     std::string tb_cpu, tb_ram, tb_files, tb_engine, tb_models, tb_mode, tb_ctx;
     int delete_armed = -1;
@@ -768,9 +779,9 @@ class ChatApp : public rtxui::Component<ChatApp> {
     // The line between the input and the bottom bar: what the next useful key or command is, for what is going on right now.
     void ComputeHint() {
         if (confirm_open) hint = "Enter or y confirms, Esc cancels";
-        else if (asking) hint = "y allows this once, A (capital) always allows this tool, n refuses";
+        else if (asking) hint = "y allows once, A always allows this tool, n or Esc refuses and stops";
         else if (recording) hint = "Listening: click the microphone again to stop";
-        else if (busy) hint = "Esc stops the answer; the wheel or PageUp scrolls";
+        else if (busy) hint = "Esc or Ctrl+C stops the answer, a tool or /compact; the wheel or PageUp scrolls";
         else if (!follow) hint = "End jumps to the newest message";
         else if (!input.empty() && input[0] == '/') hint = "Tab completes the command, Enter runs it";
         else if (!input.empty() && input[0] == '@') hint = "@path puts that file's text in your message, for example @src/main.cpp";
@@ -778,6 +789,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             hint = "Runs in your project folder; the output goes into the chat for the model to see";
         else if (!input.empty()) hint = "Enter sends";
         else hint.clear();
+        hint_class = asking ? "hint askhint" : "hint"; // a narrow screen hides the hint line, except the question about a tool
     }
 
     // ---- the settings screen: categories on the left, the settings of the chosen category on the right
@@ -1101,7 +1113,10 @@ class ChatApp : public rtxui::Component<ChatApp> {
             if (projects > 1) side.push_back({std::string(icons().project) + " " + base_name(ws), "proj", -1});
             side.insert(side.end(), group.begin(), group.end());
         }
-        if (!side_filter.empty()) side.insert(side.begin(), {"find: " + side_filter, "proj", -1});
+        if (!side_filter.empty()) {
+            if (side.empty()) side.push_back({"  no chat matches", "proj", -1});
+            side.insert(side.begin(), {"find: " + side_filter, "proj", -1});
+        }
     }
 
     // A click on a session (the index arrives as text), or Enter in the sidebar.
@@ -1209,6 +1224,9 @@ class ChatApp : public rtxui::Component<ChatApp> {
     // later, once the input line has taken the text, End moves the cursor behind it, so typing and Backspace work at the end.
     void SetInput(const std::string &s) {
         input = s;
+        // The input element takes the new value at the next Digest. Keys that arrive in the same read as the Enter (a fast typist, a pasted
+        // line, a test rig) are handled before that and would be added to the old text: push the value down now.
+        Digest();
         if (s.empty()) return;
         rtxui::PostDelayedTask([this] { Component<ChatApp>::OnEvent(Event::End()); }, std::chrono::milliseconds(40));
     }
@@ -1249,9 +1267,11 @@ class ChatApp : public rtxui::Component<ChatApp> {
         const std::vector<size_t> found = (busy || prompting) ? std::vector<size_t>() : PaletteMatches();
         matches.clear();
         if (!found.empty()) selected %= found.size();
-        for (size_t i = 0; i < found.size() && i < 8; ++i) {
+        // Eight rows show; Down scrolls the window along with the selection. The chosen row has a marker, not only a colour.
+        const size_t first = selected >= 8 ? selected - 7 : 0;
+        for (size_t i = first; i < found.size() && i < first + 8; ++i) {
             const TuiCommand &c = host.commands[found[i]];
-            matches.push_back({c.name, c.help, i == selected ? "pitem current" : "pitem"});
+            matches.push_back({std::string(i == selected ? "\xE2\x96\xB8 " : "  ") + c.name, c.help, i == selected ? "pitem current" : "pitem"});
         }
         show_palette = !matches.empty();
         return Component<ChatApp>::Digest();
@@ -1321,13 +1341,24 @@ class ChatApp : public rtxui::Component<ChatApp> {
             if (c == 'y' || c == 'Y') a = 1;
             else if (c == 'n' || c == 'N') a = 2;
             else if (c == 'A') a = 3; // a capital letter: a typed sentence must not allow a tool for good
-            if (e == Event::Escape() || e == Event::CtrlC()) a = 2;
+            bool stops = false; // Esc, Ctrl+C or typed text: the question is refused and the turn stops, so the next tool does not start
+            if (e == Event::Escape() || e == Event::CtrlC()) {
+                a = 2;
+                stops = true;
+            } else if (!a && c >= 32 && c < 127 && e != Event::Return()) {
+                a = 2;
+                stops = true;
+            }
+            if (stops && host.cancel) host.cancel(host.user);
             if (a && g_sync) {
                 std::lock_guard<std::mutex> lock(g_sync->mu);
                 g_sync->answer = a;
                 g_sync->cv.notify_all();
             }
-            return c != 0 || a != 0;
+            // Global keys (Ctrl+N, F1, ...) are not the prompt's; typed text is refused and then lands in the input line.
+            if (a && stops && e != Event::Escape() && e != Event::CtrlC()) return Component<ChatApp>::OnEvent(e);
+            if (c != 0 || a != 0) return true;
+            // a global key (Ctrl+B, PageUp, the wheel, ...): handled below as usual while the question stays open
         }
         // Choosing a session with the keyboard: type to filter, Up/Down, Enter opens, Delete removes, Esc closes.
         if (side_focus) {
@@ -1350,6 +1381,10 @@ class ChatApp : public rtxui::Component<ChatApp> {
                 if (delete_armed == side_sel) {
                     delete_armed = -1;
                     DeleteSelected();
+                    side_focus = false; // back to the input line, so typing goes there
+                    side_drawer = false;
+                    side_filter.clear();
+                    RebuildSide();
                 } else {
                     delete_armed = side_sel;
                     Toast("Press Delete again to remove this conversation for good");
@@ -1385,6 +1420,29 @@ class ChatApp : public rtxui::Component<ChatApp> {
             if (!busy) NewChat();
             return true;
         }
+        if (Is(e, "clear_input")) {
+            palette_open = false;
+            SetInput("");
+            return true;
+        }
+        if (Is(e, "copy_last") && !busy) {
+            for (size_t i = rows.size(); i-- > 0;)
+                if (rows[i].acts && rows[i].kind != TuiKind::User) {
+                    CopyRow(std::to_string(rows[i].id));
+                    return true;
+                }
+            Toast("Nothing to copy yet");
+            return true;
+        }
+        if (Is(e, "delete_last") && !busy) {
+            for (size_t i = rows.size(); i-- > 0;)
+                if (rows[i].user) {
+                    AskDelete(std::to_string(rows[i].id));
+                    return true;
+                }
+            Toast("No message to delete");
+            return true;
+        }
         if (Is(e, "sidebar")) {
             ToggleSide();
             return true;
@@ -1393,7 +1451,13 @@ class ChatApp : public rtxui::Component<ChatApp> {
             if (busy) {
                 if (host.cancel) host.cancel(host.user);
             } else if (e == Event::CtrlC()) {
-                if (g_screen) g_screen->Exit();
+                // Typed text goes first (a second Ctrl+C quits), so a person who wants to wipe the line does not lose the chat.
+                if (!input.empty() || palette_open) {
+                    palette_open = false;
+                    SetInput("");
+                } else if (g_screen) {
+                    g_screen->Exit();
+                }
             } else if (!input.empty() || palette_open) {
                 palette_open = false;
                 SetInput("");
@@ -1447,6 +1511,16 @@ class ChatApp : public rtxui::Component<ChatApp> {
             const std::string chosen = host.commands[found[selected % found.size()]].name;
             if (e == Event::Tab() || (e == Event::Return() && input != chosen)) {
                 palette_open = false;
+                if (e == Event::Return() && !tui_command_needs_argument(chosen)) {
+                    // Enter on a command that takes nothing more runs it; the others wait for their argument.
+                    SetInput("");
+                    selected = 0;
+                    if (history.empty() || history.back() != chosen) history.push_back(chosen);
+                    history_at = history.size();
+                    Emit(TuiKind::User, chosen);
+                    Submit(chosen);
+                    return true;
+                }
                 SetInput(chosen + " ");
                 selected = 0;
                 return true;
@@ -1558,7 +1632,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
           </div>
           <div if="{prompting}" class="promptq">? {prompt_line}</div>
           <div class="inrow"><div class="{mic_class}" onclick="ToggleMic">{ico_mic}</div><div class="{box_class}"><input value="{input}" placeholder="Message agent.cpp" autofocus=""/></div></div>
-          <div class="hint">{hint}</div>
+          <div class="{hint_class}">{hint}</div>
         </div>
         <div class="sp2"></div>
         <div class="status">
@@ -1638,7 +1712,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .home .sp1, .home .sp2 { flex-grow: 1; }
       .top { display: flex; flex-direction: row; border-bottom: solid; border-color: #4a4a4a; padding-left: 2; padding-right: 2; }
       .home .top { display: none; }
-      .ttitle { color: #ffffff; font-weight: bold; flex-grow: 1; white-space: nowrap; }
+      .ttitle { color: #ffffff; font-weight: bold; flex-grow: 1; flex-basis: 0; min-width: 0; overflow-x: hidden; white-space: nowrap; }
+      .burger, .tdel { flex-shrink: 0; }
       .act { color: #8a8a8a; padding-left: 1; padding-right: 1; }
       .act:hover { color: #40e0d0; }
       .act.del:hover, .tdel:hover { color: #ffb3d1; }
@@ -1678,7 +1753,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .box.active { border-color: #40e0d0; }
       .inrow { display: flex; flex-direction: row; }
       .inrow .box { flex-grow: 1; }
-      .mic { border: round; border-color: #4a4a4a; color: #8a8a8a; padding-left: 1; padding-right: 1; margin-right: 1; }
+      .mic { white-space: nowrap; flex-shrink: 0; border: round; border-color: #4a4a4a; color: #8a8a8a; padding-left: 1; padding-right: 1; margin-right: 1; }
       .mic:hover { border-color: #40e0d0; color: #40e0d0; }
       .mic.rec { border-color: #ffb3d1; color: #ffb3d1; font-weight: bold; }
       .box input { flex-grow: 1; background-color: #000000; color: #ffffff; padding-left: 0; }
@@ -1692,7 +1767,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .q { flex-grow: 1; white-space: pre-wrap; }
       .palette { border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
       .pitem { display: flex; flex-direction: row; color: #40e0d0; }
-      .pitem .pname { width: 14; }
+      .pitem .pname { width: 16; }
       .pitem .phelp { color: #ffffff; }
       .current .pname { color: #ffb3d1; font-weight: bold; }
       .promptq { color: #ffb3d1; font-weight: bold; padding-left: 1; }
@@ -1713,8 +1788,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .btn.danger { color: #ffb3d1; }
       .btn.danger:hover { border-color: #ffb3d1; color: #ffb3d1; }
       .keyrow { display: flex; flex-direction: row; }
-      .kname { width: 20; color: #40e0d0; }
-      .kdesc { color: #ffffff; }
+      .kname { width: 20; flex-shrink: 0; color: #40e0d0; white-space: nowrap; }
+      .kdesc { color: #ffffff; flex-grow: 1; flex-basis: 0; min-width: 0; white-space: normal; }
 
       /* Below 84 columns the sidebar is a screen of its own: the list opens over the conversation with the menu button, and picking a session
          goes back to the conversation, like a phone app. */
@@ -1746,13 +1821,14 @@ class ChatApp : public rtxui::Component<ChatApp> {
       @media (max-width: 49) {
         .row .mark { width: 1; }
         .assistant .mark { display: none; }
-        .tb.cpu, .tb.mode { display: none; }
+        .tb.cpu { display: none; }
         .kname { width: 10; }
       }
       @media (max-width: 35) {
         .banner { display: none; }
         .small-brand { display: block; }
         .hint { display: none; }
+        .hint.askhint { display: block; white-space: normal; }
         .tb.ram { display: none; }
       }
     </style>
