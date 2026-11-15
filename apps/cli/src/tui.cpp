@@ -1390,8 +1390,9 @@ class ChatApp : public rtxui::Component<ChatApp> {
             return true;
         }
         if (Is(e, "commands") && !busy) {
-            SetInput("/");
-            return true;
+            // The same as typing "/": the input line then has its cursor after it and the palette takes the next letters.
+            SetInput("");
+            return Component<ChatApp>::OnEvent(Event(Event::Keyboard::From('/')));
         }
         if (Is(e, "quit") && !busy) {
             if (g_screen) g_screen->Exit();
