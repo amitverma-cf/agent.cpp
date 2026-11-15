@@ -211,7 +211,8 @@ TEST_CASE("pull_model fetches the voice file next to a text-to-speech model and 
     const std::string repo_json = R"({"id":"fake/audio","siblings":[
         {"rfilename":"PocketTTS-GGUF/english/pocket.gguf","size":4},
         {"rfilename":"PocketTTS-GGUF/english/embeddings/alba.safetensors","size":5}]})";
-    s.svr.Get("/api/models/fake/audio", [&](const httplib::Request &, httplib::Response &res) { res.set_content(repo_json, "application/json"); });
+    s.svr.Get("/api/models/fake/audio",
+              [&](const httplib::Request &, httplib::Response &res) { res.set_content(repo_json, "application/json"); });
     s.svr.Get("/fake/audio/resolve/main/PocketTTS-GGUF/english/pocket.gguf",
               [](const httplib::Request &, httplib::Response &res) { res.set_content("GGUF", "application/octet-stream"); });
     s.svr.Get("/fake/audio/resolve/main/PocketTTS-GGUF/english/embeddings/alba.safetensors",
