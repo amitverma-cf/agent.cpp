@@ -488,7 +488,14 @@ std::string run_agent_command(ChatState &st, std::vector<std::string> args, bool
     if ((args[0] == "task" || args[0] == "run") && !has("--workspace")) args.insert(args.end(), {"--workspace", st.workspace});
     std::string command = shell_quote(self_executable());
     for (const std::string &a : args) command += " " + shell_quote(a);
-    command += " 2>&1";
+    // Only what the command prints on stdout is the result. The engine's loader writes tens of kilobytes of log lines to stderr; they go to
+    // a file, and the end of it is shown only when the command fails.
+    static std::atomic<unsigned> run_counter{0};
+    std::error_code tmp_ec;
+    const fs::path err_file =
+        fs::temp_directory_path(tmp_ec) / ("agent-run-" + std::to_string(++run_counter) + "-" +
+                                           std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".err");
+    command += " 2>" + shell_quote(err_file.string());
 #if defined(_WIN32)
     std::FILE *pipe = _popen(command.c_str(), "r");
 #else
@@ -511,6 +518,16 @@ std::string run_agent_command(ChatState &st, std::vector<std::string> args, bool
     const int status = pclose(pipe);
 #endif
     failed = status != 0;
+    {
+        std::ifstream err_in(err_file, std::ios::binary);
+        std::string err_text((std::istreambuf_iterator<char>(err_in)), std::istreambuf_iterator<char>());
+        err_in.close();
+        fs::remove(err_file, tmp_ec);
+        if (failed && !err_text.empty()) {
+            if (err_text.size() > 2000) err_text = "..." + err_text.substr(err_text.size() - 2000);
+            output += (output.empty() || output.back() == '\n' ? "" : "\n") + err_text;
+        }
+    }
     // "media: image/png /path/file.png 1234 bytes": the file is an artifact now (/open lists it).
     size_t at = 0;
     while ((at = output.find("media: ", at)) != std::string::npos) {
