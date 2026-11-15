@@ -144,6 +144,24 @@ agent's: they are not sandboxed and do not ask.
 `/rename TITLE` names the conversation in the sidebar. `/delete` asks, `/delete yes` removes the saved conversation for good and starts a
 new one. In the session picker (`Ctrl+K`) typing filters the list, and `Del` removes the highlighted conversation.
 
+### Doing more by prompt
+
+The chat can drive everything the `agent` command does. The model has these tools, and the user is asked before the ones that reach
+outside the conversation:
+
+| Tool | What it does |
+|---|---|
+| `agent_run` | runs `agent task`, `agent run`, `agent model`, `agent engine`, `agent skill`, `agent mcp`, `agent doctor`, `agent schedule` or `agent wake`: images, video, 3D meshes, speech, transcripts, embeddings, ONNX models, graphs, downloads. Generated files are listed by `/open` |
+| `remember`, `recall` | lasting notes about the user or the project. Notes that share words with a new message are put in front of it automatically |
+| `todo` | a checklist for a request with several steps, rewritten as the work moves on |
+
+`/task CAPABILITY --model NAME --text TEXT` and `/run FILE.json` run the same thing directly. A tool result longer than 6000 bytes
+reaches the model as its beginning and end; the whole text is saved under `.agents/results/` in the project and the note says which
+file, so the model can read or search it.
+
+How the agent presents itself comes from `SOUL.md`, `IDENTITY.md` and `ROLE.md`, plain Markdown files in the project folder or in the
+agent home, added to the system prompt next to `AGENTS.md`.
+
 ### The web
 
 The model has a `web_fetch` tool (an http or https address; HTML is reduced to readable text, at most 20,000 characters) and, when
