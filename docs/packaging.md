@@ -2,7 +2,7 @@
 
 ## Version
 
-The version is set once, in `project("agent.cpp" VERSION x.y.z)` in the top-level `CMakeLists.txt` (currently 1.0.0).
+The version is set once, in `project("agent.cpp" VERSION x.y.z)` in the top-level `CMakeLists.txt` (currently 1.1.0).
 `agent version`, the CMake package version (`agent-cppConfigVersion.cmake`) and the Linux tarball names all come from it.
 
 ## Which engines are built
@@ -261,7 +261,7 @@ Not done yet:
 
 ## Releases
 
-The git tag `v1.0.0` matches the version in `CMakeLists.txt`. The CI and release workflows in `.github/workflows/` are
+The git tag `v1.1.0` matches the version in `CMakeLists.txt`. The CI and release workflows in `.github/workflows/` are
 manual-dispatch only; nothing runs on a push. Build from source as described in [getting-started.md](getting-started.md#build),
 or use the Linux tarball script above, which is run by hand.
 

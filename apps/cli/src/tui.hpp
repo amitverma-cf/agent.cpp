@@ -140,6 +140,8 @@ void tui_submit_later(std::string_view line);
 std::string render_chat_text(const TuiHost &host, int width, int height);
 // The markdown renderer on its own, as plain text laid out for `width` columns (for tests).
 std::string render_markdown_text(std::string_view markdown, int width);
+// The text given to the markdown view: a word with an underscore inside (read_file) is put in a code span so it keeps the underscore.
+std::string markdown_keep_names(std::string_view text);
 
 // Helpers with no screen behind them (for tests).
 // The first `max_lines` lines of a tool result, each cut to `max_width` columns, and "... N more lines" when there are more.

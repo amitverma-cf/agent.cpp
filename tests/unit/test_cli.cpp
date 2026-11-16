@@ -560,6 +560,19 @@ TEST_CASE("tui: markdown layout", "[cli][tui]") {
     CHECK(lines >= 8);
 }
 
+TEST_CASE("tui: a name with an underscore keeps it in the markdown view", "[cli][tui]") {
+    CHECK(markdown_keep_names("call read_file then web_fetch") == "call `read_file` then `web_fetch`");
+    CHECK(markdown_keep_names("already `read_file` here") == "already `read_file` here");
+    CHECK(markdown_keep_names("see [the page](http://x.test/a_b_c) now") == "see [the page](http://x.test/a_b_c) now");
+    CHECK(markdown_keep_names("```\nint a_b = 1;\n```\nafter a_b") == "```\nint a_b = 1;\n```\nafter `a_b`");
+    CHECK(markdown_keep_names("some _soft_ words and __strong__ ones") == "some _soft_ words and __strong__ ones");
+    CHECK(markdown_keep_names("no underscore") == "no underscore");
+    const std::string text = render_markdown_text("The tool read_file reads and list_dir lists; _soft_ stays soft.", 80);
+    CHECK(text.find("read_file") != std::string::npos);
+    CHECK(text.find("list_dir") != std::string::npos);
+    CHECK(text.find("_soft_") == std::string::npos);
+}
+
 TEST_CASE("tui: markdown tables, quotes, numbered lists and code", "[cli][tui]") {
     const std::string md =
         "# Big title\n## Section\n### Small\n\n1. one\n2. two *soft* words\n\n> a quote\n\n---\n\n| name | size |\n|---|---|\n| "

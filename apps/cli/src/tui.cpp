@@ -249,6 +249,73 @@ const Icons &icons() {
     return chosen;
 }
 
+} // namespace
+
+// The markdown view reads an underscore as the start of emphasis, also inside a word, so `read_file` lost its underscore and half of
+// the line turned italic. A word with an underscore inside is a name (a tool, a file, a variable): it is shown as code, which keeps
+// every character. Code spans, code blocks and the address of a link are left alone.
+std::string markdown_keep_names(std::string_view text) {
+    if (text.find('_') == std::string_view::npos) return std::string(text);
+    auto word_char = [](char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || (static_cast<unsigned char>(c) & 0x80);
+    };
+    auto letter = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || (static_cast<unsigned char>(c) & 0x80); };
+    std::string out;
+    out.reserve(text.size() + 16);
+    bool fenced = false;
+    size_t line_start = 0;
+    while (line_start <= text.size()) {
+        size_t line_end = text.find('\n', line_start);
+        if (line_end == std::string_view::npos) line_end = text.size();
+        const std::string_view line = text.substr(line_start, line_end - line_start);
+        const size_t first = line.find_first_not_of(" \t");
+        const bool fence = first != std::string_view::npos && (line.substr(first, 3) == "```" || line.substr(first, 3) == "~~~");
+        const bool indented_code = line.size() >= 4 && line.substr(0, 4) == "    ";
+        if (fence || fenced || indented_code) {
+            out += line;
+            if (fence) fenced = !fenced;
+        } else {
+            size_t i = 0;
+            while (i < line.size()) {
+                if (line[i] == '`') { // a code span, to its end
+                    size_t end = line.find('`', i + 1);
+                    end = end == std::string_view::npos ? line.size() : end + 1;
+                    out += line.substr(i, end - i);
+                    i = end;
+                } else if (line[i] == ']' && i + 1 < line.size() && line[i + 1] == '(') { // the address of a link
+                    size_t end = line.find(')', i);
+                    end = end == std::string_view::npos ? line.size() : end + 1;
+                    out += line.substr(i, end - i);
+                    i = end;
+                } else if (word_char(line[i])) {
+                    size_t end = i;
+                    while (end < line.size() && word_char(line[end])) ++end;
+                    const std::string_view word = line.substr(i, end - i);
+                    bool inside = false;
+                    // Inside: a letter before the underscores and a letter after them (`__strong__` and `_soft_` have neither).
+                    for (size_t k = 1; k + 1 < word.size() && !inside; ++k) {
+                        if (word[k] != '_' || !letter(word[k - 1])) continue;
+                        size_t after = k;
+                        while (after < word.size() && word[after] == '_') ++after;
+                        inside = after < word.size();
+                    }
+                    if (inside) out += "`" + std::string(word) + "`";
+                    else out += word;
+                    i = end;
+                } else {
+                    out += line[i++];
+                }
+            }
+        }
+        if (line_end == text.size()) break;
+        out += '\n';
+        line_start = line_end + 1;
+    }
+    return out;
+}
+
+namespace {
+
 struct Row {
     TuiKind kind = TuiKind::Note;
     std::string mark; // the symbol in the left gutter
@@ -264,7 +331,7 @@ struct Row {
 
 void Fields(const Row &row, rtxui::FieldSink &out) {
     out("mark", row.mark);
-    out("text", row.text);
+    out("text", row.markdown ? markdown_keep_names(row.text) : row.text);
     out("cls", row.cls);
     out("md", row.markdown);
     out("plain", row.markdown ? 0 : 1);
@@ -1906,7 +1973,8 @@ std::string render_chat_text(const TuiHost &host, int width, int height) {
 }
 
 std::string render_markdown_text(std::string_view markdown, int width) {
-    rtxui::HeadlessScreen screen(rtxui::Ref<MarkdownProbe>::New(markdown), width, 60);
+    const std::string shown = markdown_keep_names(markdown);
+    rtxui::HeadlessScreen screen(rtxui::Ref<MarkdownProbe>::New(shown), width, 60);
     return screen.Text();
 }
 
