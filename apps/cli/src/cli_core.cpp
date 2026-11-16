@@ -366,8 +366,8 @@ std::string usage_all() {
            "global options: -h|--help, --no-sandbox (run engines, tools and commands without the OS sandbox), --home DIR (the global "
            "workspace: default $AGENT_HOME or the folder chosen at setup),\n"
            "                 --config-dir DIR (old layout: default $AGENT_CONFIG_DIR or the platform config dir)\n"
-           "engines run in a separate agent-engine-host process (a crash fails the turn, not the CLI);\n"
-           "--inprocess, or \"isolation\": \"inprocess\" in engines.json, loads them into the CLI instead\n"
+           "engines run inside the agent process (models are shared and unloaded when memory is needed);\n"
+           "\"isolation\": \"process\" on an engine in engines.json runs it in a sandboxed agent-engine-host instead\n"
            "chat commands: /exit /clear /model [NAME] /image <path> [prompt] /open [n] /stats /help\n";
 }
 
@@ -750,7 +750,10 @@ bool remove_engine(std::vector<EngineEntry> &engines, std::string_view name) {
 }
 
 EngineIsolation cli_engine_isolation(bool inprocess_flag, std::string_view entry_isolation) {
-    return inprocess_flag || entry_isolation == "inprocess" ? EngineIsolation::InProcess : EngineIsolation::Process;
+    // Engines run inside the program: one process, no copy of the data between two, and a model can be shared and unloaded by the model
+    // registry. An engine entry with "isolation": "process" in engines.json still gets its own sandboxed agent-engine-host.
+    if (inprocess_flag || entry_isolation == "inprocess") return EngineIsolation::InProcess;
+    return entry_isolation == "process" ? EngineIsolation::Process : EngineIsolation::InProcess;
 }
 
 bool cli_engine_gpu(std::string_view backend) { return !backend.empty() && backend != "cpu"; }

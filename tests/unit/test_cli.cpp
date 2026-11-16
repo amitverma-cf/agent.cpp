@@ -195,7 +195,7 @@ TEST_CASE("cli: engines.json round trip and edits", "[cli]") {
 }
 
 TEST_CASE("cli: engines run out of process unless --inprocess or engines.json say otherwise", "[cli]") {
-    CHECK(cli_engine_isolation(false, "") == agent::EngineIsolation::Process);
+    CHECK(cli_engine_isolation(false, "") == agent::EngineIsolation::InProcess);
     CHECK(cli_engine_isolation(false, "process") == agent::EngineIsolation::Process);
     CHECK(cli_engine_isolation(false, "inprocess") == agent::EngineIsolation::InProcess);
     CHECK(cli_engine_isolation(true, "process") == agent::EngineIsolation::InProcess);

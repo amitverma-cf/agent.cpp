@@ -174,6 +174,12 @@ std::string api_engine_options(const Context &ctx, std::string_view descriptor_p
 
 std::string catalog_engine_options(const Context &ctx, std::string_view model_path, std::string engine_options) {
     if (engine_for_model(model_path) == "api") return api_engine_options(ctx, model_path, std::move(engine_options));
+    // An embedding or reranking model needs its mode set; the file says which it is, so nobody has to pass engine options for it.
+    if (engine_options.empty() || engine_options == "{}") {
+        const std::string path_text(model_path);
+        const ModelKind kind = detect_model(path_text, "", std::filesystem::path(path_text).filename().string(), false);
+        if (!kind.engine_options.empty()) engine_options = kind.engine_options;
+    }
     auto cat = agent::hub::load_catalog(catalog_path(ctx));
     if (!cat.ok) return engine_options;
     for (const auto &e : cat.value)
@@ -184,6 +190,14 @@ std::string catalog_engine_options(const Context &ctx, std::string_view model_pa
 Result<LoadedEngine> load_engine_for(const Context &ctx, std::string_view engine_flag, std::string_view model_path) {
     auto engines = load_engines(ctx.engines_path);
     if (!engines.ok) return fail<LoadedEngine>(engines.error.code, engines.error.message);
+    // No engine named: the model file itself says which engine runs it (a .gguf is a language model for llama, a speech model for
+    // audiocpp, an image model for sdcpp). Going by the extension alone would hand a speech model to llama, which aborts on it.
+    std::string detected;
+    if (engine_flag.empty() && !model_path.empty() && engine_for_model(model_path) != "api") {
+        const std::string path_text(model_path);
+        detected = detect_model(path_text, "", std::filesystem::path(path_text).filename().string(), false).engine;
+        if (!detected.empty()) engine_flag = detected;
+    }
     auto ref = resolve_engine(engine_flag, model_path, engines.value, file_exists);
     if (!ref.ok) return fail<LoadedEngine>(ref.error.code, ref.error.message);
 

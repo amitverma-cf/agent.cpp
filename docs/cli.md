@@ -89,9 +89,13 @@ and follows it again. Select text with the mouse to copy it. The screen uses fou
 Options: `-m/--model`, `-e/--engine`, `--workspace DIR`, `--ctx N`, `--max-tokens N`, `--engine-options JSON`, `-y/--yes`
 (approve tool calls without asking), `--verbose` (show engine logs), `--inprocess`.
 
-The engine follows from the model file (`.gguf` uses `llama`, `.onnx` uses `onnx`, `.safetensors` and `.ckpt` use `sdcpp`) unless
-`--engine` is passed. Engines run in a separate `agent-engine-host` process, so a crash fails one turn and the next message restarts
-it ([isolation](api/engines.md#isolation)). Conversations are saved after every turn and the id is printed on exit. Tools that
+The engine follows from the model file unless `--engine` is passed: the file's own header tells a language model (`llama`) from a
+speech model (`audiocpp`) or an image model (`sdcpp`); `.onnx` uses `onnx`. Engines run inside the `agent` process, so models are shared,
+loaded on first use and unloaded by the model registry when memory is needed (the budget is 85% of the installed memory unless
+**Settings > Memory budget** sets one; a model nobody used for ten minutes is unloaded). An engine entry with `"isolation": "process"` in
+`engines.json` runs in a separate sandboxed `agent-engine-host` instead, where a crash fails one turn and the next message restarts it
+([isolation](api/engines.md#isolation)). Engine tasks asked for in the chat (speech, images, embeddings, reranking) run in the same
+process through the same registry. Conversations are saved after every turn and the id is printed on exit. Tools that
 change files or run commands (`run_command`, `delete_path`, `move_path`) ask first; without a terminal they are denied unless
 `--yes` is passed.
 

@@ -26,6 +26,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdarg>
 #include <cstdio>
@@ -35,6 +36,7 @@
 #include <optional>
 #include <simdjson.h>
 #include <thread>
+#include <unordered_map>
 
 #if !defined(_WIN32)
 #include <signal.h>
@@ -554,6 +556,32 @@ std::string self_executable() {
 #endif
 }
 
+// What a command printed, made ready for the model: files it made become artifacts, an error is put in plain words, and new skills or MCP
+// servers are loaded.
+std::string finish_agent_output(ChatState &st, const std::vector<std::string> &args, std::string output, bool &failed) {
+    // "media: image/png /path/file.png 1234 bytes": the file is an artifact now (/open lists it).
+    size_t at = 0;
+    while ((at = output.find("media: ", at)) != std::string::npos) {
+        const size_t end = output.find('\n', at);
+        const std::string line = output.substr(at + 7, end == std::string::npos ? std::string::npos : end - at - 7);
+        const size_t sp = line.find(' ');
+        const size_t tail = line.rfind(" bytes");
+        if (sp != std::string::npos && tail != std::string::npos && tail > sp) {
+            const size_t size_at = line.rfind(' ', tail - 1);
+            if (size_at != std::string::npos && size_at > sp)
+                st.artifacts.push_back(Media{line.substr(0, sp), line.substr(sp + 1, size_at - sp - 1)});
+        }
+        at = end == std::string::npos ? output.size() : end;
+    }
+    if (failed) output = beginner_error(output);
+    if (args[0] == "skill" || args[0] == "mcp") { // new tools and skills are there for the next message; say if a server did not start
+        const std::string report = sync_extensions(st);
+        if (report.find("not started") != std::string::npos) failed = true;
+        if (!report.empty()) output += (output.empty() || output.back() == '\n' ? "" : "\n") + report;
+    }
+    return output.empty() ? std::string(failed ? "the command failed" : "done") : output;
+}
+
 // Runs `agent ARGS...`; the text is what the command printed. `failed` is set when it did not succeed.
 std::string run_agent_command(ChatState &st, std::vector<std::string> args, bool &failed) {
     failed = true;
@@ -594,6 +622,18 @@ std::string run_agent_command(ChatState &st, std::vector<std::string> args, bool
     }
     if (st.ctx->has_home && !has("--home")) args.insert(args.end(), {"--home", st.ctx->home.root});
     if ((args[0] == "task" || args[0] == "run") && !has("--workspace")) args.insert(args.end(), {"--workspace", st.workspace});
+    prune_idle_models(st.registry, 10 * 60 * 1000); // models nobody used for ten minutes give their memory back
+    if (args[0] == "task") {
+        // An engine task runs inside the chat: the model is loaded through the registry on first use, shared with the next call, and
+        // unloaded when the memory budget needs the room. No second program, no second copy of a model.
+        std::vector<std::string_view> views(args.begin(), args.end());
+        auto parsed = parse_command_line(views);
+        if (!parsed.ok) return beginner_error(parsed.error.message);
+        std::string output, err;
+        failed = run_engine_task(parsed.value, *st.ctx, output, &err, &st.registry) != 0;
+        if (failed) output += (output.empty() || output.back() == '\n' ? "" : "\n") + err;
+        return model_note + finish_agent_output(st, args, std::move(output), failed);
+    }
     std::string command = shell_quote(self_executable());
     for (const std::string &a : args) command += " " + shell_quote(a);
     // Only what the command prints on stdout is the result. The engine's loader writes tens of kilobytes of log lines to stderr; they go to
@@ -641,27 +681,7 @@ std::string run_agent_command(ChatState &st, std::vector<std::string> args, bool
             output += (output.empty() || output.back() == '\n' ? "" : "\n") + err_text;
         }
     }
-    // "media: image/png /path/file.png 1234 bytes": the file is an artifact now (/open lists it).
-    size_t at = 0;
-    while ((at = output.find("media: ", at)) != std::string::npos) {
-        const size_t end = output.find('\n', at);
-        const std::string line = output.substr(at + 7, end == std::string::npos ? std::string::npos : end - at - 7);
-        const size_t sp = line.find(' ');
-        const size_t tail = line.rfind(" bytes");
-        if (sp != std::string::npos && tail != std::string::npos && tail > sp) {
-            const size_t size_at = line.rfind(' ', tail - 1);
-            if (size_at != std::string::npos && size_at > sp)
-                st.artifacts.push_back(Media{line.substr(0, sp), line.substr(sp + 1, size_at - sp - 1)});
-        }
-        at = end == std::string::npos ? output.size() : end;
-    }
-    if (failed) output = beginner_error(output);
-    if (args[0] == "skill" || args[0] == "mcp") { // new tools and skills are there for the next message; say if a server did not start
-        const std::string report = sync_extensions(st);
-        if (report.find("not started") != std::string::npos) failed = true;
-        if (!report.empty()) output += (output.empty() || output.back() == '\n' ? "" : "\n") + report;
-    }
-    return model_note + (output.empty() ? std::string(failed ? "the command failed" : "done") : output);
+    return model_note + finish_agent_output(st, args, std::move(output), failed);
 }
 
 Result<std::string> agent_run_cb(std::string_view args, void *user) {
@@ -755,8 +775,56 @@ Result<std::string> workflow_save_cb(std::string_view args, void *user) {
     return workflow_save(*st->ctx, name, json);
 }
 
+// How close each text is in meaning to the query (cosine, -1 to 1), by the installed embedding model. Empty when none is installed or it
+// cannot be loaded: the caller then goes by shared words alone. Embeddings of texts seen before are kept.
+std::vector<float> meaning_scores(ChatState &st, const std::string &query, const std::vector<std::string> &texts) {
+    static std::string embed_model; // "" = not looked for yet, "-" = none installed
+    static std::unordered_map<std::string, std::vector<float>> cache;
+    if (texts.empty() || texts.size() > 256) return {};
+    if (embed_model.empty()) {
+        embed_model = "-";
+        for (const InstalledModel &m : installed_models(catalog_path(*st.ctx)))
+            if (m.capability == "embed" && !m.remote) {
+                embed_model = m.name;
+                break;
+            }
+    }
+    if (embed_model == "-") return {};
+    std::vector<std::string_view> todo{query};
+    for (const std::string &text : texts)
+        if (!cache.count(text)) todo.push_back(text);
+    auto lease = acquire_task_model(*st.ctx, st.registry, embed_model, st.workspace);
+    if (!lease.ok) {
+        embed_model = "-";
+        return {};
+    }
+    auto vectors = embed(*lease.value.session, todo);
+    if (!vectors.ok || vectors.value.size() != todo.size()) return {};
+    const std::vector<float> q = vectors.value[0];
+    for (size_t i = 1; i < todo.size(); ++i) cache[std::string(todo[i])] = std::move(vectors.value[i]);
+    auto cosine = [&](const std::vector<float> &v) {
+        if (v.size() != q.size() || q.empty()) return 0.0f;
+        double dot = 0, a = 0, b = 0;
+        for (size_t i = 0; i < q.size(); ++i) {
+            dot += static_cast<double>(q[i]) * v[i];
+            a += static_cast<double>(q[i]) * q[i];
+            b += static_cast<double>(v[i]) * v[i];
+        }
+        return a > 0 && b > 0 ? static_cast<float>(dot / std::sqrt(a * b)) : 0.0f;
+    };
+    std::vector<float> out;
+    out.reserve(texts.size());
+    for (const std::string &text : texts) {
+        const auto it = cache.find(text);
+        out.push_back(it == cache.end() ? 0.0f : cosine(it->second));
+    }
+    if (cache.size() > 4096) cache.clear();
+    return out;
+}
+
 // What the agent knows from earlier chats that fits this message: the notes kept with `remember` whose name or text shares words with
-// it, best first, within a small budget. It goes in front of the message, so the agent follows what the user said before without asking.
+// it, or, when an embedding model is installed, whose meaning is close to it ("what should I cook" finds "the user is vegetarian"), best
+// first, within a small budget. It goes in front of the message, so the agent follows what the user said before without asking.
 std::string memory_pack(ChatState &st, const std::string &prompt) {
     if (!st.lease) return {};
     auto index = retrieve_memory(*st.lease, "note_index");
@@ -776,8 +844,9 @@ std::string memory_pack(ChatState &st, const std::string &prompt) {
             }
         }
     }
-    if (words.empty()) return {};
-    std::vector<std::pair<int, std::string>> found;
+    std::vector<std::pair<float, std::string>> found;
+    std::vector<std::string> note_texts, note_lines;
+    std::vector<float> word_scores;
     size_t from = 0;
     while (from < index.value.size()) {
         size_t end = index.value.find('\n', from);
@@ -791,11 +860,21 @@ std::string memory_pack(ChatState &st, const std::string &prompt) {
         int score = 0;
         for (const std::string &w : words)
             if (haystack.find(w) != std::string::npos) ++score;
-        if (score > 0) found.emplace_back(score, "- " + key + ": " + one_line(value.value, 300) + "\n");
+        note_texts.push_back(key + ": " + one_line(value.value, 300));
+        note_lines.push_back("- " + note_texts.back() + "\n");
+        word_scores.push_back(static_cast<float>(score));
+    }
+    // Hybrid: shared words count one each; closeness in meaning adds up to two and can bring in a note that shares no word.
+    const std::vector<float> meaning = meaning_scores(st, prompt, note_texts);
+    for (size_t i = 0; i < note_lines.size(); ++i) {
+        const float close = i < meaning.size() ? meaning[i] : 0.0f;
+        const float score = word_scores[i] + (close >= 0.55f ? (close - 0.45f) * 4.0f : 0.0f);
+        if (score > 0) found.emplace_back(score, note_lines[i]);
     }
     std::stable_sort(found.begin(), found.end(), [](const auto &a, const auto &b) { return a.first > b.first; });
     std::string pack;
     for (const auto &[score, line] : found) {
+        (void)score;
         if (pack.size() + line.size() > 1200) break;
         pack += line;
     }
@@ -2603,7 +2682,10 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
     if (!store_session.ok) return chat_fail(store_session.error);
     st.store = std::move(store_session.value);
     remember_workspace(st);
-    set_budget(st.registry, ModelBudget{.ram_bytes = static_cast<uint64_t>(std::max<int64_t>(0, st.ctx->config.memory_budget_mb)) << 20});
+    // No budget set: models may use 85% of the installed memory together. The registry unloads the ones not in use to stay under it.
+    set_budget(st.registry,
+               ModelBudget{.ram_bytes = st.ctx->config.memory_budget_mb > 0 ? static_cast<uint64_t>(st.ctx->config.memory_budget_mb) << 20
+                                                                            : total_ram_bytes() / 100 * 85});
 
     std::fprintf(g_err, "loading %s ...\n", st.model.path.c_str());
     if (auto r = open_session(st); !r.ok) return chat_fail(r.error);

@@ -6,11 +6,14 @@
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/engine_abi.h>
 #include <algorithm>
+#include <chrono>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <simdjson.h>
 #include <string>
 #include <string_view>
@@ -160,37 +163,51 @@ bool parse_tensor_arg(std::string_view arg, TensorBuf &out, std::string &err) {
 
 bool g_all_values = false; // --all-values: print every element of a tensor, not the first four
 
-void print_tensor(const TensorView &t) {
+void appendf(std::string &out, const char *fmt, ...) {
+    char buf[2048];
+    va_list ap;
+    va_start(ap, fmt);
+    const int n = std::vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n > 0) out.append(buf, std::min<size_t>(static_cast<size_t>(n), sizeof(buf) - 1));
+}
+
+void print_tensor(std::string &out, const TensorView &t) {
     std::string shape;
     for (size_t i = 0; i < t.shape.size(); ++i) shape += (i ? "," : "") + std::to_string(t.shape[i]);
-    std::printf("tensor: %.*s %s [%s] %zu bytes", static_cast<int>(t.name.size()), t.name.data(), dtype_name(t.dtype), shape.c_str(),
-                t.data.size());
+    appendf(out, "tensor: %.*s %s [%s] %zu bytes", static_cast<int>(t.name.size()), t.name.data(), dtype_name(t.dtype), shape.c_str(),
+            t.data.size());
     const size_t esize = dtype_size(t.dtype);
     if (esize && (t.dtype == DType::Float32 || t.dtype == DType::Int64 || t.dtype == DType::Int32) && t.data.size() >= esize) {
         const size_t n = g_all_values ? t.data.size() / esize : std::min<size_t>(4, t.data.size() / esize);
-        std::printf("  first:");
+        appendf(out, "  first:");
         for (size_t i = 0; i < n; ++i) {
             if (t.dtype == DType::Float32) {
                 float v = 0;
                 std::memcpy(&v, t.data.data() + i * esize, esize);
-                std::printf(" %.4g", static_cast<double>(v));
+                appendf(out, " %.4g", static_cast<double>(v));
             } else if (t.dtype == DType::Int64) {
                 int64_t v = 0;
                 std::memcpy(&v, t.data.data() + i * esize, esize);
-                std::printf(" %lld", static_cast<long long>(v));
+                appendf(out, " %lld", static_cast<long long>(v));
             } else {
                 int32_t v = 0;
                 std::memcpy(&v, t.data.data() + i * esize, esize);
-                std::printf(" %d", v);
+                appendf(out, " %d", v);
             }
         }
     }
-    std::printf("\n");
+    appendf(out, "\n");
 }
 
 } // namespace
 
-int cmd_task(const CommandLine &cl, Context &ctx) {
+int run_engine_task(const CommandLine &cl, Context &ctx, std::string &out, std::string *err, ModelRegistry *registry) {
+    auto bad = [&](const Error &e) {
+        if (!err) return report_error(e);
+        *err = e.message;
+        return 1;
+    };
     g_all_values = cl.has("all-values");
     const std::string cap_name = cl.positionals[0];
     uint32_t task = 0;
@@ -199,18 +216,18 @@ int cmd_task(const CommandLine &cl, Context &ctx) {
     if (!task) {
         std::string list;
         for (const auto &c : kCaps) list += (list.empty() ? "" : ", ") + std::string(c.name);
-        return report_error(Error{ErrorCode::InvalidConfig, "unknown capability '" + cap_name + "' (one of: " + list + ")"});
+        return bad(Error{ErrorCode::InvalidConfig, "unknown capability '" + cap_name + "' (one of: " + list + ")"});
     }
 
     // --model is optional: engines such as audiocpp take all their files from --engine-options.
     std::string model_path;
     if (cl.has("model")) {
         auto model = resolve_model(cl.get("model"), ctx.config.default_model, catalog_refs(ctx), path_exists);
-        if (!model.ok) return report_error(model.error);
+        if (!model.ok) return bad(model.error);
         model_path = model.value.path;
     }
     auto engine = load_engine_for(ctx, cl.get("engine"), model_path);
-    if (!engine.ok) return report_error(engine.error);
+    if (!engine.ok) return bad(engine.error);
 
     Config cfg;
     cfg.provider = AiProvider::Engine;
@@ -267,8 +284,29 @@ int cmd_task(const CommandLine &cl, Context &ctx) {
     cfg.context_window = ctx.config.context_window;
     cfg.max_tokens = ctx.config.max_tokens;
     cfg.temperature = ctx.config.temperature;
-    auto session = init(cfg);
-    if (!session.ok) return report_error(session.error);
+    // With a registry (the chat) the model is loaded on first use, kept for the next call and unloaded when the memory budget needs the
+    // room. Alone (agent task) it is loaded for this one run.
+    std::optional<Result<Session>> own;
+    ModelLease lease;
+    Session *sess = nullptr;
+    if (registry && !cl.has("tools")) {
+        cfg.engine_isolation = engine.value.isolation == "process" ? EngineIsolation::Process : EngineIsolation::InProcess;
+        const std::string name = "task:" + engine.value.name + ":" + cap_name + ":" + model_path + ":" + cfg.engine_options;
+        if (!has_model(*registry, name)) {
+            ModelSpec spec;
+            spec.name = name;
+            spec.config = cfg;
+            if (auto r = register_model(*registry, std::move(spec)); !r.ok) return bad(r.error);
+        }
+        auto got = acquire_model(*registry, name);
+        if (!got.ok) return bad(got.error);
+        lease = std::move(got.value);
+        sess = lease.session;
+    } else {
+        own.emplace(init(cfg));
+        if (!own->ok) return bad(own->error);
+        sess = &own->value;
+    }
 
     const std::string text(cl.get("text"));
     const std::string file(cl.get("file"));
@@ -281,8 +319,8 @@ int cmd_task(const CommandLine &cl, Context &ctx) {
     for (const Flag &f : cl.flags) {
         if (f.name != "tensor") continue;
         TensorBuf buf;
-        if (std::string err; !parse_tensor_arg(f.value, buf, err))
-            return report_error(Error{ErrorCode::InvalidConfig, "--tensor " + f.value + ": " + err});
+        if (std::string why; !parse_tensor_arg(f.value, buf, why))
+            return bad(Error{ErrorCode::InvalidConfig, "--tensor " + f.value + ": " + why});
         tensor_bufs.push_back(std::move(buf));
     }
     std::vector<TensorView> tensor_views;
@@ -310,35 +348,73 @@ int cmd_task(const CommandLine &cl, Context &ctx) {
         std::vector<std::string_view> docs;
         for (const Flag &f : cl.flags)
             if (f.name == "doc") docs.push_back(f.value);
-        auto scores = rerank(session.value, text, docs);
-        if (!scores.ok) return report_error(scores.error);
-        std::printf("task: rerank  engine: %s\n", engine.value.name.c_str());
+        auto scores = rerank(*sess, text, docs);
+        if (!scores.ok) return bad(scores.error);
+        appendf(out, "task: rerank  engine: %s\n", engine.value.name.c_str());
         for (size_t i = 0; i < scores.value.size(); ++i)
-            std::printf("score[%zu]: %.4f  %.*s\n", i, static_cast<double>(scores.value[i]), static_cast<int>(docs[i].size()),
-                        docs[i].data());
+            appendf(out, "score[%zu]: %.4f  %.*s\n", i, static_cast<double>(scores.value[i]), static_cast<int>(docs[i].size()),
+                    docs[i].data());
         return 0;
     }
 
-    auto res = run_task(session.value, task, req);
-    if (!res.ok) return report_error(res.error);
+    auto res = run_task(*sess, task, req);
+    if (!res.ok) return bad(res.error);
     const InferResponse &r = res.value;
 
-    std::printf("task: %s  engine: %s\n", cap_name.c_str(), engine.value.name.c_str());
-    if (!r.message.content.empty()) std::printf("text: %.*s\n", static_cast<int>(r.message.content.size()), r.message.content.data());
+    appendf(out, "task: %s  engine: %s\n", cap_name.c_str(), engine.value.name.c_str());
+    if (!r.message.content.empty()) appendf(out, "text: %.*s\n", static_cast<int>(r.message.content.size()), r.message.content.data());
     for (const MediaView &m : r.message.media) {
         std::error_code ec;
         const auto size = fs::file_size(std::string(m.path), ec);
-        std::printf("media: %.*s %.*s %llu bytes\n", static_cast<int>(m.mime.size()), m.mime.data(), static_cast<int>(m.path.size()),
-                    m.path.data(), static_cast<unsigned long long>(ec ? 0 : size));
+        appendf(out, "media: %.*s %.*s %llu bytes\n", static_cast<int>(m.mime.size()), m.mime.data(), static_cast<int>(m.path.size()),
+                m.path.data(), static_cast<unsigned long long>(ec ? 0 : size));
     }
     // output_tensors mirrors the tensors of the message; print one copy.
-    for (const TensorView &t : (r.output_tensors.empty() ? r.message.tensors : r.output_tensors)) print_tensor(t);
+    for (const TensorView &t : (r.output_tensors.empty() ? r.message.tensors : r.output_tensors)) print_tensor(out, t);
     for (const ToolCallView &c : r.message.tool_calls)
-        std::printf("tool_call: %.*s %.*s\n", static_cast<int>(c.name.size()), c.name.data(), static_cast<int>(c.arguments.size()),
-                    c.arguments.data());
-    std::printf("usage: prompt=%d completion=%d\n", r.usage.prompt_tokens, r.usage.completion_tokens);
-    if (const std::string footer = format_turn_footer(r.usage); !footer.empty()) std::puts(("stats: " + footer).c_str());
+        appendf(out, "tool_call: %.*s %.*s\n", static_cast<int>(c.name.size()), c.name.data(), static_cast<int>(c.arguments.size()),
+                c.arguments.data());
+    appendf(out, "usage: prompt=%d completion=%d\n", r.usage.prompt_tokens, r.usage.completion_tokens);
+    if (const std::string footer = format_turn_footer(r.usage); !footer.empty()) out += "stats: " + footer + "\n";
     return 0;
+}
+
+int cmd_task(const CommandLine &cl, Context &ctx) {
+    std::string out;
+    const int rc = run_engine_task(cl, ctx, out, nullptr, nullptr);
+    std::fputs(out.c_str(), stdout);
+    return rc;
+}
+
+Result<ModelLease> acquire_task_model(Context &ctx, ModelRegistry &registry, std::string_view model_name, std::string_view workspace) {
+    auto model = resolve_model(model_name, ctx.config.default_model, catalog_refs(ctx), path_exists);
+    if (!model.ok) return fail<ModelLease>(model.error.code, model.error.message);
+    auto engine = load_engine_for(ctx, "", model.value.path);
+    if (!engine.ok) return fail<ModelLease>(engine.error.code, engine.error.message);
+    const std::string name = "task:" + engine.value.name + ":" + model.value.path;
+    if (!has_model(registry, name)) {
+        ModelSpec spec;
+        spec.name = name;
+        spec.config.provider = AiProvider::Engine;
+        spec.config.engine = engine.value.name;
+        spec.config.engine_isolation = engine.value.isolation == "process" ? EngineIsolation::Process : EngineIsolation::InProcess;
+        spec.config.engine_sandbox.gpu = cli_engine_gpu(engine.value.backend);
+        apply_sandbox_choice(spec.config);
+        spec.config.engine_options = catalog_engine_options(ctx, model.value.path, "");
+        spec.config.model = model.value.path;
+        spec.config.auto_default_tools = false;
+        spec.config.workspace_dir = workspace_dir(ctx, workspace);
+        if (auto r = register_model(registry, std::move(spec)); !r.ok) return fail<ModelLease>(r.error.code, r.error.message);
+    }
+    return acquire_model(registry, name);
+}
+
+size_t prune_idle_models(ModelRegistry &registry, int64_t idle_ms) {
+    const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    size_t n = 0;
+    for (const LoadedModelInfo &m : loaded_models(registry))
+        if (m.leases == 0 && !m.pinned && m.last_used_ms > 0 && now - m.last_used_ms > idle_ms && unload_model(registry, m.name).ok) ++n;
+    return n;
 }
 
 } // namespace agent::cli

@@ -87,7 +87,14 @@ int mcp_serve(const CommandLine &cl, Context &ctx);    // mcp_serve.cpp
 int cmd_doctor(const CommandLine &cl, Context &ctx);   // doctor_cmd.cpp
 int cmd_clean(const CommandLine &cl, Context &ctx);    // doctor_cmd.cpp
 int cmd_init(const CommandLine &cl, Context &ctx);     // creates .agents/ in a project
-int cmd_task(const CommandLine &cl, Context &ctx);     // task.cpp
-int cmd_voice(const CommandLine &cl, Context &ctx);    // voice.cpp
+// One engine capability, as `agent task` runs it. The text it would print goes to out. With err set an error is returned in it (exit code 1)
+// instead of being printed. With a registry the model is loaded through it (kept for the next call, unloaded under memory pressure).
+int run_engine_task(const CommandLine &cl, Context &ctx, std::string &out, std::string *err, ModelRegistry *registry);
+// A lease on an installed model (by its name in the catalog) for a task such as embed or rerank, loaded through the registry on first use.
+Result<ModelLease> acquire_task_model(Context &ctx, ModelRegistry &registry, std::string_view model_name, std::string_view workspace);
+// Unloads the models nobody has used for idle_ms (not leased, not pinned). Returns how many.
+size_t prune_idle_models(ModelRegistry &registry, int64_t idle_ms);
+int cmd_task(const CommandLine &cl, Context &ctx);  // task.cpp
+int cmd_voice(const CommandLine &cl, Context &ctx); // voice.cpp
 
 } // namespace agent::cli
