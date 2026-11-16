@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -1268,10 +1269,27 @@ class ChatApp : public rtxui::Component<ChatApp> {
                 RefreshSessions();
                 Settle();
                 if (!again && g_screen) g_screen->Exit();
+                else if (!later.empty()) {
+                    const std::string next = later.front();
+                    later.pop_front();
+                    Emit(TuiKind::User, next);
+                    Submit(next);
+                }
             });
         });
         Refresh();
     }
+
+    // A line from a timer: sent now when nothing is running, otherwise after the answer in progress.
+    void SubmitLater(const std::string &line) {
+        if (busy || asking || prompting) {
+            later.push_back(line);
+            return;
+        }
+        Emit(TuiKind::User, line);
+        Submit(line);
+    }
+    std::deque<std::string> later;
 
     // The palette is open while the user is typing a command name: the input starts with "/" and has no space yet.
     std::vector<size_t> PaletteMatches() const {
@@ -1896,6 +1914,13 @@ void tui_emit(TuiKind kind, std::string_view text) {
     if (!g_app) return;
     rtxui::PostTask([kind, t = std::string(text)] {
         if (g_app) g_app->Emit(kind, t);
+    });
+}
+
+void tui_submit_later(std::string_view line) {
+    if (!g_app) return;
+    rtxui::PostTask([l = std::string(line)] {
+        if (g_app) g_app->SubmitLater(l);
     });
 }
 

@@ -2,6 +2,7 @@
 // output part. For smoke tests, scripts and comparing engines (or the mock engine) part by part.
 
 #include "commands.hpp"
+#include "crash_guard.hpp"
 
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/engine_abi.h>
@@ -202,8 +203,10 @@ void print_tensor(std::string &out, const TensorView &t) {
 
 } // namespace
 
-int run_engine_task(const CommandLine &cl, Context &ctx, std::string &out, std::string *err, ModelRegistry *registry) {
+int run_engine_task(const CommandLine &cl, Context &ctx, std::string &out, std::string *err, ModelRegistry *registry, ErrorCode *code) {
+    if (ctx.has_home) crash_guard_install(ctx.home.cache);
     auto bad = [&](const Error &e) {
+        if (code) *code = e.code;
         if (!err) return report_error(e);
         *err = e.message;
         return 1;
@@ -289,8 +292,12 @@ int run_engine_task(const CommandLine &cl, Context &ctx, std::string &out, std::
     std::optional<Result<Session>> own;
     ModelLease lease;
     Session *sess = nullptr;
+    // A model that crashed the program before runs in its own process from then on; a crash now is recorded against it.
+    const bool healed = !model_path.empty() && crashed_before(model_path) && engine_host_available();
+    if (healed) cfg.engine_isolation = EngineIsolation::Process;
+    const CrashScope crash_scope(model_path);
     if (registry && !cl.has("tools")) {
-        cfg.engine_isolation = engine.value.isolation == "process" ? EngineIsolation::Process : EngineIsolation::InProcess;
+        cfg.engine_isolation = engine.value.isolation == "process" || healed ? EngineIsolation::Process : EngineIsolation::InProcess;
         const std::string name = "task:" + engine.value.name + ":" + cap_name + ":" + model_path + ":" + cfg.engine_options;
         if (!has_model(*registry, name)) {
             ModelSpec spec;
@@ -381,7 +388,7 @@ int run_engine_task(const CommandLine &cl, Context &ctx, std::string &out, std::
 
 int cmd_task(const CommandLine &cl, Context &ctx) {
     std::string out;
-    const int rc = run_engine_task(cl, ctx, out, nullptr, nullptr);
+    const int rc = run_engine_task(cl, ctx, out, nullptr, nullptr, nullptr);
     std::fputs(out.c_str(), stdout);
     return rc;
 }

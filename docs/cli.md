@@ -158,7 +158,7 @@ outside the conversation:
 |---|---|
 | `agent_run` | runs `agent task`, `agent run`, `agent model`, `agent engine`, `agent skill`, `agent mcp`, `agent workflow`, `agent runtime`, `agent doctor`, `agent schedule` or `agent wake`: images, video, 3D meshes, speech, transcripts, embeddings, ONNX models, graphs, downloads. Generated files are listed by `/open` |
 | `settings` | reads and changes the chat's safe settings when you ask in plain words ("make it faster", "more creative", "longer answers"): temperature, longest answer, context window, KV cache, speculative decoding, draft model, MTP and mode. It asks first, applies the change when the answer is finished and says what changed; the model reloads for most of them. Local only, the web address and the other privacy switches are never changed by the agent |
-| `remember`, `recall` | lasting notes about the user or the project. Notes that share words with a new message are put in front of it automatically |
+| `remember`, `recall` | lasting notes about the user or the project. Notes and passages of earlier chats that fit a new message are put in front of it automatically (see Memory search) |
 | `todo` | a checklist for a request with several steps, rewritten as the work moves on |
 
 `/task CAPABILITY --model NAME --text TEXT` and `/run FILE.json` run the same thing directly. A tool result longer than 6000 bytes
@@ -167,6 +167,42 @@ file, so the model can read or search it.
 
 How the agent presents itself comes from `SOUL.md`, `IDENTITY.md` and `ROLE.md`, plain Markdown files in the project folder or in the
 agent home, added to the system prompt next to `AGENTS.md`.
+
+### Memory, timers, learned skills, plugins
+
+These work without a command: the agent uses them when a request calls for it.
+
+| What | How it works |
+|---|---|
+| Memory search | Notes (`remember`) and every message of the saved chats of a project are indexed in `memory/index.sqlite3` under the project. `recall` searches the index by words (full text, BM25) and by meaning (vectors) together and lists the closest passages. With an embedding model installed (for example `bge-small`) the meaning search is real; without one the index goes by words. A second run embeds only what is new. Before each message the same index is searched once: the notes that fit come first, then passages of earlier chats of the project, each marked "said in an earlier chat". A passage is kept only when it shares two words with the message or is close to it in meaning, and the whole block stays under 1,200 characters, so a message that fits nothing gets no block. |
+| Timers | "Remind me in 20 minutes", "every morning at 9 check the build": the `timer` tool keeps the request in `timers.json` in the home folder and puts it to the agent as a message when it is due and the chat is idle. A timer that came due while the program was closed fires once when it is opened again. Work that has to run with the program closed belongs to [`agent schedule`](#agent-schedule), which uses the system scheduler. |
+| Learned skills | After a task that took several steps, the agent keeps how it was done with `skill_learn` as `skills/NAME/SKILL.md` in the home folder; the skill is offered from the next message on. When the steps of a skill fail, the agent repairs it: new steps replace the old ones and the cause is kept under `## Lessons`. |
+| Plugins | A plugin is a folder under `plugins/` in the home folder (or `.agents/plugins/` in a project) with a `plugin.json` and a script. Each tool it declares is offered to the model as `PLUGIN_TOOL` and asks before it runs. |
+
+A plugin manifest:
+
+```json
+{ "name": "weather", "description": "Weather lookups", "runtime": "bun", "entry": "main.js", "timeout_seconds": 60,
+  "tools": [ { "name": "forecast", "description": "Forecast for a city",
+               "parameters": { "type": "object", "properties": { "city": { "type": "string" } } } } ] }
+```
+
+`runtime` is `bun`, `node`, `nub`, `uv` or `python` (the private runtimes of [`agent runtime`](#agent-runtime); `python` falls back to
+`python3` on the PATH). The script is started once per call in the plugin folder; the call arrives on standard input as
+`{"tool": "forecast", "arguments": {...}, "workspace": "..."}` and what the script prints is the result. A non-zero exit code is an error.
+A plugin runs outside the sandbox with the user's rights, like an MCP server, so only plugins from a trusted source belong there.
+
+### Memory and crashes
+
+Engines run inside the program, and the models share one memory budget (85% of the installed memory unless **Settings > Memory budget**
+sets one).
+
+- A model nobody used for ten minutes is unloaded.
+- When an engine task (speech, an image, ...) does not fit beside the chat model, the chat model is set aside for the time the task takes
+  and loaded again afterwards; the conversation is kept. Asked for in the middle of an answer, the task runs right after the answer.
+- An engine that crashes takes the program with it once. The crash is recorded against the model that was running
+  (`cache/crashed/` in the home folder); from the next start that model runs in its own `agent-engine-host` process, where the same fault
+  fails one answer and the chat goes on. Deleting the file in `cache/crashed/` puts the model back in the program.
 
 ### Speed
 

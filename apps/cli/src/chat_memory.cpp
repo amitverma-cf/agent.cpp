@@ -185,6 +185,39 @@ std::vector<ChatHit> search_chats(Session &session, std::string_view query, std:
     return hits;
 }
 
+std::string_view without_notes(std::string_view message) {
+    constexpr std::string_view open = "[Notes kept from earlier chats", close = "[End of notes]";
+    if (!message.starts_with(open)) return message;
+    const size_t end = message.find(close);
+    if (end == std::string_view::npos) return message;
+    message.remove_prefix(end + close.size());
+    while (!message.empty() && (message.front() == 10 || message.front() == 13 || message.front() == 32)) message.remove_prefix(1);
+    return message;
+}
+
+std::vector<std::pair<std::string, std::string>> memory_passages(Session &session, size_t max_chats) {
+    std::vector<std::pair<std::string, std::string>> out;
+    for (const std::string &k : note_keys(session)) {
+        auto v = retrieve_memory(session, std::string(kNotePrefix) + k);
+        if (v.ok && !v.value.empty()) out.emplace_back("note:" + k, k + ": " + v.value);
+    }
+    auto index = retrieve_memory(session, kChatIndex);
+    const auto ids = conversation_ids(index.ok ? index.value : std::string());
+    size_t chats = 0;
+    for (auto it = ids.rbegin(); it != ids.rend() && chats < max_chats; ++it, ++chats) {
+        Conversation c;
+        c.id = *it;
+        if (!load_conversation(session, c).ok) continue;
+        for (size_t i = 0; i < c.history.size(); ++i) {
+            const Message &m = c.history[i];
+            const std::string_view text = without_notes(m.content);
+            if ((m.role != "user" && m.role != "assistant") || text.empty()) continue;
+            out.emplace_back("chat:" + c.id + ":" + std::to_string(i), m.role + ": " + std::string(text));
+        }
+    }
+    return out;
+}
+
 std::string recall_text(Session &session, std::string_view key, std::string_view query, std::string_view current_id) {
     if (!key.empty()) {
         auto exact = retrieve_memory(session, std::string(kNotePrefix) + std::string(key));

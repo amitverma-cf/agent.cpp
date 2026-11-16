@@ -133,6 +133,8 @@ bool tui_ask(std::string_view question, bool *always);
 // A free-text question from the worker thread: shows `question` (with the default in brackets) above the input line and blocks until the
 // user presses Enter; an empty answer means `default_value`. Returns false when the interface is closing.
 bool tui_prompt(std::string_view question, std::string_view default_value, std::string &answer);
+// Sends a line as if the user had typed it: at once when the chat is idle, otherwise right after the running answer. Thread safe.
+void tui_submit_later(std::string_view line);
 
 // The whole chat screen as plain text at a given terminal size, with the host as it is (for tests of the responsive layout).
 std::string render_chat_text(const TuiHost &host, int width, int height);

@@ -36,6 +36,12 @@ struct ChatHit {
 std::vector<ChatHit> search_chats(Session &session, std::string_view query, std::string_view skip_id, size_t &searched,
                                   size_t max_hits = 5);
 
+// Every note ("note:<key>") and every user and assistant message of the newest `max_chats` saved conversations
+// ("chat:<id>:<message number>") with its text: what the memory index is filled from.
+// A stored user message without the block of notes the chat put in front of it.
+std::string_view without_notes(std::string_view message);
+std::vector<std::pair<std::string, std::string>> memory_passages(Session &session, size_t max_chats = 200);
+
 // What the recall tool answers: the note named `key`; otherwise the notes and the earlier chats that match `query` (or `key`), with the
 // number of chats searched. With nothing to go on it lists the note names and the latest chats.
 std::string recall_text(Session &session, std::string_view key, std::string_view query, std::string_view current_id);

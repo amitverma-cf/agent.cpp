@@ -7,6 +7,11 @@ add_library(agent_cli_core STATIC
     src/chat_models.cpp
     src/catalog_browse.cpp
     src/chat_memory.cpp
+    src/memory_index.cpp
+    src/plugins.cpp
+    src/timers.cpp
+    src/skill_learn.cpp
+    src/crash_guard.cpp
     src/workflows.cpp
     src/model_detect.cpp
     src/cli_platform.cpp
@@ -27,7 +32,7 @@ add_library(agent_cli_core STATIC
     src/voice_core.cpp
 )
 target_include_directories(agent_cli_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(agent_cli_core PUBLIC agent)
+target_link_libraries(agent_cli_core PUBLIC agent agent_store_sqlite)
 # Secrets: sha256 from the hub, AES-GCM / scrypt from OpenSSL, and the OS credential store.
 target_link_libraries(agent_cli_core PRIVATE agent_hub OpenSSL::Crypto)
 if(WIN32)

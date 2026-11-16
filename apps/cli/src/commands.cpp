@@ -187,6 +187,16 @@ std::string catalog_engine_options(const Context &ctx, std::string_view model_pa
     return engine_options;
 }
 
+bool engine_host_available() {
+    std::error_code ec;
+#if defined(_WIN32)
+    const char *name = "agent-engine-host.exe";
+#else
+    const char *name = "agent-engine-host";
+#endif
+    return std::filesystem::is_regular_file(std::filesystem::path(executable_dir()) / name, ec);
+}
+
 Result<LoadedEngine> load_engine_for(const Context &ctx, std::string_view engine_flag, std::string_view model_path) {
     auto engines = load_engines(ctx.engines_path);
     if (!engines.ok) return fail<LoadedEngine>(engines.error.code, engines.error.message);

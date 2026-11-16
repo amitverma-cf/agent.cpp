@@ -7,15 +7,20 @@
 #include "chat_memory.hpp"
 #include "chat_models.hpp"
 #include "commands.hpp"
+#include "crash_guard.hpp"
 #include "edit_journal.hpp"
 #include "mcp_config.hpp"
+#include "memory_index.hpp"
 #include "model_detect.hpp"
+#include "plugins.hpp"
 #include "registries.hpp"
 #include "runtimes.hpp"
 #include "schedule.hpp"
 #include "secrets.hpp"
 #include "settings_tool.hpp"
+#include "skill_learn.hpp"
 #include "speed.hpp"
+#include "timers.hpp"
 #include "tui.hpp"
 #include "voice.hpp"
 #include "workflows.hpp"
@@ -31,12 +36,14 @@
 #include <cstdarg>
 #include <cstdio>
 #include <ctime>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <simdjson.h>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 #if !defined(_WIN32)
 #include <signal.h>
@@ -78,10 +85,11 @@ void install_sigint() {
 #endif
 }
 
-bool g_tui = false;      // the full-screen interface is running: output goes to it, not to stdout
-bool g_headless = false; // -p: the answer alone goes to stdout; tool lines and notes go to stderr
-bool g_jsonl = false;    // --jsonl: every piece of output is one JSON line on stdout
-bool g_acp = false;      // --acp: Agent Client Protocol on stdio (JSON-RPC, one message per line)
+std::unordered_set<std::string> g_plugin_names; // the tool names that belong to plugins (they ask before they run)
+bool g_tui = false;                             // the full-screen interface is running: output goes to it, not to stdout
+bool g_headless = false;                        // -p: the answer alone goes to stdout; tool lines and notes go to stderr
+bool g_jsonl = false;                           // --jsonl: every piece of output is one JSON line on stdout
+bool g_acp = false;                             // --acp: Agent Client Protocol on stdio (JSON-RPC, one message per line)
 std::string g_acp_session, g_acp_call;
 int g_acp_calls = 0;
 bool g_last_turn_failed = false;
@@ -200,6 +208,15 @@ struct ChatState {
     // on one database.
     ModelRegistry registry;
     ModelLease lease;
+    // The words-and-meaning search over the notes and saved chats of the open project (memory/index.sqlite3), opened on first use.
+    std::optional<MemoryIndex> index;
+    std::string index_workspace;
+    bool index_failed = false, index_filled = false;
+    std::string embed_model; // "" = not looked for yet, "-" = none installed
+    // True while an answer is being made (a tool call then runs inside the chat model's turn and cannot unload it).
+    bool in_turn = false;
+    // Engine tasks that did not fit in memory beside the chat model: run right after the answer, with the chat model set aside.
+    std::vector<std::vector<std::string>> deferred_tasks;
     Session store;
     Conversation memory;
 
@@ -251,7 +268,11 @@ std::string system_prompt(const ChatState &st) {
         "with remember without "
         "being asked. When a request is ambiguous, ask with ask_user instead of guessing. For a request with several "
         "steps keep a checklist "
-        "with todo. When the user mentions their files, a folder or a document without a path, look in the workspace first "
+        "with todo. After a task that took several steps or a recovery from a mistake, keep how it was done with skill_learn; when the "
+        "steps of a skill fail, repair that skill with skill_learn and the lesson. For something to do later or again and again, set a "
+        "timer. A new tool can be added as a plugin: a folder under the home plugins folder with plugin.json (name, description, runtime "
+        "bun or uv, entry, tools) and a script that reads the call as JSON on stdin and prints the result. When the user mentions their "
+        "files, a folder or a document without a path, look in the workspace first "
         "(list_dir, then read what matches) before asking; ask only when nothing matches. For questions about earlier "
         "chats, check recall and the saved notes first. When the user asks to make answers faster, slower, more creative, steadier or "
         "longer, or asks about a small helper model or MTP, use the settings tool (action get first, then set); never claim a "
@@ -318,7 +339,8 @@ PermissionDecision check_tool(std::string_view name, std::string_view arguments,
     }
     if (st->mode == ChatMode::Auto) return PermissionDecision::Allow;
     PermissionDecision d = tools::default_permission_policy(name, arguments, nullptr);
-    if ((name == "web_fetch" || name == "web_search" || name == "agent_run") && d == PermissionDecision::Allow)
+    if ((name == "web_fetch" || name == "web_search" || name == "agent_run" || g_plugin_names.count(std::string(name))) &&
+        d == PermissionDecision::Allow)
         d = PermissionDecision::Ask;                                                     // the network, other models
     if (changes_settings && d == PermissionDecision::Allow) d = PermissionDecision::Ask; // changing a setting reloads the model
     if (d == PermissionDecision::Ask && std::find(st->always_allowed.begin(), st->always_allowed.end(), name) != st->always_allowed.end())
@@ -582,6 +604,21 @@ std::string finish_agent_output(ChatState &st, const std::vector<std::string> &a
     return output.empty() ? std::string(failed ? "the command failed" : "done") : output;
 }
 
+// Runs an engine task with the chat model unloaded for the time it takes, then loads the chat model again: for a model that does not fit
+// in the memory budget beside it. The conversation is kept; only the model's cache of it is rebuilt.
+std::string run_task_swapped(ChatState &st, const CommandLine &cl, bool &failed) {
+    out("[memory] setting the chat model aside to make room; it comes back when this is done\n");
+    release_model(st.lease);
+    unload_model(st.registry, st.model.name);
+    std::string output, err;
+    failed = run_engine_task(cl, *st.ctx, output, &err, &st.registry, nullptr) != 0;
+    if (failed) output += (output.empty() || output.back() == '\n' ? "" : "\n") + err;
+    prune_idle_models(st.registry, -1); // the chat model needs the room back
+    if (auto r = acquire_current(st); !r.ok)
+        output += "\n[error] the chat model could not be loaded again: " + r.error.message + " (switch with /model NAME)";
+    return output;
+}
+
 // Runs `agent ARGS...`; the text is what the command printed. `failed` is set when it did not succeed.
 std::string run_agent_command(ChatState &st, std::vector<std::string> args, bool &failed) {
     failed = true;
@@ -630,7 +667,21 @@ std::string run_agent_command(ChatState &st, std::vector<std::string> args, bool
         auto parsed = parse_command_line(views);
         if (!parsed.ok) return beginner_error(parsed.error.message);
         std::string output, err;
-        failed = run_engine_task(parsed.value, *st.ctx, output, &err, &st.registry) != 0;
+        ErrorCode code = ErrorCode::Ok;
+        failed = run_engine_task(parsed.value, *st.ctx, output, &err, &st.registry, &code) != 0;
+        if (failed && code == ErrorCode::OutOfMemory && st.lease && st.engine.name != "api") {
+            // The model does not fit beside the chat model. Outside an answer the chat model is set aside now; inside one (a tool call)
+            // that cannot be done, so the task waits for the end of the answer.
+            if (st.in_turn) {
+                st.deferred_tasks.push_back(args);
+                failed = false;
+                return "There is not enough memory to run this beside the chat model, so it is queued: it runs by itself right after this "
+                       "answer, with the chat model set aside for a moment, and the result is shown to the user. Tell the user it is on "
+                       "its way and do not call the tool again for it.";
+            }
+            output = run_task_swapped(st, parsed.value, failed);
+            err.clear();
+        }
         if (failed) output += (output.empty() || output.back() == '\n' ? "" : "\n") + err;
         return model_note + finish_agent_output(st, args, std::move(output), failed);
     }
@@ -684,6 +735,27 @@ std::string run_agent_command(ChatState &st, std::vector<std::string> args, bool
     return model_note + finish_agent_output(st, args, std::move(output), failed);
 }
 
+// The engine tasks that waited for the end of the answer (see run_agent_command): each runs with the chat model set aside, its result is
+// shown and kept in the conversation so the next message can refer to it.
+void run_deferred_tasks(ChatState &st) {
+    while (!st.deferred_tasks.empty()) {
+        const std::vector<std::string> args = std::move(st.deferred_tasks.front());
+        st.deferred_tasks.erase(st.deferred_tasks.begin());
+        std::vector<std::string_view> views(args.begin(), args.end());
+        auto parsed = parse_command_line(views);
+        if (!parsed.ok) continue;
+        bool failed = false;
+        std::string output = run_task_swapped(st, parsed.value, failed);
+        output = finish_agent_output(st, args, std::move(output), failed);
+        out("\n" + output + (output.empty() || output.back() == '\n' ? "" : "\n"));
+        Message done;
+        done.role = "assistant";
+        done.content = "[Ran after the answer: " + args[0] + (args.size() > 1 ? " " + args[1] : "") + "]\n" + output;
+        st.memory.history.push_back(std::move(done));
+        if (st.lease) (void)save_conversation(*st.lease, st.memory);
+    }
+}
+
 Result<std::string> agent_run_cb(std::string_view args, void *user) {
     auto *st = static_cast<ChatState *>(user);
     simdjson::dom::parser parser;
@@ -713,6 +785,83 @@ constexpr std::string_view kRecallSchema =
 constexpr std::string_view kForgetSchema =
     R"({"type":"object","properties":{"key":{"type":"string","description":"the exact name of the note"},"text":{"type":"string","description":"words that describe the note when its name is not known"}}})";
 
+// ---- The memory index: notes and saved chats, searched by words and by meaning ----
+
+std::vector<std::vector<float>> embed_texts(ChatState &st, const std::vector<std::string> &texts) {
+    if (st.embed_model.empty()) {
+        st.embed_model = "-";
+        for (const InstalledModel &m : installed_models(catalog_path(*st.ctx)))
+            if (m.capability == "embed" && !m.remote) {
+                st.embed_model = m.name;
+                break;
+            }
+    }
+    if (st.embed_model == "-" || texts.empty()) return {};
+    auto lease = acquire_task_model(*st.ctx, st.registry, st.embed_model, st.workspace);
+    if (!lease.ok) return {};
+    std::vector<std::string_view> views(texts.begin(), texts.end());
+    auto vectors = embed(*lease.value.session, views);
+    if (!vectors.ok) return {};
+    return std::move(vectors.value);
+}
+
+EmbedFn embedder(ChatState &st) {
+    return [&st](const std::vector<std::string> &texts) { return embed_texts(st, texts); };
+}
+
+MemoryIndex *memory_index(ChatState &st) {
+    if (st.index && st.index_workspace == st.workspace) return &*st.index;
+    if (st.index_failed && st.index_workspace == st.workspace) return nullptr;
+    st.index.reset();
+    st.index_workspace = st.workspace;
+    st.index_failed = st.index_filled = false;
+    int dims = 0;
+    if (const auto probe = embed_texts(st, {"size"}); probe.size() == 1) dims = static_cast<int>(probe[0].size());
+    auto opened = MemoryIndex::open(st.workspace, dims);
+    if (!opened.ok) {
+        st.index_failed = true;
+        return nullptr;
+    }
+    st.index = std::move(opened.value);
+    return &*st.index;
+}
+
+// The first search of a run brings the index up to date with everything saved (only what changed is embedded).
+void fill_memory_index(ChatState &st) {
+    MemoryIndex *index = memory_index(st);
+    if (!index || st.index_filled || !st.lease) return;
+    st.index_filled = true;
+    (void)index->put(memory_passages(*st.lease), embedder(st));
+}
+
+void index_conversation(ChatState &st, const Conversation &c) {
+    MemoryIndex *index = memory_index(st);
+    if (!index) return;
+    std::vector<std::pair<std::string, std::string>> items;
+    for (size_t i = 0; i < c.history.size(); ++i) {
+        const Message &m = c.history[i];
+        const std::string_view text = without_notes(m.content);
+        if ((m.role != "user" && m.role != "assistant") || text.empty()) continue;
+        items.emplace_back("chat:" + c.id + ":" + std::to_string(i), m.role + ": " + std::string(text));
+    }
+    (void)index->put(items, embedder(st));
+}
+
+// The passages of the index closest to `what`, as lines for the model; the open conversation is left out.
+std::string memory_index_lines(ChatState &st, const std::string &what, int k) {
+    MemoryIndex *index = memory_index(st);
+    if (!index || what.empty()) return {};
+    fill_memory_index(st);
+    std::string lines;
+    for (const MemoryHit &h : index->search(what, k + 4, embedder(st))) {
+        const std::string chat = memory_hit_chat(h.id);
+        if (!chat.empty() && chat == st.memory.id) continue;
+        lines += "- (" + (chat.empty() ? std::string("note") : "chat " + chat) + ") " + one_line(h.text, 260) + "\n";
+        if (--k <= 0) break;
+    }
+    return lines;
+}
+
 Result<std::string> remember_cb(std::string_view args, void *user) {
     auto *st = static_cast<ChatState *>(user);
     simdjson::dom::parser parser;
@@ -723,6 +872,8 @@ Result<std::string> remember_cb(std::string_view args, void *user) {
         return fail<std::string>(ErrorCode::InvalidConfig, "remember needs a key and a value");
     if (!st->lease) return fail<std::string>(ErrorCode::InvalidConfig, "no model is loaded");
     if (auto r = note_keep(*st->lease, key, value); !r.ok) return fail<std::string>(r.error.code, r.error.message);
+    if (MemoryIndex *index = memory_index(*st))
+        (void)index->put({{"note:" + std::string(key), std::string(key) + ": " + std::string(value)}}, embedder(*st));
     return ok("kept note '" + std::string(key) + "'. Confirm in one short sentence; do nothing else unless asked.");
 }
 
@@ -738,7 +889,14 @@ Result<std::string> forget_cb(std::string_view args, void *user) {
     if (key.empty() && text.empty()) return fail<std::string>(ErrorCode::InvalidConfig, "forget needs a key or a text");
     if (!st->lease) return fail<std::string>(ErrorCode::InvalidConfig, "no model is loaded");
     bool removed = false;
+    const std::vector<std::string> before = note_keys(*st->lease);
     const std::string answer = note_forget(*st->lease, key, text, removed);
+    if (removed)
+        if (MemoryIndex *index = memory_index(*st)) {
+            const std::vector<std::string> after = note_keys(*st->lease);
+            for (const std::string &k : before)
+                if (std::find(after.begin(), after.end(), k) == after.end()) (void)index->erase("note:" + k);
+        }
     if (!removed) return fail<std::string>(ErrorCode::KeyNotFound, answer);
     return ok(answer);
 }
@@ -753,7 +911,85 @@ Result<std::string> recall_cb(std::string_view args, void *user) {
     if (doc["key"].get(key)) key = {};
     if (doc["query"].get(query)) query = {};
     if (!st->lease) return fail<std::string>(ErrorCode::InvalidConfig, "no model is loaded");
-    return ok(recall_text(*st->lease, key, query, st->memory.id));
+    std::string text = recall_text(*st->lease, key, query, st->memory.id);
+    const std::string what = query.empty() ? std::string(key) : std::string(query);
+    if (const std::string lines = memory_index_lines(*st, what, 6); !lines.empty())
+        text += "Closest passages in the notes and earlier chats, by words and meaning:\n" + lines;
+    return ok(std::move(text));
+}
+
+// ---- Timers, self-written skills, plugins ----
+
+constexpr std::string_view kTimerSchema =
+    R"({"type":"object","properties":{"action":{"type":"string","enum":["add","list","remove"]},"prompt":{"type":"string","description":"what to do when the timer fires, as a full request"},"in_minutes":{"type":"number"},"every_minutes":{"type":"number"},"at":{"type":"string","description":"HH:MM, local time"},"repeat":{"type":"boolean","description":"with at: every day"},"id":{"type":"string"}},"required":["action"]})";
+
+Result<std::string> timer_cb(std::string_view args, void *user) {
+    auto *st = static_cast<ChatState *>(user);
+    if (!st->ctx->has_home) return ok(std::string("timers need a home folder; run agent setup"));
+    bool failed = false;
+    return ok(timer_tool(st->ctx->home.root, st->workspace, args, static_cast<int64_t>(std::time(nullptr)), failed));
+}
+
+constexpr std::string_view kSkillLearnSchema =
+    R"({"type":"object","properties":{"name":{"type":"string","description":"lower-case letters, digits and -, for example deploy-site"},"description":{"type":"string","description":"one line: when to use this skill"},"steps":{"type":"string","description":"the steps that worked, as markdown"},"lesson":{"type":"string","description":"what went wrong and what fixes it"}},"required":["name"]})";
+
+std::string sync_extensions(ChatState &st);
+
+Result<std::string> skill_learn_cb(std::string_view args, void *user) {
+    auto *st = static_cast<ChatState *>(user);
+    if (!st->ctx->has_home) return ok(std::string("skills need a home folder; run agent setup"));
+    char today[16] = "";
+    const std::time_t now = std::time(nullptr);
+    std::tm local{};
+#if defined(_WIN32)
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    std::strftime(today, sizeof(today), "%Y-%m-%d", &local);
+    bool failed = false;
+    return ok(skill_learn(st->ctx->home.skills, args, today, failed));
+}
+
+struct PluginBinding {
+    PluginTool tool;
+    ChatState *st = nullptr;
+};
+std::deque<PluginBinding> g_plugins; // never shrinks: loaded sessions hold views into it
+
+Result<std::string> plugin_cb(std::string_view args, void *user) {
+    auto *binding = static_cast<PluginBinding *>(user);
+    bool failed = false;
+    std::string text = run_plugin_tool(binding->tool, binding->st->ctx->home, std::string(args), binding->st->workspace, failed);
+    return ok(failed ? "the plugin reported an error: " + text : text);
+}
+
+// The plugin tools of the home and of the project, added to a session's tools. Returns the problems found, one per line.
+std::string add_plugin_tools(ChatState &st, std::vector<Tool> &tools) {
+    if (!st.ctx->has_home) return {};
+    std::vector<std::string> problems;
+    const std::vector<std::string> dirs{st.ctx->home.plugins, (fs::path(st.workspace) / ".agents" / "plugins").string()};
+    for (PluginTool &found : load_plugins(dirs, problems)) {
+        PluginBinding *binding = nullptr;
+        for (PluginBinding &b : g_plugins)
+            if (b.tool.full_name == found.full_name && b.tool.dir == found.dir && b.tool.schema == found.schema &&
+                b.tool.description == found.description && b.tool.entry == found.entry && b.tool.runtime == found.runtime)
+                binding = &b;
+        if (!binding) {
+            g_plugins.push_back(PluginBinding{std::move(found), &st});
+            binding = &g_plugins.back();
+        }
+        if (std::any_of(tools.begin(), tools.end(), [&](const Tool &t) { return t.name == binding->tool.full_name; })) continue;
+        g_plugin_names.insert(binding->tool.full_name);
+        tools.push_back(Tool{.name = binding->tool.full_name,
+                             .description = binding->tool.description,
+                             .parameter_schema = binding->tool.schema,
+                             .callback = plugin_cb,
+                             .user_data = binding});
+    }
+    std::string text;
+    for (const std::string &p : problems) text += "[plugin] " + p + "\n";
+    return text;
 }
 
 // A reusable workflow: the graph is checked, then kept as <home>/graphs/NAME.json and run later by name.
@@ -871,11 +1107,50 @@ std::string memory_pack(ChatState &st, const std::string &prompt) {
         const float score = word_scores[i] + (close >= 0.55f ? (close - 0.45f) * 4.0f : 0.0f);
         if (score > 0) found.emplace_back(score, note_lines[i]);
     }
+    // Earlier chats of the project, from the index: every message was embedded once when it was saved, so this costs one search. The index
+    // always has a closest passage, so one is kept only when it shares two words with the message or is close in meaning.
+    if (MemoryIndex *passages = memory_index(st)) {
+        fill_memory_index(st);
+        // What a passage says, without the "user: " / "assistant: " in front.
+        auto said = [](const std::string &text) {
+            const size_t colon = text.find(": ");
+            return colon != std::string::npos && colon <= 10 ? text.substr(colon + 2) : text;
+        };
+        std::vector<std::string> texts;
+        std::vector<std::string> kept; // what the passages taken so far say, in lower case
+        for (const MemoryHit &h : passages->search(prompt, 8, embedder(st))) {
+            const std::string chat = memory_hit_chat(h.id);
+            if (chat.empty() || chat == st.memory.id) continue; // the notes are scored above; the open chat is in the context already
+            std::string text = one_line(h.text, 220);
+            // A few words ("tool done", "ok thanks") carry no fact, and an answer that repeats a message adds nothing to it.
+            const std::string body = lower(said(text));
+            if (body.size() < 24) continue;
+            const bool repeated = std::any_of(kept.begin(), kept.end(), [&](const std::string &k) {
+                return k.find(body) != std::string::npos || body.find(k) != std::string::npos;
+            });
+            if (repeated) continue;
+            kept.push_back(body);
+            texts.push_back(std::move(text));
+        }
+        // A greeting or a word or two is close in meaning to almost any short text: by meaning alone only a message of three words or more.
+        const bool has_question = std::count(prompt.begin(), prompt.end(), ' ') >= 2;
+        const std::vector<float> close = meaning_scores(st, prompt, texts);
+        for (size_t i = 0; i < texts.size(); ++i) {
+            const std::string haystack = lower(texts[i]);
+            int shared = 0;
+            for (const std::string &w : words)
+                if (haystack.find(w) != std::string::npos) ++shared;
+            const float c = i < close.size() ? close[i] : 0.0f;
+            if (shared < 2 && (c < 0.6f || !has_question)) continue;
+            found.emplace_back(static_cast<float>(shared) + (c >= 0.55f ? (c - 0.45f) * 4.0f : 0.0f) - 0.5f,
+                               "- (said in an earlier chat) " + texts[i] + "\n");
+        }
+    }
     std::stable_sort(found.begin(), found.end(), [](const auto &a, const auto &b) { return a.first > b.first; });
     std::string pack;
     for (const auto &[score, line] : found) {
         (void)score;
-        if (pack.size() + line.size() > 1200) break;
+        if (pack.size() + line.size() > 1200) continue; // a long line does not keep a shorter one out
         pack += line;
     }
     if (pack.empty()) return {};
@@ -974,6 +1249,10 @@ Result<void> open_session(ChatState &st) {
     cfg.provider = AiProvider::Engine;
     cfg.engine = st.engine.name;
     cfg.engine_isolation = cli_engine_isolation(st.inprocess, st.engine.isolation);
+    if (cfg.engine_isolation == EngineIsolation::InProcess && crashed_before(st.model.path) && engine_host_available()) {
+        cfg.engine_isolation = EngineIsolation::Process; // it took the program down before: from now on it gets its own process
+        std::fprintf(g_err, "%s crashed the program earlier; it now runs in its own process\n", st.model.name.c_str());
+    }
     cfg.engine_sandbox.gpu = cli_engine_gpu(st.engine.backend);
     apply_sandbox_choice(cfg);
     {
@@ -1058,6 +1337,20 @@ Result<void> open_session(ChatState &st) {
                                  .parameter_schema = kForgetSchema,
                                  .callback = forget_cb,
                                  .user_data = &st});
+        cfg.tools.push_back(Tool{.name = "timer",
+                                 .description = "Set, list or remove a timer: a request the agent gets back later (in_minutes), at a time "
+                                                "of day (at), or again and again (every_minutes, or at with repeat). It fires while the "
+                                                "chat is open, or the next time it is opened.",
+                                 .parameter_schema = kTimerSchema,
+                                 .callback = timer_cb,
+                                 .user_data = &st});
+        cfg.tools.push_back(Tool{.name = "skill_learn",
+                                 .description = "Keep how a task was done as a skill for next time (name, description, steps), or repair "
+                                                "a skill whose steps failed (same name, new steps, and the lesson: what went wrong).",
+                                 .parameter_schema = kSkillLearnSchema,
+                                 .callback = skill_learn_cb,
+                                 .user_data = &st});
+        if (const std::string problems = add_plugin_tools(st, cfg.tools); !problems.empty()) std::fputs(problems.c_str(), stderr);
         cfg.tools.push_back(
             Tool{.name = "workflow_save",
                  .description =
@@ -1114,6 +1407,7 @@ void remember_conversation(ChatState &st) {
     const std::string updated = add_conversation_id(current, st.memory.id);
     if (updated != current) store_memory(*st.lease, kIndexKey, updated);
     st.saved = true;
+    index_conversation(st, st.memory);
 }
 
 std::string new_conversation_id() {
@@ -1207,10 +1501,13 @@ void run_one_turn(ChatState &st, const std::string &text, std::span<const Media>
     clear_cancel(*st.lease);
     sync_extensions(st); // servers and skills added since the last message
     st.declined.clear();
+    st.in_turn = true;
+    const CrashScope crash_scope(st.model.path);
     g_generating.store(true);
     auto r = media.empty() ? run_turn(*st.lease, st.memory, text, true, on_token, &st)
                            : run_turn_with_media(*st.lease, st.memory, text, media, true, on_token, &st);
     g_generating.store(false);
+    st.in_turn = false;
     g_last_turn_failed = !r.ok;
     // A failed turn with attachments leaves its message in the history; every later turn would send the same media and fail again.
     if (!r.ok && !media.empty() && st.memory.history.size() > before)
@@ -1745,6 +2042,7 @@ bool handle_line(ChatState &st, const std::string &line) {
             out("attached: " + names + "\n");
         }
         run_one_turn(st, memory_pack(st, text) + text, {});
+        run_deferred_tasks(st);
         return true;
     }
     if (cmd.kind == SlashKind::Exit) return false;
@@ -2682,6 +2980,7 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
     if (!store_session.ok) return chat_fail(store_session.error);
     st.store = std::move(store_session.value);
     remember_workspace(st);
+    if (st.ctx->has_home) crash_guard_install(st.ctx->home.cache);
     // No budget set: models may use 85% of the installed memory together. The registry unloads the ones not in use to stay under it.
     set_budget(st.registry,
                ModelBudget{.ram_bytes = st.ctx->config.memory_budget_mb > 0 ? static_cast<uint64_t>(st.ctx->config.memory_budget_mb) << 20
@@ -2785,7 +3084,26 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
         };
         g_tui = true;
         start_stats(st.ctx->has_home ? st.ctx->home.root : st.workspace);
+        // The agent's own timers: checked every few seconds, a due one is put to the agent as a message when it is idle.
+        std::atomic<bool> timers_stop{false};
+        std::thread timers_thread;
+        if (st.ctx->has_home)
+            timers_thread = std::thread([&timers_stop, home = st.ctx->home.root] {
+                int ticks = 0;
+                while (!timers_stop.load()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    if (++ticks % 20 != 4) continue; // every ten seconds, the first time two seconds after the start
+                    std::vector<Timer> timers = load_timers(home);
+                    if (timers.empty()) continue;
+                    const std::vector<Timer> due = take_due_timers(timers, "*", static_cast<int64_t>(std::time(nullptr)));
+                    if (due.empty()) continue;
+                    save_timers(home, timers);
+                    for (const Timer &timer : due) tui_submit_later("[timer " + timer.id + "] " + timer.prompt);
+                }
+            });
         const int rc = run_tui(host);
+        timers_stop.store(true);
+        if (timers_thread.joinable()) timers_thread.join();
         stop_stats();
         g_tui = false;
         g_err = saved_err;

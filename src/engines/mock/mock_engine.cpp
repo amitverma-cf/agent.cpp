@@ -531,6 +531,13 @@ int32_t mock_run(void *instance, const agent_request *req, agent_response *resp)
         }
     }
 
+    // The chat puts the notes it keeps in front of the message; a tool-call trigger behind them still counts.
+    if (const size_t notes_end = last_user.find("[End of notes]");
+        last_user.starts_with("[Notes kept") && notes_end != std::string_view::npos) {
+        std::string_view rest = last_user.substr(notes_end + 14);
+        while (!rest.empty() && (rest.front() == 10 || rest.front() == 13 || rest.front() == 32)) rest.remove_prefix(1);
+        if (rest.starts_with("call:")) last_user = rest;
+    }
     if (last_user == "crash:segv") std::raise(SIGSEGV);
     if (last_user == "crash:abort") std::abort();
     if (last_user == "crash:exit") std::exit(3);
