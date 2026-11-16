@@ -69,7 +69,12 @@ jobs:
           choco install ninja -y --no-progress
           "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install openssl:${{ matrix.triplet }}
           if [ -n "${{ matrix.variant }}" ]; then
-            choco install vulkan-sdk -y --no-progress
+            # The SDK download server refuses a request now and then: try up to four times before giving up.
+            for attempt in 1 2 3 4; do
+              choco install vulkan-sdk -y --no-progress && break
+              [ "$attempt" = 4 ] && exit 1
+              sleep 30
+            done
             sdk="$(ls -d /c/VulkanSDK/* | sort | tail -1)"
             echo "VULKAN_SDK=C:/VulkanSDK/$(basename "$sdk")" >> "$GITHUB_ENV"
           fi
