@@ -47,6 +47,8 @@ if(AGENT_LLAMA_PREBUILT)
         # The libraries sit next to the plugin.
         set_target_properties(agent-engine-llama PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN" BUILD_WITH_INSTALL_RPATH ON)
         target_link_options(agent-engine-llama PRIVATE -Wl,--disable-new-dtags)
+    elseif(APPLE)
+        set_target_properties(agent-engine-llama PROPERTIES BUILD_RPATH "@loader_path" INSTALL_RPATH "@loader_path" BUILD_WITH_INSTALL_RPATH ON)
     endif()
     # What a test or a build tree needs next to the plugin: the release's libraries.
     if(WIN32)

@@ -8,7 +8,7 @@ REL="${1:?release folder}"; SCRIPTS="${2:?scripts folder}"; TAG="${3:-local}"
 MODELS="${MODELS:-$HOME/models}"
 T=${MODTEST_DIR:-/tmp/agent-engtest}; rm -rf "$T"; mkdir -p "$T"
 export AGENT_HOME="$T/root" AGENT_RELEASE="$REL" AGENT_SCRIPTS="$SCRIPTS" AGENT_VERSION="$TAG" AGENT_NO_ENV=1 AGENT_YES=1 AGENT_NO_START=1 NO_COLOR=1
-A="$AGENT_HOME/bin/agent"
+A="$AGENT_HOME/bin/agent"; DLEXT=so; [ "$(uname -s)" = Darwin ] && DLEXT=dylib
 pass=0; fail=0
 ok_if() { if eval "$2" >/dev/null 2>&1; then pass=$((pass + 1)); printf 'PASS %s\n' "$1"; else fail=$((fail + 1)); printf 'FAIL %s  ::  %s\n' "$1" "$2"; fi; }
 show() { sed 's/^/    /' | cut -c1-200 | head -${1:-6}; }
@@ -30,7 +30,7 @@ if echo " $ENGINES " | grep -q " llama "; then
     ok_if "llama: an embedding of a real text" "printf '%s' \"\$out\" | grep -qi embedding"
     out="$("$A" task rerank -m jina-reranker-v1-tiny-en-Q8_0 --text 'red fox' --doc 'a red fox jumps' --doc 'blue sky' 2>&1 | tail -4)"; echo "$out" | show 4
     ok_if "llama: a rerank puts the matching passage first" "printf '%s' \"\$out\" | grep -q 'score\[0\]'"
-    ok_if "llama: the plugin is small and the libraries are upstream's" "[ \$(stat -c %s '$AGENT_HOME/engines/llama/agent-engine-llama.so') -lt 3000000 ] && [ -f '$AGENT_HOME/engines/llama/libllama.so' ]"
+    ok_if "llama: the plugin is small and the libraries are upstream's" "[ \$(wc -c < '$AGENT_HOME/engines/llama/agent-engine-llama.$DLEXT') -lt 3000000 ] && ls '$AGENT_HOME/engines/llama/' | grep -q '^libllama\.'"
 fi
 if echo " $ENGINES " | grep -q " audiocpp " && [ -d "$AGENT_HOME/engines/audiocpp" ]; then
     echo "== audiocpp"
@@ -48,7 +48,7 @@ PY
     "$A" model pull "$T/add.onnx" >/dev/null 2>&1
     out="$("$A" task generic -e onnx -m add --tensor a:f32:2,2=1,2,3,4 --tensor b:f32:2,2=10,20,30,40 2>&1 | tail -4)"; echo "$out" | show 4
     ok_if "onnx: a real model adds two tensors (11 22 33 44)" "printf '%s' \"\$out\" | grep -q '11'"
-    ok_if "onnx: the library is the official onnxruntime" "ls '$AGENT_HOME/engines/onnx/' | grep -q 'libonnxruntime.so'"
+    ok_if "onnx: the library is the official onnxruntime" "ls '$AGENT_HOME/engines/onnx/' | grep -q 'libonnxruntime\.'"
 fi
 if echo " $ENGINES " | grep -q " audiocpp " && [ ! -d "$AGENT_HOME/engines/audiocpp" ]; then echo "SKIP audiocpp: the installer refused it here (its upstream Linux build needs a newer glibc)"; fi
 for e in sdcpp trellis; do

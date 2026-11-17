@@ -1,13 +1,13 @@
 name: Release
 
-# Builds the CLI and the llama engine for Windows and Linux (x86_64 and aarch64; plus a Vulkan build for GPUs on Linux x86_64 and
-# aarch64 and Windows x86_64), on demand only, and with publish=true (run on a tag: the release is then the "latest") uploads:
-#   * agent-cpp-<version>-<os>-<arch>.tar.gz / .zip     the CLI, the engine host and the engines, ready to run
-#   * agent-engine-<name>-<os>-<arch>.<so|dll|dylib>    each engine alone, for `agent engine pull` and `agent setup`
-#   * manifest.json and SHA256SUMS                       what the downloader reads, with a SHA-256 for every file
+# Builds the program and the thin engine plugins for Linux, Windows and macOS (x86_64 and aarch64) on demand, installs the result with the
+# installer script on a clean machine of each kind, and with publish=true (run on a tag: the release is then the "latest") uploads:
+#   * agent-cpp-core-<tag>-<os>-<arch>                  the program
+#   * agent-engine-<name>-<tag>-<os>-<arch>             each thin plugin (llama, audiocpp, onnx)
+#   * install.sh, install.ps1, components.tsv           the installer and the pinned list
+#   * manifest.json and SHA256SUMS
 #
-# The binaries are portable: no -march=native. Linux is built on ubuntu-24.04 with GCC 14 (glibc 2.39 or newer to run). x86-64 targets AVX2 + FMA + F16C (any CPU since about 2015); on older
-# CPUs build from source.
+# Linux is built on ubuntu-24.04 with GCC 14 (glibc 2.39 or newer to run). The upstream libraries come from their own releases.
 
 on:
   workflow_dispatch:
@@ -37,6 +37,8 @@ jobs:
           - { runner: ubuntu-24.04-arm, os_name: linux,   arch: aarch64, lib_prefix: lib, lib_ext: so,    exe_ext: "",     ggml: "-DGGML_NATIVE=OFF" }
           - { runner: windows-2022,     os_name: windows, arch: x86_64,  lib_prefix: "",  lib_ext: dll,   exe_ext: ".exe", ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON", triplet: x64-windows, dll: x64 }
           - { runner: windows-11-arm,   os_name: windows, arch: aarch64, lib_prefix: "",  lib_ext: dll,   exe_ext: ".exe", ggml: "-DGGML_NATIVE=ON", triplet: arm64-windows, dll: arm64 }
+          - { runner: macos-15,         os_name: macos,   arch: aarch64, lib_prefix: lib, lib_ext: dylib, exe_ext: "",     ggml: "" }
+          - { runner: macos-15-intel,   os_name: macos,   arch: x86_64,  lib_prefix: lib, lib_ext: dylib, exe_ext: "",     ggml: "" }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,6 +60,12 @@ jobs:
           echo "CC=gcc-14" >> "$GITHUB_ENV"
           echo "CXX=g++-14" >> "$GITHUB_ENV"
 
+      - name: Dependencies (macOS)
+        if: matrix.os_name == 'macos'
+        run: |
+          brew install ninja openssl@3
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+
       - name: Dependencies (Windows)
         if: matrix.os_name == 'windows'
         shell: bash
@@ -77,6 +85,7 @@ jobs:
           # The plugins are compiled against the upstream releases the installer will download (llama.cpp, audio.cpp), at the exact pinned
           # versions: only the plugins are built here, not those projects. A plugin whose upstream has no build for this system is skipped.
           export AGENT_LIST="$PWD/scripts/components.tsv" AGENT_BACKEND=cpu
+          if [ "${{ matrix.os_name }}-${{ matrix.arch }}" = "macos-aarch64" ]; then export AGENT_BACKEND=metal; fi
           eng=",${{ inputs.engines || 'llama,onnx,audiocpp' }},"
           for e in llama audiocpp; do
             case "$eng" in *",$e,"*) ;; *) continue ;; esac
@@ -96,6 +105,7 @@ jobs:
           extra=""
           if [ "${{ matrix.os_name }}" = "linux" ]; then export LDFLAGS="-static-libstdc++ -static-libgcc"; fi
           if [ "${{ matrix.os_name }}" = "windows" ]; then extra="-DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}"; fi
+          if [ "${{ matrix.os_name }}" = "macos" ]; then extra="-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR"; fi
           [ "$(on llama)" = ON ] && extra="$extra -DAGENT_LLAMA_PREBUILT=$PWD/build/upstream/llama"
           [ "$(on audiocpp)" = ON ] && extra="$extra -DAGENT_AUDIOCPP_PREBUILT=$PWD/build/upstream/audiocpp"
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -204,6 +214,8 @@ jobs:
           - { runner: ubuntu-24.04-arm, os_name: linux,   arch: aarch64, engines: "llama,onnx",          runtimes: "bun,uv,node,pnpm,nub" }
           - { runner: windows-2022,     os_name: windows, arch: x86_64,  engines: "llama,onnx,audiocpp", runtimes: "bun,uv,node,pnpm,nub" }
           - { runner: windows-11-arm,   os_name: windows, arch: aarch64, engines: "llama,onnx",          runtimes: "uv,node,pnpm,nub" }
+          - { runner: macos-15,         os_name: macos,   arch: aarch64, engines: "llama,onnx,audiocpp", runtimes: "bun,uv,node,pnpm,nub" }
+          - { runner: macos-15-intel,   os_name: macos,   arch: x86_64,  engines: "llama,audiocpp",       runtimes: "bun,uv,node,pnpm,nub" }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -221,7 +233,7 @@ jobs:
           mkdir testscripts && cp scripts/install.sh scripts/install.ps1 scripts/components.tsv testscripts/
           sed -i "s/^# tag .*/# tag ${v}/" testscripts/components.tsv
       - name: Install test (Linux)
-        if: matrix.os_name == 'linux'
+        if: matrix.os_name != 'windows'
         run: |
           ENGINES="$(echo '${{ matrix.engines }}' | tr ',' ' ')" RUNTIMES="$(echo '${{ matrix.runtimes }}' | tr ',' ' ')" \
             AGENT_SCRIPTS_DIR="$PWD/testscripts" bash tests/modular/run.sh "$PWD/assets" "${{ steps.version.outputs.value }}" | tee install-test.log

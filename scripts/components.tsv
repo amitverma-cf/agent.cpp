@@ -1,21 +1,27 @@
-# agent.cpp components, pinned for release v1.2.1. Written by scripts/pin-components.py: do not edit by hand.
-# tag v1.2.1
+# agent.cpp components, pinned for release v1.2.2. Written by scripts/pin-components.py: do not edit by hand.
+# tag v1.2.2
 # kind	name	os	arch	backend	version	sha256	strip	dest	url
-core	agent	linux	x86_64	any	v1.2.1	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-linux-x86_64.tar.gz
-engine	llama	linux	x86_64	any	v1.2.1	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-linux-x86_64.tar.gz
-engine	audiocpp	linux	x86_64	any	v1.2.1	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-linux-x86_64.tar.gz
-engine	onnx	linux	x86_64	any	v1.2.1	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-linux-x86_64.tar.gz
-core	agent	linux	aarch64	any	v1.2.1	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-linux-aarch64.tar.gz
-engine	llama	linux	aarch64	any	v1.2.1	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-linux-aarch64.tar.gz
-engine	onnx	linux	aarch64	any	v1.2.1	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-linux-aarch64.tar.gz
-core	agent	windows	x86_64	any	v1.2.1	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-windows-x86_64.zip
-engine	llama	windows	x86_64	any	v1.2.1	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-windows-x86_64.zip
-engine	audiocpp	windows	x86_64	any	v1.2.1	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-windows-x86_64.zip
-engine	onnx	windows	x86_64	any	v1.2.1	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-windows-x86_64.zip
-core	agent	windows	aarch64	any	v1.2.1	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-windows-aarch64.zip
-engine	llama	windows	aarch64	any	v1.2.1	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-windows-aarch64.zip
-engine	audiocpp	windows	aarch64	any	v1.2.1	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-windows-aarch64.zip
-engine	onnx	windows	aarch64	any	v1.2.1	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-windows-aarch64.zip
+core	agent	linux	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-linux-x86_64.tar.gz
+engine	llama	linux	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-linux-x86_64.tar.gz
+engine	audiocpp	linux	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-linux-x86_64.tar.gz
+engine	onnx	linux	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-linux-x86_64.tar.gz
+core	agent	linux	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-linux-aarch64.tar.gz
+engine	llama	linux	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-linux-aarch64.tar.gz
+engine	onnx	linux	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-linux-aarch64.tar.gz
+core	agent	windows	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-windows-x86_64.zip
+engine	llama	windows	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-windows-x86_64.zip
+engine	audiocpp	windows	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-windows-x86_64.zip
+engine	onnx	windows	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-windows-x86_64.zip
+core	agent	windows	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-windows-aarch64.zip
+engine	llama	windows	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-windows-aarch64.zip
+engine	onnx	windows	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-windows-aarch64.zip
+core	agent	macos	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-macos-aarch64.tar.gz
+engine	llama	macos	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-macos-aarch64.tar.gz
+engine	audiocpp	macos	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-macos-aarch64.tar.gz
+engine	onnx	macos	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-macos-aarch64.tar.gz
+core	agent	macos	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-macos-x86_64.tar.gz
+engine	llama	macos	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-macos-x86_64.tar.gz
+engine	audiocpp	macos	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-macos-x86_64.tar.gz
 engine	sdcpp	linux	x86_64	cpu	37bc88b	faf619ce21435677477eba61488ef45db0b9356baa567075d67d2542a77ff02a	0	.	https://github.com/amitverma-cf/agent.cpp/releases/download/engine-sdcpp-37bc88b/agent-engine-sdcpp-37bc88b-linux-x86_64.tar.gz
 engine	sdcpp	linux	aarch64	cpu	37bc88b	e91bff817a03ab41ad02776726ba8af458fa2874b6d1ea41aa59f07a72694e86	0	.	https://github.com/amitverma-cf/agent.cpp/releases/download/engine-sdcpp-37bc88b/agent-engine-sdcpp-37bc88b-linux-aarch64.tar.gz
 engine	sdcpp	windows	x86_64	cpu	37bc88b	70d70e04136f301d7c0d11182544cc01d4cd4de1044ee2ae0cddba8951ae1a92	0	.	https://github.com/amitverma-cf/agent.cpp/releases/download/engine-sdcpp-37bc88b/agent-engine-sdcpp-37bc88b-windows-x86_64.zip
@@ -44,14 +50,27 @@ engine	llama	windows	aarch64	cpu	b12020	50a1cd7272b6042664def2583d1ac20ed2c4502e
 engine	llama	windows	aarch64	vulkan	b12020	d93e464293c10192035fcb40e002e7b2a6333c204771e86030f43721596f744a	1	.	https://github.com/ggml-org/llama.cpp/releases/download/b12020/llama-b12020-bin-win-vulkan-arm64.zip
 engine	llama	windows	aarch64	cuda13	b12020	800cbb6a27996d453ae64c1ba9134f6770e5b8f764975f2ce89f99a2799ef88b	1	.	https://github.com/ggml-org/llama.cpp/releases/download/b12020/llama-b12020-bin-win-cuda-13.4-arm64.zip
 engine	llama	windows	aarch64	cuda13	b12020	642dcde8805b3e3165ca710a5443b3b4044b27d96bd3ee3132473988c9bcb774	1	.	https://github.com/ggml-org/llama.cpp/releases/download/b12020/cudart-llama-bin-win-cuda-13.4-arm64.zip
+engine	llama	macos	aarch64	metal	b12020	b630ebd5da34b02e86f7294dd5743aba842a0a02cb023130debd64599721c541	1	.	https://github.com/ggml-org/llama.cpp/releases/download/b12020/llama-b12020-bin-macos-arm64.tar.gz
+engine	llama	macos	x86_64	cpu	b12020	774fba46a668cf6c94eb8d515b2dfb5897878ab6da08943585f487a1dd1aa6a0	1	.	https://github.com/ggml-org/llama.cpp/releases/download/b12020/llama-b12020-bin-macos-x64.tar.gz
 engine	audiocpp	linux	x86_64	cpu	v0.9.5	b60fab096d58eb07955409ce3b931de0b5830f5e89ad023dc9f8f1dfa74f1db2	find:libaudiocpp.so	.	https://github.com/0xShug0/audio.cpp/releases/download/v0.9.5/audio-v0.9.5-lib-ubuntu-x64-cpu-portable.tar.gz	glibc>=2.43
 engine	audiocpp	linux	x86_64	vulkan	v0.9.5	ff732d8daaf5770daa88acd4e2237c516fb9eaab81da69321245bb2669dff1dd	find:libaudiocpp.so	.	https://github.com/0xShug0/audio.cpp/releases/download/v0.9.5/audio-v0.9.5-lib-ubuntu-x64-vulkan-portable.tar.gz	glibc>=2.43
+engine	audiocpp	linux	x86_64	cuda12	v0.9.5	ba1708122290ce1a32ec6040063d2adc9a06ad2d22b9a25d37a8e34f57fc6d45	find:libaudiocpp.so	.	https://github.com/0xShug0/audio.cpp/releases/download/v0.9.5/audio-v0.9.5-lib-ubuntu-x64-cuda12.8.tar.gz	glibc>=2.43
+engine	audiocpp	linux	x86_64	cuda12	b12020	a17d59ed20873a82cbf2ff6c651d5bb432689d8569b4af0b6b1c7e35aeb001ba	1	.	https://github.com/ggml-org/llama.cpp/releases/download/b12020/cudart-llama-b12020-bin-ubuntu-cuda-12.8-x64.tar.gz	glibc>=2.43
+engine	audiocpp	linux	x86_64	cuda13	v0.9.5	61091545078e7c0b1ee24f7b48ac3a7f32b7a32d30e419ea65abe35c788d7c4b	find:libaudiocpp.so	.	https://github.com/0xShug0/audio.cpp/releases/download/v0.9.5/audio-v0.9.5-lib-ubuntu-x64-cuda13.3.tar.gz	glibc>=2.43
+engine	audiocpp	linux	x86_64	cuda13	b12020	22ebd98c96c5156f00731d1327f1fe40f0d1cce4ff6d51ac4c82845b1424b0e1	1	.	https://github.com/ggml-org/llama.cpp/releases/download/b12020/cudart-llama-b12020-bin-ubuntu-cuda-13.4-x64.tar.gz	glibc>=2.43
 engine	audiocpp	windows	x86_64	cpu	v0.9.5	0cca326b8a58a81d4646531d7086c34c8e2e829246ef6015602156588d13857d	find:audiocpp.dll	.	https://github.com/0xShug0/audio.cpp/releases/download/v0.9.5/audio-v0.9.5-lib-windows-x64-cpu-portable.zip
 engine	audiocpp	windows	x86_64	vulkan	v0.9.5	44b9cb3c07449045da6607a074fd6d4c87f23073cfde285459383e9f1f062405	find:audiocpp.dll	.	https://github.com/0xShug0/audio.cpp/releases/download/v0.9.5/audio-v0.9.5-lib-windows-x64-vulkan-portable.zip
+engine	audiocpp	windows	x86_64	cuda12	v0.9.5	99ec5fed230f5babcd3d5b59fb8c0c47ca631fda034d16ba96bdb1cc8e4b34cf	find:audiocpp.dll	.	https://github.com/0xShug0/audio.cpp/releases/download/v0.9.5/audio-v0.9.5-lib-windows-x64-cuda12.4.zip
+engine	audiocpp	windows	x86_64	cuda12	b12020	8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6	1	.	https://github.com/ggml-org/llama.cpp/releases/download/b12020/cudart-llama-bin-win-cuda-12.4-x64.zip
+engine	audiocpp	windows	x86_64	cuda13	v0.9.5	7b7735581858082523ae216de12954f7aa4dd55061a3e5006769c87bc4a65ceb	find:audiocpp.dll	.	https://github.com/0xShug0/audio.cpp/releases/download/v0.9.5/audio-v0.9.5-lib-windows-x64-cuda13.3.zip
+engine	audiocpp	windows	x86_64	cuda13	b12020	738f8c251ac22b70c3ae6f83a10cf222725df0395246a2cf58f32bdb85fbe668	1	.	https://github.com/ggml-org/llama.cpp/releases/download/b12020/cudart-llama-bin-win-cuda-13.4-x64.zip
+engine	audiocpp	macos	aarch64	metal	v0.9.5	6c66ce9515c3e0bcf298186f6497881a124e97fd9c986afd25e244f43103bd48	find:libaudiocpp.dylib	.	https://github.com/0xShug0/audio.cpp/releases/download/v0.9.5/audio-v0.9.5-lib-macos-arm64-metal.tar.gz
+engine	audiocpp	macos	x86_64	cpu	v0.9.5	d92e6ecdae81c0f914efbea6d2a0a768963ed13610a82fd0dedd4c4f3a6a5277	find:libaudiocpp.dylib	.	https://github.com/0xShug0/audio.cpp/releases/download/v0.9.5/audio-v0.9.5-lib-macos-x64-metal.tar.gz
 engine	onnx	linux	x86_64	any	1.31.1	c849e36a1ef3e22d4ff217b9d1ce4a3cf5b9467b975610913ae959ad5b16bdc9	find:libonnxruntime.so.1	.	https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-linux-x64-1.31.1.tgz
 engine	onnx	linux	aarch64	any	1.31.1	5317505e2da99be65f8e2775ba3c2afd6d2961fd78aba1bd8f56159f48820c78	find:libonnxruntime.so.1	.	https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-linux-aarch64-1.31.1.tgz
 engine	onnx	windows	x86_64	any	1.31.1	5869e26bb25314375f2d5ef1877e3ea06b1543d6c710e6e4a1ec2f7177ab4b2c	find:onnxruntime.dll	.	https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-win-x64-1.31.1.zip
 engine	onnx	windows	aarch64	any	1.31.1	817f4129073f84f81cde3ff92b1a4e06d007691e7208deed08a8b6d6df143f7f	find:onnxruntime.dll	.	https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-win-arm64-1.31.1.zip
+engine	onnx	macos	aarch64	any	1.31.1	2e1344a1926ee50eb25b38153cb6992c3567515aef0e677a1a520a1798896d6f	find:libonnxruntime.dylib	.	https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-osx-arm64-1.31.1.tgz
 runtime	bun	linux	x86_64	any	1.4.4	bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c	find:bun	.	https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64.zip
 runtime	bun	linux	aarch64	any	1.4.4	baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e	find:bun	.	https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-aarch64.zip
 runtime	bun	windows	x86_64	any	1.4.4	cd2c0fccc78f3ede1f50ca827a15f063eda13d4d150a3d0674f4f6e323d864a5	find:bun.exe	.	https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-windows-x64.zip

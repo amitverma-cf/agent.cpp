@@ -3,7 +3,7 @@
 
 A maintainer runs this when raising the pin of an upstream project or before tagging a release; the installer scripts only read the result.
 
-  python3 scripts/pin-components.py --tag v1.2.0 > scripts/components.tsv
+  python3 scripts/pin-components.py --tag v1.2.2 > scripts/components.tsv
 
 Columns (tab separated, "-" for none):
   kind  name  os  arch  backend  version  sha256  strip  dest  url  [needs]
@@ -43,7 +43,7 @@ OURS_ENGINES = {  # thin plugins built in every release, over an upstream librar
 }
 # Engines with no upstream library: built by engines-extra.yml, only when vendor/<name> moves, and published under a release of their own.
 EXTRA_ENGINES = {"sdcpp": ("engine-sdcpp-%s", "stable-diffusion.cpp"), "trellis": ("engine-trellis-%s", "trellis2cpp")}
-PLATFORMS = [("linux", "x86_64"), ("linux", "aarch64"), ("windows", "x86_64"), ("windows", "aarch64")]
+PLATFORMS = [("linux", "x86_64"), ("linux", "aarch64"), ("windows", "x86_64"), ("windows", "aarch64"), ("macos", "aarch64"), ("macos", "x86_64")]
 
 
 def ext(os_):
@@ -86,7 +86,7 @@ def add(kind, name, os_, arch, backend, version, sha, strip, dest, url, needs=""
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tag", required=True, help="the agent.cpp release these pins belong to, e.g. v1.2.0")
+    ap.add_argument("--tag", required=True, help="the agent.cpp release these pins belong to, e.g. v1.2.2")
     tag = ap.parse_args().tag
 
     # ---- our own files: the program and the engine plugins
@@ -124,7 +124,9 @@ def main():
               ("linux", "aarch64"): {"cpu": "ubuntu-arm64", "vulkan": "ubuntu-vulkan-arm64", "cuda13": "ubuntu-cuda-13.4-arm64"},
               ("windows", "x86_64"): {"cpu": "win-cpu-x64", "vulkan": "win-vulkan-x64", "cuda12": "win-cuda-12.4-x64",
                                       "cuda13": "win-cuda-13.4-x64", "rocm": "win-rocm-10.0-x64"},
-              ("windows", "aarch64"): {"cpu": "win-cpu-arm64", "vulkan": "win-vulkan-arm64", "cuda13": "win-cuda-13.4-arm64"}}
+              ("windows", "aarch64"): {"cpu": "win-cpu-arm64", "vulkan": "win-vulkan-arm64", "cuda13": "win-cuda-13.4-arm64"},
+              ("macos", "aarch64"): {"metal": "macos-arm64"}, ("macos", "x86_64"): {"cpu": "macos-x64"}}
+    llama_assets = assets
     for (os_, arch), table in ubuntu.items():
         for bk, t in table.items():
             name = "llama-%s-bin-%s.%s" % (tagl, t, ext(os_))
@@ -140,20 +142,30 @@ def main():
     assets = release_assets("0xShug0/audio.cpp", tag_a)
     # CUDA builds of audio.cpp need their CUDA runtime from a second archive whose layout is not checked yet: CPU and Vulkan only.
     # Linux: the "portable" builds, which also run on older glibc (the plain ones were built on Ubuntu 26.04 and need glibc 2.43).
-    audio = {("linux", "x86_64"): {"cpu": "ubuntu-x64-cpu-portable", "vulkan": "ubuntu-x64-vulkan-portable"},
+    audio = {("linux", "x86_64"): {"cpu": "ubuntu-x64-cpu-portable", "vulkan": "ubuntu-x64-vulkan-portable", "cuda12": "ubuntu-x64-cuda12.8",
+                                   "cuda13": "ubuntu-x64-cuda13.3"},
              # Windows: the "portable" builds too; the plain Vulkan build stopped on this PC with an illegal instruction (0xC000001D).
-             ("windows", "x86_64"): {"cpu": "windows-x64-cpu-portable", "vulkan": "windows-x64-vulkan-portable"}}
+             ("windows", "x86_64"): {"cpu": "windows-x64-cpu-portable", "vulkan": "windows-x64-vulkan-portable", "cuda12": "windows-x64-cuda12.4",
+                                     "cuda13": "windows-x64-cuda13.3"},
+             ("macos", "aarch64"): {"metal": "macos-arm64-metal"}, ("macos", "x86_64"): {"cpu": "macos-x64-metal"}}
+    libfile = {"windows": "audiocpp.dll", "linux": "libaudiocpp.so", "macos": "libaudiocpp.dylib"}
+    cudart = {"cuda12": {"linux": "cudart-llama-%s-bin-ubuntu-cuda-12.8-x64.tar.gz" % tagl, "windows": "cudart-llama-bin-win-cuda-12.4-x64.zip"},
+              "cuda13": {"linux": "cudart-llama-%s-bin-ubuntu-cuda-13.4-x64.tar.gz" % tagl, "windows": "cudart-llama-bin-win-cuda-13.4-x64.zip"}}
     for (os_, arch), table in audio.items():
         for bk, t_ in table.items():
             sha, url = assets["audio-%s-lib-%s.%s" % (tag_a, t_, ext(os_))]
-            add("engine", "audiocpp", os_, arch, bk, tag_a, sha, "find:" + ("audiocpp.dll" if os_ == "windows" else "libaudiocpp.so"), ".", url,
-                "glibc>=2.43" if os_ == "linux" else "")  # built on Ubuntu 26.04: checked with objdump, even the "portable" builds
+            need = "glibc>=2.43" if os_ == "linux" else ""  # built on Ubuntu 26.04: checked with objdump, even the "portable" builds
+            add("engine", "audiocpp", os_, arch, bk, tag_a, sha, "find:" + libfile[os_], ".", url, need)
+            if bk.startswith("cuda"):  # the CUDA libraries are not in audio.cpp's archive: llama.cpp's cudart archive of the same CUDA release has them
+                sha, url = llama_assets[cudart[bk][os_]]
+                add("engine", "audiocpp", os_, arch, bk, tagl, sha, "1", ".", url, need)
 
     # ---- onnxruntime: the official library, next to our adapter
     v = PINS["onnxruntime"]
     assets = release_assets("microsoft/onnxruntime", "v" + v)
-    ort = {("linux", "x86_64"): "linux-x64", ("linux", "aarch64"): "linux-aarch64", ("windows", "x86_64"): "win-x64", ("windows", "aarch64"): "win-arm64"}
-    libname = {"linux": "libonnxruntime.so.1", "windows": "onnxruntime.dll"}
+    ort = {("linux", "x86_64"): "linux-x64", ("linux", "aarch64"): "linux-aarch64", ("windows", "x86_64"): "win-x64", ("windows", "aarch64"): "win-arm64",
+           ("macos", "aarch64"): "osx-arm64"}  # onnxruntime publishes no Intel macOS build
+    libname = {"linux": "libonnxruntime.so.1", "windows": "onnxruntime.dll", "macos": "libonnxruntime.dylib"}
     for (os_, arch), t in ort.items():
         name = "onnxruntime-%s-%s.%s" % (t, v, "zip" if os_ == "windows" else "tgz")
         sha, url = assets[name]
@@ -213,7 +225,7 @@ def main():
     for r in rows:
         f = r.split("	")
         by_key.setdefault((f[1], f[2], f[3]), []).append(f[9].startswith("@RELEASE@"))
-    thin = set(OURS_ENGINES) - {"onnx"}
+    thin = set(OURS_ENGINES)
     rows[:] = [r for r in rows if not (r.split("	")[1] in thin and all(by_key[(r.split("	")[1], r.split("	")[2], r.split("	")[3])]))]
     out = ["# agent.cpp components, pinned for release %s. Written by scripts/pin-components.py: do not edit by hand." % tag,
            "# tag %s" % tag,
