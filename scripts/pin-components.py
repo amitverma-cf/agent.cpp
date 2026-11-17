@@ -208,6 +208,13 @@ def main():
     for os_, arch in [(o, a) for o in ("linux", "windows", "macos") for a in ("x86_64", "aarch64")]:
         add("runtime", "pnpm", os_, arch, "any", meta["version"], sha, "1", ".", tarball)
 
+    # A thin plugin is useless without the upstream library it links: where upstream has no build for a system, the plugin is not offered either.
+    by_key = {}
+    for r in rows:
+        f = r.split("	")
+        by_key.setdefault((f[1], f[2], f[3]), []).append(f[9].startswith("@RELEASE@"))
+    thin = set(OURS_ENGINES) - {"onnx"}
+    rows[:] = [r for r in rows if not (r.split("	")[1] in thin and all(by_key[(r.split("	")[1], r.split("	")[2], r.split("	")[3])]))]
     out = ["# agent.cpp components, pinned for release %s. Written by scripts/pin-components.py: do not edit by hand." % tag,
            "# tag %s" % tag,
            "# kind\tname\tos\tarch\tbackend\tversion\tsha256\tstrip\tdest\turl"] + rows
