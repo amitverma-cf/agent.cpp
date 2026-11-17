@@ -11,7 +11,7 @@ sandbox does. It is applied to three kinds of children:
 | `run_command` (default tool set) | `Config::tool_sandbox` | **on**: workspace read-write, system dirs read-only, `/tmp` read-write, network allowed |
 | MCP servers | `McpServerConfig::sandbox` (`"sandbox"` per server in [agent.json](api/agent-json.md#mcp_servers)) | **off** (opt-in per server) |
 
-In-process engines are not sandboxed (they are the calling process). Neither is anything of its own
+Engines run in-process by default, in the library and in the `agent` CLI, and then are not sandboxed (they are the calling process). Isolation is opt-in: `"isolation": "process"` for an engine in `engines.json`, or `Config::engine_isolation`. Neither is anything of its own
 tools start.
 
 The sandbox is on by default. The `agent` CLI's global `--no-sandbox` flag runs engines, tools and commands

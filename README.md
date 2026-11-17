@@ -21,10 +21,12 @@ curl -fsSL https://agent.qozu.fyi/install.sh | sh
 irm https://agent.qozu.fyi/install.ps1 | iex
 ```
 
-The installer asks where to keep everything (one folder, default `~/.agent.cpp`; it becomes the environment variable `AGENT_HOME`), installs
-the program, then lets you pick the engines (llama, audiocpp, sdcpp, onnx, trellis) and runtimes (bun, uv, node, pnpm, nub) and a first
-model. Each component is downloaded for this machine (the GPU backend when a driver is present) at the exact version the release pins, and
-its SHA-256 is checked. llama.cpp and audio.cpp come straight from their own releases; agent.cpp only ships the small plugin over them. Later: `agent engine pull NAME`, `agent runtime install NAME`, `agent update`, `agent uninstall`.
+The installer asks for one folder (default `~/.agent.cpp`, stored as the environment variable `AGENT_HOME`), installs the program, then
+offers the engines (llama, audiocpp, onnx, sdcpp, trellis), the runtimes (bun, uv, node, pnpm, nub) and a first model. Everything is
+downloaded for this machine at the version the release pins, with its SHA-256 checked, and the GPU backend follows the driver found.
+llama.cpp, audio.cpp and onnxruntime come from their own releases; agent.cpp adds a small plugin over each. stable-diffusion.cpp and
+TRELLIS.2 publish no library, so their plugins are built by agent.cpp. Later: `agent engine pull NAME`, `agent runtime install NAME`,
+`agent update`, `agent uninstall`.
 
 ## Chat
 

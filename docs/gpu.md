@@ -24,7 +24,7 @@ The choice is recorded per engine in `<home>/engines/<name>/.pin` and `engines.j
 ## What the code does
 
 Three things change when a GPU backend is in use. All three apply only when the engine runs in its own process
-(`EngineIsolation::Process`, the CLI's default) with the engine sandbox on and `engine_sandbox.gpu = true`. CPU builds are
+(`EngineIsolation::Process`, opt-in with `"isolation": "process"` in `engines.json`) with the engine sandbox on and `engine_sandbox.gpu = true`. CPU builds are
 unaffected.
 
 - **Device nodes.** The sandboxed host may open `/dev/dri` (DRM render and card nodes: Vulkan, Intel, ROCm), `/dev/kfd`
