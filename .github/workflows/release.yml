@@ -37,8 +37,8 @@ jobs:
           - { runner: ubuntu-24.04-arm, os_name: linux,   arch: aarch64, lib_prefix: lib, lib_ext: so,    exe_ext: "",     ggml: "-DGGML_NATIVE=OFF" }
           - { runner: windows-2022,     os_name: windows, arch: x86_64,  lib_prefix: "",  lib_ext: dll,   exe_ext: ".exe", ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON", triplet: x64-windows, dll: x64 }
           - { runner: windows-11-arm,   os_name: windows, arch: aarch64, lib_prefix: "",  lib_ext: dll,   exe_ext: ".exe", ggml: "-DGGML_NATIVE=ON", triplet: arm64-windows, dll: arm64 }
-          - { runner: macos-15,         os_name: macos,   arch: aarch64, lib_prefix: lib, lib_ext: dylib, exe_ext: "",     ggml: "" }
-          - { runner: macos-15-intel,   os_name: macos,   arch: x86_64,  lib_prefix: lib, lib_ext: dylib, exe_ext: "",     ggml: "" }
+          - { runner: macos-15,         os_name: macos,   arch: aarch64, lib_prefix: lib, lib_ext: dylib, exe_ext: "",     ggml: "", engines: "llama,onnx,audiocpp,sdcpp" }
+          - { runner: macos-15-intel,   os_name: macos,   arch: x86_64,  lib_prefix: lib, lib_ext: dylib, exe_ext: "",     ggml: "", engines: "llama,audiocpp" }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -86,7 +86,7 @@ jobs:
           # versions: only the plugins are built here, not those projects. A plugin whose upstream has no build for this system is skipped.
           export AGENT_LIST="$PWD/scripts/components.tsv" AGENT_BACKEND=cpu
           if [ "${{ matrix.os_name }}-${{ matrix.arch }}" = "macos-aarch64" ]; then export AGENT_BACKEND=metal; fi
-          eng=",${{ inputs.engines || 'llama,onnx,audiocpp,sdcpp,trellis' }},"
+          eng=",${{ inputs.engines || matrix.engines || 'llama,onnx,audiocpp,sdcpp,trellis' }},"
           for e in llama audiocpp sdcpp; do
             case "$eng" in *",$e,"*) ;; *) continue ;; esac
             if [ "${{ matrix.os_name }}" = "windows" ]; then
@@ -133,7 +133,7 @@ jobs:
           v="${{ steps.version.outputs.value }}"
           extra=""
           if [ "${{ matrix.os_name }}" = "windows" ]; then extra="--openssl-dir $VCPKG_INSTALLATION_ROOT/installed/${{ matrix.triplet }}/bin --openssl-suffix -${{ matrix.dll }}"; fi
-          bash scripts/package-release.sh --build-dir build --out-dir assets --tag "$v" --os ${{ matrix.os_name }} --arch ${{ matrix.arch }} --plugin-only llama,audiocpp,onnx,sdcpp,trellis \
+          bash scripts/package-release.sh --build-dir build --out-dir assets --tag "$v" --os ${{ matrix.os_name }} --arch ${{ matrix.arch }} --plugin-only "${ENGINES#,}" \
             --lib-ext ${{ matrix.lib_ext }} --exe-ext "${{ matrix.exe_ext }}" $extra
           rm -f assets/SHA256SUMS
           ls -la assets
@@ -233,7 +233,7 @@ jobs:
           (cd assets && if command -v sha256sum >/dev/null; then sha256sum * > SHA256SUMS; else shasum -a 256 * > SHA256SUMS; fi)
           # the list of the repository is pinned for another tag: for this test run it is the list of this build
           mkdir testscripts && cp scripts/install.sh scripts/install.ps1 scripts/components.tsv testscripts/
-          sed -i "s/^# tag .*/# tag ${v}/" testscripts/components.tsv
+          sed "s/^# tag .*/# tag ${v}/" testscripts/components.tsv > testscripts/components.new && mv testscripts/components.new testscripts/components.tsv
       - name: Install test (Linux)
         if: matrix.os_name != 'windows'
         run: |
