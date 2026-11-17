@@ -2,7 +2,7 @@
 
 ## Version
 
-The version is set once, in `project("agent.cpp" VERSION x.y.z)` in the top-level `CMakeLists.txt` (currently 1.2.0).
+The version is set once, in `project("agent.cpp" VERSION x.y.z)` in the top-level `CMakeLists.txt` (currently 1.2.1).
 `agent version`, the CMake package version (`agent-cppConfigVersion.cmake`) and the Linux tarball names all come from it.
 
 ## Which engines are built
@@ -293,13 +293,13 @@ parts (onnxruntime, bun, uv, node, pnpm, nub) are not rebuilt or copied: the ins
 each file. It is written by
 
 ```sh
-python3 scripts/pin-components.py --tag v1.2.0 > scripts/components.tsv     # before the tag is made; the release workflow checks it
+python3 scripts/pin-components.py --tag v1.2.1 > scripts/components.tsv     # before the tag is made; the release workflow checks it
 ```
 
 Raising the pin of an upstream project means changing `PINS` in that script, running it, and testing `local/e2e/modular` on Linux
 and Windows. The workflow's `publish` job refuses a tag whose `components.tsv` was written for another tag.
 
-The git tag `v1.2.0` matches the version in `CMakeLists.txt`. The CI and release workflows in `.github/workflows/` are
+The git tag `v1.2.1` matches the version in `CMakeLists.txt`. The CI and release workflows in `.github/workflows/` are
 manual-dispatch only; nothing runs on a push. Build from source as described in [getting-started.md](getting-started.md#build),
 or use the Linux tarball script above, which is run by hand.
 
