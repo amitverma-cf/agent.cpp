@@ -240,6 +240,7 @@ jobs:
           ENGINES="$(echo '${{ matrix.engines }}' | tr ',' ' ')" RUNTIMES="$(echo '${{ matrix.runtimes }}' | tr ',' ' ')" \
             AGENT_SCRIPTS_DIR="$PWD/testscripts" bash tests/modular/run.sh "$PWD/assets" "${{ steps.version.outputs.value }}" | tee install-test.log
           ! grep -q '^FAIL' install-test.log
+          case ",${{ matrix.engines }}," in *,onnx,*) ;; *) echo "no onnxruntime build for this platform: engine check skipped"; exit 0 ;; esac
           ENGINES=onnx bash tests/modular/engines.sh "$PWD/assets" "$PWD/testscripts" "${{ steps.version.outputs.value }}" | tee engines-test.log
           ! grep -q '^FAIL' engines-test.log
       - name: Install test (Windows)

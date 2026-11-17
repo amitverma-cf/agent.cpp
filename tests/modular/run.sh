@@ -53,7 +53,9 @@ ok_if "add: bun is back" "[ -x '$AGENT_HOME/runtimes/bun/bun' ]"
 
 echo "== a download that does not match its sum is refused"
 cp "$AGENT_HOME/scripts/components.tsv" "$T/good.tsv"
-awk -F'\t' 'BEGIN{OFS="\t"} $2=="uv" && $7!="@sums" && !d {$7="0000000000000000000000000000000000000000000000000000000000000000"; d=1} {print}' "$T/good.tsv" >"$AGENT_HOME/scripts/components.tsv"
+case "$(uname -s)" in Darwin) this_os=macos ;; *) this_os=linux ;; esac
+case "$(uname -m)" in x86_64 | amd64) this_arch=x86_64 ;; *) this_arch=aarch64 ;; esac
+awk -F'\t' -v o="$this_os" -v a="$this_arch" 'BEGIN{OFS="\t"} $2=="uv" && $3==o && $4==a && $7!="@sums" && !d {$7="0000000000000000000000000000000000000000000000000000000000000000"; d=1} {print}' "$T/good.tsv" >"$AGENT_HOME/scripts/components.tsv"
 sh "$AGENT_HOME/scripts/install.sh" rm uv >/dev/null 2>&1
 out="$(sh "$AGENT_HOME/scripts/install.sh" add uv 2>&1 || true)"
 ok_if "a wrong SHA-256 is refused" "printf '%s' '$out' | grep -qi 'mismatch'"
