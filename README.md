@@ -2,7 +2,7 @@
 
 <p align="center"><img src="docs/images/chat.svg" alt="The agent.cpp chat screen: logo, New chat and sessions grouped by project on the left, the message box and mic at the bottom, CPU, RAM, engine, model, mode and context in the bottom bar" width="1000"></p>
 
-**An AI assistant in the terminal. It runs on the local machine, reads files, runs commands, listens and speaks.**
+**AGENT.CPP** is a local-first agent runtime. Chat with a model that can read your files and run commands, transcribe speech, speak, draw, turn a picture into a 3D mesh, or wire all of that into a graph that runs on a schedule.
 
 `agent` is a full-screen chat for local models: Qwen, Llama, Gemma and any other GGUF model. It works on Linux and Windows, on
 Intel, AMD and Arm, with or without a GPU. Prompts, files and voice recordings never leave the computer.
