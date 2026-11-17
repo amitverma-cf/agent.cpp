@@ -17,9 +17,9 @@ on:
         type: boolean
         default: false
       engines:
-        description: "Engine plugins to build, comma separated: llama,onnx,audiocpp,sdcpp,trellis. They are thin: compiled against the upstream releases pinned in scripts/components.tsv (trellis needs no library: it runs the release's trellis-cli)"
+        description: "Engine plugins to build, comma separated: llama,onnx,audiocpp,sdcpp,trellis. They are thin: compiled against the upstream releases pinned in scripts/components.tsv (trellis needs no library: it runs the release's trellis-cli). Empty: every engine the platform has"
         type: string
-        default: "llama,onnx,audiocpp,sdcpp,trellis"
+        default: ""
 
 
 permissions:
