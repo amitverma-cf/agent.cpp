@@ -56,11 +56,12 @@ if ($Runtimes -contains 'bun') {
 }
 
 '== a download that does not match its sum is refused'
+$thisArch = if (($env:PROCESSOR_ARCHITEW6432 + $env:PROCESSOR_ARCHITECTURE) -match 'ARM64') { 'aarch64' } else { 'x86_64' }
 $good = Get-Content "$root\scripts\components.tsv"
 $bad = @(); $done = $false
 foreach ($l in $good) {
     $f = $l -split "`t"
-    if (-not $done -and $f.Count -ge 10 -and $f[1] -eq 'uv' -and $f[2] -eq 'windows' -and $f[3] -eq 'x86_64') { $f[6] = ('0' * 64); $l = $f -join "`t"; $done = $true }
+    if (-not $done -and $f.Count -ge 10 -and $f[1] -eq 'uv' -and $f[2] -eq 'windows' -and $f[3] -eq $thisArch) { $f[6] = ('0' * 64); $l = $f -join "`t"; $done = $true }
     $bad += $l
 }
 Set-Content -LiteralPath "$root\scripts\components.tsv" -Value $bad -Encoding ASCII
