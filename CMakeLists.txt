@@ -1,4 +1,8 @@
 cmake_minimum_required(VERSION 3.21)
+# macOS 13.3 or newer: the C++ library has std::from_chars for floating point only from there (the full-screen chat needs it).
+if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS version")
+endif()
 # The single version source: the CLI version string, the package config version and the release
 # tarball names all come from here.
 project("agent.cpp" VERSION 1.2.1 LANGUAGES C CXX)
