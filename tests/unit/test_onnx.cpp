@@ -45,7 +45,8 @@ const char *kWorkspace = "/tmp/agent_test_onnx_ws";
 std::string add_model_path() {
     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "agent_test_onnx";
     std::filesystem::create_directories(dir);
-    const std::string path = (dir / "add.onnx").string();
+    // Forward slashes: the path goes into a JSON config, where the backslashes of a Windows path are escapes.
+    const std::string path = (dir / "add.onnx").generic_string();
     std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char *>(kAddModel), sizeof(kAddModel));
     return path;
 }

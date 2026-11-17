@@ -4,8 +4,11 @@
 
 #include <catch_amalgamated.hpp>
 #include <cstdio>
-#ifndef _WIN32
+#ifdef _WIN32
+#include <process.h>
+#else
 #include <sys/wait.h>
+#include <unistd.h>
 #endif
 #include <cstdlib>
 #include <filesystem>
@@ -29,6 +32,14 @@ struct CliResult {
 #define AGENT_PCLOSE pclose
 #endif
 
+inline unsigned long process_id() {
+#ifdef _WIN32
+    return static_cast<unsigned long>(_getpid());
+#else
+    return static_cast<unsigned long>(getpid());
+#endif
+}
+
 inline void set_env(const char *name, const std::string &value) {
 #ifdef _WIN32
     _putenv_s(name, value.c_str());
@@ -40,7 +51,8 @@ inline void set_env(const char *name, const std::string &value) {
 inline std::string quote(const std::string &s) { return "\"" + s + "\""; }
 
 struct Home {
-    fs::path root = fs::temp_directory_path() / "agent_test_cli_e2e";
+    // One folder for each test process: ctest runs several at once, and each deletes its folder when it starts.
+    fs::path root = fs::temp_directory_path() / ("agent_test_cli_e2e_" + std::to_string(process_id()));
     fs::path workspace = root / "ws";
     fs::path model = root / "model.gguf"; // the mock engine ignores the file's content; the CLI wants it to exist
     fs::path graph = root / "graph.json";
