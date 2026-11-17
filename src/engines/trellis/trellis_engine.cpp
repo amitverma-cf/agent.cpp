@@ -42,21 +42,21 @@ agent_str to_c(const std::string &s) { return agent_str{s.data(), s.size()}; }
 
 // Defaults come from Config::engine_options at create(); agent_request::params_json overrides them per call.
 struct GenSettings {
-    int64_t seed = -1;           // -1 = random
-    int resolution = 1024;       // 512 (light), 1024 (cascade, default), 1536
-    int steps = 0;               // flow sampler steps; 0 = the model's default
-    float guidance = -1.0f;      // sparse-structure guidance; < 0 = default (7.5)
-    float guidance_shape = -1.0f; // shape guidance; < 0 = default (7.5)
+    int64_t seed = -1;               // -1 = random
+    int resolution = 1024;           // 512 (light), 1024 (cascade, default), 1536
+    int steps = 0;                   // flow sampler steps; 0 = the model's default
+    float guidance = -1.0f;          // sparse-structure guidance; < 0 = default (7.5)
+    float guidance_shape = -1.0f;    // shape guidance; < 0 = default (7.5)
     std::string background = "auto"; // "auto", "birefnet" or "threshold"
-    bool texture = true;         // false: geometry only
-    bool xatlas = true;          // false: box UV projection
-    int faces = 0;               // face budget of the decimated mesh; 0 = default
-    int atlas = 0;               // UV atlas size in px; 0 = default
-    int texture_resolution = 0;  // PBR texture resolution; 0 = automatic
+    bool texture = true;             // false: geometry only
+    bool xatlas = true;              // false: box UV projection
+    int faces = 0;                   // face budget of the decimated mesh; 0 = default
+    int atlas = 0;                   // UV atlas size in px; 0 = default
+    int texture_resolution = 0;      // PBR texture resolution; 0 = automatic
     bool normal_map = false;
-    int gpu = 0;                 // GPU index; < 0 runs on the CPU
-    std::string backend;         // force a ggml backend by name (Vulkan, CUDA, ...); empty = automatic
-    int threads = 0;             // CPU threads; 0 = all
+    int gpu = 0;         // GPU index; < 0 runs on the CPU
+    std::string backend; // force a ggml backend by name (Vulkan, CUDA, ...); empty = automatic
+    int threads = 0;     // CPU threads; 0 = all
 };
 
 template <typename T> T json_number(simdjson::ondemand::object &obj, const char *key, T fallback) {
@@ -220,7 +220,8 @@ RunResult run_program(const std::string &exe, const std::vector<std::string> &ar
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
     PROCESS_INFORMATION pi{};
     const std::wstring dir = widen(fs::path(exe).parent_path().string());
-    if (!CreateProcessW(nullptr, line.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, dir.empty() ? nullptr : dir.c_str(), &si, &pi)) {
+    if (!CreateProcessW(nullptr, line.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, dir.empty() ? nullptr : dir.c_str(), &si,
+                        &pi)) {
         r.tail = "could not start " + exe + " (error " + std::to_string(GetLastError()) + ")";
         CloseHandle(read_end);
         CloseHandle(write_end);
@@ -364,7 +365,10 @@ int32_t t2_engine_create(agent_str config_json, void **out_instance, char *err, 
     }
     const std::string program = find_cli(cli);
     if (program.empty()) {
-        std::snprintf(err, err_cap, "trellis: %s not found next to the plugin (add the engine with `agent engine pull trellis`; options.cli or AGENT_TRELLIS_CLI name another)", kCliName);
+        std::snprintf(err, err_cap,
+                      "trellis: %s not found next to the plugin (add the engine with `agent engine pull trellis`; options.cli or "
+                      "AGENT_TRELLIS_CLI name another)",
+                      kCliName);
         return AGENT_ERR_INIT_FAILED;
     }
     auto *inst = new Instance();
@@ -491,13 +495,15 @@ int32_t t2_engine_run(void *instance, const agent_request *req, agent_response *
         std::string tail = run.tail;
         while (!tail.empty() && (tail.back() == '\n' || tail.back() == '\r' || tail.back() == ' ')) tail.pop_back();
         return fail(inst, AGENT_ERR_DECODE_FAILED,
-                    "trellis: generation failed (trellis-cli exit " + std::to_string(run.exit_code) + ")" + (tail.empty() ? "" : ": " + tail));
+                    "trellis: generation failed (trellis-cli exit " + std::to_string(run.exit_code) + ")" +
+                        (tail.empty() ? "" : ": " + tail));
     }
     if (req->on_progress) req->on_progress(req->user_data, 1, 1);
 
     const uintmax_t bytes = fs::file_size(output, ec);
     inst->path = output;
-    inst->text = "generated 3D model: " + inst->path + " (" + std::to_string(ec ? 0 : static_cast<unsigned long long>(bytes / 1024)) + " KiB)";
+    inst->text =
+        "generated 3D model: " + inst->path + " (" + std::to_string(ec ? 0 : static_cast<unsigned long long>(bytes / 1024)) + " KiB)";
     inst->parts[0] = agent_part{};
     inst->parts[0].kind = AGENT_PART_FILE;
     inst->parts[0].path = to_c(inst->path);

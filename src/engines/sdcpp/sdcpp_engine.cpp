@@ -361,7 +361,8 @@ int32_t sd_engine_create(agent_str config_json, void **out_instance, char *err, 
         !set_path("taesd_path", taesd) || !set_path("clip_l_path", clip_l) || !set_path("clip_g_path", clip_g) ||
         !set_path("t5xxl_path", t5xxl) || !set_path("llm_path", llm) || !set_path("prediction", prediction) ||
         (threads > 0 && !set_num(params.get(), "n_threads", threads, set_error)) ||
-        !set_flag(params.get(), "flash_attn", flash_attn, set_error) || !set_flag(params.get(), "diffusion_flash_attn", flash_attn, set_error) ||
+        !set_flag(params.get(), "flash_attn", flash_attn, set_error) ||
+        !set_flag(params.get(), "diffusion_flash_attn", flash_attn, set_error) ||
         !set_flag(params.get(), "eager_load", eager_load, set_error)) {
         std::snprintf(err, err_cap, "sdcpp: %s", set_error.c_str());
         return AGENT_ERR_INVALID_CONFIG;
@@ -378,7 +379,8 @@ int32_t sd_engine_create(agent_str config_json, void **out_instance, char *err, 
     }
     if (status != SD_STATUS_OK || !ctx) {
         const char *why = sd_get_last_error();
-        std::snprintf(err, err_cap, "sdcpp: failed to load model%s%s", (why && *why) ? ": " : "", (why && *why) ? why : active.last_error.c_str());
+        std::snprintf(err, err_cap, "sdcpp: failed to load model%s%s", (why && *why) ? ": " : "",
+                      (why && *why) ? why : active.last_error.c_str());
         return AGENT_ERR_MODEL_LOAD_FAILED;
     }
     const bool image = sd_ctx_supports_image_generation(ctx), video = sd_ctx_supports_video_generation(ctx);
@@ -503,8 +505,8 @@ bool write_mjpeg_avi(const std::string &path, const std::vector<Pixels> &frames,
             error = "sdcpp: frame " + std::to_string(i) + " is missing or has a different size";
             return false;
         }
-        if (!stbi_write_jpg_to_func(append_bytes, &jpegs[static_cast<size_t>(i)], static_cast<int>(w), static_cast<int>(h),
-                                    f.c, f.data, quality)) {
+        if (!stbi_write_jpg_to_func(append_bytes, &jpegs[static_cast<size_t>(i)], static_cast<int>(w), static_cast<int>(h), f.c, f.data,
+                                    quality)) {
             error = "sdcpp: JPEG encoding failed";
             return false;
         }

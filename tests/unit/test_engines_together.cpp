@@ -24,9 +24,9 @@ const char *env(const char *name) {
 }
 
 struct Models {
-    const char *llama = env("AGENT_TEST_LLAMA_MODEL");        // a small instruct GGUF
-    const char *sd = env("AGENT_TEST_SDCPP_MODEL");           // a small single-file image model (SD-Turbo)
-    const char *tts = env("AGENT_TEST_AUDIOCPP_TTS_MODEL");   // an audio.cpp text-to-speech GGUF (Pocket TTS)
+    const char *llama = env("AGENT_TEST_LLAMA_MODEL");      // a small instruct GGUF
+    const char *sd = env("AGENT_TEST_SDCPP_MODEL");         // a small single-file image model (SD-Turbo)
+    const char *tts = env("AGENT_TEST_AUDIOCPP_TTS_MODEL"); // an audio.cpp text-to-speech GGUF (Pocket TTS)
     bool all() const { return llama && sd && tts; }
 };
 
@@ -173,7 +173,8 @@ TEST_CASE("loading and unloading the engines repeatedly does not leak memory", "
     const uint64_t after_first = agent::process_rss_bytes();
     for (int i = 0; i < 3; ++i) cycle();
     const uint64_t after_more = agent::process_rss_bytes();
-    INFO("rss after the first cycle: " << after_first / (1024 * 1024) << " MiB, after three more: " << after_more / (1024 * 1024) << " MiB");
+    INFO("rss after the first cycle: " << after_first / (1024 * 1024) << " MiB, after three more: " << after_more / (1024 * 1024)
+                                       << " MiB");
     if (after_first > 0) CHECK(after_more < after_first + 600ull * 1024 * 1024); // models are released; a leak of a whole model would show
 }
 

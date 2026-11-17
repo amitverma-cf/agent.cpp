@@ -64,7 +64,8 @@ bool has_glb_magic(const std::string &path) { return read_file(path).rfind("glTF
 struct Workdir {
     fs::path root;
     Workdir() {
-        root = fs::temp_directory_path() / ("agent_test_trellis_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        root = fs::temp_directory_path() /
+               ("agent_test_trellis_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         fs::create_directories(root / "models");
         fs::create_directories(root / "out");
     }
@@ -89,7 +90,8 @@ void set_env(const char *name, const char *value) {
 }
 
 std::string config_with_fake(const Workdir &w, const std::string &options = "") {
-    return R"({"model":")" + js(w.models()) + R"(","options":{"cli":")" + js(kFakeCli) + "\"" + (options.empty() ? "" : "," + options) + "}}";
+    return R"({"model":")" + js(w.models()) + R"(","options":{"cli":")" + js(kFakeCli) + "\"" + (options.empty() ? "" : "," + options) +
+           "}}";
 }
 
 // One request: a text part and an image part (a FILE, or BYTES when `bytes` is set).
@@ -164,13 +166,16 @@ TEST_CASE("trellis engine rejects a bad configuration", "[engines][trellis]") {
     REQUIRE(error.find("/nonexistent/trellis") != std::string::npos);
 
     // Bad generation defaults are rejected before anything else.
-    REQUIRE(create(engine, R"({"model":")" + js(w.models()) + R"(","options":{"resolution":2048}})", &inst, error) == AGENT_ERR_INVALID_CONFIG);
+    REQUIRE(create(engine, R"({"model":")" + js(w.models()) + R"(","options":{"resolution":2048}})", &inst, error) ==
+            AGENT_ERR_INVALID_CONFIG);
     REQUIRE(error.find("resolution") != std::string::npos);
-    REQUIRE(create(engine, R"({"model":")" + js(w.models()) + R"(","options":{"background":"purple"}})", &inst, error) == AGENT_ERR_INVALID_CONFIG);
+    REQUIRE(create(engine, R"({"model":")" + js(w.models()) + R"(","options":{"background":"purple"}})", &inst, error) ==
+            AGENT_ERR_INVALID_CONFIG);
     REQUIRE(error.find("background") != std::string::npos);
 
     // A program that is not there.
-    REQUIRE(create(engine, R"({"model":")" + js(w.models()) + R"(","options":{"cli":"/nonexistent/trellis-cli"}})", &inst, error) == AGENT_ERR_INIT_FAILED);
+    REQUIRE(create(engine, R"({"model":")" + js(w.models()) + R"(","options":{"cli":"/nonexistent/trellis-cli"}})", &inst, error) ==
+            AGENT_ERR_INIT_FAILED);
     REQUIRE(inst == nullptr);
     REQUIRE(error.find("trellis-cli") != std::string::npos);
 }
@@ -235,7 +240,8 @@ TEST_CASE("trellis engine runs the program and returns its GLB", "[engines][trel
         REQUIRE(engine->run(inst, &r.req, &resp) == AGENT_OK);
         const std::string path(resp.message.parts[0].path.data, resp.message.parts[0].path.size);
         const std::string args = read_file(path + ".args");
-        for (const char *want : {"--res\n1536\n", "--no-texture", "--box-uv", "--faces\n50000\n", "--gss\n5.5\n", "--bg-removal\nbirefnet\n"})
+        for (const char *want :
+             {"--res\n1536\n", "--no-texture", "--box-uv", "--faces\n50000\n", "--gss\n5.5\n", "--bg-removal\nbirefnet\n"})
             REQUIRE(args.find(want) != std::string::npos);
         engine->free_response(inst, &resp);
     }
@@ -336,7 +342,8 @@ TEST_CASE("trellis engine generates a GLB with the real program and models", "[e
     REQUIRE(engine != nullptr);
     const char *steps_env = std::getenv("AGENT_TEST_TRELLIS_STEPS");
     const std::string steps = steps_env ? steps_env : "2";
-    const std::string config = R"({"model":")" + js(dir) + R"(","options":{"cli":")" + js(cli) + R"(","resolution":512,"seed":42,"steps":)" + steps + "}}";
+    const std::string config =
+        R"({"model":")" + js(dir) + R"(","options":{"cli":")" + js(cli) + R"(","resolution":512,"seed":42,"steps":)" + steps + "}}";
     void *inst = nullptr;
     std::string error;
     REQUIRE(create(engine, config, &inst, error) == AGENT_OK);
