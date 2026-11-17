@@ -16,11 +16,23 @@ namespace {
 
 const char *kSdOutputDir = "/tmp/agent_test_sdcpp_out";
 
+// The upstream stable-diffusion.cpp library for Linux needs glibc 2.43: on an older machine the plugin cannot load, and the tests skip.
+bool g_needs_newer_glibc = false;
+
 const agent_engine_v1 *sdcpp_engine() {
     auto res = agent::load_engine_plugin(AGENT_TEST_SDCPP_ENGINE_PATH);
-    if (!res.ok) return nullptr;
+    if (!res.ok) {
+        g_needs_newer_glibc = res.error.message.find("GLIBC") != std::string::npos;
+        return nullptr;
+    }
     return agent::find_engine("sdcpp");
 }
+
+#define REQUIRE_SDCPP_ENGINE(engine)                                                                                                       \
+    do {                                                                                                                                   \
+        if (!(engine) && g_needs_newer_glibc) SKIP("the stable-diffusion.cpp library needs a newer glibc than this machine has");          \
+        REQUIRE((engine) != nullptr);                                                                                                      \
+    } while (0)
 
 agent_str str(const std::string &s) { return agent_str{s.data(), s.size()}; }
 
@@ -55,7 +67,7 @@ const char *sdcpp_test_model() { return std::getenv("AGENT_TEST_SDCPP_MODEL"); }
 
 TEST_CASE("sdcpp engine plugin loads and declares image generation", "[engines][sdcpp]") {
     const agent_engine_v1 *engine = sdcpp_engine();
-    REQUIRE(engine != nullptr);
+    REQUIRE_SDCPP_ENGINE(engine);
     REQUIRE(std::string(engine->name) == "sdcpp");
     REQUIRE(engine->abi_version == AGENT_ENGINE_ABI_VERSION);
     REQUIRE((engine->caps & AGENT_CAP_IMAGE_GEN) != 0);
@@ -65,7 +77,7 @@ TEST_CASE("sdcpp engine plugin loads and declares image generation", "[engines][
 
 TEST_CASE("sdcpp engine fails cleanly without a usable model", "[engines][sdcpp]") {
     const agent_engine_v1 *engine = sdcpp_engine();
-    REQUIRE(engine != nullptr);
+    REQUIRE_SDCPP_ENGINE(engine);
     void *inst = nullptr;
     std::string error;
 
@@ -104,7 +116,7 @@ TEST_CASE("sdcpp engine via AiProvider::Engine reports a missing model", "[engin
 TEST_CASE("sdcpp engine generates a PNG with a real model", "[engines][sdcpp][model]") {
     if (!sdcpp_test_model()) SKIP("AGENT_TEST_SDCPP_MODEL not set");
     const agent_engine_v1 *engine = sdcpp_engine();
-    REQUIRE(engine != nullptr);
+    REQUIRE_SDCPP_ENGINE(engine);
 
     const std::string config = std::string(R"({"model":")") + sdcpp_test_model() +
                                R"(","options":{"threads":2,"width":64,"height":64,"steps":1,"cfg_scale":1.0,"seed":42}})";
@@ -268,7 +280,7 @@ TEST_CASE("sdcpp engine generates an MJPEG AVI with a Wan video model", "[engine
     const std::string steps = steps_env ? steps_env : "4";
 
     const agent_engine_v1 *engine = sdcpp_engine();
-    REQUIRE(engine != nullptr);
+    REQUIRE_SDCPP_ENGINE(engine);
     REQUIRE((engine->caps & AGENT_CAP_VIDEO_GEN) != 0);
     const std::string config = R"({"options":{"diffusion_model":")" + diffusion + R"(","vae":")" + vae + R"(","t5xxl":")" + t5 +
                                R"(","threads":4,"sampler":"euler","cfg_scale":6.0,"flow_shift":3.0,"seed":42}})";

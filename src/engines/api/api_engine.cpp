@@ -301,8 +301,18 @@ class Child {
             } else data.remove_prefix(static_cast<size_t>(n));
         }
         if (!ok) {
+#if defined(__APPLE__)
+            // macOS has no sigtimedwait: take the pending SIGPIPE (it is blocked) with sigwait
+            sigset_t pending;
+            sigemptyset(&pending);
+            if (sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE)) {
+                int sig = 0;
+                sigwait(&pipe_set, &sig);
+            }
+#else
             const struct timespec zero{0, 0};
             while (::sigtimedwait(&pipe_set, nullptr, &zero) > 0) {}
+#endif
         }
         pthread_sigmask(SIG_SETMASK, &old, nullptr);
         return ok;

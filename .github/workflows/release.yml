@@ -114,7 +114,8 @@ jobs:
             -DAGENT_ENGINE_AUDIOCPP=$(on audiocpp) -DAGENT_ENGINE_SDCPP=$(on sdcpp) -DAGENT_ENGINE_TRELLIS=$(on trellis) $extra
 
       - name: Build
-        run: cmake --build build --config Release
+        # -k 0: keep going after a failure, so one run shows every error
+        run: cmake --build build --config Release -- -k 0
 
       - name: Unit tests
         # Windows on Arm: the runner has an older onnxruntime.dll in System32 that the ONNX tests pick up; the archive is still built and shipped.
