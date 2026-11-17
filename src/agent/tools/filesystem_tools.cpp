@@ -70,7 +70,7 @@ Result<std::string> media_path_for_engine(const WorkspaceContext &ctx, const std
     if (ec) abs = std::filesystem::absolute(full, ec);
     if (hal::resolve_under_workspace(*ctx.workspace_dir, abs.string(), true).ok) return ok(abs.string());
 
-    auto dir = std::filesystem::absolute(std::filesystem::path(*ctx.workspace_dir) / "artifacts", ec);
+    auto dir = std::filesystem::absolute(std::filesystem::path(ctx.state_dir ? *ctx.state_dir : *ctx.workspace_dir) / "artifacts", ec);
     std::filesystem::create_directories(dir, ec);
     const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     auto dest = dir / ("read-" + std::to_string(stamp) + "-" + full.filename().string());

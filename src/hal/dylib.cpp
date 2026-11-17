@@ -20,7 +20,12 @@ void *open_library(std::string_view path, std::string &error) {
     std::wstring wide(static_cast<size_t>(n > 0 ? n : 0), L'\0');
     if (n > 0) MultiByteToWideChar(CP_UTF8, 0, path.data(), static_cast<int>(path.size()), wide.data(), n);
 
-    // Search the plugin's own directory for its dependencies (e.g. ggml.dll next to the engine).
+    // Search the plugin's own directory for its dependencies (e.g. ggml.dll next to the engine). That search needs a fully qualified
+    // path written with backslashes: with "D:/build/engine.dll" the folder of the plugin is not searched, and a dependency such as
+    // onnxruntime.dll is then taken from System32, where Windows keeps an older one.
+    std::wstring full(32768, L'\0');
+    const DWORD len = GetFullPathNameW(wide.c_str(), static_cast<DWORD>(full.size()), full.data(), nullptr);
+    if (len > 0 && len < full.size()) wide.assign(full.data(), len);
     HMODULE h = LoadLibraryExW(wide.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     if (!h) error = "LoadLibrary failed with error " + std::to_string(GetLastError());
     return reinterpret_cast<void *>(h);

@@ -1,6 +1,7 @@
 #include "memory_index.hpp"
 
 #include "chat_memory.hpp"
+#include "home.hpp"
 
 #include <agent-cpp/store_sqlite.hpp>
 #include <algorithm>
@@ -70,7 +71,7 @@ std::string memory_hit_chat(std::string_view id) {
 
 Result<MemoryIndex> MemoryIndex::open(const std::string &workspace, int dimensions) {
     std::error_code ec;
-    const std::filesystem::path dir = std::filesystem::path(workspace) / "memory";
+    const std::filesystem::path dir = std::filesystem::path(state_dir_for(workspace)) / "memory"; // in the home, not in the project
     std::filesystem::create_directories(dir, ec);
     MemoryIndex index;
     index.ops_ = agent::store::sqlite_vector_store();

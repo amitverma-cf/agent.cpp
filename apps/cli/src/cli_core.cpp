@@ -79,6 +79,7 @@ constexpr std::string_view kRuntimeValue[] = {"version"};
 constexpr std::string_view kCleanBool[] = {"downloads", "cache", "logs", "yes"};
 constexpr std::string_view kUpdateValue[] = {"repo", "tag"};
 constexpr std::string_view kUpdateBool[] = {"check", "yes", "allow-unsigned"};
+constexpr std::string_view kUninstallBool[] = {"yes", "keep-data"};
 constexpr std::string_view kSecretValue[] = {"identity"};
 constexpr std::string_view kSecretBool[] = {"stdin"};
 
@@ -126,6 +127,7 @@ constexpr CommandSpec kCommands[] = {
     {"version", {}, 0, 0, {}, {}},
     {"completion", {}, 1, 1, {}, {}},
     {"update", {}, 0, 0, kUpdateValue, kUpdateBool},
+    {"uninstall", {}, 0, 0, {}, kUninstallBool},
 };
 
 const CommandSpec *find_command(std::string_view name) {
@@ -397,6 +399,7 @@ constexpr CommandBlurb kOverview[] = {
     {"schedule", "run an agent command on a schedule (cron / Task Scheduler)"},
     {"completion", "print a completion script: bash, zsh, fish or powershell"},
     {"update", "update to the latest release (runs the installer script from the repository; --check only looks)"},
+    {"uninstall", "remove agent.cpp: the data folder, the program and its PATH entry (asks first; --yes, --keep-data)"},
     {"version", "print the version"},
 };
 } // namespace

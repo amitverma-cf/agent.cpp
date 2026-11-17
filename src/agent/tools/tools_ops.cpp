@@ -36,6 +36,7 @@ Result<void> default_init(Session &session) {
     if (session.config.auto_default_tools) {
         auto fs_ctx = std::make_shared<WorkspaceContext>();
         fs_ctx->workspace_dir = session.workspace_path.get();
+        fs_ctx->state_dir = session.state_path.get();
         fs_ctx->sandbox = session.config.sandbox_filesystem;
         fs_ctx->command_sandbox = session.config.tool_sandbox;
         fs_ctx->cancel = session.cancel_flag.get(); // shared_ptr: the address survives Session moves

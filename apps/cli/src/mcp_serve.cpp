@@ -4,6 +4,7 @@
 
 #include "chat_extras.hpp"
 #include "commands.hpp"
+#include "home.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -34,7 +35,7 @@ std::string error_reply(const std::string &id, int code, std::string_view messag
 int mcp_serve(const CommandLine &cl, Context &ctx) {
     Config cfg;
     cfg.provider = AiProvider::Mock;
-    cfg.workspace_dir = workspace_dir(ctx, cl.get("workspace"));
+    use_workspace(cfg, workspace_dir(ctx, cl.get("workspace")));
     cfg.auto_default_tools = true;
     apply_sandbox_choice(cfg);
     auto session = init(cfg);

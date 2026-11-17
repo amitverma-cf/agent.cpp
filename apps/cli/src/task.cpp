@@ -3,6 +3,7 @@
 
 #include "commands.hpp"
 #include "crash_guard.hpp"
+#include "home.hpp"
 
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/engine_abi.h>
@@ -244,7 +245,7 @@ int run_engine_task(const CommandLine &cl, Context &ctx, std::string &out, std::
         cfg.engine_options = with_role_model(cfg.engine_options, cap_name, model_path);
     cfg.model = model_path;
     cfg.auto_default_tools = false; // a task is not a chat turn: keep the tool instructions out of the prompt
-    cfg.workspace_dir = workspace_dir(ctx, cl.get("workspace"));
+    use_workspace(cfg, workspace_dir(ctx, cl.get("workspace")));
     // The file the user named is theirs to give: let a sandboxed engine read that one file.
     if (cl.has("file")) {
         std::error_code ec;
@@ -410,7 +411,7 @@ Result<ModelLease> acquire_task_model(Context &ctx, ModelRegistry &registry, std
         spec.config.engine_options = catalog_engine_options(ctx, model.value.path, "");
         spec.config.model = model.value.path;
         spec.config.auto_default_tools = false;
-        spec.config.workspace_dir = workspace_dir(ctx, workspace);
+        use_workspace(spec.config, workspace_dir(ctx, workspace));
         if (auto r = register_model(registry, std::move(spec)); !r.ok) return fail<ModelLease>(r.error.code, r.error.message);
     }
     return acquire_model(registry, name);

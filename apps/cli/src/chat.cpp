@@ -9,6 +9,7 @@
 #include "commands.hpp"
 #include "crash_guard.hpp"
 #include "edit_journal.hpp"
+#include "home.hpp"
 #include "mcp_config.hpp"
 #include "memory_index.hpp"
 #include "model_detect.hpp"
@@ -237,6 +238,11 @@ struct ChatState {
     std::vector<std::string> declined;       // tool calls (name + arguments) the user refused in the turn that is running: not asked again
     std::vector<std::string> always_allowed; // tools the user allowed for good in this project (.agents/permissions.json)
     ChatMode mode = ChatMode::Ask;
+    // How far the changes of the open conversation reach (chat_extras.hpp), and the conversation that value belongs to.
+    AccessScope scope = AccessScope::Project;
+    std::string scope_chat;
+    AccessScope scope_asked = AccessScope::Session; // the scope a question to the user is about, taken when the answer is yes
+    bool scope_pending = false;
     ThinkFilter think;
     bool repaint = false; // the open conversation was replaced by a command
     bool no_tools =
@@ -294,8 +300,16 @@ std::string system_prompt(const ChatState &st) {
         "pending with ask_user, then continue with agent_run [\"run\",\"NAME\",\"--resume\",\"THREAD\",\"--input\",\"ANSWER\"] (THREAD "
         "is in the output; the answer approve lets pending tool calls run).";
     const auto models = installed_models(catalog_path(*st.ctx));
-    return std::string(kSystemPrompt) + platform + habits + honesty + installed_models_prompt(models) + workflows_prompt(*st.ctx) +
-           load_project_rules(st.workspace, st.ctx->has_home ? st.ctx->home.root : st.ctx->config_dir);
+    // Where things go. The model decides from the request how far a change reaches; the rules above enforce it.
+    const std::string folders =
+        " Folders: relative paths are in the project folder " + st.workspace + ". This conversation has its own folder, " +
+        session_dir_for(st.workspace, st.memory.id) +
+        ": put drafts, downloads, notes to yourself and anything the user did not ask to have in the project there. Decide from the "
+        "request how far a change reaches: something only for this conversation goes in the conversation's folder; a change the user "
+        "wants in the project goes in the project folder; another project is touched only when the user names it. Never write into "
+        "the program, engines, runtimes or settings folders.";
+    return std::string(kSystemPrompt) + platform + habits + honesty + folders + installed_models_prompt(models) +
+           workflows_prompt(*st.ctx) + load_project_rules(st.workspace, st.ctx->has_home ? st.ctx->home.root : st.ctx->config_dir);
 }
 
 void log_fn(LogLevel level, std::string_view message, void *user_data) {
@@ -318,6 +332,104 @@ void remember_always(ChatState &st, const std::string &tool) {
     save_always_allowed(st.workspace, st.always_allowed);
 }
 
+std::vector<std::string> known_workspaces(const Context &ctx);
+
+// A chat without a project of the user (the default workspace of the home) starts in its own folder; one opened on a project starts
+// at that project.
+AccessScope starting_scope(const ChatState &st) {
+    return st.workspace == workspace_dir(*st.ctx, {}) ? AccessScope::Session : AccessScope::Project;
+}
+
+// The scope belongs to one conversation: a new or another conversation starts over.
+void sync_scope(ChatState &st) {
+    if (st.scope_chat == st.memory.id) return;
+    st.scope_chat = st.memory.id;
+    st.scope = starting_scope(st);
+    st.scope_pending = false;
+}
+
+AccessPlaces access_places(const ChatState &st) {
+    AccessPlaces places;
+    places.session_dir = session_dir_for(st.workspace, st.memory.id);
+    places.workspace = st.workspace;
+    if (st.ctx->has_home) places.home_workspaces = st.ctx->home.workspaces;
+    for (std::string &w : known_workspaces(*st.ctx))
+        if (w != st.workspace) places.other_projects.push_back(std::move(w));
+    return places;
+}
+
+void widen_scope(ChatState &st, AccessScope to, std::string_view why) {
+    if (to <= st.scope) return;
+    st.scope = to;
+    out(std::string("[access] this conversation now works at ") + access_scope_name(to) + " level (" + std::string(why) + ")\n");
+}
+
+// True when the user's last message names the path or a folder above it: the user asked for it in so many words.
+bool user_named_path(const ChatState &st, std::string_view path) {
+    std::string said;
+    for (auto it = st.memory.history.rbegin(); it != st.memory.history.rend(); ++it)
+        if (it->role == "user") {
+            said = std::string(without_notes(it->content));
+            break;
+        }
+    auto plain = [](std::string s) {
+        for (char &c : s) c = c == '\\' ? '/' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+    said = plain(said);
+    for (fs::path p{std::string(path)}; p.has_parent_path() && p != p.parent_path(); p = p.parent_path()) {
+        const std::string candidate = plain(p.string());
+        if (std::count(candidate.begin(), candidate.end(), '/') < 2) break; // "/home" or "c:/users": too wide to count as named
+        if (said.find(candidate) != std::string::npos) return true;
+    }
+    return false;
+}
+
+bool prompt_tool_asked(std::string_view name, std::string_view arguments, void *user_data);
+
+// A file tool or a command reaches for a path outside the workspace. Plan mode refuses a change. Auto mode decides by itself, inside
+// fixed bounds: another project the agent knows and the workspaces folder of the home (the conversation then works at workspace
+// level), or a path the user named in the message; never the program, engines, runtimes or settings of the home, and nothing else.
+// Ask mode puts the question to the user.
+PathGateDecision chat_path_gate(const PathAccessRequest &request, void *user_data) {
+    auto *st = static_cast<ChatState *>(user_data);
+    sync_scope(*st);
+    const std::string path(request.path);
+    const std::string what = std::string(request.write ? "write " : "read ") + path;
+    if (st->mode == ChatMode::Plan && request.write) {
+        out("[plan mode] " + what + " is not allowed\n");
+        return PathGateDecision::Deny;
+    }
+    AccessScope needed = AccessScope::Workspace;
+    const bool known = access_scope_needed(access_places(*st), path, needed);
+    const bool in_home = st->ctx->has_home && access_scope_needed(AccessPlaces{.workspace = st->ctx->home.root}, path, needed);
+    if (st->mode == ChatMode::Auto) {
+        if (known) {
+            widen_scope(*st, AccessScope::Workspace, path);
+            return PathGateDecision::AllowAlways; // for the rest of this run; nothing is saved
+        }
+        if (in_home && request.write) {
+            out("[access] " + what + " is refused: the program, engines, runtimes and settings in the home are not changed by the agent\n");
+            return PathGateDecision::Deny;
+        }
+        if (user_named_path(*st, path)) {
+            out("[access] " + what + ": allowed, the message names it\n");
+            return PathGateDecision::AllowOnce;
+        }
+        out("[access] " + what +
+            " is refused: it is outside the project and the workspaces, and the message does not name it. Name the "
+            "folder in the message, or grant it with: agent sandbox grant \"" +
+            path + "\"\n");
+        return PathGateDecision::Deny;
+    }
+    // The user already said yes to workspace level in this conversation: the places it covers are not asked about again.
+    if (known && st->scope == AccessScope::Workspace) return PathGateDecision::AllowOnce;
+    const std::string arguments = "{\"path\":\"" + json_escape(path) + "\",\"access\":\"" + (request.write ? "write" : "read") + "\"}";
+    if (!prompt_tool_asked("access outside the project", arguments, st)) return PathGateDecision::Deny;
+    if (known) widen_scope(*st, AccessScope::Workspace, path);
+    return PathGateDecision::AllowOnce;
+}
+
 PermissionDecision check_tool(std::string_view name, std::string_view arguments, void *user_data) {
     auto *st = static_cast<ChatState *>(user_data);
     ensure_newline();
@@ -337,6 +449,32 @@ PermissionDecision check_tool(std::string_view name, std::string_view arguments,
         out("[tool] " + std::string(name) + ": you already declined this exact call in this turn\n");
         return PermissionDecision::Deny;
     }
+    // Where a change lands decides how far the conversation reaches: its own folder never asks; a wider place is taken by the agent
+    // itself in auto mode and put to the user in ask mode. A path outside all three places goes to the path gate above.
+    sync_scope(*st);
+    st->scope_pending = false;
+    if (const std::vector<std::string> targets = tool_changed_paths(name, arguments); !targets.empty()) {
+        const AccessPlaces places = access_places(*st);
+        AccessScope widest = AccessScope::Session;
+        bool known = true;
+        for (const std::string &target : targets) {
+            AccessScope needed = AccessScope::Session;
+            if (!access_scope_needed(places, target, needed)) known = false;
+            else widest = std::max(widest, needed);
+        }
+        if (known && widest == AccessScope::Session) return PermissionDecision::Allow;
+        if (known && widest > st->scope) {
+            if (st->mode == ChatMode::Auto) {
+                widen_scope(*st, widest, targets.front());
+            } else {
+                st->scope_asked = widest;
+                st->scope_pending = true;
+                out(std::string("[access] this change is at ") + access_scope_name(widest) + " level; the conversation works at " +
+                    access_scope_name(st->scope) + " level\n");
+                return PermissionDecision::Ask;
+            }
+        }
+    }
     if (st->mode == ChatMode::Auto) return PermissionDecision::Allow;
     PermissionDecision d = tools::default_permission_policy(name, arguments, nullptr);
     if ((name == "web_fetch" || name == "web_search" || name == "agent_run" || g_plugin_names.count(std::string(name))) &&
@@ -348,11 +486,13 @@ PermissionDecision check_tool(std::string_view name, std::string_view arguments,
     return d;
 }
 
-bool prompt_tool_asked(std::string_view name, std::string_view arguments, void *user_data);
-
 bool prompt_tool(std::string_view name, std::string_view arguments, void *user_data) {
+    auto *st = static_cast<ChatState *>(user_data);
     const bool allowed = prompt_tool_asked(name, arguments, user_data);
-    if (!allowed) static_cast<ChatState *>(user_data)->declined.push_back(std::string(name) + "\n" + std::string(arguments));
+    if (!allowed) st->declined.push_back(std::string(name) + "\n" + std::string(arguments));
+    // A yes to a change at a wider level is a yes to that level for the rest of the conversation.
+    if (allowed && st->scope_pending) widen_scope(*st, st->scope_asked, "allowed by the user");
+    st->scope_pending = false;
     return allowed;
 }
 
@@ -1264,7 +1404,7 @@ Result<void> open_session(ChatState &st) {
         cfg.engine_options = speed_engine_options(st.ctx->config, st.engine.name, st.engine_options, draft_path);
     }
     cfg.model = st.model.path;
-    cfg.workspace_dir = st.workspace;
+    use_workspace(cfg, st.workspace);
     {
         // With MCP servers configured the tool list gets long, so the model sees tool_search / load_tool and loads tools on demand. Without
         // them the handful of built-in tools stay directly visible: small models do much better when they can just call list_dir.
@@ -1272,6 +1412,8 @@ Result<void> open_session(ChatState &st) {
         cfg.lazy_tools = !collect_mcp_servers(*st.ctx, mcp_warnings).empty();
     }
     install_cli_hooks(cfg, *st.ctx);
+    cfg.path_gate = chat_path_gate; // the chat knows its mode and can ask in the full-screen interface
+    cfg.path_gate_user_data = &st;
     if (st.no_tools) cfg.auto_default_tools = false;
     if (!st.no_tools && !st.ctx->config.local_only)
         cfg.tools.push_back(Tool{.name = "web_fetch",
@@ -1440,10 +1582,17 @@ void print_stats(const ChatState &st) {
     outf("loaded models (budget %s, CLI process RSS %.0f MiB; out-of-process engines are not included):\n",
          budget.ram_bytes ? (std::to_string(budget.ram_bytes >> 20) + " MiB").c_str() : "unlimited", mb(process_rss_bytes()));
     const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    for (const LoadedModelInfo &m : loaded_models(st.registry))
-        outf("  %-24s ~%.0f MiB%s  %s, last used %llds ago, loaded in %.1fs\n", m.name.c_str(), mb(m.ram_bytes + m.vram_bytes),
+    for (const LoadedModelInfo &m : loaded_models(st.registry)) {
+        // A task model is named by its engine and its file ("task:llama:/long/path/model.gguf"): the file name says which one it is.
+        std::string name = m.name;
+        if (const size_t slash = name.find_last_of("/\\"); slash != std::string::npos) {
+            const size_t prefix = name.rfind(':', name.find_first_of("/\\"));
+            name = (prefix == std::string::npos ? std::string() : name.substr(0, prefix + 1)) + name.substr(slash + 1);
+        }
+        outf("  %-24s ~%.0f MiB%s  %s, last used %llds ago, loaded in %.1fs\n", name.c_str(), mb(m.ram_bytes + m.vram_bytes),
              m.vram_bytes ? " (VRAM)" : "", m.leases ? "in use" : "idle", static_cast<long long>((now - m.last_used_ms) / 1000),
              static_cast<double>(m.load_time_ms) / 1000.0);
+    }
 }
 
 void print_chat_help() {
@@ -1451,7 +1600,7 @@ void print_chat_help() {
          "/clear                forget the conversation so far\n"
          "/model [NAME|PATH]    show or switch the model (the conversation is kept)\n"
          "/image <path> [text]  send an image (or audio) with an optional prompt\n"
-         "/open [n]             list generated artifacts, or open the n-th with the default app\n"
+         "/open [n]             list generated files, or open the n-th\n"
          "/stats                token and tool-call counters\n"
          "/diff                 what the tools changed in files this session\n"
          "/undo                 put back the files of the last tool call\n"
@@ -1462,9 +1611,9 @@ void print_chat_help() {
          "/rename TITLE         name this conversation in the sidebar\n"
          "/delete               remove this conversation (asks to confirm)\n"
          "@path                 in a message: add the file's content\n"
-         "!command              run a shell command in the project folder; the model sees the output\n"
+         "!command              run a shell command; the model sees the output\n"
          "/doctor               what is installed and how much disk it uses\n"
-         "/setup                ask the setup questions here, then run agent setup with the answers\n"
+         "/setup                ask the setup questions, then run agent setup\n"
          "//text                send a message that starts with '/'\n"
          "Ctrl-C while the model is answering cancels the answer.\n");
 }
@@ -1599,7 +1748,7 @@ bool delete_conversation(ChatState &st, const std::string &id, const std::string
     if (workspace == st.workspace && st.lease) return update(*st.lease);
     Config cfg;
     cfg.provider = AiProvider::Mock;
-    cfg.workspace_dir = workspace;
+    use_workspace(cfg, workspace);
     cfg.memory = {.store = store::sqlite_store()};
     cfg.auto_default_tools = false;
     auto other = init(cfg);
@@ -1609,7 +1758,7 @@ bool delete_conversation(ChatState &st, const std::string &id, const std::string
 int list_conversations(const std::string &workspace) {
     Config cfg;
     cfg.provider = AiProvider::Mock;
-    cfg.workspace_dir = workspace;
+    use_workspace(cfg, workspace);
     cfg.memory = {.store = store::sqlite_store()};
     auto s = init(cfg);
     if (!s.ok) return report_error(s.error);
@@ -1713,7 +1862,8 @@ void remember_workspace(const ChatState &st) {
 std::string conversation_title(const Conversation &c) {
     for (const Message &m : c.history) {
         if (m.role != "user" || m.content.empty()) continue;
-        std::string title = m.content.substr(0, 120);
+        std::string title(without_notes(m.content).substr(0, 120)); // the notes put in front of a message are for the model
+        if (title.empty()) continue;
         for (char &ch : title)
             if (ch == '\n' || ch == '\r' || ch == '\t') ch = ' ';
         const size_t a = title.find_first_not_of(' ');
@@ -1761,7 +1911,7 @@ std::vector<TuiSession> tui_sessions(ChatState &st) {
         if (!fs::is_directory(w, ec)) continue;
         Config cfg;
         cfg.provider = AiProvider::Mock;
-        cfg.workspace_dir = w;
+        use_workspace(cfg, w);
         cfg.memory = {.store = store::sqlite_store()};
         cfg.auto_default_tools = false;
         auto other = init(cfg);
@@ -1775,7 +1925,7 @@ std::vector<TuiMessage> tui_history(const ChatState &st) {
     std::vector<TuiMessage> messages;
     for (const Message &m : st.memory.history) {
         if (m.role == "user") {
-            messages.push_back({TuiKind::User, m.content});
+            messages.push_back({TuiKind::User, std::string(without_notes(m.content))}); // as it was typed
         } else if (m.role == "assistant") {
             for (const ToolCall &call : m.tool_calls)
                 messages.push_back({TuiKind::Tool, "[tool] " + std::string(call.name) + " " + std::string(call.arguments)});
@@ -1804,7 +1954,7 @@ bool switch_session(ChatState &st, const std::string &id, const std::string &wor
         st.always_allowed = load_always_allowed(st.workspace);
         Config store_cfg;
         store_cfg.provider = AiProvider::Mock;
-        store_cfg.workspace_dir = st.workspace;
+        use_workspace(store_cfg, st.workspace);
         store_cfg.memory = {.store = store::sqlite_store()};
         store_cfg.auto_default_tools = false;
         auto store_session = init(store_cfg);
@@ -1907,8 +2057,8 @@ int cmd_chat(const CommandLine &cl, Context &ctx) {
     std::string engine_log;
     if (!st.verbose) {
         std::error_code ec;
-        fs::create_directories(fs::path(st.workspace) / "logs", ec);
-        engine_log = (fs::path(st.workspace) / "logs" / "engine.log").string();
+        fs::create_directories(fs::path(state_dir_for(st.workspace)) / "logs", ec);
+        engine_log = (fs::path(state_dir_for(st.workspace)) / "logs" / "engine.log").string();
         if (std::FILE *original = redirect_stderr(engine_log)) g_err = original;
         else engine_log.clear();
     }
@@ -2123,14 +2273,16 @@ bool handle_line(ChatState &st, const std::string &line) {
     }
     case SlashKind::Mode: {
         if (cmd.arg.empty()) {
-            out(std::string("mode: ") + chat_mode_name(st.mode) +
-                "\n  ask   tools that change things ask first (default)\n  plan  only reading: no file changes, no commands\n  auto  "
-                "nothing asks\n");
+            sync_scope(st);
+            out(std::string("mode: ") + chat_mode_name(st.mode) + ", access: " + access_scope_name(st.scope) +
+                " level\n  ask   (manual) tools that change things ask first, and so does a change outside the conversation's reach "
+                "(default)\n  plan  only reading: no file changes, no commands\n  auto  nothing asks: the agent decides by itself how "
+                "far a change reaches (its own folder, the project, other projects), never beyond those\n");
             break;
         }
         ChatMode mode = ChatMode::Ask;
         if (!parse_chat_mode(cmd.arg, mode)) {
-            out("[error] /mode ask, plan or auto\n");
+            out("[error] /mode ask (or manual), plan or auto\n");
             break;
         }
         st.mode = mode;
@@ -2403,7 +2555,7 @@ std::string tui_mic(ChatState &st, bool start) {
         cfg.engine_isolation = cli_engine_isolation(st.inprocess, engine.value.isolation);
         cfg.engine_sandbox.gpu = cli_engine_gpu(engine.value.backend);
         apply_sandbox_choice(cfg);
-        cfg.workspace_dir = st.workspace;
+        use_workspace(cfg, st.workspace);
         cfg.engine_options = options.value;
         cfg.auto_default_tools = false;
         auto session = init(cfg);
@@ -2743,7 +2895,8 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
         info("Runtimes", size_text(folder_bytes(st.ctx->home.runtimes)));
         info("Log files", st.ctx->home.logs, "Engine and chat logs, for bug reports");
     }
-    info("This project", size_text(folder_bytes((fs::path(st.workspace) / "memory").string())), "Conversations and memory of this project");
+    info("This project", size_text(folder_bytes((fs::path(state_dir_for(st.workspace)) / "memory").string())),
+         "Conversations and memory of this project");
 
     cat("Shortcuts");
     head("Press Enter on a shortcut, then the keys you want instead");
@@ -2973,7 +3126,7 @@ int run_acp(ChatState &st) {
 int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log) {
     Config store_cfg;
     store_cfg.provider = AiProvider::Mock;
-    store_cfg.workspace_dir = st.workspace;
+    use_workspace(store_cfg, st.workspace);
     store_cfg.memory = {.store = store::sqlite_store()};
     store_cfg.auto_default_tools = false;
     auto store_session = init(store_cfg);
@@ -3007,7 +3160,7 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
     if (st.use_tui) {
         if (cl.has("resume")) collect_artifacts(st, 0);
         // Anything written to stderr (engine logs, warnings) would tear the screen: it goes to a file for the time being.
-        std::FILE *log = std::fopen((fs::path(st.workspace) / "logs" / "chat.log").string().c_str(), "a");
+        std::FILE *log = std::fopen((fs::path(state_dir_for(st.workspace)) / "logs" / "chat.log").string().c_str(), "a");
         std::FILE *saved_err = g_err;
         if (log) g_err = log;
         TuiHost host;

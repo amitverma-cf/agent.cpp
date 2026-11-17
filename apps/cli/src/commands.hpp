@@ -80,13 +80,14 @@ PathGateDecision cli_path_gate(const PathAccessRequest &request, void *context);
 // Sets the hooks every CLI session shares: MCP servers started by npx / npm / node / uvx run on the private runtimes of the
 // chosen js_runtime (Config::mcp_launcher). `ctx` must outlive the session.
 void install_cli_hooks(Config &cfg, Context &ctx);
-int cmd_skill(const CommandLine &cl, Context &ctx);    // skill_cmd.cpp
-int cmd_workflow(const CommandLine &cl, Context &ctx); // workflow_cmd.cpp
-int cmd_update(const CommandLine &cl, Context &ctx);   // script_cmd.cpp: runs scripts/install.sh|ps1
-int mcp_serve(const CommandLine &cl, Context &ctx);    // mcp_serve.cpp
-int cmd_doctor(const CommandLine &cl, Context &ctx);   // doctor_cmd.cpp
-int cmd_clean(const CommandLine &cl, Context &ctx);    // doctor_cmd.cpp
-int cmd_init(const CommandLine &cl, Context &ctx);     // creates .agents/ in a project
+int cmd_skill(const CommandLine &cl, Context &ctx);     // skill_cmd.cpp
+int cmd_workflow(const CommandLine &cl, Context &ctx);  // workflow_cmd.cpp
+int cmd_uninstall(const CommandLine &cl, Context &ctx); // script_cmd.cpp: removes the data folder, the program and its PATH entry
+int cmd_update(const CommandLine &cl, Context &ctx);    // script_cmd.cpp: runs scripts/install.sh|ps1
+int mcp_serve(const CommandLine &cl, Context &ctx);     // mcp_serve.cpp
+int cmd_doctor(const CommandLine &cl, Context &ctx);    // doctor_cmd.cpp
+int cmd_clean(const CommandLine &cl, Context &ctx);     // doctor_cmd.cpp
+int cmd_init(const CommandLine &cl, Context &ctx);      // creates .agents/ in a project
 // One engine capability, as `agent task` runs it. The text it would print goes to out. With err set an error is returned in it (exit code 1)
 // instead of being printed. With a registry the model is loaded through it (kept for the next call, unloaded under memory pressure).
 int run_engine_task(const CommandLine &cl, Context &ctx, std::string &out, std::string *err, ModelRegistry *registry,

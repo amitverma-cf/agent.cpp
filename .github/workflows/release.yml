@@ -108,7 +108,7 @@ jobs:
         shell: bash
         run: |
           # The unit suite needs no models. Engine tests that need a downloaded model skip themselves.
-          ctest --test-dir build --output-on-failure -j2 --timeout 300 -E "model|engine_real" || ctest --test-dir build --rerun-failed --output-on-failure -j1 --timeout 300
+          ctest --test-dir build --output-on-failure -j2 --timeout 300 -E "model|engine_real" || ctest --test-dir build --rerun-failed --output-on-failure -j1 --timeout 300 -E "model|engine_real"
 
       - name: Package
         shell: bash

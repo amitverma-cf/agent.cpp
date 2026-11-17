@@ -145,9 +145,11 @@ Result<Session> init(const Config &config) {
         }
     }
 
+    // What the library writes itself goes to the state folder (Config::state_dir), which is the workspace unless the host set one.
+    const std::string &state_root = config.state_dir.empty() ? config.workspace_dir : config.state_dir;
     std::error_code ec;
     for (const char *sub : {"models", "memory", "logs", "tmp"}) {
-        auto p = std::filesystem::path(config.workspace_dir) / sub;
+        auto p = std::filesystem::path(state_root) / sub;
         std::filesystem::create_directories(p, ec);
         if (ec) return fail<Session>(ErrorCode::FilesystemError, "Failed to create " + p.string() + ": " + ec.message());
     }
@@ -160,9 +162,10 @@ Result<Session> init(const Config &config) {
     session.arena = Arena(arena_size);
 
     session.workspace_path = std::make_shared<std::string>(config.workspace_dir);
+    session.state_path = std::make_shared<std::string>(state_root);
 
     if (config.enable_file_logging) {
-        session.log_file = hal::open_session_log(config.workspace_dir);
+        session.log_file = hal::open_session_log(state_root);
         if (!session.log_file) {
             return fail<Session>(ErrorCode::FilesystemError, "enable_file_logging is set but the log file could not be opened "
                                                              "under workspace logs/.");
@@ -251,7 +254,7 @@ Result<void> init_memory(Session &session) {
     const StoreOps *ops = memory::active_store(session);
     if (!ops->open || !ops->put || !ops->get || !ops->clear)
         return fail(ErrorCode::InvalidConfig, "MemoryConfig::store is missing one of open/put/get/clear.");
-    auto res = ops->open(session.config.memory, session.config.workspace_dir);
+    auto res = ops->open(session.config.memory, session.state_path ? *session.state_path : session.config.workspace_dir);
     if (!res.ok) return fail(res.error.code, res.error.message);
     session.memory_state = std::move(res.value);
     return ok();

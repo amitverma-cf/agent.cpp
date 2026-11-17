@@ -605,6 +605,8 @@ struct Config {
     std::string engine_options;     // Engine: JSON object forwarded to the engine as "options"
     std::string model;              // the model file the engine loads
     std::string workspace_dir;      // required. No quotes, $, &, |, ;, or newlines.
+    std::string state_dir;          // where the library writes its own files (memory/, artifacts/, tmp/, cache/, logs/,
+                                    // .agents/results/); empty = workspace_dir. Set it to keep a project folder free of them.
 
     MemoryConfig memory;
     std::vector<Tool> tools;        // the tools; the default tools are added by init()

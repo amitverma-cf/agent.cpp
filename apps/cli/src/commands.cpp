@@ -4,6 +4,7 @@
 
 #include "doctor.hpp"
 #include "engine_release.hpp"
+#include "home.hpp"
 #include "model_detect.hpp"
 #include "runtimes.hpp"
 #include "status_view.hpp"
@@ -270,9 +271,7 @@ int cmd_init(const CommandLine &cl, Context &ctx) {
     std::printf("  %s  skills for this project (committed)\n", made.value.skills.c_str());
     std::printf("  %s  MCP servers for this project (committed; keys are referenced by name, never stored)\n",
                 made.value.mcp_config.c_str());
-    std::printf("  %s  conversations and memory (private, git-ignored)\n", made.value.memory.c_str());
-    std::printf("  %s  private, git-ignored\n", made.value.cache.c_str());
-    std::printf("  %s  private, git-ignored\n", made.value.local.c_str());
+    std::printf("conversations, memory and logs of this project are kept in the agent's home, not in this folder\n");
     return 0;
 }
 
@@ -770,7 +769,7 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
     }
 
     Config base;
-    base.workspace_dir = workspace_dir(ctx, cl.get("workspace"));
+    use_workspace(base, workspace_dir(ctx, cl.get("workspace")));
     base.context_window = ctx.config.context_window;
     base.max_tokens = ctx.config.max_tokens;
     base.temperature = ctx.config.temperature;
@@ -831,7 +830,7 @@ int cmd_run(const CommandLine &cl, Context &ctx) {
     // across invocations; "checkpointer": "memory" in the file keeps them in this process only.
     const bool memory_checkpoints = graph.value.checkpointer == "memory";
     CheckpointerConfig cp_config;
-    if (!memory_checkpoints) cp_config.path = (fs::path(base.workspace_dir) / "memory" / "checkpoints.sqlite3").string();
+    if (!memory_checkpoints) cp_config.path = (fs::path(state_dir_for(base.workspace_dir)) / "memory" / "checkpoints.sqlite3").string();
     auto checkpointer = open_checkpointer(memory_checkpoints ? in_memory_checkpointer() : store::sqlite_checkpointer(), cp_config);
     if (!checkpointer.ok) return report_error(checkpointer.error);
 

@@ -273,8 +273,9 @@ TEST_CASE("workflows are saved by name, listed, resolved and removed", "[chat_fe
     CHECK(list[0].name == "daily-report");
     CHECK(list[0].description == "daily report");
     CHECK(list[0].nodes == 6);
-    CHECK(resolve_graph_arg(ctx, "daily-report") == root + "/home/graphs/daily-report.json");
-    CHECK(resolve_graph_arg(ctx, "daily-report.json") == root + "/home/graphs/daily-report.json");
+    // Compared as paths: on Windows the file is named with backslashes.
+    CHECK(fs::path(resolve_graph_arg(ctx, "daily-report")) == fs::path(root + "/home/graphs/daily-report.json"));
+    CHECK(fs::path(resolve_graph_arg(ctx, "daily-report.json")) == fs::path(root + "/home/graphs/daily-report.json"));
     CHECK(resolve_graph_arg(ctx, "other") == "other");
     CHECK(workflows_prompt(ctx).find("daily-report (daily report)") != std::string::npos);
 

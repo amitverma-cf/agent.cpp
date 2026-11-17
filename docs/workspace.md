@@ -1,7 +1,7 @@
 # Workspace layout
 
-agent.cpp keeps its files in two places and nowhere else: one **global home** and, optionally, an `.agents/`
-folder inside each project. Nothing is installed globally, and the agent never needs `npm` or `python` on the
+agent.cpp keeps everything it writes in one place: the **global home**. A project can have an `.agents/` folder for the files its
+owner writes (skills, MCP servers, rules); the agent's own data about a project is in the home, not in the project. Nothing is installed globally, and the agent never needs `npm` or `python` on the
 machine (see "Runtimes" below).
 
 ## One folder: `~/.agent.cpp`
@@ -28,9 +28,34 @@ to `~/.agent.cpp/`.
 | `runtimes/` | private `bun` and `uv` installs, used only by agent.cpp |
 | `cache/` | downloads in progress, saved prefix KV states, GPU kernel and shader caches |
 | `logs/` | engine and session logs |
-| `workspaces/default/` | the default workspace: what the file tools may touch, plus memory and artifacts |
+| `workspaces/default/` | the default workspace: what the file tools may touch when a chat has no project, plus its memory and artifacts |
+| `workspaces/<name>-<hash>/` | the state of one project folder (see below) |
 
 `agent doctor` reports how much each of `models/`, `cache/` and `runtimes/` uses and what is safe to delete.
+
+## The state of a project
+
+A chat, task or graph run works in a workspace: the default one in the home, or a project folder of the user (`--workspace DIR`, the
+folder picked in the chat). What the agent writes about a project folder goes to `workspaces/<folder name>-<hash of its path>/` in the
+home, never into the project:
+
+| Path in the state folder | What it holds |
+|---|---|
+| `memory/` | conversations and notes (`db.sqlite3`), the search index, graph checkpoints |
+| `sessions/<id>/` | the folder of one conversation: drafts, downloads, scratch files |
+| `artifacts/` | generated and received files (images, audio, MCP content) |
+| `logs/`, `tmp/`, `cache/` | session and engine logs, engine scratch space, GPU caches |
+| `.agents/results/`, `.agents/permissions.json` | long tool results kept in full; tools allowed for good |
+| `waiting.json`, `voice/` | paused graph runs; spoken replies when there is no speaker |
+| `project.txt` | the path of the project the folder belongs to |
+
+A workspace inside the home keeps its state in itself. What an earlier version wrote into a project folder (`memory/`,
+`.agents/permissions.json`, `.agents/results/`, `waiting.json`, and `logs/` when it holds only agent logs) is moved to the state folder
+the first time the project is opened; when the conversations cannot be moved (the database is open in another program) the project
+folder is used as before for that run. With `--config-dir` (no home) the state stays in the workspace.
+
+The only file outside the home is `home.json`, which names the home: it is inside the install folder, or in the platform config
+folder for a program that does not run from an install.
 
 ## A project: `.agents/`
 
@@ -41,11 +66,9 @@ depend on any other tool's folders.
 |---|---|---|
 | `.agents/skills/` | yes | skills for this project |
 | `.agents/mcp.json` | yes | MCP servers for this project; keys are referenced by name |
-| `.agents/memory/` | no | conversations and the memory database |
-| `.agents/cache/` | no | project caches |
-| `.agents/local/` | no | personal notes and overrides |
+| `.agents/local/` | no | personal overrides: path grants for this project, MCP data |
 
-`agent init` writes a `.gitignore` inside `.agents/` for the three private folders. The project is the nearest
+`agent init` writes a `.gitignore` inside `.agents/` for the private folders. The project is the nearest
 ancestor of the working directory that contains a `.agents/` folder.
 
 ## Older layouts

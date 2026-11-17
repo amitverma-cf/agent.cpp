@@ -8,6 +8,7 @@ add_library(agent_cli_core STATIC
     src/catalog_browse.cpp
     src/chat_memory.cpp
     src/memory_index.cpp
+    src/state_dir.cpp
     src/plugins.cpp
     src/timers.cpp
     src/skill_learn.cpp

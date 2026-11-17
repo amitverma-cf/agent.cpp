@@ -136,11 +136,20 @@ agent's: they are not sandboxed and do not ask.
 
 ### Modes, thinking, permissions
 
-- `/mode plan` lets the agent only read (no file changes, no commands); `/mode auto` never asks; `/mode ask` (default) asks before `run_command`, `delete_path`, `move_path`,
+- `/mode plan` lets the agent only read (no file changes, no commands); `/mode auto` never asks; `/mode ask` (default, also `/mode manual`) asks before `run_command`, `delete_path`, `move_path`,
   `agent_run`, `web_fetch` and `web_search`. `write_file` and `append_file` do **not** ask: they are shown in the transcript and put back with `/undo` (`/diff`
   lists them), and `/mode plan` refuses them. The status line shows the mode when it is not `ask`.
+- **How far a change reaches.** Every conversation has a folder of its own, `sessions/<id>/` in the state folder of the project
+  ([workspace.md](workspace.md#the-state-of-a-project)); the agent is told its path and uses it for drafts, downloads and anything that
+  is only for that conversation. A change is at one of three levels: **session** (that folder; never asks), **project** (the folder
+  the chat works in) and **workspace** (other projects the agent knows, and the `workspaces/` folder of the home). A chat opened on a
+  project starts at project level; a chat with no project (the default workspace) starts at session level. A change at a wider level
+  than the conversation has is asked about in `ask` mode, and a yes widens the conversation for the rest of it. In `auto` mode the
+  agent widens by itself and says so in the transcript (`[access] this conversation now works at workspace level`), inside fixed
+  bounds: it never writes into the program, engines, runtimes or settings of the home, and it uses a folder outside all three levels
+  only when the message names that folder. `/mode` shows the mode and the level.
 - `/thinking [on|off]` shows or hides the `<think>...</think>` blocks of reasoning models (hidden by default).
-- Answering `a` to a permission question allows that tool for good **in this project**: it is kept in `<workspace>/.agents/permissions.json`.
+- Answering `a` to a permission question allows that tool for good **in this project**: it is kept in `.agents/permissions.json` in the project's state folder.
   `/permissions` lists them and `/permissions clear` forgets them. The question shows the call's arguments, one per line.
 - `/compact` summarises the oldest messages to free context (the last six stay as they are).
 
@@ -532,12 +541,27 @@ nobody is there to answer. On Linux the entries are crontab lines tagged `# agen
 and are now due. `agent run` records such a run in `<workspace>/waiting.json` with its original flags; `wake` re-runs each due one
 with `--resume`. Together with `schedule add wake --every 15m -- wake` this gives sleep and wake with no background process.
 
+## agent uninstall
+
+```sh
+agent uninstall              # lists what it would remove, asks, then removes it
+agent uninstall --keep-data  # the program and its PATH entry only; models, conversations and settings stay
+agent uninstall --yes        # no question (needed without a terminal)
+```
+
+It removes the data folder chosen at setup (models, engines, conversations, notes, logs, caches), the program folder when it was made by
+the installer (a build tree or a package-manager copy is left alone), the PATH entry of the program (user PATH on Windows, the line
+the installer added to `~/.profile`, `~/.bashrc` and `~/.zshrc` elsewhere) and the `home.json` pointer when it is outside both folders.
+Windows continues in a window of its own: it cannot delete a program that is running. The work is done by `scripts/uninstall.sh|ps1`
+(fetched like `setup`; `AGENT_SCRIPTS` points at a copy).
+
 ## Files and layout
 
 One global home (default `.agent.cpp` in the user folder, the same folder the program is installed in, remembered in `home.json` in the platform
 config folder; `--home` and `$AGENT_HOME` override it) holds `config.json`, `engines.json`, `models/`, `engines/`, `skills/`, `mcp/`,
-`runtimes/`, `cache/`, `logs/` and `workspaces/default/` (file tools, `memory/db.sqlite3`, `artifacts/`). Each project can have
-a `.agents/` folder. Full layout and the contents of `config.json` and `engines.json`: [workspace.md](workspace.md).
+`runtimes/`, `cache/`, `logs/` and `workspaces/` (the default workspace, and one state folder for each project folder the agent has
+worked in: conversations, memory, logs, generated files). A project folder itself holds only its own files; it can have a `.agents/`
+folder for skills, MCP servers and rules. Full layout and the contents of `config.json` and `engines.json`: [workspace.md](workspace.md).
 
 `AGENT_HTTP_REWRITE="https://github.com=https://mirror.example/gh"` redirects downloads by URL prefix (rules separated by `;`), and
 `HF_ENDPOINT` does the same for Hugging Face. Source: the CLI lives in `apps/cli/src/`; `cli_core` holds the testable parts (argument

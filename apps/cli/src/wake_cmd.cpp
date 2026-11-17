@@ -5,6 +5,7 @@
 // finished runs leave it, a run that waits again gets its new time). Start it from `agent schedule add wake --every 15m -- wake --yes`.
 
 #include "commands.hpp"
+#include "home.hpp"
 #include "schedule.hpp"
 #include "waiting.hpp"
 
@@ -19,7 +20,9 @@ namespace agent::cli {
 
 namespace {
 
-std::string waiting_path(const std::string &workspace) { return (std::filesystem::path(workspace) / "waiting.json").string(); }
+std::string waiting_path(const std::string &workspace) {
+    return (std::filesystem::path(state_dir_for(workspace)) / "waiting.json").string();
+}
 
 std::string read_all(const std::string &path) {
     std::ifstream f(path, std::ios::binary);

@@ -77,6 +77,9 @@ function Get-LatestRuntime($name) {
     return ''
 }
 function Get-InstalledRuntime($name) {
+    # Windows PowerShell 5.1 turns anything a program writes to stderr into a terminating error under 'Stop', so "uv is not
+    # installed" ended the whole setup. A missing runtime is an answer here, not an error.
+    $ErrorActionPreference = 'Continue'
     $p = & $agent runtime path $name 2>$null
     if ($LASTEXITCODE -ne 0 -or -not $p) { return '' }
     if ($name -eq 'pnpm') { # a script run by node: its version is in the package.json two folders up
@@ -86,6 +89,7 @@ function Get-InstalledRuntime($name) {
     return ("$v" -replace '^[^0-9]*([0-9][0-9.]*).*$', '$1')
 }
 function Ensure-Runtime($name) {
+    $ErrorActionPreference = 'Continue' # see Get-InstalledRuntime: what an installer prints on stderr is reported below, not thrown
     $have = Get-InstalledRuntime $name
     $newest = Get-LatestRuntime $name
     $pin = @(); if ($name -eq 'pnpm' -and $newest) { $pin = @('--version', $newest) }
@@ -136,7 +140,7 @@ if ($model) {
     if ($LASTEXITCODE -ne 0) { Fail 'The model could not be added.' }
 }
 
-$listed = (& $agent model ls 2>$null | Out-String).Trim()
+$listed = (& { $ErrorActionPreference = 'Continue'; & $agent model ls 2>$null } | Out-String).Trim()
 $haveModel = $listed -and -not $listed.StartsWith('no models')
 if ($haveModel -and $ask) {
     Write-Host ''

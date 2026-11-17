@@ -1,5 +1,6 @@
 #include "mcp_config.hpp"
 
+#include "home.hpp"
 #include "runtimes.hpp"
 
 #include <algorithm>
@@ -180,8 +181,10 @@ std::vector<McpServerConfig> collect_mcp_servers(const Context &ctx, std::vector
     }
     if (!ctx.project_root.empty()) {
         const ProjectLayout project = project_layout(ctx.project_root);
-        add_file(project.mcp_config, (fs::path(project.local) / "mcp").string(), ctx, out, warnings);
-        add_dropins(project.agents, (fs::path(project.local) / "mcp").string(), ctx, out, warnings);
+        // The data folders of the project's servers are in the home, with the rest of what the agent keeps about the project.
+        const std::string data_root = (fs::path(state_dir_for(ctx.project_root)) / "mcp").string();
+        add_file(project.mcp_config, data_root, ctx, out, warnings);
+        add_dropins(project.agents, data_root, ctx, out, warnings);
     }
     return out;
 }

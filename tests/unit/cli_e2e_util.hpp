@@ -52,7 +52,18 @@ struct Home {
         std::ofstream(graph)
             << R"({"name":"g","engine":"mock","entry":"a","nodes":[{"name":"a","kind":"agent","system_prompt":"s","input_key":"request","output_key":"answer"}],"edges":[]})";
         set_env("AGENT_HOME", (root / "home").string());
+        // Everything the commands write stays under the test folder. With the config folder left at its default, `agent home DIR`
+        // (run by setup) replaced the home pointer of the person running the tests with a folder this test deletes.
+        // (An explicit AGENT_CONFIG_DIR would turn the home off, so the platform's own config folder is moved instead.)
         set_env("AGENT_CONFIG_DIR", "");
+#ifdef _WIN32
+        set_env("APPDATA", (root / "config").string());
+#else
+        set_env("XDG_CONFIG_HOME", (root / "config").string());
+#endif
+#if defined(AGENT_TEST_SCRIPTS_DIR)
+        set_env("AGENT_SCRIPTS", AGENT_TEST_SCRIPTS_DIR); // the setup and install scripts of this checkout, not the published ones
+#endif
     }
     ~Home() {
         std::error_code ec;

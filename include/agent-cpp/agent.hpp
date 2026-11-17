@@ -314,6 +314,8 @@ struct WorkspaceContext {
     std::shared_ptr<std::vector<PathGrant>> grants;
     PathGateFn gate = nullptr;
     void *gate_user_data = nullptr;
+    // Where files the library makes itself go (see Config::state_dir); nullptr = the workspace.
+    const std::string *state_dir = nullptr;
 };
 
 std::vector<Tool> get_filesystem_tools(std::shared_ptr<WorkspaceContext> ctx);
@@ -523,6 +525,11 @@ struct Config {
 
     std::string model;
     std::string workspace_dir;
+    // Where the library keeps what it writes itself: the conversation database (memory/), generated and copied files (artifacts/),
+    // engine scratch (tmp/), GPU caches (cache/) and long tool results (.agents/results/). Empty = workspace_dir. A host that works in
+    // a project folder of the user sets this to a folder of its own, so that only the user's files are in the project. The file tools
+    // may read and write it like the workspace.
+    std::string state_dir;
 
     MemoryConfig memory;
     std::vector<Tool> tools;
@@ -651,6 +658,7 @@ struct Session {
     std::shared_ptr<void> memory_state;
 
     std::shared_ptr<std::string> workspace_path;
+    std::shared_ptr<std::string> state_path; // Config::state_dir, or the workspace when that is empty
 
     std::shared_ptr<void> tool_context;
 

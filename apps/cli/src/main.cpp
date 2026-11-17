@@ -81,6 +81,7 @@ int main(int argc, char **argv) {
         ctx.config_dir = ctx.home.root;
         ctx.config_path = ctx.home.config;
         ctx.engines_path = ctx.home.engines_json;
+        set_state_home(ctx.home.root, ctx.home.workspaces); // what the agent writes about a project folder goes into the home
     } else {
         ctx.config_dir = cl.has("config-dir") ? std::string(cl.get("config-dir")) : default_config_dir();
         ctx.config_path = (std::filesystem::path(ctx.config_dir) / "config.json").string();
@@ -111,6 +112,7 @@ int main(int argc, char **argv) {
     if (cl.command == "secret") return cmd_secret(cl, ctx);
     if (cl.command == "doctor") return cmd_doctor(cl, ctx);
     if (cl.command == "update") return cmd_update(cl, ctx);
+    if (cl.command == "uninstall") return cmd_uninstall(cl, ctx);
     if (cl.command == "mcp") return cmd_mcp(cl, ctx);
     if (cl.command == "runtime") return cmd_runtime(cl, ctx);
     if (cl.command == "skill") return cmd_skill(cl, ctx);

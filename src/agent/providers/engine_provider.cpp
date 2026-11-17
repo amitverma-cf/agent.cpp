@@ -207,7 +207,8 @@ Result<void> init_engine(Session &session) {
                                                                                        : EngineIsolation::InProcess;
 
     auto state = std::make_shared<EngineState>();
-    state->output_dir = (std::filesystem::path(cfg.workspace_dir) / "artifacts").string();
+    const std::string &state_root = cfg.state_dir.empty() ? cfg.workspace_dir : cfg.state_dir; // see Config::state_dir
+    state->output_dir = (std::filesystem::path(state_root) / "artifacts").string();
     std::error_code ec;
     std::filesystem::create_directories(state->output_dir, ec);
     if (ec) return fail(ErrorCode::FilesystemError, "Failed to create " + state->output_dir + ": " + ec.message());
@@ -220,7 +221,7 @@ Result<void> init_engine(Session &session) {
     config += ",\"parallel\":" + std::to_string(cfg.max_parallel_subagents);
     // Scratch space for engines that unpack embedded files or keep caches (audio.cpp): the workspace tmp folder, the one other
     // read-write directory of a sandboxed engine besides artifacts.
-    const std::string scratch_dir = (std::filesystem::path(cfg.workspace_dir) / "tmp").string();
+    const std::string scratch_dir = (std::filesystem::path(state_root) / "tmp").string();
     std::filesystem::create_directories(scratch_dir, ec);
     config += ",\"scratch_dir\":\"";
     utils::escape_json_string(scratch_dir, config);
@@ -275,8 +276,8 @@ Result<void> init_engine(Session &session) {
             // Driver caches (compiled kernels / shaders) live under $HOME by default, which the sandbox hides;
             // without a writable folder every start recompiles. Untested on real GPUs: see docs/gpu.md.
             std::error_code gpu_ec;
-            const std::filesystem::path cache = cfg.gpu_cache_dir.empty() ? std::filesystem::path(cfg.workspace_dir) / "cache" / "gpu"
-                                                                          : std::filesystem::path(cfg.gpu_cache_dir);
+            const std::filesystem::path cache =
+                cfg.gpu_cache_dir.empty() ? std::filesystem::path(state_root) / "cache" / "gpu" : std::filesystem::path(cfg.gpu_cache_dir);
             std::filesystem::create_directories(cache / "cuda", gpu_ec);
             std::filesystem::create_directories(cache / "mesa", gpu_ec);
             std::filesystem::create_directories(cache / "nv", gpu_ec);

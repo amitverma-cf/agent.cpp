@@ -70,7 +70,10 @@ TEST_CASE("Windows: a sandboxed child writes only in its allowed folder", "[sand
     CHECK_FALSE(fs::exists(dir / "outside" / "bad.txt"));
 
     // The child reads its own folder, not other folders of the user (the AppContainer has no access to them).
-    CHECK(run_cmd("type " + native((dir / "rw" / "ok.txt").string()) + " >nul", policy) == 0);
+    std::string read_error; // what the child printed, for a machine where this read is refused
+    const int read_rc = run_cmd("type " + native((dir / "rw" / "ok.txt").string()), policy, &read_error);
+    INFO(read_error);
+    CHECK(read_rc == 0);
     { std::ofstream(dir / "outside" / "secret.txt") << "secret"; }
     CHECK(run_cmd("type " + native((dir / "outside" / "secret.txt").string()) + " >nul", policy) != 0);
     agent::SandboxPolicy granted = policy;

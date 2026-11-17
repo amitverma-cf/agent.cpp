@@ -1,5 +1,7 @@
 #include "chat_extras.hpp"
 
+#include "home.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -263,7 +265,7 @@ std::string flush_think(ThinkFilter &f) {
 
 bool parse_chat_mode(std::string_view text, ChatMode &mode) {
     const std::string t = lower_copy(text);
-    if (t == "ask") mode = ChatMode::Ask;
+    if (t == "ask" || t == "manual") mode = ChatMode::Ask;
     else if (t == "plan") mode = ChatMode::Plan;
     else if (t == "auto") mode = ChatMode::Auto;
     else return false;
@@ -272,6 +274,62 @@ bool parse_chat_mode(std::string_view text, ChatMode &mode) {
 
 const char *chat_mode_name(ChatMode mode) { return mode == ChatMode::Plan ? "plan" : mode == ChatMode::Auto ? "auto" : "ask"; }
 
+const char *access_scope_name(AccessScope scope) {
+    return scope == AccessScope::Workspace ? "workspace" : scope == AccessScope::Project ? "project" : "session";
+}
+
+namespace {
+fs::path settled(const fs::path &p) {
+    std::error_code ec;
+    fs::path full = fs::weakly_canonical(fs::absolute(p, ec), ec);
+    if (ec || full.empty()) full = fs::absolute(p, ec);
+    return full.lexically_normal();
+}
+bool inside(const fs::path &path, const std::string &folder) {
+    if (folder.empty()) return false;
+    const fs::path base = settled(folder);
+    if (path == base) return true;
+    const fs::path rel = path.lexically_relative(base);
+    return !rel.empty() && rel.native().rfind(fs::path("..").native(), 0) != 0;
+}
+} // namespace
+
+bool access_scope_needed(const AccessPlaces &places, std::string_view path, AccessScope &needed) {
+    fs::path p{std::string(path)};
+    if (p.is_relative()) p = fs::path(places.workspace) / p;
+    p = settled(p);
+    // The narrowest place first: the conversation's folder may lie inside the workspace.
+    if (inside(p, places.session_dir)) {
+        needed = AccessScope::Session;
+        return true;
+    }
+    if (inside(p, places.workspace)) {
+        needed = AccessScope::Project;
+        return true;
+    }
+    if (inside(p, places.home_workspaces) ||
+        std::any_of(places.other_projects.begin(), places.other_projects.end(), [&](const std::string &o) { return inside(p, o); })) {
+        needed = AccessScope::Workspace;
+        return true;
+    }
+    return false;
+}
+
+std::vector<std::string> tool_changed_paths(std::string_view tool, std::string_view arguments_json) {
+    std::vector<std::string> paths;
+    const bool one = tool == "write_file" || tool == "append_file" || tool == "delete_path" || tool == "create_dir";
+    if (!one && tool != "move_path") return paths;
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded{std::string(arguments_json)};
+    simdjson::dom::element doc;
+    if (parser.parse(padded).get(doc)) return paths;
+    for (const char *key : {"path", "from", "to"}) {
+        std::string_view value;
+        if (!doc[key].get(value) && !value.empty()) paths.emplace_back(value);
+    }
+    return paths;
+}
+
 bool tool_changes_things(std::string_view tool) {
     return tool == "write_file" || tool == "append_file" || tool == "delete_path" || tool == "move_path" || tool == "create_dir" ||
            tool == "run_command" || tool == "agent_run";
@@ -279,7 +337,7 @@ bool tool_changes_things(std::string_view tool) {
 
 std::vector<std::string> load_always_allowed(const std::string &workspace) {
     std::vector<std::string> tools;
-    std::ifstream in(fs::path(workspace) / ".agents" / "permissions.json", std::ios::binary);
+    std::ifstream in(fs::path(state_dir_for(workspace)) / ".agents" / "permissions.json", std::ios::binary);
     if (!in) return tools;
     const std::string body((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     simdjson::dom::parser parser;
@@ -294,7 +352,7 @@ std::vector<std::string> load_always_allowed(const std::string &workspace) {
 
 bool save_always_allowed(const std::string &workspace, const std::vector<std::string> &tools) {
     std::error_code ec;
-    const fs::path dir = fs::path(workspace) / ".agents";
+    const fs::path dir = fs::path(state_dir_for(workspace)) / ".agents";
     fs::create_directories(dir, ec);
     std::string json = "{\"always\":[";
     for (size_t i = 0; i < tools.size(); ++i) json += (i ? ",\"" : "\"") + tools[i] + "\"";

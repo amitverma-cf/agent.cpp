@@ -52,6 +52,23 @@ std::string resolve_home_root(std::string_view flag, std::string_view env_value,
 Result<void> save_home_pointer(const std::string &pointer_path, std::string_view root);
 Result<void> create_home_layout(const HomeLayout &home);
 
+// ---- The state of a workspace
+//
+// A workspace is the folder the tools work in. When it is a project folder of the user (anywhere outside the home), what the agent
+// itself writes about it does not go into that folder but into <home>/workspaces/<folder name>-<hash of its path>/: the conversations
+// and notes (memory/), logs/, tmp/, cache/, generated files (artifacts/), saved tool results and the permissions given for good. A
+// workspace inside the home (workspaces/default) keeps its state in itself, and so does every workspace when there is no home (the
+// layout of --config-dir). What an earlier version left in the project folder is moved over the first time.
+
+// Called once at start: the home and its workspaces folder; empty strings = no home.
+void set_state_home(std::string_view home_root, std::string_view workspaces_dir);
+// The state folder of a workspace (created). Equal to `workspace` when the state stays in it.
+std::string state_dir_for(const std::string &workspace);
+// <state>/sessions/<id>/ (created): the folder one conversation works in when it has no project to work on.
+std::string session_dir_for(const std::string &workspace, std::string_view session_id);
+// Points a Config at a workspace: workspace_dir, state_dir, and the grant that lets the file tools use the state folder.
+void use_workspace(Config &cfg, const std::string &workspace);
+
 struct ProjectLayout {
     std::string root;       // the project folder
     std::string agents;     // <root>/.agents

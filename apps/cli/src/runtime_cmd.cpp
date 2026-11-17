@@ -50,7 +50,8 @@ void install_cli_hooks(Config &cfg, Context &ctx) {
         if (c->has_home) rewrite_launcher(server, c->home, c->config.js_runtime);
     };
     cfg.mcp_launcher_user_data = &ctx;
-    cfg.path_grants = load_all_grants(ctx);
+    const std::vector<PathGrant> saved = load_all_grants(ctx); // added to what the workspace set up (its state folder)
+    cfg.path_grants.insert(cfg.path_grants.end(), saved.begin(), saved.end());
     cfg.path_gate = cli_path_gate;
     cfg.path_gate_user_data = &ctx;
 }

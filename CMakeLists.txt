@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 # The single version source: the CLI version string, the package config version and the release
 # tarball names all come from here.
-project("agent.cpp" VERSION 1.1.0 LANGUAGES C CXX)
+project("agent.cpp" VERSION 1.1.1 LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -377,10 +377,11 @@ if(AGENT_BUILD_HUB)
     endif()
 endif()
 if(AGENT_BUILD_CLI)
-    target_sources(test_agent PRIVATE tests/unit/test_cli.cpp tests/unit/test_cli_growth.cpp tests/unit/test_edit_journal.cpp tests/unit/test_chat_extras.cpp tests/unit/test_model_detect.cpp tests/unit/test_cli_status.cpp tests/unit/test_voice.cpp tests/unit/test_home.cpp tests/unit/test_secrets.cpp tests/unit/test_doctor.cpp tests/unit/test_mcp_config.cpp tests/unit/test_archive.cpp tests/unit/test_runtimes.cpp tests/unit/test_registries.cpp tests/unit/test_engine_release.cpp tests/unit/test_sandbox_windows.cpp tests/unit/test_path_gate.cpp tests/unit/test_cli_e2e.cpp tests/unit/test_cli_net.cpp tests/unit/test_chat_features.cpp)
+    target_sources(test_agent PRIVATE tests/unit/test_cli.cpp tests/unit/test_cli_growth.cpp tests/unit/test_cli_workspace.cpp tests/unit/test_edit_journal.cpp tests/unit/test_chat_extras.cpp tests/unit/test_model_detect.cpp tests/unit/test_cli_status.cpp tests/unit/test_voice.cpp tests/unit/test_home.cpp tests/unit/test_secrets.cpp tests/unit/test_doctor.cpp tests/unit/test_mcp_config.cpp tests/unit/test_archive.cpp tests/unit/test_runtimes.cpp tests/unit/test_registries.cpp tests/unit/test_engine_release.cpp tests/unit/test_sandbox_windows.cpp tests/unit/test_path_gate.cpp tests/unit/test_cli_e2e.cpp tests/unit/test_cli_net.cpp tests/unit/test_chat_features.cpp)
     target_link_libraries(test_agent PRIVATE agent_cli_core)
     # The agent voice end-to-end test runs the real binary.
-    target_compile_definitions(test_agent PRIVATE AGENT_TEST_CLI_PATH="$<TARGET_FILE:agent_cli_bin>")
+    target_compile_definitions(test_agent PRIVATE AGENT_TEST_CLI_PATH="$<TARGET_FILE:agent_cli_bin>"
+                                                  AGENT_TEST_SCRIPTS_DIR="${PROJECT_SOURCE_DIR}/scripts")
     add_dependencies(test_agent agent_cli_bin)
 endif()
 target_compile_definitions(test_agent PRIVATE AGENT_TEST_MOCK_ENGINE_PATH="$<TARGET_FILE:agent-engine-mock>"

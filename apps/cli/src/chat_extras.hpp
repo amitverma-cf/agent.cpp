@@ -34,8 +34,29 @@ std::string strip_think(std::string_view text);
 
 // ask: tools that change things ask first (the default); plan: only reading is allowed; auto: nothing asks.
 enum class ChatMode { Ask, Plan, Auto };
+// "ask" (also "manual"), "plan", "auto".
 bool parse_chat_mode(std::string_view text, ChatMode &mode);
 const char *chat_mode_name(ChatMode mode);
+
+// How far the changes of a conversation reach. Session: its own folder (<state>/sessions/<id>/), for drafts, downloads and anything
+// that is only for this conversation. Project: the folder the chat works in. Workspace: other projects the agent knows and the
+// workspaces folder of the home. A chat starts at Session when it has no project of the user (the default workspace) and at Project
+// when it was opened on one. In auto mode the agent widens the scope by itself, one bounded step at a time and never to a folder
+// outside these three; in ask mode the user is asked; plan mode changes nothing.
+enum class AccessScope { Session, Project, Workspace };
+const char *access_scope_name(AccessScope scope);
+// The folders a path is judged against.
+struct AccessPlaces {
+    std::string session_dir;                 // the conversation's own folder
+    std::string workspace;                   // the folder the chat works in
+    std::string home_workspaces;             // <home>/workspaces ("" without a home)
+    std::vector<std::string> other_projects; // the other folders in workspaces.txt
+};
+// The scope a change to `path` (absolute, or relative to the workspace) needs. False when the path is in none of the three places:
+// the agent never widens to it by itself.
+bool access_scope_needed(const AccessPlaces &places, std::string_view path, AccessScope &needed);
+// The paths a call of a file tool changes ("path", or "from" and "to"); empty for other tools and for unreadable arguments.
+std::vector<std::string> tool_changed_paths(std::string_view tool, std::string_view arguments_json);
 // Built-in tools that change files or run commands.
 bool tool_changes_things(std::string_view tool);
 

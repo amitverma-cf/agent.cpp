@@ -6,6 +6,7 @@
 #include "voice.hpp"
 
 #include "commands.hpp"
+#include "home.hpp"
 
 #include <agent-cpp/store_sqlite.hpp>
 #include <algorithm>
@@ -154,7 +155,7 @@ Config base_config(VoiceState &st, const LoadedEngine &engine) {
     cfg.engine_isolation = cli_engine_isolation(st.settings.inprocess, engine.isolation);
     cfg.engine_sandbox.gpu = cli_engine_gpu(engine.backend);
     apply_sandbox_choice(cfg);
-    cfg.workspace_dir = st.workspace;
+    use_workspace(cfg, st.workspace);
     cfg.logger = log_fn;
     cfg.logger_user_data = &st;
     return cfg;
@@ -358,8 +359,8 @@ int cmd_voice(const CommandLine &cl, Context &ctx) {
     std::string engine_log;
     if (!st.settings.verbose) {
         std::error_code ec;
-        fs::create_directories(fs::path(st.workspace) / "logs", ec);
-        engine_log = (fs::path(st.workspace) / "logs" / "engine.log").string();
+        fs::create_directories(fs::path(state_dir_for(st.workspace)) / "logs", ec);
+        engine_log = (fs::path(state_dir_for(st.workspace)) / "logs" / "engine.log").string();
         if (std::FILE *original = redirect_stderr(engine_log)) g_err = original;
         else engine_log.clear();
     }
@@ -390,12 +391,12 @@ int run_voice(VoiceState &st, const std::string &engine_log) {
     if (output_dir.empty() && !file_input) {
         output = audio::open_device_output();
         if (!output.ok) {
-            output_dir = (fs::path(st.workspace) / "voice").string();
+            output_dir = (fs::path(state_dir_for(st.workspace)) / "voice").string();
             std::fprintf(g_err, "warning: %s; replies go to %s instead\n", output.error.message.c_str(), output_dir.c_str());
         }
     }
     if (!output.ok) {
-        if (output_dir.empty()) output_dir = (fs::path(st.workspace) / "voice").string();
+        if (output_dir.empty()) output_dir = (fs::path(state_dir_for(st.workspace)) / "voice").string();
         output = audio::open_file_output(output_dir, "reply", st.settings.barge_in);
         if (!output.ok) return voice_fail(output.error);
     }

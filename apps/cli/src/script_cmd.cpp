@@ -109,9 +109,9 @@ int run_remote_script(const std::string &name, const std::vector<std::string> &a
     if (detach) {
         // Windows will not replace a program that is running: the script waits for this process to exit, in a window of its own.
         set_env("AGENT_WAIT_PID", std::to_string(_getpid()));
-        std::printf("updating in a new window; this program exits now\n");
+        std::printf("continuing in a new window; this program exits now\n");
         std::fflush(stdout);
-        return std::system(("start \"agent update\" " + command).c_str()) == 0 ? 0 : 1;
+        return std::system(("start \"agent " + name + "\" " + command).c_str()) == 0 ? 0 : 1;
     }
 #else
     (void)detach;
@@ -131,6 +131,58 @@ int run_remote_script(const std::string &name, const std::vector<std::string> &a
     std::error_code ec;
     if (scripts_base().rfind("http", 0) == 0) fs::remove(file.value, ec);
     return rc == 0 ? 0 : 1;
+}
+
+namespace {
+// Whether the folder of the running program was made by the installer (so it is the installer's to remove, not a build tree).
+bool installed_program(const fs::path &dir) {
+    std::error_code ec;
+    return fs::is_regular_file(dir / ".version", ec) || !install_root().empty();
+}
+std::string lexical(const fs::path &p) { return p.lexically_normal().string(); }
+bool within(const fs::path &path, const fs::path &folder) {
+    const fs::path rel = path.lexically_normal().lexically_relative(folder.lexically_normal());
+    return !rel.empty() && rel.native().rfind(fs::path("..").native(), 0) != 0;
+}
+} // namespace
+
+int cmd_uninstall(const CommandLine &cl, Context &ctx) {
+    const std::string exe_dir = executable_dir();
+    const fs::path program = exe_dir.empty() ? fs::path() : fs::path(exe_dir);
+    const bool remove_program = !program.empty() && installed_program(program);
+    const std::string pointer = home_pointer_path();
+    std::error_code ec;
+    const bool has_data = ctx.has_home && !cl.has("keep-data") && fs::is_directory(ctx.home.root, ec);
+    std::printf("agent uninstall removes:\n");
+    if (has_data) std::printf("  the data folder   %s  (models, engines, conversations, notes, logs, caches)\n", ctx.home.root.c_str());
+    else if (ctx.has_home) std::printf("  nothing of the data folder %s (--keep-data)\n", ctx.home.root.c_str());
+    if (remove_program) std::printf("  the program       %s\n", lexical(program).c_str());
+    else std::printf("  nothing of the program: %s does not look like an installed copy (a build or a package manager)\n", exe_dir.c_str());
+    const bool pointer_outside =
+        has_data && fs::exists(pointer, ec) && !within(pointer, ctx.home.root) && !(remove_program && within(pointer, program));
+    if (pointer_outside) std::printf("  the pointer file  %s\n", pointer.c_str());
+    if (remove_program) std::printf("  the PATH entry of the program\n");
+    if (!has_data && !remove_program) {
+        std::printf("nothing to remove\n");
+        return 0;
+    }
+    if (!cl.has("yes")) {
+        if (!stdin_is_tty()) {
+            std::fprintf(stderr, "agent uninstall: removing files needs a yes: run it in a terminal, or pass --yes\n");
+            return 1;
+        }
+        std::printf("This cannot be undone. Type yes to remove it: ");
+        std::fflush(stdout);
+        char line[32] = {0};
+        if (!std::fgets(line, sizeof(line), stdin) || std::string(line).rfind("yes", 0) != 0) {
+            std::printf("nothing was removed\n");
+            return 1;
+        }
+    }
+    set_env("AGENT_UNINSTALL_HOME", has_data ? lexical(fs::path(ctx.home.root)) : std::string());
+    set_env("AGENT_UNINSTALL_PROGRAM", remove_program ? lexical(program) : std::string());
+    set_env("AGENT_UNINSTALL_POINTER", pointer_outside ? pointer : std::string());
+    return run_remote_script("uninstall", {}, true);
 }
 
 int cmd_setup(const CommandLine &cl, Context &) { return run_remote_script("setup", forwarded_args(cl), false); }

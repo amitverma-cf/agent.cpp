@@ -110,6 +110,8 @@ std::vector<size_t> filter_commands(std::span<const TuiCommand> commands, std::s
     std::vector<size_t> matches;
     for (size_t i = 0; i < commands.size(); ++i)
         if (std::string_view(commands[i].name).substr(0, typed.size()) == typed) matches.push_back(i);
+    // What was typed in full comes first: "/mode" is not completed to "/model".
+    std::stable_partition(matches.begin(), matches.end(), [&](size_t i) { return std::string_view(commands[i].name) == typed; });
     return matches;
 }
 
@@ -526,6 +528,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         Bind(project_line);
         Bind(side_class);
         Bind(app_class);
+        Bind(welcome_class);
         Bind(tip);
         Bind(notice);
         Bind(has_notice);
@@ -598,7 +601,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
     std::string notice;
     bool has_notice = false;
     std::string title_l, title_s;
-    std::string main_title = "New chat", project_line, side_class = "side", app_class = "main home", tip;
+    std::string main_title = "New chat", project_line, side_class = "side", app_class = "main home", welcome_class = "welcome", tip;
     std::string md_css = std::string(kMarkdownCss);
     bool asking = false, prompting = false, busy = false;
     bool show_welcome = true, show_palette = false, palette_open = false; // palette_open: Ctrl+P, the input line is still empty
@@ -615,10 +618,9 @@ class ChatApp : public rtxui::Component<ChatApp> {
         key_rows.clear();
         for (const TuiShortcut &a : tui_shortcut_actions()) key_rows.push_back({tui_key_pretty(keymap[a.action]), a.label, ""});
         key_hint = tui_key_pretty(keymap["help"]) + " shortcuts";
-        key_rows.push_back({"? or F1", "Show this list", ""});
         key_rows.push_back({"@file", "Put a file's text in your message", ""});
         key_rows.push_back({"!command", "Run a shell command in your project", ""});
-        key_rows.push_back({"Esc, Ctrl+C", "Stop the answer, tool or /compact that is running", ""});
+        key_rows.push_back({"Esc, Ctrl+C", "Stop what is running, close this list", ""});
         key_rows.push_back({"PageUp, PageDown", "Scroll the conversation", ""});
         key_rows.push_back({"Home, End", "Oldest message, newest message", ""});
     }
@@ -1371,14 +1373,17 @@ class ChatApp : public rtxui::Component<ChatApp> {
         const std::vector<size_t> found = (busy || prompting) ? std::vector<size_t>() : PaletteMatches();
         matches.clear();
         if (!found.empty()) selected %= found.size();
-        // Eight rows show; Down scrolls the window along with the selection. The chosen row has a marker, not only a colour.
-        const size_t first = selected >= 8 ? selected - 7 : 0;
-        for (size_t i = first; i < found.size() && i < first + 8; ++i) {
+        // Six rows show; Down scrolls the window along with the selection. The chosen row has a marker, not only a colour.
+        const size_t first = selected >= 6 ? selected - 5 : 0;
+        for (size_t i = first; i < found.size() && i < first + 6; ++i) {
             const TuiCommand &c = host.commands[found[i]];
-            matches.push_back(
-                {std::string(i == selected ? "\xE2\x96\xB8 " : "  ") + c.name, c.help, i == selected ? "pitem current" : "pitem"});
+            // A very short terminal has room for five rows: the sixth gives way, or the first when the sixth is the chosen one.
+            const bool late = i - first == (selected - first == 5 ? 0u : 5u);
+            matches.push_back({std::string(i == selected ? "\xE2\x96\xB8 " : "  ") + c.name, c.help,
+                               std::string(i == selected ? "pitem current" : "pitem") + (late ? " late" : "")});
         }
         show_palette = !matches.empty();
+        welcome_class = show_palette ? "welcome withpal" : "welcome";
         title_l = clip(main_title, 44);
         title_s = clip(main_title, 22);
         return Component<ChatApp>::Digest();
@@ -1716,7 +1721,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         </div>
         <div class="sp1"></div>
         <div class="transcript" id="t">
-          <div if="{show_welcome}" class="welcome">
+          <div if="{show_welcome}" class="{welcome_class}">
             <div class="small-brand">agent.cpp</div>
             <for each="{banner}" as="ln"><div class="{ln.cls}">{ln.text}</div></for>
             <div class="warn" if="{has_notice}">{notice}</div>
@@ -1745,7 +1750,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
             <for each="{matches}" as="m"><div class="{m.cls}"><span class="pname">{m.name}</span><span class="phelp">{m.help}</span></div></for>
           </div>
           <div if="{prompting}" class="promptq">? {prompt_line}</div>
-          <div class="inrow"><div class="{mic_class}" onclick="ToggleMic">{ico_mic}</div><div class="{box_class}"><input value="{input}" placeholder="Message agent.cpp" autofocus=""/></div></div>
+          <div class="inrow"><div class="{mic_class}" onclick="ToggleMic">{ico_mic}</div><div class="{box_class}"><input value="{input}" placeholder="Type a message" autofocus=""/></div></div>
           <div class="{hint_class}">{hint}</div>
         </div>
         <div class="sp2"></div>
@@ -1771,8 +1776,8 @@ class ChatApp : public rtxui::Component<ChatApp> {
         <div class="dlgactions"><span class="btn danger" onclick="ConfirmYes">y Delete  </span><span class="btn" onclick="ConfirmNo">n Cancel  </span></div>
       </dialog>
       <dialog open="{show_keys}" title="Keyboard shortcuts">
-        <for each="{key_rows}" as="k"><div class="keyrow"><span class="kname">{k.label}</span><span class="kdesc">{k.value}</span></div></for>
-        <div class="dlgactions"><span class="btn" onclick="CloseKeys">Esc Close  </span></div>
+        <div class="keylist"><for each="{key_rows}" as="k"><div class="keyrow"><span class="kname">{k.label}</span><span class="kdesc">{k.value}</span></div></for></div>
+        <div class="dlgactions keysclose"><span class="btn" onclick="CloseKeys">Esc Close  </span></div>
       </dialog>
       <toast open="{toast_open}">{toast_text}</toast>
     </div>
@@ -1880,20 +1885,21 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .ask { border: round; border-color: #40e0d0; padding-left: 1; padding-right: 1; margin-bottom: 0; }
       .allow { color: #ffb3d1; font-weight: bold; padding-right: 1; }
       .q { flex-grow: 1; white-space: pre-wrap; }
-      .palette { border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; }
-      .pitem { display: flex; flex-direction: row; color: #40e0d0; }
+      .palette { border: round; border-color: #4a4a4a; padding-left: 1; padding-right: 1; overflow-x: hidden; }
+      .pitem { display: flex; flex-direction: row; color: #40e0d0; overflow-x: hidden; white-space: nowrap; }
       .pitem .pname { width: 16; flex-shrink: 0; }
-      .pitem .phelp { color: #ffffff; flex-grow: 1; flex-basis: 0; min-width: 0; }
+      .pitem .phelp { color: #ffffff; flex-grow: 1; flex-basis: 0; min-width: 0; white-space: nowrap; overflow-x: hidden; }
       .current .pname { color: #ffb3d1; font-weight: bold; }
       .promptq { color: #ffb3d1; font-weight: bold; padding-left: 1; }
       .status { display: flex; flex-direction: row; padding-left: 2; padding-right: 2; color: #8a8a8a; border-top: solid; border-color: #4a4a4a; }
-      .sl { display: flex; flex-direction: row; flex-grow: 1; min-width: 0; white-space: nowrap; overflow-x: hidden; }
+      .sl { display: flex; flex-direction: row; flex-wrap: wrap; height: 1; flex-grow: 1; flex-basis: 0; min-width: 0; white-space: nowrap;
+            overflow: hidden; }
       .sr { display: flex; flex-direction: row; flex-shrink: 0; white-space: nowrap; }
       .tb { padding-right: 1; white-space: nowrap; flex-shrink: 0; }
       .sr .tb { padding-left: 1; padding-right: 0; color: #8a8a8a; }
       .gauge { color: #40e0d0; padding-left: 2; white-space: nowrap; }
       .gauge.hot { color: #ffb3d1; }
-      dialog::part(dialog-box) { border: round; border-color: #40e0d0; background-color: #000000; color: #ffffff; min-width: 50; max-width: 90; }
+      dialog::part(dialog-box) { border: round; border-color: #40e0d0; background-color: #000000; color: #ffffff; min-width: 64; max-width: 90; }
       dialog::part(dialog-header) { color: #40e0d0; border-color: #4a4a4a; }
       toast::part(toast) { border-color: #40e0d0; background-color: #000000; color: #ffffff; }
       .box input::part(placeholder) { color: #8a8a8a; }
@@ -1905,7 +1911,10 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .keyrow { display: flex; flex-direction: row; }
       .kname { width: 20; flex-shrink: 0; color: #40e0d0; white-space: nowrap; }
       .kdesc { color: #ffffff; flex-grow: 1; flex-basis: 0; min-width: 0; white-space: normal; }
+      .keylist { overflow-y: scroll; scrollbar-color: #40e0d0 #000000; }
 
+)html"
+                            R"html(
       /* Below 84 columns the sidebar is a screen of its own: the list opens over the conversation with the menu button, and picking a session
          goes back to the conversation, like a phone app. */
       @media (max-width: 83) {
@@ -1932,6 +1941,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         .user { padding-left: 3; }
         .home .composer { width: 100%; padding-left: 1; padding-right: 1; }
         .tb.models, .tb.engine { display: none; }
+        dialog::part(dialog-box) { min-width: 44; }
       }
       @media (max-width: 55) {
         .tl { display: none; }
@@ -1942,6 +1952,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         .assistant .mark { display: none; }
         .tb.cpu { display: none; }
         .kname { width: 11; white-space: normal; }
+        .pitem .phelp { display: none; }
         dialog::part(dialog-box) { min-width: 28; }
       }
       @media (max-width: 35) {
@@ -1950,6 +1961,22 @@ class ChatApp : public rtxui::Component<ChatApp> {
         .hint { display: none; }
         .hint.askhint { display: block; white-space: normal; }
         .tb.ram { display: none; }
+      }
+      /* A short terminal: the command list takes the place of the big name, and the list of shortcuts scrolls. */
+      @media (max-height: 27) {
+        .welcome.withpal { display: none; }
+        .keysclose { display: none; }
+        .keylist { max-height: 14; }
+      }
+      @media (max-height: 20) {
+        .keylist { max-height: 9; }
+        .home .transcript { padding-top: 0; }
+        .hint { display: none; }
+        .hint.askhint { display: block; white-space: normal; }
+      }
+      @media (max-height: 16) {
+        .keylist { max-height: 6; }
+        .pitem.late { display: none; }
       }
     </style>
   )html";

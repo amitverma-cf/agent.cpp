@@ -50,7 +50,7 @@ std::string snippet_around(const std::string &text, const std::vector<std::strin
 std::string chat_title(Session &session, const std::string &id, const Conversation &c) {
     if (auto named = retrieve_memory(session, std::string(kTitlePrefix) + id); named.ok && !named.value.empty()) return named.value;
     for (const Message &m : c.history)
-        if (m.role == "user" && !m.content.empty()) return one_line_cut(m.content, 80);
+        if (m.role == "user" && !without_notes(m.content).empty()) return one_line_cut(std::string(without_notes(m.content)), 80);
     return id;
 }
 
@@ -164,16 +164,17 @@ std::vector<ChatHit> search_chats(Session &session, std::string_view query, std:
         int best = 0;
         for (const Message &m : c.history) {
             if ((m.role != "user" && m.role != "assistant") || m.content.empty()) continue;
-            const int s = score_text(lower(m.content), words);
+            const std::string said(without_notes(m.content)); // the notes are the same in every chat: they say nothing about this one
+            const int s = score_text(lower(said), words);
             if (s > best) {
                 best = s;
-                hit.snippet = snippet_around(m.content, words);
+                hit.snippet = snippet_around(said, words);
             }
         }
         // The conversation as a whole: every word found anywhere counts once.
         std::string all = lower(hit.title);
         for (const Message &m : c.history)
-            if ((m.role == "user" || m.role == "assistant")) all += " " + lower(m.content);
+            if ((m.role == "user" || m.role == "assistant")) all += " " + lower(std::string(without_notes(m.content)));
         hit.score = std::max(hit.score, score_text(all, words));
         if (hit.score > 0) {
             if (hit.snippet.empty()) hit.snippet = hit.title;

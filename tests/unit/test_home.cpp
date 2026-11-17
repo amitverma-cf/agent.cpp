@@ -73,9 +73,7 @@ TEST_CASE("project: the nearest .agents folder up the tree is the project", "[ho
     auto made = init_project(dir.string());
     REQUIRE(made.ok);
     CHECK(fs::is_directory(made.value.skills));
-    CHECK(fs::is_directory(made.value.memory));
-    CHECK(fs::is_directory(made.value.cache));
-    CHECK(fs::is_directory(made.value.local));
+    CHECK_FALSE(fs::exists(made.value.memory)); // the agent's own data about a project is kept in the home
     CHECK(fs::exists(fs::path(made.value.agents) / ".gitignore"));
 
     CHECK(fs::path(find_project_root(deep.string())) == fs::absolute(dir).lexically_normal());

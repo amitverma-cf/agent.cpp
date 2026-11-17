@@ -35,7 +35,7 @@ std::string shorten_tool_result(const Session &session, std::string text, std::s
     namespace fs = std::filesystem;
     static std::atomic<unsigned> counter{0};
     std::error_code ec;
-    const fs::path dir = fs::path(session.config.workspace_dir) / ".agents" / "results";
+    const fs::path dir = fs::path(session.state_path ? *session.state_path : session.config.workspace_dir) / ".agents" / "results";
     fs::create_directories(dir, ec);
     if (ec) return text;
     std::string label(tool);

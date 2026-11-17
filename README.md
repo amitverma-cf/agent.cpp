@@ -59,6 +59,7 @@ Every capability is one command, and all of them run offline.
 | Run a repeatable workflow, resumable | `agent run flow.json` |
 | Add models, MCP servers and skills | `agent model pull NAME`, `agent mcp`, `agent skill` |
 | Check the installation, free disk space | `agent doctor`, `agent clean` |
+| Remove agent.cpp and its data folder | `agent uninstall` (`--keep-data` keeps the models and conversations) |
 
 `agent --help` lists every command and `agent <command> --help` explains one. The full reference is [docs/cli.md](docs/cli.md).
 

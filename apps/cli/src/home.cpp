@@ -138,7 +138,8 @@ Result<ProjectLayout> init_project(std::string_view dir) {
     const fs::path abs = fs::absolute(fs::path(std::string(dir)), ec).lexically_normal();
     if (ec) return fail<ProjectLayout>(ErrorCode::FilesystemError, "cannot resolve " + std::string(dir) + ": " + ec.message());
     ProjectLayout p = project_layout(abs.string());
-    for (const std::string *d : {&p.agents, &p.skills, &p.memory, &p.cache, &p.local}) {
+    // Only what the owner of the project writes: the agent's own data about the project is in the home (state_dir_for).
+    for (const std::string *d : {&p.agents, &p.skills}) {
         fs::create_directories(*d, ec);
         if (ec) return fail<ProjectLayout>(ErrorCode::FilesystemError, "cannot create " + *d + ": " + ec.message());
     }

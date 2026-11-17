@@ -108,7 +108,8 @@ TEST_CASE("cli e2e: init creates the project folders", "[cli_e2e]") {
     INFO(r.out);
     CHECK(r.code == 0);
     CHECK(fs::exists(proj / ".agents"));
-    CHECK(fs::exists(proj / ".agents" / "memory"));
+    CHECK(fs::exists(proj / ".agents" / "skills"));
+    CHECK_FALSE(fs::exists(proj / ".agents" / "memory"));   // the agent's own data is in the home
     CHECK(h.run("init " + quote(proj.string())).code == 0); // running it again is harmless
 }
 
@@ -132,12 +133,37 @@ TEST_CASE("cli e2e: runtime, skill and secret commands report usage errors and m
     CHECK(h.run("secret bind ONLYNAME").code != 0);
 }
 
+TEST_CASE("cli e2e: uninstall asks first and removes the data folder", "[cli_e2e]") {
+    Home h;
+    fs::create_directories(h.root / "home" / "models");
+    std::ofstream(h.root / "home" / "config.json") << "{}";
+    auto no = h.run("uninstall", "\n"); // input from a file: no terminal to ask
+    CHECK(no.code != 0);                // no terminal and no --yes: nothing happens
+    CHECK(has(no, "needs a yes"));
+    CHECK(has(no, "the data folder"));
+    CHECK(fs::exists(h.root / "home" / "config.json"));
+    auto keep = h.run("uninstall --keep-data --yes");
+    CHECK(keep.code == 0);
+    CHECK(has(keep, "nothing to remove")); // a build tree is not an installed program
+    CHECK(fs::exists(h.root / "home" / "config.json"));
+#if !defined(_WIN32)
+    auto yes = h.run("uninstall --yes"); // the test's home only; the program in the build tree is not touched
+    INFO(yes.out);
+    CHECK(yes.code == 0);
+    CHECK_FALSE(fs::exists(h.root / "home"));
+    CHECK(fs::exists(AGENT_TEST_CLI_PATH));
+#endif
+}
+
 TEST_CASE("cli e2e: setup writes the home, doctor reads it, clean has nothing to do", "[cli_e2e]") {
     Home h;
-    auto setup = h.run("setup --yes --no-models --caps llama --home " + quote((h.root / "home2").string()));
+    // No runtimes and no model: nothing is downloaded. The home is the one given, not the one of the environment.
+    set_env("AGENT_HOME", "");
+    auto setup = h.run("setup --yes --no-models --no-runtimes --home " + quote((h.root / "home2").string()));
     INFO(setup.out);
     CHECK(setup.code == 0);
-    CHECK(fs::exists(h.root / "home2" / "config.json"));
+    CHECK(fs::is_directory(h.root / "home2" / "models"));
+    CHECK(fs::exists(h.root / "config" / "agent" / "home.json")); // the folder is remembered, inside the test's own config folder
     auto doctor = h.run("doctor --home " + quote((h.root / "home2").string()));
     CHECK(doctor.code == 0);
     CHECK(has(doctor, "home:"));
@@ -239,6 +265,7 @@ TEST_CASE("cli e2e: task drives every capability of the mock-all engine", "[cli_
     // Out of process, through the engine host.
     auto isolated = h.run("task embed -e " + quote(AGENT_TEST_MOCK_ALL_ENGINE_PATH) + " -m " + quote(h.model.string()) +
                           " --text hello --workspace " + quote(h.workspace.string()));
+    INFO(isolated.out); // what the command printed, for the day this fails
     CHECK(has(isolated, "embedding"));
 }
 #endif
