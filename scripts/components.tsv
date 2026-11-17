@@ -7,7 +7,6 @@ engine	audiocpp	linux	x86_64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-audiocp
 engine	onnx	linux	x86_64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-linux-x86_64.tar.gz
 core	agent	linux	aarch64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-linux-aarch64.tar.gz
 engine	llama	linux	aarch64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-linux-aarch64.tar.gz
-engine	audiocpp	linux	aarch64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-linux-aarch64.tar.gz
 engine	onnx	linux	aarch64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-linux-aarch64.tar.gz
 core	agent	windows	x86_64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-windows-x86_64.zip
 engine	llama	windows	x86_64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-windows-x86_64.zip
