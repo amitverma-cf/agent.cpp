@@ -1,48 +1,45 @@
 # agent-engine-llama: a plugin over llama.cpp, in one of two ways.
 #
 #   AGENT_LLAMA_PREBUILT=<folder>   (what a release does) the plugin is compiled against an upstream llama.cpp release that was unpacked
-#                                   in <folder> and links its shared libraries (llama, llama-common, mtmd, llama-server-impl, ggml).
+#                                   in <folder> and links its shared libraries (llama, llama-common, mtmd, ggml).
 #                                   The release must be the one vendor/llama.cpp is at (its tag is in scripts/components.tsv), because the
-#                                   plugin uses llama-common and the server code, whose interfaces change with every commit. Only the
+#                                   plugin uses llama-common and compiles llama.cpp's scheduler sources, whose interfaces change with every commit. Only the
 #                                   plugin is compiled: llama.cpp is not. `scripts/install.sh fetch llama <folder>` downloads the release.
 #   (empty)                         llama.cpp is compiled from vendor/llama.cpp and linked statically into one self-contained plugin.
 set(AGENT_LLAMA_PREBUILT "" CACHE PATH "Folder with an upstream llama.cpp release to link instead of compiling llama.cpp")
 if(AGENT_LLAMA_PREBUILT)
     include(${PROJECT_SOURCE_DIR}/cmake/prebuilt_library.cmake)
     set(_ll ${PROJECT_SOURCE_DIR}/vendor/llama.cpp)
-    # llama.cpp's server code (the engine used for models with a multi-token-prediction head) is exported by its Linux and macOS libraries
-    # but not by llama-server-impl.dll: with a Windows release the plugin goes without it, and an MTP model runs on the plugin's own engine.
+    # The engine for models with a multi-token-prediction head, a draft model or a native decision head is llama.cpp's own scheduler
+    # (tools/server/server-context: llama-server and llama-cli run on it). It is compiled into the plugin from vendor/llama.cpp, the same
+    # way on every system, against the release's libraries (llama, llama-common, mtmd): llama-server-impl exports it on Linux and macOS
+    # but not on Windows. Only those sources are compiled, not llama.cpp itself, and nothing listens on a socket.
     set(_libs ggml-base ggml llama llama-common mtmd)
-    set(_server ON)
-    if(WIN32)
-        set(_server OFF)
-    else()
-        list(APPEND _libs llama-server-impl)
-    endif()
     foreach(_lib ${_libs})
         agent_prebuilt_library(${_lib} "${AGENT_LLAMA_PREBUILT}")
     endforeach()
     target_include_directories(llama SYSTEM INTERFACE ${_ll}/include ${_ll}/ggml/include)
     target_include_directories(llama-common SYSTEM INTERFACE ${_ll}/common ${_ll}/vendor)
     target_include_directories(mtmd SYSTEM INTERFACE ${_ll}/tools/mtmd)
-    if(_server)
-        target_include_directories(llama-server-impl SYSTEM INTERFACE ${_ll}/tools/server)
-    endif()
     target_link_libraries(llama INTERFACE ggml ggml-base)
+    set(_srv ${_ll}/tools/server)
+    set(_server_sources
+        ${_srv}/server-chat.cpp ${_srv}/server-task.cpp ${_srv}/server-queue.cpp ${_srv}/server-common.cpp
+        ${_srv}/server-decision.cpp ${_srv}/server-context.cpp ${_srv}/server-realtime.cpp ${_srv}/server-stream.cpp
+        ${_srv}/server-tools.cpp ${_srv}/server-mcp.cpp ${_srv}/server-schema.cpp)
     set(CMAKE_CXX_STANDARD 20)
     add_library(agent-engine-llama SHARED
         llama_engine.cpp
         upstream_engine.cpp
+        ${_server_sources}
         ${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader/simdjson.cpp
     )
-    target_include_directories(agent-engine-llama PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader)
+    # llama.cpp is a C++17 project: its sources are compiled as such, without our warning flags.
+    set_source_files_properties(${_server_sources} PROPERTIES COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w;/bigobj,-w>" CXX_STANDARD 17)
+    target_include_directories(agent-engine-llama PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader
+        ${_srv} ${_ll}/tools/mtmd ${_ll} ${_ll}/vendor ${_ll}/common)
     target_link_libraries(agent-engine-llama PRIVATE llama llama-common mtmd)
-    target_compile_definitions(agent-engine-llama PRIVATE AGENT_LLAMA_PREBUILT=1)
-    if(_server)
-        target_link_libraries(agent-engine-llama PRIVATE llama-server-impl)
-        target_compile_definitions(agent-engine-llama PRIVATE AGENT_LLAMA_UPSTREAM=1)
-        target_include_directories(agent-engine-llama PRIVATE ${_ll}/tools/server)
-    endif()
+    target_compile_definitions(agent-engine-llama PRIVATE AGENT_LLAMA_PREBUILT=1 AGENT_LLAMA_UPSTREAM=1)
     set_target_properties(agent-engine-llama PROPERTIES PREFIX "" CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
     set_source_files_properties(${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader/simdjson.cpp PROPERTIES COMPILE_OPTIONS "-w")
     target_compile_options(agent-engine-llama PRIVATE ${AGENT_WARNINGS})

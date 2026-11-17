@@ -326,6 +326,61 @@ TEST_CASE("llama engine runs parallel graph branches through continuous batching
 #endif
 
 #ifdef AGENT_TEST_LLAMA_ENGINE_PATH
+// Set AGENT_TEST_LLAMA_MTP_MODEL to a GGUF with a multi-token-prediction head, e.g.
+// https://huggingface.co/unsloth/Qwen3.5-4B-MTP-GGUF (Qwen3.5-4B-Q4_K_M.gguf)
+TEST_CASE("llama engine drives the MTP head of a model and drafts tokens", "[engines][llama][model][mtp]") {
+    const char *model = std::getenv("AGENT_TEST_LLAMA_MTP_MODEL");
+    if (!model) SKIP("AGENT_TEST_LLAMA_MTP_MODEL not set");
+    auto cfg = llama_config(model);
+    cfg.context_window = 2048;
+    cfg.max_tokens = 96;
+    auto res = agent::init(cfg);
+    INFO(res.error.message);
+    REQUIRE(res.ok);
+    agent::Session session = std::move(res.value);
+
+    agent::Conversation memory;
+    memory.id = "llama_mtp";
+    auto reply = agent::run_turn(session, memory, "Count from 1 to 40, one number per line, nothing else.");
+    INFO(reply.error.message);
+    REQUIRE(reply.ok);
+    CHECK_FALSE(reply.value.empty());
+    CHECK(memory.stats.last.spec_kind == AGENT_SPEC_MTP);
+    CHECK(memory.stats.last.spec_drafted > 0);
+    CHECK(memory.stats.last.spec_accepted > 0);
+    CHECK(memory.stats.completion_tokens > 0);
+}
+
+// Set AGENT_TEST_LLAMA_DECISION_MODEL to a native decision model, e.g.
+// https://huggingface.co/ggml-org/tinylaya-for-testing-gguf (tinylaya-for-testing-Q8_0.gguf)
+TEST_CASE("llama engine answers a choice and a score with a native decision model", "[engines][llama][model][decision]") {
+    const char *model = std::getenv("AGENT_TEST_LLAMA_DECISION_MODEL");
+    if (!model) SKIP("AGENT_TEST_LLAMA_DECISION_MODEL not set");
+    auto cfg = llama_config(model);
+    cfg.context_window = 1024;
+    auto res = agent::init(cfg);
+    INFO(res.error.message);
+    REQUIRE(res.ok);
+    agent::Session session = std::move(res.value);
+
+    const std::string_view teams[] = {"billing", "shipping", "technical"};
+    auto choice = agent::decide(session, "I was charged twice for my order last week and nobody has replied.", teams);
+    INFO(choice.error.message);
+    REQUIRE(choice.ok);
+    REQUIRE(choice.value.probs.size() == 3);
+    float sum = 0.0f;
+    for (float p : choice.value.probs) sum += p;
+    CHECK(sum == Catch::Approx(1.0f).margin(1e-3));
+    CHECK(choice.value.choice >= 0);
+    CHECK(choice.value.choice < 3);
+
+    auto score = agent::decide_score(session, "How urgent is a customer who was charged twice and got no reply?", 1, 4);
+    INFO(score.error.message);
+    REQUIRE(score.ok);
+    CHECK(score.value.score >= 1.0f);
+    CHECK(score.value.score <= 4.0f);
+}
+
 TEST_CASE("llama engine rejects a prompt longer than the context instead of aborting", "[engines][llama][model]") {
     if (!test_model()) SKIP("AGENT_TEST_LLAMA_MODEL not set");
     auto cfg = llama_config(test_model());

@@ -29,9 +29,11 @@ scripts/install.sh fetch llama build/upstream/llama           # the pinned upstr
 cmake -S . -B build -DAGENT_LLAMA_PREBUILT=$PWD/build/upstream/llama -DAGENT_AUDIOCPP_PREBUILT=$PWD/build/upstream/audiocpp
 ```
 
-- `llama`: the plugin uses llama.cpp's own libraries `llama-common` and `llama-server-impl`, whose interfaces change with every commit,
-  so `vendor/llama.cpp` must be at the pinned tag (`b12020`; checked: the commit is the tag's). llama.cpp's Windows `llama-server-impl.dll` does
-  not export the server code, so a Windows plugin goes without it and a multi-token-prediction model runs on the plugin's own engine.
+- `llama`: the plugin uses llama.cpp's own libraries `llama`, `llama-common` and `mtmd`, whose interfaces change with every commit, and
+  compiles llama.cpp's scheduler sources (`tools/server/server-context` and its neighbours: the code `llama-server` and `llama-cli` run on,
+  with multi-token prediction, draft models and native decision models), so `vendor/llama.cpp` must be at the pinned tag (`b12020`; checked:
+  the commit is the tag's). Those sources are compiled into the plugin the same way on every system, because llama.cpp's Windows
+  `llama-server-impl.dll` does not export them. Only they are compiled, not llama.cpp.
 - `audiocpp`: only the C header `audiocpp.h` is used, which is the release's.
 - `onnx`: always linked against the official onnxruntime release (`AGENT_ORT_VERSION` in `cmake/onnxruntime_release.cmake`).
 - `sdcpp` and `trellis` have no upstream library to link (stable-diffusion.cpp publishes command-line programs, trellis2cpp nothing), so they

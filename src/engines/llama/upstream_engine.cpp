@@ -20,6 +20,12 @@
 #include <nlohmann/json.hpp>
 #include <thread>
 
+#if defined(AGENT_LLAMA_PREBUILT) && defined(_WIN32)
+// llama.cpp's Windows libraries do not export this one (it is built into each of its programs); the scheduler sources use it for the
+// "system_fingerprint" of an answer.
+const char *llama_build_info(void) { return "agent-cpp"; }
+#endif
+
 namespace upstream {
 
 namespace {
