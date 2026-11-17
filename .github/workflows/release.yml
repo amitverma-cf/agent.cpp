@@ -17,9 +17,9 @@ on:
         type: boolean
         default: false
       engines:
-        description: "Engines to build and ship, comma separated: llama,onnx,audiocpp,sdcpp,trellis"
+        description: "Engine plugins to build, comma separated: llama,onnx,audiocpp. They are thin: compiled against the upstream releases pinned in scripts/components.tsv (sdcpp and trellis have no upstream library: see engines-extra.yml)"
         type: string
-        default: "llama,onnx,audiocpp,sdcpp,trellis"
+        default: "llama,onnx,audiocpp"
 
 
 permissions:
@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   build:
-    name: ${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.variant }}
+    name: ${{ matrix.os_name }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -37,10 +37,6 @@ jobs:
           - { runner: ubuntu-24.04-arm, os_name: linux,   arch: aarch64, lib_prefix: lib, lib_ext: so,    exe_ext: "",     ggml: "-DGGML_NATIVE=OFF" }
           - { runner: windows-2022,     os_name: windows, arch: x86_64,  lib_prefix: "",  lib_ext: dll,   exe_ext: ".exe", ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON", triplet: x64-windows, dll: x64 }
           - { runner: windows-11-arm,   os_name: windows, arch: aarch64, lib_prefix: "",  lib_ext: dll,   exe_ext: ".exe", ggml: "-DGGML_NATIVE=ON", triplet: arm64-windows, dll: arm64 }
-          # GPU builds (Vulkan: NVIDIA, AMD, Intel). The driver brings the Vulkan loader; the installer picks this build when it is there.
-          - { runner: ubuntu-24.04,     os_name: linux,   arch: x86_64,  variant: "-vulkan", lib_prefix: lib, lib_ext: so,  exe_ext: "",     ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON -DGGML_VULKAN=ON" }
-          - { runner: ubuntu-24.04-arm, os_name: linux,   arch: aarch64, variant: "-vulkan", lib_prefix: lib, lib_ext: so,  exe_ext: "",     ggml: "-DGGML_NATIVE=OFF -DGGML_VULKAN=ON" }
-          - { runner: windows-2022,     os_name: windows, arch: x86_64,  variant: "-vulkan", lib_prefix: "",  lib_ext: dll, exe_ext: ".exe", ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON -DGGML_VULKAN=ON", triplet: x64-windows, dll: x64 }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,7 +54,7 @@ jobs:
         run: |
           # The full-screen chat (RTXUI) needs C++23: GCC 13 or newer. GCC 14 is used, and libstdc++ is linked statically so the
           # binaries do not need the newer libstdc++ on the machine that runs them.
-          sudo apt-get update && sudo apt-get install -y ninja-build libssl-dev g++-14 ${{ matrix.variant != '' && 'libvulkan-dev glslc spirv-headers' || '' }}
+          sudo apt-get update && sudo apt-get install -y ninja-build libssl-dev g++-14
           echo "CC=gcc-14" >> "$GITHUB_ENV"
           echo "CXX=g++-14" >> "$GITHUB_ENV"
 
@@ -68,16 +64,6 @@ jobs:
         run: |
           choco install ninja -y --no-progress
           "$VCPKG_INSTALLATION_ROOT/vcpkg.exe" install openssl:${{ matrix.triplet }}
-          if [ -n "${{ matrix.variant }}" ]; then
-            # The SDK download server refuses a request now and then: try up to four times before giving up.
-            for attempt in 1 2 3 4; do
-              choco install vulkan-sdk -y --no-progress && break
-              [ "$attempt" = 4 ] && exit 1
-              sleep 30
-            done
-            sdk="$(ls -d /c/VulkanSDK/* | sort | tail -1)"
-            echo "VULKAN_SDK=C:/VulkanSDK/$(basename "$sdk")" >> "$GITHUB_ENV"
-          fi
 
       - name: Compiler environment (Windows)
         if: matrix.os_name == 'windows'
@@ -85,19 +71,36 @@ jobs:
         with:
           arch: ${{ matrix.arch == 'aarch64' && 'arm64' || 'x64' }}
 
+      - name: Upstream libraries
+        shell: bash
+        run: |
+          # The plugins are compiled against the upstream releases the installer will download (llama.cpp, audio.cpp), at the exact pinned
+          # versions: only the plugins are built here, not those projects. A plugin whose upstream has no build for this system is skipped.
+          export AGENT_LIST="$PWD/scripts/components.tsv" AGENT_BACKEND=cpu
+          eng=",${{ inputs.engines || 'llama,onnx,audiocpp' }},"
+          for e in llama audiocpp; do
+            case "$eng" in *",$e,"*) ;; *) continue ;; esac
+            if [ "${{ matrix.os_name }}" = "windows" ]; then
+              powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1 fetch "$e" "$PWD/build/upstream/$e" || { eng="$(echo "$eng" | sed "s/,$e,/,/")"; echo "::notice::$e has no upstream build for this system"; }
+            else
+              sh scripts/install.sh fetch "$e" "$PWD/build/upstream/$e" || { eng="$(echo "$eng" | sed "s/,$e,/,/")"; echo "::notice::$e has no upstream build for this system"; }
+            fi
+          done
+          echo "ENGINES=$eng" >> "$GITHUB_ENV"
+
       - name: Configure
         shell: bash
         run: |
-          eng=",${{ inputs.engines || 'llama' }},"
-          # ggml's nested builds (audio.cpp, stable-diffusion.cpp, TRELLIS.2) refuse MSVC on ARM ("use clang"): Windows arm64 ships llama and onnx.
-          if [ "${{ matrix.os_name }}-${{ matrix.arch }}" = "windows-aarch64" ]; then eng="$(echo "$eng" | sed 's/,audiocpp,/,/; s/,sdcpp,/,/; s/,trellis,/,/')"; fi
+          eng="$ENGINES"
           on() { case "$eng" in *",$1,"*) echo ON ;; *) echo OFF ;; esac; }
           extra=""
           if [ "${{ matrix.os_name }}" = "linux" ]; then export LDFLAGS="-static-libstdc++ -static-libgcc"; fi
           if [ "${{ matrix.os_name }}" = "windows" ]; then extra="-DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}"; fi
+          [ "$(on llama)" = ON ] && extra="$extra -DAGENT_LLAMA_PREBUILT=$PWD/build/upstream/llama"
+          [ "$(on audiocpp)" = ON ] && extra="$extra -DAGENT_AUDIOCPP_PREBUILT=$PWD/build/upstream/audiocpp"
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DAGENT_BUILD_CLI=ON -DAGENT_BUILD_EXAMPLES=OFF             -DAGENT_ENGINE_LLAMA=$(on llama) -DAGENT_ENGINE_ONNX=$(on onnx) -DAGENT_ENGINE_AUDIOCPP=$(on audiocpp)             -DAGENT_ENGINE_SDCPP=$(on sdcpp) -DAGENT_ENGINE_TRELLIS=$(on trellis) \
-            ${{ matrix.ggml }} $extra
+            -DAGENT_BUILD_CLI=ON -DAGENT_BUILD_EXAMPLES=OFF -DAGENT_ENGINE_LLAMA=$(on llama) -DAGENT_ENGINE_ONNX=$(on onnx) \
+            -DAGENT_ENGINE_AUDIOCPP=$(on audiocpp) -DAGENT_ENGINE_SDCPP=OFF -DAGENT_ENGINE_TRELLIS=OFF $extra
 
       - name: Build
         run: cmake --build build --config Release
@@ -118,15 +121,14 @@ jobs:
           v="${{ steps.version.outputs.value }}"
           extra=""
           if [ "${{ matrix.os_name }}" = "windows" ]; then extra="--openssl-dir $VCPKG_INSTALLATION_ROOT/installed/${{ matrix.triplet }}/bin --openssl-suffix -${{ matrix.dll }}"; fi
-          if [ -n "${{ matrix.variant }}" ]; then extra="$extra --variant vulkan --no-core"; fi
-          bash scripts/package-release.sh --build-dir build --out-dir assets --tag "$v" --os ${{ matrix.os_name }} --arch ${{ matrix.arch }} \
+          bash scripts/package-release.sh --build-dir build --out-dir assets --tag "$v" --os ${{ matrix.os_name }} --arch ${{ matrix.arch }} --plugin-only llama,audiocpp,onnx \
             --lib-ext ${{ matrix.lib_ext }} --exe-ext "${{ matrix.exe_ext }}" $extra
           rm -f assets/SHA256SUMS
           ls -la assets
 
       - uses: actions/upload-artifact@v4
         with:
-          name: assets-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.variant }}
+          name: assets-${{ matrix.os_name }}-${{ matrix.arch }}
           path: assets/*
           if-no-files-found: error
 
@@ -181,3 +183,51 @@ jobs:
           prerelease: ${{ github.ref_type != 'tag' }}
           generate_release_notes: true
           files: assets/*
+
+  install-test:
+    # The installer script, on a clean machine of every kind, with the files this run just built and the real upstream downloads: install,
+    # add every engine and runtime, check the SHA-256 refusal, remove, uninstall. And one real model (onnx) through the engine.
+    name: install ${{ matrix.os_name }}-${{ matrix.arch }}
+    needs: build
+    if: ${{ !cancelled() && needs.build.result != 'cancelled' }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04,     os_name: linux,   arch: x86_64,  engines: "llama,onnx,audiocpp", runtimes: "bun,uv,node,pnpm,nub" }
+          - { runner: ubuntu-24.04-arm, os_name: linux,   arch: aarch64, engines: "llama,onnx",          runtimes: "bun,uv,node,pnpm,nub" }
+          - { runner: windows-2022,     os_name: windows, arch: x86_64,  engines: "llama,onnx,audiocpp", runtimes: "bun,uv,node,pnpm,nub" }
+          - { runner: windows-11-arm,   os_name: windows, arch: aarch64, engines: "llama,onnx",          runtimes: "uv,node,pnpm,nub" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: assets-${{ matrix.os_name }}-${{ matrix.arch }}
+          path: assets
+      - name: Version
+        id: version
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then v="${GITHUB_REF_NAME}"; else v="build-${{ github.run_number }}"; fi
+          echo "value=${v}" >> "$GITHUB_OUTPUT"
+          (cd assets && if command -v sha256sum >/dev/null; then sha256sum * > SHA256SUMS; else shasum -a 256 * > SHA256SUMS; fi)
+      - name: Install test (Linux)
+        if: matrix.os_name == 'linux'
+        run: |
+          ENGINES="$(echo '${{ matrix.engines }}' | tr ',' ' ')" RUNTIMES="$(echo '${{ matrix.runtimes }}' | tr ',' ' ')" \
+            bash tests/modular/run.sh "$PWD/assets" "${{ steps.version.outputs.value }}" | tee install-test.log
+          ! grep -q '^FAIL' install-test.log
+          ENGINES=onnx bash tests/modular/engines.sh "$PWD/assets" "$PWD/scripts" "${{ steps.version.outputs.value }}" | tee engines-test.log
+          ! grep -q '^FAIL' engines-test.log
+      - name: Install test (Windows)
+        if: matrix.os_name == 'windows'
+        shell: powershell
+        run: |
+          $log = & powershell -NoProfile -ExecutionPolicy Bypass -File tests/modular/run.ps1 -Release "$PWD\assets" -Scripts "$PWD\scripts" -Tag "${{ steps.version.outputs.value }}" -Engines "${{ matrix.engines }}" -Runtimes "${{ matrix.runtimes }}" 2>&1
+          $log | Out-String | Write-Host
+          if ($log | Select-String -Pattern '^FAIL') { exit 1 }
+          $env:AGENT_TEST_TAG = "${{ steps.version.outputs.value }}"
+          $log = & powershell -NoProfile -ExecutionPolicy Bypass -File tests/modular/engines.ps1 -Release "$PWD\assets" -Scripts "$PWD\scripts" -ChatModel none -Engines onnx 2>&1
+          $log | Out-String | Write-Host
+          if ($log | Select-String -Pattern '^FAIL') { exit 1 }

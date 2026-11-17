@@ -1,4 +1,70 @@
-# agent-engine-llama: links llama.cpp statically into one self-contained plugin.
+# agent-engine-llama: a plugin over llama.cpp, in one of two ways.
+#
+#   AGENT_LLAMA_PREBUILT=<folder>   (what a release does) the plugin is compiled against an upstream llama.cpp release that was unpacked
+#                                   in <folder> and links its shared libraries (llama, llama-common, mtmd, llama-server-impl, ggml).
+#                                   The release must be the one vendor/llama.cpp is at (its tag is in scripts/components.tsv), because the
+#                                   plugin uses llama-common and the server code, whose interfaces change with every commit. Only the
+#                                   plugin is compiled: llama.cpp is not. `scripts/install.sh fetch llama <folder>` downloads the release.
+#   (empty)                         llama.cpp is compiled from vendor/llama.cpp and linked statically into one self-contained plugin.
+set(AGENT_LLAMA_PREBUILT "" CACHE PATH "Folder with an upstream llama.cpp release to link instead of compiling llama.cpp")
+if(AGENT_LLAMA_PREBUILT)
+    include(${PROJECT_SOURCE_DIR}/cmake/prebuilt_library.cmake)
+    set(_ll ${PROJECT_SOURCE_DIR}/vendor/llama.cpp)
+    # llama.cpp's server code (the engine used for models with a multi-token-prediction head) is exported by its Linux and macOS libraries
+    # but not by llama-server-impl.dll: with a Windows release the plugin goes without it, and an MTP model runs on the plugin's own engine.
+    set(_libs ggml-base ggml llama llama-common mtmd)
+    set(_server ON)
+    if(WIN32)
+        set(_server OFF)
+    else()
+        list(APPEND _libs llama-server-impl)
+    endif()
+    foreach(_lib ${_libs})
+        agent_prebuilt_library(${_lib} "${AGENT_LLAMA_PREBUILT}")
+    endforeach()
+    target_include_directories(llama SYSTEM INTERFACE ${_ll}/include ${_ll}/ggml/include)
+    target_include_directories(llama-common SYSTEM INTERFACE ${_ll}/common ${_ll}/vendor)
+    target_include_directories(mtmd SYSTEM INTERFACE ${_ll}/tools/mtmd)
+    if(_server)
+        target_include_directories(llama-server-impl SYSTEM INTERFACE ${_ll}/tools/server)
+    endif()
+    target_link_libraries(llama INTERFACE ggml ggml-base)
+    set(CMAKE_CXX_STANDARD 20)
+    add_library(agent-engine-llama SHARED
+        llama_engine.cpp
+        upstream_engine.cpp
+        ${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader/simdjson.cpp
+    )
+    target_include_directories(agent-engine-llama PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader)
+    target_link_libraries(agent-engine-llama PRIVATE llama llama-common mtmd)
+    target_compile_definitions(agent-engine-llama PRIVATE AGENT_LLAMA_PREBUILT=1)
+    if(_server)
+        target_link_libraries(agent-engine-llama PRIVATE llama-server-impl)
+        target_compile_definitions(agent-engine-llama PRIVATE AGENT_LLAMA_UPSTREAM=1)
+        target_include_directories(agent-engine-llama PRIVATE ${_ll}/tools/server)
+    endif()
+    set_target_properties(agent-engine-llama PROPERTIES PREFIX "" CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+    set_source_files_properties(${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader/simdjson.cpp PROPERTIES COMPILE_OPTIONS "-w")
+    target_compile_options(agent-engine-llama PRIVATE ${AGENT_WARNINGS})
+    if(UNIX AND NOT APPLE)
+        # The libraries sit next to the plugin.
+        set_target_properties(agent-engine-llama PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN" BUILD_WITH_INSTALL_RPATH ON)
+        target_link_options(agent-engine-llama PRIVATE -Wl,--disable-new-dtags)
+    endif()
+    # What a test or a build tree needs next to the plugin: the release's libraries.
+    if(WIN32)
+        file(GLOB _rt "${AGENT_LLAMA_PREBUILT}/*.dll")
+    else()
+        file(GLOB _rt "${AGENT_LLAMA_PREBUILT}/*.so*" "${AGENT_LLAMA_PREBUILT}/*.dylib")
+    endif()
+    foreach(_f ${_rt})
+        add_custom_command(TARGET agent-engine-llama POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_f}" "$<TARGET_FILE_DIR:agent-engine-llama>" VERBATIM)
+    endforeach()
+    agent_install_engine(agent-engine-llama)
+    return()
+endif()
+
 set(BUILD_SHARED_LIBS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)

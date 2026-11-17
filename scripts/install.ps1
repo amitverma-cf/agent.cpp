@@ -395,6 +395,34 @@ function Invoke-AgentInstaller([string[]] $Argv) {
         if (-not $env:AGENT_NO_START) { Do-Setup } else { Write-Host ''; Write-Host '  Next: ' -NoNewline; Write-Host 'agent setup' -ForegroundColor Cyan; Write-Host '' }
     }
 
+    # fetch NAME DIR: only the upstream parts of an engine (what its plugin is compiled against), for the release workflow. Everything is
+    # unpacked whole, the header folders included, and no agent.cpp folder is needed.
+    function Do-Fetch {
+        $n = $names[0]; $d = $names[1]
+        if (-not $n -or -not $d) { Fail 'usage: install.ps1 fetch NAME DIR' }
+        $d = [System.IO.Path]::GetFullPath($d)
+        $script:ROOT = Join-Path ([System.IO.Path]::GetTempPath()) ('agent-fetch-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $script:ROOT -Force | Out-Null
+        New-Tmp
+        $list = if ($env:AGENT_LIST) { $env:AGENT_LIST } else { Join-Path $env:AGENT_SCRIPTS 'components.tsv' }
+        Read-List $list
+        $b = Pick-Backend 'engine' $n
+        if (-not $b) { Fail "$n has no build for $os $arch." }
+        New-Item -ItemType Directory -Path $d -Force | Out-Null
+        foreach ($r in (Get-Rows 'engine' $n | Where-Object { ($_.Backend -eq 'any' -or $_.Backend -eq $b) -and -not $_.Url.StartsWith('@RELEASE@') })) {
+            $file = $r.Url.Substring($r.Url.LastIndexOf('/') + 1)
+            $local = Join-Path $tmp $file
+            Get-Source $r.Url $local $true
+            if ((Get-FileHash -Algorithm SHA256 -LiteralPath $local).Hash.ToLower() -ne $r.Sha.ToLower()) { Fail "SHA-256 mismatch for $file." }
+            $st = if ($r.Strip -like 'find:*') { '0' } else { $r.Strip }  # whole archive: the header folders are wanted too
+            Expand-Component $local $d $st
+            Remove-Item -LiteralPath $local -Force
+            Step "fetched $file ($($r.Version))"
+        }
+        Remove-Item -LiteralPath $script:ROOT -Recurse -Force -ErrorAction SilentlyContinue
+        $script:tmp = $null
+    }
+
     function Do-Add {
         Resolve-Root; Load-List; if (-not $tmp) { New-Tmp }
         $tag = Get-ListTag
@@ -481,6 +509,7 @@ function Invoke-AgentInstaller([string[]] $Argv) {
 
     try {
         switch ($cmd) {
+            'fetch' { Do-Fetch }
             'install' { Do-Install }
             'setup' { Do-Setup }
             'add' { Do-Add }

@@ -124,8 +124,11 @@ case "$(uname -m)" in
     aarch64 | arm64) ARCH=aarch64 ;;
     *) die "Unsupported CPU: $(uname -m). x86_64 and aarch64 are supported." ;;
 esac
-LIBC=gnu
-if [ "$OS" = linux ] && { ldd --version 2>&1 || true; } | grep -qi musl; then LIBC=musl; fi
+LIBC=gnu; GLIBC=""
+if [ "$OS" = linux ]; then
+    if { ldd --version 2>&1 || true; } | grep -qi musl; then LIBC=musl
+    else GLIBC="$({ ldd --version 2>&1 || true; } | head -n 1 | sed -n 's/.* \([0-9][0-9]*\.[0-9][0-9]*\)[^0-9.]*$/\1/p')"; fi
+fi
 
 # The backends this machine can run, best first.
 detect_backends() {
@@ -237,13 +240,33 @@ list_tag() { lst | sed -n 's/^# tag \(.*\)$/\1/p' | head -n 1; }
 rows_for() { # kind name -> the rows for this machine
     lst | awk -F'\t' -v k="$1" -v n="$2" -v o="$OS" -v a="$ARCH" '$0 !~ /^#/ && $1==k && $2==n && $3==o && $4==a' 
 }
+# A row may carry a last column "glibc>=2.43": a build made on a newer system, which loads only where the C library is at least that.
+version_ge() { [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" = "$2" ]; }
+backend_runs() { # kind name backend -> true when every row of that backend can run here
+    [ -z "${FETCHING:-}" ] || return 0 # fetch is for compiling against the files, not for running them
+    need="$(rows_for "$1" "$2" | awk -F'\t' -v b="$3" '($5==b || $5=="any") && $11 ~ /^glibc>=/ {sub(/^glibc>=/, "", $11); print $11}' | sort -V | tail -n 1)"
+    [ -z "$need" ] || [ -z "$GLIBC" ] || version_ge "$GLIBC" "$need"
+}
+unmet_for() { # kind name -> why no backend can run here, when a build exists but needs a newer C library
+    for b in $BACKENDS; do
+        if [ -n "$(rows_for "$1" "$2" | awk -F'	' -v b="$b" '$5==b {print 1; exit}')" ] && ! backend_runs "$1" "$2" "$b"; then
+            echo "the upstream $b build needs glibc $(rows_for "$1" "$2" | awk -F'	' -v b="$b" '$5==b && $11 ~ /^glibc>=/ {sub(/^glibc>=/, "", $11); print $11; exit}') or newer; this system has glibc $GLIBC"; return
+        fi
+    done
+}
+UNMET=""
 pick_backend() { # kind name -> the backend to install, or nothing
     rows="$(rows_for "$1" "$2")"
     [ -n "$rows" ] || return 0
     have="$(printf '%s\n' "$rows" | awk -F'\t' '{print $5}' | sort -u | tr '\n' ' ' | sed 's/ *$//')"
+    UNMET=""
     case " $have " in " any ") echo any; return ;; esac
     for b in $BACKENDS; do
-        case " $have " in *" $b "*) echo "$b"; return ;; esac
+        case " $have " in
+            *" $b "*)
+                if backend_runs "$1" "$2" "$b"; then echo "$b"; return; fi
+                UNMET="$b needs a newer C library than glibc $GLIBC" ;;
+        esac
     done
 }
 kind_of() { # a name -> engine, runtime or core
@@ -285,8 +308,8 @@ unpack() { # archive destination strip
             src="$(dirname "$hit")" ;;
         *)
             while [ "$i" -lt "$strip" ]; do
-                n="$(ls -A "$src" | wc -l | tr -d ' ')"
-                [ "$n" = 1 ] || break
+                cnt="$(ls -A "$src" | wc -l | tr -d ' ')"
+                [ "$cnt" = 1 ] || break
                 src="$src/$(ls -A "$src")"; i=$((i + 1))
             done ;;
     esac
@@ -302,7 +325,7 @@ install_component() { # kind name backend
     [ "$kind" != core ] || stage="$ROOT/bin.new"
     rm -rf "$stage"; mkdir -p "$stage"
     got=""
-    rows_for "$kind" "$name" | while IFS="$TAB" read -r k n o a b v s st d u; do
+    rows_for "$kind" "$name" | while IFS="$TAB" read -r rk rn ro ra b v s st d u need; do
         [ "$b" = any ] || [ "$b" = "$bk" ] || continue
         printf '%s\n' "$b $v $s $st $d $u"
     done >"$TMP/rows.$$"
@@ -347,7 +370,11 @@ add_names() { # comma separated names
         k="$(kind_of "$n")"
         if [ -z "$k" ] || [ "$k" = core ]; then info "$n is not a component of this release (agent ls shows them)"; continue; fi
         b="$(pick_backend "$k" "$n")"
-        if [ -z "$b" ]; then info "$n has no build for $OS $ARCH yet"; continue; fi
+        if [ -z "$b" ]; then
+            why="$(unmet_for "$k" "$n")"
+            if [ -n "$why" ]; then info "$n cannot run here: $why"; else info "$n has no build for $OS $ARCH yet"; fi
+            continue
+        fi
         install_component "$k" "$n" "$b"
         if [ "$k" = engine ] && [ -x "$BIN/agent" ]; then
             if "$BIN/agent" doctor 2>/dev/null | grep -Eq "^ +$n +ok"; then step "$n loads"; else info "$n is installed but did not report ok in agent doctor"; fi
@@ -527,7 +554,30 @@ do_uninstall() {
     step "agent.cpp is removed"
 }
 
+# fetch NAME DIR: only the upstream parts of an engine (what its plugin is compiled against), for the release workflow. Everything is
+# unpacked whole, the header folders included, and no agent.cpp folder is needed.
+do_fetch() {
+    n="$(printf '%s' "$names" | cut -d, -f1)"; d="$(printf '%s' "$names" | cut -d, -f2)"
+    [ -n "$n" ] && [ -n "$d" ] || die "usage: install.sh fetch NAME,DIR  (or: fetch NAME DIR)"
+    case "$d" in /*) ;; *) d="$(pwd)/$d" ;; esac
+    TMP="$(mktemp -d)"; ROOT="$TMP"; FETCHING=1
+    LIST="${AGENT_LIST:-${AGENT_SCRIPTS:-}/components.tsv}"
+    [ -r "$LIST" ] || die "set AGENT_LIST to scripts/components.tsv"
+    TAG="$(list_tag)"; release_base
+    b="$(pick_backend engine "$n")"; [ -n "$b" ] || die "$n has no build for $OS $ARCH."
+    mkdir -p "$d"
+    lst | awk -F'\t' -v n="$n" -v o="$OS" -v a="$ARCH" -v b="$b" '$0 !~ /^#/ && $1=="engine" && $2==n && $3==o && $4==a && ($5=="any" || $5==b) && $10 !~ /^@RELEASE@/' | while IFS="$TAB" read -r rk rn ro ra rb v s st dd u need; do
+        file="${u##*/}"
+        get_progress "$u" "$TMP/$file" || die "The download of $file failed."
+        [ "$(sha "$TMP/$file")" = "$s" ] || die "SHA-256 mismatch for $file."
+        case "$st" in find:*) st=0 ;; esac # whole archive: the header folders are wanted too
+        unpack "$TMP/$file" "$d" "$st"
+        printf '  %s fetched %s (%s)\n' "$T$R" "$file" "$v"
+    done
+}
+
 case "$cmd" in
+    fetch) do_fetch ;;
     install) do_install ;;
     setup) do_setup ;;
     add) do_add ;;

@@ -2,7 +2,7 @@
 
 ## Version
 
-The version is set once, in `project("agent.cpp" VERSION x.y.z)` in the top-level `CMakeLists.txt` (currently 1.1.1).
+The version is set once, in `project("agent.cpp" VERSION x.y.z)` in the top-level `CMakeLists.txt` (currently 1.2.0).
 `agent version`, the CMake package version (`agent-cppConfigVersion.cmake`) and the Linux tarball names all come from it.
 
 ## Which engines are built
@@ -16,6 +16,29 @@ Every engine is a plugin file, and each one has its own switch (`AGENT_ENGINE_<N
 | `sdcpp` | `ON` when `vendor/stable-diffusion.cpp` is checked out | Its own nested ggml submodule is needed too. |
 | `audiocpp` | `ON` when `vendor/audio.cpp` is checked out | |
 | `trellis` | `ON` when `vendor/trellis2cpp` is checked out | CPU only, no CUDA needed ([api/engines.md](api/engines.md#the-trellis-engine)); the coarse path takes about 6 minutes and 3.5 GiB. |
+
+### Plugins over an upstream release (what a release does)
+
+llama.cpp and audio.cpp publish their own builds for every backend (CPU, Vulkan, CUDA, ROCm, ...). A release of agent.cpp does not compile
+them: the `llama` and `audiocpp` plugins are compiled against the release that is pinned in `scripts/components.tsv` and link its shared
+libraries, so a plugin is a few hundred kilobytes and compiles in seconds; the installer downloads the upstream part at the pinned version
+for the backend the machine can run.
+
+```sh
+scripts/install.sh fetch llama build/upstream/llama           # the pinned upstream release, unpacked (install.ps1 fetch on Windows)
+cmake -S . -B build -DAGENT_LLAMA_PREBUILT=$PWD/build/upstream/llama -DAGENT_AUDIOCPP_PREBUILT=$PWD/build/upstream/audiocpp
+```
+
+- `llama`: the plugin uses llama.cpp's own libraries `llama-common` and `llama-server-impl`, whose interfaces change with every commit,
+  so `vendor/llama.cpp` must be at the pinned tag (`b12020`; checked: the commit is the tag's). llama.cpp's Windows `llama-server-impl.dll` does
+  not export the server code, so a Windows plugin goes without it and a multi-token-prediction model runs on the plugin's own engine.
+- `audiocpp`: only the C header `audiocpp.h` is used, which is the release's.
+- `onnx`: always linked against the official onnxruntime release (`AGENT_ORT_VERSION` in `cmake/onnxruntime_release.cmake`).
+- `sdcpp` and `trellis` have no upstream library to link (stable-diffusion.cpp publishes command-line programs, trellis2cpp nothing), so they
+  are compiled with their source by `.github/workflows/engines-extra.yml`, only when `vendor/` moves, and published under a release of their
+  own (`engine-sdcpp-<commit>`); the normal release does not build them.
+- Where the upstream build needs a newer C library than the machine has (audio.cpp's Linux builds need glibc 2.43), the installer says so
+  and installs nothing, instead of installing a plugin that cannot load (`needs` column of `components.tsv`).
 
 Clone with `git clone --recurse-submodules` so the optional engines are included. A plain clone still builds and says which
 engines it skipped. Build options are listed in [getting-started.md](getting-started.md#build-options).
@@ -261,7 +284,20 @@ Not done yet:
 
 ## Releases
 
-The git tag `v1.1.1` matches the version in `CMakeLists.txt`. The CI and release workflows in `.github/workflows/` are
+A release is a set of small files, not one archive: `agent-cpp-core-<tag>-<os>-<arch>` (the program) and one
+`agent-engine-<name>-<tag>-<os>-<arch>[-vulkan]` for each engine, made by `scripts/package-release.sh`, plus `SHA256SUMS`. The upstream
+parts (onnxruntime, bun, uv, node, pnpm, nub) are not rebuilt or copied: the installer script downloads them from their own projects.
+`scripts/components.tsv` lists every component with its pinned version, per operating system, architecture and backend, and the SHA-256 of
+each file. It is written by
+
+```sh
+python3 scripts/pin-components.py --tag v1.2.0 > scripts/components.tsv     # before the tag is made; the release workflow checks it
+```
+
+Raising the pin of an upstream project means changing `PINS` in that script, running it, and testing `local/e2e/modular` on Linux
+and Windows. The workflow's `publish` job refuses a tag whose `components.tsv` was written for another tag.
+
+The git tag `v1.2.0` matches the version in `CMakeLists.txt`. The CI and release workflows in `.github/workflows/` are
 manual-dispatch only; nothing runs on a push. Build from source as described in [getting-started.md](getting-started.md#build),
 or use the Linux tarball script above, which is run by hand.
 

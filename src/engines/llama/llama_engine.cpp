@@ -35,6 +35,17 @@
 #include <deque>
 #include <exception>
 #include <filesystem>
+#ifdef AGENT_LLAMA_PREBUILT
+#include <ggml-backend.h>
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+#endif
 #include <llama.h>
 #include <memory>
 #include <mtmd-helper.h>
@@ -1963,8 +1974,34 @@ bool maybe_reranker(const llama_model *model) {
 
 // ------------------------------------------------------------------ ABI functions
 
+#ifdef AGENT_LLAMA_PREBUILT
+// An upstream release loads its ggml backends (the CPU variants, Vulkan, CUDA, ...) as libraries from a folder: this plugin's own.
+std::string plugin_folder() {
+#if defined(_WIN32)
+    HMODULE module = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(&plugin_folder), &module))
+        return {};
+    wchar_t path[32768];
+    const DWORD n = GetModuleFileNameW(module, path, 32768);
+    if (n == 0 || n >= 32768) return {};
+    return std::filesystem::path(std::wstring(path, n)).parent_path().string();
+#else
+    Dl_info info{};
+    if (!dladdr(reinterpret_cast<void *>(&plugin_folder), &info) || !info.dli_fname) return {};
+    return std::filesystem::path(info.dli_fname).parent_path().string();
+#endif
+}
+#endif
+
 int32_t llama_create(agent_str config_json, void **out_instance, char *err, size_t err_cap) {
-    std::call_once(g_backend_once, [] { llama_backend_init(); });
+    std::call_once(g_backend_once, [] {
+#ifdef AGENT_LLAMA_PREBUILT
+        const std::string folder = plugin_folder();
+        if (!folder.empty()) ggml_backend_load_all_from_path(folder.c_str());
+#endif
+        llama_backend_init();
+    });
 
     simdjson::ondemand::parser parser;
     simdjson::padded_string json(sv(config_json));

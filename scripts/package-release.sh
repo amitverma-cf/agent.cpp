@@ -12,7 +12,7 @@
 # The ONNX Runtime library is not packed with the onnx plugin: the installer downloads the official release (see scripts/components.tsv).
 set -euo pipefail
 
-build_dir=build; out_dir=dist; tag=""; os_name=""; arch=""; variant=""; no_core=""; lib_ext=""; exe_ext=""; ssl_dir=""; ssl_suffix=""
+build_dir=build; out_dir=dist; tag=""; os_name=""; arch=""; variant=""; no_core=""; only=""; plugin_only=""; lib_ext=""; exe_ext=""; ssl_dir=""; ssl_suffix=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --build-dir) build_dir=$2; shift 2 ;;
@@ -22,6 +22,8 @@ while [ $# -gt 0 ]; do
         --arch) arch=$2; shift 2 ;;
         --variant) variant=$2; shift 2 ;;
         --no-core) no_core=1; shift ;;
+        --only) only=$2; no_core=1; shift 2 ;; # pack this engine alone (no program)
+        --plugin-only) plugin_only=",$2,"; shift 2 ;; # engines whose libraries come from upstream: the archive holds the plugin alone
         --lib-ext) lib_ext=$2; shift 2 ;;
         --exe-ext) exe_ext=$2; shift 2 ;;
         --openssl-dir) ssl_dir=$2; shift 2 ;;
@@ -79,12 +81,14 @@ for plugin in "$build_dir"/src/engines/*/agent-engine-*.$lib_ext; do
     [ -f "$plugin" ] || continue
     base=$(basename "$plugin" ".$lib_ext")
     name=${base#agent-engine-}
-    case "$name" in mock* | api) continue ;; esac # the test engines are not released; the api engine is part of the core
+    case "$name" in mock* | api) continue ;; esac
+    [ -z "$only" ] || [ "$name" = "$only" ] || continue # the test engines are not released; the api engine is part of the core
     stage="$work/engine-$name"; rm -rf "$stage"; mkdir -p "$stage"
     cp "$plugin" "$stage/"
     # Libraries the plugin loads from its own folder (libaudiocpp, ...). ONNX Runtime comes from upstream, not from here.
     for l in "$(dirname "$plugin")"/*.$lib_ext*; do
         [ -f "$l" ] || continue
+        case "$plugin_only" in *",$name,"*) continue ;; esac
         case "$(basename "$l")" in agent-engine-* | *onnxruntime*) continue ;; esac
         cp "$l" "$stage/"
     done

@@ -20,23 +20,11 @@ one command.
 `--no-sandbox` works with every command and turns the OS sandbox off for engines, tools and commands. `--home DIR` picks the
 global home for one run. Everything is documented below; the same text is in `--help`.
 
-## agent setup, agent home, agent update
+## agent setup, update, uninstall, home
 
-`agent setup` and `agent update` are not code in this program: each downloads a script from the repository
-([`scripts/setup.sh`](../scripts/setup.sh) / [`setup.ps1`](../scripts/setup.ps1) and [`install.sh`](../scripts/install.sh) /
-[`install.ps1`](../scripts/install.ps1)) and runs it, so they can be improved without a new release. `AGENT_SCRIPTS` points at another
-base URL or a folder with copies of the scripts.
-
-```sh
-agent setup                  # the files folder, the optional bun and uv runtimes, a model link or file; then the chat opens
-agent setup --yes --model https://huggingface.co/owner/repo     # no questions
-agent home [DIR]             # show, or move, the folder agent.cpp keeps its files in
-agent update                 # same version: nothing; a newer release: replaced in place (SHA-256 checked); --check only looks
-```
-
-Options of `setup`: `--yes`, `--model LINK|FILE|owner/repo[:quant]`, `--no-model`, `--runtimes` / `--no-runtimes`, `--home DIR`. The GPU
-backend and the engines are not asked about: they come with the build that was installed (CPU or Vulkan). Engines are not touched by
-`update`; `agent engine pull NAME` fetches newer ones.
+`agent setup`, `update` and `uninstall` are not code in this program: they run the installer script that came with the installed release
+([`scripts/install.sh`](../scripts/install.sh) / [`install.ps1`](../scripts/install.ps1), kept in `<home>/scripts/`). The full description is
+under [agent setup, update, uninstall](#agent-setup-update-uninstall) below. `agent home` prints the folder everything is kept in.
 
 ## agent chat
 
@@ -385,8 +373,8 @@ time; with no microphone `voice` asks for `--input-wav`, with no speaker replies
 ```sh
 agent engine ls                       # name, version, ok/MISSING, path, capabilities
 agent engine add path/to/agent-engine-sdcpp.so
-agent engine pull sdcpp               # a prebuilt engine from a GitHub release (--tag, --repo)
-agent engine rm sdcpp                 # forgets the entry; the file stays
+agent engine pull llama               # the installer script adds an engine of the installed release (--backend vulkan|cuda12|cuda13|rocm|cpu)
+agent engine rm sdcpp                 # an engine the installer added is removed with its files; one added by path is only forgotten
 ```
 
 `add` loads the plugin, prints its name, version and capabilities, and records it in `engines.json`; a plugin with the wrong ABI or
@@ -541,27 +529,41 @@ nobody is there to answer. On Linux the entries are crontab lines tagged `# agen
 and are now due. `agent run` records such a run in `<workspace>/waiting.json` with its original flags; `wake` re-runs each due one
 with `--resume`. Together with `schedule add wake --every 15m -- wake` this gives sleep and wake with no background process.
 
-## agent uninstall
+## agent setup, update, uninstall
+
+These three do not contain any installing code. They run the installer script that came with the installed release
+(`<home>/scripts/install.sh`, or `install.ps1` on Windows), so what a release installs and removes always matches that release. The same
+script is what `curl -fsSL https://agent.qozu.fyi/install.sh | sh` and `irm https://agent.qozu.fyi/install.ps1 | iex` run for a first install,
+and it can be called directly: `install.sh add llama`, `install.sh ls`, `install.sh rm sdcpp`.
 
 ```sh
-agent uninstall              # lists what it would remove, asks, then removes it
-agent uninstall --keep-data  # the program and its PATH entry only; models, conversations and settings stay
-agent uninstall --yes        # no question (needed without a terminal)
+agent setup                    # engines, runtimes and a first model; asks, or take --engines llama,onnx --runtimes bun,uv --model LINK --yes
+agent engine pull llama        # add an engine of the installed release (--backend vulkan|cuda12|cuda13|rocm|metal|cpu to choose)
+agent runtime install bun      # add a runtime: bun, uv, node, pnpm, nub
+agent engine rm sdcpp          # remove one (agent runtime rm NAME)
+agent update [--check]         # move to the newest release; installed engines and runtimes follow the versions it pins
+agent uninstall [--keep-data] [--yes]
 ```
 
-It removes the data folder chosen at setup (models, engines, conversations, notes, logs, caches), the program folder when it was made by
-the installer (a build tree or a package-manager copy is left alone), the PATH entry of the program (user PATH on Windows, the line
-the installer added to `~/.profile`, `~/.bashrc` and `~/.zshrc` elsewhere) and the `home.json` pointer when it is outside both folders.
-Windows continues in a window of its own: it cannot delete a program that is running. The work is done by `scripts/uninstall.sh|ps1`
-(fetched like `setup`; `AGENT_SCRIPTS` points at a copy).
+**Pinned.** Each release lists, in `scripts/components.tsv`, the exact version and SHA-256 of every component it works with: its own
+engines, the official onnxruntime and the runtimes (bun, uv, node, pnpm, nub). `setup`, `engine pull` and `runtime install` use
+the list of the installed release and never "the latest"; only `agent update` reads a newer one. A download whose SHA-256 differs is
+refused and nothing is installed.
+
+**Backends.** The script looks at the machine (operating system, CPU architecture, NVIDIA driver and CUDA version, Vulkan) and picks the
+best backend a component has; `--backend` or `AGENT_BACKEND` chooses another. `agent engine pull NAME` says when a component has no
+build for this system. `uninstall --keep-data` removes the program, engines, runtimes and caches and keeps models, conversations and settings;
+without it the whole folder goes, with `AGENT_HOME` and the `PATH` entry. It always asks first (`--yes` skips the question, which a
+script without a terminal needs). On Windows `update` and `uninstall` continue in a window of their own, because a running program cannot
+be replaced or deleted.
 
 ## Files and layout
 
-One global home (default `.agent.cpp` in the user folder, the same folder the program is installed in, remembered in `home.json` in the platform
-config folder; `--home` and `$AGENT_HOME` override it) holds `config.json`, `engines.json`, `models/`, `engines/`, `skills/`, `mcp/`,
-`runtimes/`, `cache/`, `logs/` and `workspaces/` (the default workspace, and one state folder for each project folder the agent has
-worked in: conversations, memory, logs, generated files). A project folder itself holds only its own files; it can have a `.agents/`
-folder for skills, MCP servers and rules. Full layout and the contents of `config.json` and `engines.json`: [workspace.md](workspace.md).
+One folder holds everything, the one chosen when agent.cpp was installed: it is the environment variable `AGENT_HOME` (`--home` overrides it
+for one run). In it: `bin/` (the program), `engines/`, `runtimes/`, `scripts/`, `config.json`, `models/`, `skills/`, `mcp/`, `cache/`,
+`logs/` and `workspaces/` (the default workspace, and one state folder for each project folder the agent has worked in: conversations,
+memory, logs, generated files). A project folder itself holds only its own files; it can have a `.agents/` folder for skills, MCP servers
+and rules. Full layout and the contents of `config.json`: [workspace.md](workspace.md).
 
 `AGENT_HTTP_REWRITE="https://github.com=https://mirror.example/gh"` redirects downloads by URL prefix (rules separated by `;`), and
 `HF_ENDPOINT` does the same for Hugging Face. Source: the CLI lives in `apps/cli/src/`; `cli_core` holds the testable parts (argument

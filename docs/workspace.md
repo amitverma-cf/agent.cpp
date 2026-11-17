@@ -4,28 +4,29 @@ agent.cpp keeps everything it writes in one place: the **global home**. A projec
 owner writes (skills, MCP servers, rules); the agent's own data about a project is in the home, not in the project. Nothing is installed globally, and the agent never needs `npm` or `python` on the
 machine (see "Runtimes" below).
 
-## One folder: `~/.agent.cpp`
+## One folder, chosen when agent.cpp is installed
 
-The installer puts everything in one folder, `~/.agent.cpp` (`%USERPROFILE%\.agent.cpp` on Windows): the program in `app/`, and next to
-it the files below. Nothing is stored anywhere else; the only change outside the folder is a PATH entry for `app/`. Removing the folder
-removes agent.cpp. Set `AGENT_HOME` before installing to use another folder, and `agent home DIR` moves the data to a different place
-later (a small `home.json` in the install folder remembers it). `--home DIR` and `$AGENT_HOME` override it for a single run. A program
-that does not run from an install (a build tree, a package) falls back to a pointer file in the platform config folder.
+The installer asks where agent.cpp should keep everything, once, before anything is downloaded (default `~/.agent.cpp`, or
+`%USERPROFILE%\.agent.cpp` on Windows; it must be a full path, and an empty or new folder). Everything is inside it: the program, the
+engines, the runtimes, the models, the scripts, the data. The folder is remembered as the user environment variable **`AGENT_HOME`**
+(a line in the shell profiles on Linux and macOS) and `<folder>/bin` is put on `PATH`; those two entries are the only thing outside the
+folder. The program reads `AGENT_HOME`, or, started by its full path, the folder it sits in. `--home DIR` overrides it for one run.
+Removing the folder removes agent.cpp; `agent uninstall` does that and the two entries.
 
-Older versions used three folders (the program in `~/.local/share/agent-cpp`, the files in `~/.agent.cpp-workspace`, the pointer in
-`~/.config/agent`). The installer removes the old program folder; the old files folder keeps working through its pointer, or can be moved
-to `~/.agent.cpp/`.
+There is no pointer file and no second folder. The program and the data are not moved apart by setup: to use another folder, uninstall
+(`--keep-data` keeps the models and conversations) and install again with the new one.
 
 | Folder / file | What it holds |
 |---|---|
-| `app/` | the program: `agent`, `agent-engine-host` and the bundled engines. Replaced on update |
+| `bin/` | the program: `agent`, `agent-engine-host` and the `api` engine. Replaced on update |
+| `scripts/` | `install.sh` / `install.ps1` and `components.tsv` of the installed release: what `agent setup`, `update`, `uninstall`, `engine pull` and `runtime install` run. They stay as installed until `agent update` |
 | `config.json`, `engines.json` | settings; the engine plugins in use |
-| `engines/` | engine plugins, one folder per engine and version |
+| `engines/` | one folder for each engine the installer added: our plugin and, where one exists, the upstream library it loads (onnxruntime), with a `.pin` file that names the backend and versions |
 | `models/` | `models.json` and the model files, one folder per engine (`llama/`, `sdcpp/`, `onnx/`, `audiocpp/`): `models/llama/owner/repo/file.gguf`; projectors sit beside their model. Models pulled earlier stay where they are |
 | `skills/` | skills available in every project |
 | `mcp/` | MCP server definitions. Keys are never stored here: they are referenced by name |
 | `plugins/` | third-party plugins, each with its own data folder |
-| `runtimes/` | private `bun` and `uv` installs, used only by agent.cpp |
+| `runtimes/` | private `bun`, `uv`, `node`, `pnpm` and `nub` installs, used only by agent.cpp, put there by the installer script |
 | `cache/` | downloads in progress, saved prefix KV states, GPU kernel and shader caches |
 | `logs/` | engine and session logs |
 | `workspaces/default/` | the default workspace: what the file tools may touch when a chat has no project, plus its memory and artifacts |
@@ -54,8 +55,7 @@ A workspace inside the home keeps its state in itself. What an earlier version w
 the first time the project is opened; when the conversations cannot be moved (the database is open in another program) the project
 folder is used as before for that run. With `--config-dir` (no home) the state stays in the workspace.
 
-The only file outside the home is `home.json`, which names the home: it is inside the install folder, or in the platform config
-folder for a program that does not run from an install.
+Outside the home there is nothing but the `AGENT_HOME` variable and the `PATH` entry.
 
 ## A project: `.agents/`
 

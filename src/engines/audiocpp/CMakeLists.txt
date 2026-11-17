@@ -2,6 +2,50 @@
 #
 # audio.cpp ships its own ggml, so it is built as a separate CMake project with ExternalProject. It exports a shared
 # library (libaudiocpp); the plugin links it and the installed layout puts both in lib/agent/engines/ ($ORIGIN rpath).
+#
+# AGENT_AUDIOCPP_PREBUILT=<folder>  (what a release does) the plugin is compiled against audio.cpp's own release library (the "lib"
+#                                   archive of a release: libaudiocpp.so / audiocpp.dll) unpacked in <folder>, and audio.cpp is not
+#                                   compiled. The header is the one in vendor/audio.cpp, which is the release's. `scripts/install.sh
+#                                   fetch audiocpp <folder>` downloads the release. Empty: audio.cpp is compiled from vendor/audio.cpp.
+set(AGENT_AUDIOCPP_PREBUILT "" CACHE PATH "Folder with an audio.cpp release library to link instead of compiling audio.cpp")
+if(AGENT_AUDIOCPP_PREBUILT)
+    include(${PROJECT_SOURCE_DIR}/cmake/prebuilt_library.cmake)
+    set(_au_libs "${AGENT_AUDIOCPP_PREBUILT}/libs")
+    if(NOT IS_DIRECTORY "${_au_libs}")
+        set(_au_libs "${AGENT_AUDIOCPP_PREBUILT}")
+    endif()
+    agent_prebuilt_library(audiocpp "${_au_libs}")
+    add_library(agent-engine-audiocpp SHARED
+        audiocpp_engine.cpp
+        ${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader/simdjson.cpp
+    )
+    target_include_directories(agent-engine-audiocpp PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    target_include_directories(agent-engine-audiocpp SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/vendor/audio.cpp/include ${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader)
+    target_compile_definitions(agent-engine-audiocpp PRIVATE AUDIOCPP_USE_DLL)
+    target_link_libraries(agent-engine-audiocpp PRIVATE audiocpp ${CMAKE_DL_LIBS})
+    set_target_properties(agent-engine-audiocpp PROPERTIES PREFIX "" CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON
+                          BUILD_WITH_INSTALL_RPATH ON INSTALL_RPATH "$ORIGIN")
+    set_source_files_properties(${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader/simdjson.cpp PROPERTIES COMPILE_OPTIONS "-w")
+    target_compile_options(agent-engine-audiocpp PRIVATE ${AGENT_WARNINGS})
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_options(agent-engine-audiocpp PRIVATE -Wl,--version-script=${PROJECT_SOURCE_DIR}/src/engines/common/exports.map)
+        set_property(TARGET agent-engine-audiocpp APPEND PROPERTY LINK_DEPENDS ${PROJECT_SOURCE_DIR}/src/engines/common/exports.map)
+    elseif(APPLE)
+        target_link_options(agent-engine-audiocpp PRIVATE -Wl,-exported_symbol,_agent_engine_get_v1)
+    endif()
+    if(WIN32)
+        file(GLOB _rt "${_au_libs}/*.dll")
+    else()
+        file(GLOB _rt "${_au_libs}/*.so*" "${_au_libs}/*.dylib")
+    endif()
+    foreach(_f ${_rt})
+        add_custom_command(TARGET agent-engine-audiocpp POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_f}" "$<TARGET_FILE_DIR:agent-engine-audiocpp>" VERBATIM)
+    endforeach()
+    agent_install_engine(agent-engine-audiocpp)
+    return()
+endif()
+
 include(ExternalProject)
 
 set(AUDIOCPP_SOURCE_DIR ${PROJECT_SOURCE_DIR}/vendor/audio.cpp)

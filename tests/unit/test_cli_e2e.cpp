@@ -138,8 +138,7 @@ TEST_CASE("cli e2e: uninstall hands over to the script, which asks first", "[cli
     Home h;
     fs::create_directories(h.root / "home" / "models");
     std::ofstream(h.root / "home" / "config.json") << "{}";
-    auto no = h.run("uninstall", "
-"); // input from a file: no terminal to ask
+    auto no = h.run("uninstall", "\n"); // input from a file: no terminal to ask
     CHECK(no.code != 0);                // no terminal and no --yes: nothing is removed
     CHECK(has(no, "Nothing was removed"));
     CHECK(fs::exists(h.root / "home" / "config.json"));
@@ -147,7 +146,7 @@ TEST_CASE("cli e2e: uninstall hands over to the script, which asks first", "[cli
     INFO(keep.out);
     CHECK(keep.code == 0);
     CHECK(fs::exists(h.root / "home" / "config.json")); // the data stays
-    auto yes = h.run("uninstall --yes");                 // the test's folder only: AGENT_HOME points at it
+    auto yes = h.run("uninstall --yes");                // the test's folder only: AGENT_HOME points at it
     INFO(yes.out);
     CHECK(yes.code == 0);
     CHECK_FALSE(fs::exists(h.root / "home"));

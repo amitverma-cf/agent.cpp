@@ -21,9 +21,10 @@ curl -fsSL https://agent.qozu.fyi/install.sh | sh
 irm https://agent.qozu.fyi/install.ps1 | iex
 ```
 
-The installer picks the build for the machine (Vulkan when a GPU driver is present, CPU otherwise), verifies its checksum, and runs a
-short setup that suggests and downloads a model sized for the hardware. Running it again updates the installation. Everything lives in
-one folder, `~/.agent.cpp` (`%USERPROFILE%\.agent.cpp` on Windows): program, engines, models, skills and memory.
+The installer asks where to keep everything (one folder, default `~/.agent.cpp`; it becomes the environment variable `AGENT_HOME`), installs
+the program, then lets you pick the engines (llama, audiocpp, sdcpp, onnx, trellis) and runtimes (bun, uv, node, pnpm, nub) and a first
+model. Each component is downloaded for this machine (the GPU backend when a driver is present) at the exact version the release pins, and
+its SHA-256 is checked. llama.cpp and audio.cpp come straight from their own releases; agent.cpp only ships the small plugin over them. Later: `agent engine pull NAME`, `agent runtime install NAME`, `agent update`, `agent uninstall`.
 
 ## Chat
 
