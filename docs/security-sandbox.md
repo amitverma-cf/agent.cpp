@@ -129,7 +129,7 @@ uses the `landlock_create_ruleset(..., LANDLOCK_CREATE_RULESET_VERSION)` syscall
 
 ## macOS
 
-macOS: not supported in v1.0.0.
+macOS: not supported.
 
 ## Windows
 

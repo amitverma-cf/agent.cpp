@@ -35,11 +35,11 @@ never part of a public header.
 | `src/agent/models/` | `ModelRegistry`: several models under one memory budget (optional). |
 | `src/agent/tasks/` | Helpers for one-shot tasks (`decide`, `ocr`). |
 | `src/hal/` | The only layer that calls the operating system: processes, dynamic loading, paths, sandbox, logging, time. |
-| `src/engines/<name>/` | Engine plugins: `llama`, `onnx`, `sdcpp`, `trellis`, `audiocpp`, and `mock` (used by the tests). |
+| `src/engines/<name>/` | Engine plugins: `llama`, `onnx`, `sdcpp`, `trellis`, `audiocpp`, `api` (remote models) and `mock` (used by the tests). `llama` and `audiocpp` are thin over the upstream releases in a release build. |
 | `apps/engine-host/` | `agent-engine-host`: loads one plugin and serves it over pipes (process isolation). |
 | `apps/store-sqlite/` | `agent_store_sqlite`: SQLite store, checkpointer and sqlite-vec vector source. Separate library. |
 | `apps/hub/` | `agent_hub`: Hugging Face and GitHub downloads and the model catalogue. Separate library. |
-| `apps/cli/` | The `agent` program: setup, chat, voice, tasks, engine, model, skill and MCP management. |
+| `apps/cli/` | The `agent` program: chat, voice, tasks, engine, model, skill and MCP management. `setup`, `update`, `uninstall` and the adding of engines and runtimes run the installer script (`scripts/install.sh` / `install.ps1`); the program holds no installer code. |
 | `bench/`, `examples/`, `tests/` | Benchmark harness, example programs, unit and integration tests. |
 
 ---

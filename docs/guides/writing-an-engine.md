@@ -280,7 +280,7 @@ An application that ships the installed plugin lists it in `agent_deploy_engines
 
 `agent_install_engine(<target> <libs>...)` also copies the runtime libraries a plugin loads through an
 `$ORIGIN` RPATH (ONNX Runtime, ...), keeping symlinks whose targets are listed too. Prefer
-linking the inference library statically (llama and sdcpp do), so the plugin is one file.
+linking the inference library statically (sdcpp and a source build of llama do), so the plugin is one file; the plugins of a release (llama, audiocpp) are thin and load the upstream shared libraries from their own folder.
 
 Then register it with the CLI, which loads it once to validate the ABI and prints its capabilities:
 

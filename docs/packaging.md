@@ -68,7 +68,7 @@ Installed layout:
 
 The library directory is `CMAKE_INSTALL_LIBDIR` (`lib`, or `lib64` on some distributions). The engine directory is always
 `lib/agent/engines`, because that is where the CLI looks (`<exe>/../lib/agent/engines`, see [cli.md](cli.md)). An installed
-`agent setup` finds the installed plugins there with no flags.
+`agent` finds the installed plugins there with no flags.
 
 The mock engine plugins (`agent-engine-mock*`, used by the tests) are not installed by default, so CLI archives never carry
 them. Library users who want model-free tests build with `-DAGENT_INSTALL_MOCK_ENGINE=ON`; the plugins then go to
@@ -98,20 +98,20 @@ RPATHs:
 - shared `libagent_store_sqlite` and `libagent_hub`: `$ORIGIN`, so they find `libagent` next to them.
 - `agent-engine-host` with shared libraries: `$ORIGIN/../lib`, so it finds `libagent` in the prefix's `lib`.
 - `agent-engine-onnx` and `agent-engine-audiocpp`: `$ORIGIN`, so they find their bundled runtime libraries.
-- `agent-engine-llama` and `agent-engine-sdcpp` link llama.cpp and stable-diffusion.cpp statically and need only system
+- `agent-engine-llama` (prebuilt mode, what a release is) and `agent-engine-audiocpp` find the upstream shared libraries next to them (`$ORIGIN`). A source build of `agent-engine-llama` and `agent-engine-sdcpp` links llama.cpp and stable-diffusion.cpp statically and needs only system
   libraries (`libstdc++`, `libgomp` for OpenMP, `libc`).
 
 ## Using the library: `find_package(agent-cpp)`
 
 ```cmake
-find_package(agent-cpp 0.1 REQUIRED)
+find_package(agent-cpp 1.2 REQUIRED)
 target_link_libraries(my_app PRIVATE agent-cpp::agent)
 # optional:
 target_link_libraries(my_app PRIVATE agent-cpp::store_sqlite)  # SQLite KV store + sqlite-vec
 target_link_libraries(my_app PRIVATE agent-cpp::hub)           # Hugging Face downloads (if built)
 ```
 
-Configure with `-DCMAKE_PREFIX_PATH=<prefix>`. A request for version `1.0` accepts any `1.0.x`
+Configure with `-DCMAKE_PREFIX_PATH=<prefix>`. A request for version `1.2` accepts any `1.2.x`
 (`SameMinorVersion`). The package also sets:
 
 - `agent-cpp_ENGINE_DIR`: `<prefix>/lib/agent/engines`
@@ -123,7 +123,7 @@ Components tell CMake which parts of this install the program needs. A required 
 configuration with a message that says how to build it:
 
 ```cmake
-find_package(agent-cpp 0.1 REQUIRED COMPONENTS graph rag llama)
+find_package(agent-cpp 1.2 REQUIRED COMPONENTS graph rag llama)
 ```
 
 | Component | Found when |
@@ -198,7 +198,7 @@ cmake_minimum_required(VERSION 3.21)
 project(my_app CXX)
 include(GNUInstallDirs)
 
-find_package(agent-cpp 0.1 REQUIRED COMPONENTS llama)
+find_package(agent-cpp 1.2 REQUIRED COMPONENTS llama)
 
 add_executable(my_app main.cpp)
 target_link_libraries(my_app PRIVATE agent-cpp::agent)
@@ -242,14 +242,14 @@ engine plus a test harness that loads it in process and through the host. See [g
 
 ## Linux tarball: `scripts/package.sh`
 
-This script makes a Linux-only tarball from a local build.
+This script makes a Linux-only tarball from a local build with llama.cpp compiled from source. Releases do not use it (see "Releases" below); it is run by hand.
 
 ```sh
-scripts/package.sh                                   # agent-0.1.2-linux-x64.tar.gz, llama engine, CPU
+scripts/package.sh                                   # agent-1.2.1-linux-x64.tar.gz, llama engine, CPU
 scripts/package.sh --engines llama,sdcpp
 scripts/package.sh --engines llama,onnx --onnxruntime-root ~/onnxruntime-linux-x64-1.23.2
 scripts/package.sh --engines llama,audiocpp
-scripts/package.sh --backend vulkan                  # agent-0.1.2-linux-x64-vulkan.tar.gz
+scripts/package.sh --backend vulkan                  # agent-1.2.1-linux-x64-vulkan.tar.gz
 ```
 
 The script configures a Release build (`build-package/` by default, `--build-dir` to change it), builds only the installed
@@ -280,15 +280,15 @@ on the oldest supported distribution.
 Not done yet:
 
 - The `cuda` and `vulkan` backends only pass `GGML_CUDA` / `GGML_VULKAN` to the llama build. They have not been built or
-  tested, and the CUDA runtime libraries are not bundled.
+  tested, and the CUDA runtime libraries are not bundled. The installer gets CUDA, ROCm and Vulkan builds from llama.cpp's releases instead ([gpu.md](gpu.md)).
 - Licence files for cpp-httplib, sqlite-vec and SQLite (public domain) are not in `vendor/`, so they are not copied into
   `licenses/`.
 
 ## Releases
 
 A release is a set of small files, not one archive: `agent-cpp-core-<tag>-<os>-<arch>` (the program) and one
-`agent-engine-<name>-<tag>-<os>-<arch>[-vulkan]` for each engine, made by `scripts/package-release.sh`, plus `SHA256SUMS`. The upstream
-parts (onnxruntime, bun, uv, node, pnpm, nub) are not rebuilt or copied: the installer script downloads them from their own projects.
+`agent-engine-<name>-<tag>-<os>-<arch>` for each of the thin plugins (llama, audiocpp, onnx), made by `scripts/package-release.sh`, plus `SHA256SUMS`. The upstream
+parts (llama.cpp, audio.cpp, onnxruntime, bun, uv, node, pnpm, nub) are not rebuilt or copied: the installer script downloads them from their own projects. stable-diffusion.cpp and TRELLIS.2 are built by `engines-extra.yml` and referenced from the same list.
 `scripts/components.tsv` lists every component with its pinned version, per operating system, architecture and backend, and the SHA-256 of
 each file. It is written by
 
@@ -296,7 +296,7 @@ each file. It is written by
 python3 scripts/pin-components.py --tag v1.2.1 > scripts/components.tsv     # before the tag is made; the release workflow checks it
 ```
 
-Raising the pin of an upstream project means changing `PINS` in that script, running it, and testing `local/e2e/modular` on Linux
+Raising the pin of an upstream project means changing `PINS` in that script, running it, and testing `tests/modular` (the installer tests) on Linux
 and Windows. The workflow's `publish` job refuses a tag whose `components.tsv` was written for another tag.
 
 The git tag `v1.2.1` matches the version in `CMakeLists.txt`. The CI and release workflows in `.github/workflows/` are

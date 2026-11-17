@@ -11,12 +11,12 @@ Two ways in. **The `agent` command** is a ready-to-use terminal assistant: insta
 | OpenSSL 3 | `libssl-dev` | `vcpkg install openssl:x64-windows` |
 
 OpenSSL is used for model downloads (`agent_hub`); without it (`-DAGENT_BUILD_HUB=OFF`) the CLI is not built. macOS is not tested
-and not supported in v1.0.0.
+and not supported.
 
 ## Install a release
 
 `curl -fsSL https://agent.qozu.fyi/install.sh | sh` (Linux) or `irm https://agent.qozu.fyi/install.ps1 | iex` (Windows PowerShell) installs the latest release; see the
-[README](../README.md#install). Set `AGENT_VERSION=v1.1.1` to install a given tag.
+[README](../README.md#install). Set `AGENT_VERSION=v1.2.1` to install a given tag. The installer is the only thing that installs, changes or removes agent.cpp: `agent setup`, `agent update`, `agent uninstall`, `agent engine pull` and `agent runtime install` run its copy in `<home>/scripts/`.
 
 ## Build
 
@@ -39,13 +39,15 @@ The build puts `agent`, `agent-engine-host` and the tests at the top of `build/`
 ## Use the command
 
 ```sh
-agent setup                                                    # home folder, hardware check, engines, first model
-agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M       # more models
 agent                                                          # chat; built from source: ./build/agent
+agent model pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M       # more models
+agent engine pull audiocpp                                     # add an engine (runs the installer script)
+agent doctor                                                   # what is installed and where
 ```
 
-On Windows use `.\build\agent.exe`. Setup records the engines it finds, so `-e llama` works afterwards. The commands are
-described in [cli.md](cli.md); `agent --help` lists them and `agent <command> --help` explains one.
+On Windows use `.\build\agent.exe`. `agent setup` and the other commands that change the installation need an installed release
+(they run `<home>/scripts/install.sh` or `install.ps1`); a source build is used for development and runs the engines built next to
+it. The commands are described in [cli.md](cli.md); `agent --help` lists them and `agent <command> --help` explains one.
 
 ## Use the library
 
@@ -115,8 +117,12 @@ Routing, parallel branches, loops, checkpoints and human-in-the-loop interrupts:
 | `AGENT_CLI_TUI` | `ON` | Build the full-screen chat (RTXUI, C++23, `vendor/RTXUI`) into the CLI; `OFF`, or a compiler older than GCC 13 / Clang 18, keeps only the line-based `agent chat --plain` |
 | `AGENT_CLI_AUDIO_DEVICE` | `ON` | Build microphone and speaker support (miniaudio) into the CLI; `OFF` leaves it out |
 | `AGENT_ENGINE_LLAMA` | `ON` | Build the llama.cpp engine plugin (`src/engines/llama`) |
-| `AGENT_LLAMA_UPSTREAM` | `ON` | Link llama.cpp's own server handlers in process (MTP models and native System One decision models) |
-| `AGENT_ENGINE_ONNX` | `ON` | Build the ONNX Runtime engine (`src/engines/onnx`). CMake downloads the pinned ONNX Runtime release; `-DONNXRUNTIME_ROOT=<dir>` is needed only where upstream publishes no archive |
+| `AGENT_LLAMA_UPSTREAM` | `ON` | Source builds only: link llama.cpp's scheduler (`tools/server`) in process for MTP, draft and native decision models. A prebuilt build always has it |
+| `AGENT_LLAMA_PREBUILT` | (empty) | Folder with an upstream llama.cpp release (`scripts/install.sh fetch llama DIR`): only the small plugin is compiled, against its libraries. What the release does; `vendor/llama.cpp` must be at the pinned tag |
+| `AGENT_AUDIOCPP_PREBUILT` | (empty) | Same for audio.cpp (`install.sh fetch audiocpp DIR`) |
+| `AGENT_ENGINE_API` | `ON` | Build the remote API engine plugin (runs a bun child) |
+| `AGENT_BUILD_TESTS` | `ON` (top level) | Build `test_agent`, the unit tests |
+| `AGENT_ENGINE_ONNX` | `ON` | Build the ONNX Runtime engine (`src/engines/onnx`). CMake downloads the pinned official ONNX Runtime release (`AGENT_ONNXRUNTIME_FETCH`); `-DONNXRUNTIME_ROOT=<dir>` uses a local copy |
 | `AGENT_ENGINE_SDCPP` | `ON` with its submodule | Build the stable-diffusion.cpp engine for images and video (`src/engines/sdcpp`) |
 | `AGENT_ENGINE_AUDIOCPP` | `ON` with its submodule | Build the audio.cpp speech engine (`src/engines/audiocpp`: TTS, ASR, VAD, diarization); needs the `vendor/audio.cpp` submodule |
 | `AGENT_AUDIOCPP_MODEL_SET` | `custom` | audio.cpp model families compiled in: `custom` builds the families in `AGENT_AUDIOCPP_MODELS`, `full` builds all of them |

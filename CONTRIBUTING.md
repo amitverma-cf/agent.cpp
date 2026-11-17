@@ -20,7 +20,8 @@ Before submitting the PR:
 - **Scripts** (all run by hand; no GitHub Action runs automatically, and the CI and release workflows are manual-dispatch only):
   - `scripts/test.sh`: build and run the tests (`--with-engines`, `--all`).
   - `scripts/update-deps.sh`: the one dependency update script (`list`, `bump NAME`, `ort`).
-  - `scripts/package.sh`: the Linux release tarball.
+  - `scripts/package-release.sh`: the release archives (the program, and the thin engine plugins over upstream releases); `scripts/package.sh` makes a self-contained Linux tarball by hand.
+  - `scripts/install.sh` / `install.ps1`: the installer and manager (install, setup, add, rm, ls, update, uninstall); `scripts/components.tsv` pins every component; `scripts/pin-components.py` writes it. `tests/modular/` tests the installer.
   - `scripts/format.sh`: runs clang-format on the C++ files. Run it only when about to push, not while editing.
   - `scripts/setup-hooks.sh`: enables `.githooks`: format check, build and tests before a push. Nothing runs on commit.
 - **Test the changes**:

@@ -15,13 +15,13 @@ microphone ──16 kHz──> VAD (audiocpp) ──utterance──> ASR (audioc
 
 The `audiocpp` engine wraps [audio.cpp](https://github.com/0xShug0/audio.cpp) (Apache-2.0), which is a git
 submodule in `vendor/audio.cpp`. It is built by default once that submodule is checked out, so a clone with
-`--recurse-submodules` already has it. To fetch it into an existing clone and force the engine on:
+`--recurse-submodules` already has it. An installed release gets it with `agent engine pull audiocpp` (audio.cpp's own release; on Linux it needs glibc 2.43 or newer, and the installer says when the machine has less). To fetch the source into an existing clone and force the engine on:
 
 ```sh
 git submodule update --init vendor/audio.cpp
 cmake -B build -G Ninja -DAGENT_ENGINE_AUDIOCPP=ON
 cmake --build build
-./build/agent setup --yes          # records the llama and audiocpp plugins it finds
+./build/agent --help               # a source build runs the engines built next to it
 ```
 
 Microphone and speaker support (miniaudio) is built into the CLI by default (`AGENT_CLI_AUDIO_DEVICE`). On Linux it uses

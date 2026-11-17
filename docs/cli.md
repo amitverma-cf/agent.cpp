@@ -477,7 +477,7 @@ the command needs a new `bind`.
 ```sh
 agent runtime ls
 agent runtime use bun|node|nub        # which JavaScript tooling MCP servers use
-agent runtime install js|bun|uv
+agent runtime install js|bun|uv|node|pnpm|nub
 agent runtime path uv | rm bun
 ```
 

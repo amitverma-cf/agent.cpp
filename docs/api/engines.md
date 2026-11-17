@@ -391,7 +391,7 @@ suffers), `overwrite`. The engine host's sandbox allows writes only in `<workspa
 
 ### Image and audio input
 
-With `mmproj` set, the plugin loads the projector with llama.cpp's libmtmd (linked statically into the
+With `mmproj` set, the plugin loads the projector with llama.cpp's libmtmd (linked statically into a source-built
 plugin) and accepts `AGENT_PART_FILE` / `AGENT_PART_BYTES` parts in input messages:
 
 - Images: anything stb_image decodes (PNG, JPEG, BMP, GIF, ...). Audio: WAV, MP3, FLAC, if the projector

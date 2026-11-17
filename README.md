@@ -66,13 +66,24 @@ Every capability is one command, and all of them run offline.
 
 ## Supported platforms
 
-| | Builds |
+| | Supported |
 |---|---|
 | Linux | x86_64 and aarch64, glibc 2.39 or newer |
 | Windows 11 | x64 and arm64 |
-| Acceleration | CPU and Vulkan (Intel, AMD, Arm GPUs) |
+| macOS | not published |
 
-CUDA, ROCm and macOS builds are not published. All archives are on the [releases page](https://github.com/amitverma-cf/agent.cpp/releases).
+What the installer offers depends on the machine; anything unavailable is reported while installing, with the reason.
+
+| Engine | Linux x86_64 | Linux aarch64 | Windows x64 | Windows arm64 |
+|---|---|---|---|---|
+| llama (chat, embeddings, rerank, vision, decision models) | CPU, Vulkan, CUDA 12 / 13, ROCm | CPU, Vulkan, CUDA 13 | CPU, Vulkan, CUDA 12 / 13, ROCm | CPU, Vulkan, CUDA 13 |
+| onnx | yes | yes | yes | yes |
+| audiocpp (speech) | CPU, Vulkan; needs glibc 2.43 or newer | no | CPU, Vulkan | no |
+| sdcpp (images, video), trellis (3D) | CPU | CPU | CPU | no |
+
+The llama.cpp, audio.cpp and onnxruntime libraries are the projects' own releases at pinned versions; the GPU backend is picked from
+the driver found. The archives are on the [releases page](https://github.com/amitverma-cf/agent.cpp/releases). Raspberry Pi and Android
+builds are not supported yet.
 
 ## Build from source
 
@@ -83,7 +94,7 @@ git clone --recurse-submodules https://github.com/amitverma-cf/agent.cpp
 cd agent.cpp
 cmake -B build -G Ninja
 cmake --build build
-./build/agent setup
+./build/agent
 ```
 
 Windows prerequisites, build options and engine switches are in [docs/getting-started.md](docs/getting-started.md).

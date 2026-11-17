@@ -153,7 +153,7 @@ plus the KV cache) and a q8 instead of the automatic KV type.
 verifying a draft and restores it (then decodes the accepted prefix again) when part of the draft is rejected. Qwen3.5-4B on a
 request that repeats its input: 10.6 s to 5.5 s (15 rounds, 113 drafted tokens accepted), identical text.
 
-**MTP, measured with upstream `llama-cli --spec-type draft-mtp` (the llama engine does not drive the MTP head).** Generation speed in
+**MTP, measured with upstream `llama-cli --spec-type draft-mtp` (before the llama engine drove the MTP head itself; it does now, see [api/engines.md](api/engines.md)).** Generation speed in
 tokens/s on the same model: output that repeats the input 12.3 plain, 15.6 n-gram, 18.6 MTP (n=3, +51%); an open question 15.3 plain,
 14.4 n-gram, 12.3 MTP (-20%). On four CPU cores the draft passes cost about as much as they save, so MTP pays only for predictable
 output. It is not a default here; prompt-lookup speculation costs nothing when there is nothing to look up.
