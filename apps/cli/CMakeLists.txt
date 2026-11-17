@@ -21,7 +21,6 @@ add_library(agent_cli_core STATIC
     src/mcp_config.cpp
     src/archive.cpp
     src/runtimes.cpp
-    src/engine_release.cpp
     src/registries.cpp
     src/doctor.cpp
     src/status_view.cpp

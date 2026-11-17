@@ -133,47 +133,47 @@ TEST_CASE("cli e2e: runtime, skill and secret commands report usage errors and m
     CHECK(h.run("secret bind ONLYNAME").code != 0);
 }
 
-TEST_CASE("cli e2e: uninstall asks first and removes the data folder", "[cli_e2e]") {
+#if !defined(_WIN32) // on Windows the script continues in a window of its own; scripts/install.ps1 is tested by local/e2e/modular/run.ps1
+TEST_CASE("cli e2e: uninstall hands over to the script, which asks first", "[cli_e2e]") {
     Home h;
     fs::create_directories(h.root / "home" / "models");
     std::ofstream(h.root / "home" / "config.json") << "{}";
-    auto no = h.run("uninstall", "\n"); // input from a file: no terminal to ask
-    CHECK(no.code != 0);                // no terminal and no --yes: nothing happens
-    CHECK(has(no, "needs a yes"));
-    CHECK(has(no, "the data folder"));
+    auto no = h.run("uninstall", "
+"); // input from a file: no terminal to ask
+    CHECK(no.code != 0);                // no terminal and no --yes: nothing is removed
+    CHECK(has(no, "Nothing was removed"));
     CHECK(fs::exists(h.root / "home" / "config.json"));
     auto keep = h.run("uninstall --keep-data --yes");
+    INFO(keep.out);
     CHECK(keep.code == 0);
-    CHECK(has(keep, "nothing to remove")); // a build tree is not an installed program
-    CHECK(fs::exists(h.root / "home" / "config.json"));
-#if !defined(_WIN32)
-    auto yes = h.run("uninstall --yes"); // the test's home only; the program in the build tree is not touched
+    CHECK(fs::exists(h.root / "home" / "config.json")); // the data stays
+    auto yes = h.run("uninstall --yes");                 // the test's folder only: AGENT_HOME points at it
     INFO(yes.out);
     CHECK(yes.code == 0);
     CHECK_FALSE(fs::exists(h.root / "home"));
-    CHECK(fs::exists(AGENT_TEST_CLI_PATH));
-#endif
 }
+#endif
 
-TEST_CASE("cli e2e: setup writes the home, doctor reads it, clean has nothing to do", "[cli_e2e]") {
+TEST_CASE("cli e2e: setup hands over to the script, doctor reads the folder, clean has nothing to do", "[cli_e2e]") {
     Home h;
-    // No runtimes and no model: nothing is downloaded. The home is the one given, not the one of the environment.
-    set_env("AGENT_HOME", "");
-    auto setup = h.run("setup --yes --no-models --no-runtimes --home " + quote((h.root / "home2").string()));
+    const fs::path home2 = h.root / "home2";
+    for (const char *d : {"models", "engines", "runtimes", "cache", "logs", "workspaces"}) fs::create_directories(home2 / d);
+    // Nothing is chosen, so nothing is downloaded: the script only reports where everything is kept.
+    auto setup = h.run("setup --yes --no-engines --no-runtimes --no-model --home " + quote(home2.string()));
     INFO(setup.out);
     CHECK(setup.code == 0);
-    CHECK(fs::is_directory(h.root / "home2" / "models"));
-    CHECK(fs::exists(h.root / "config" / "agent" / "home.json")); // the folder is remembered, inside the test's own config folder
-    auto doctor = h.run("doctor --home " + quote((h.root / "home2").string()));
+    CHECK(has(setup, home2.string()));
+    CHECK(h.run("home --home " + quote(home2.string())).code == 0);
+    auto doctor = h.run("doctor --home " + quote(home2.string()));
     CHECK(doctor.code == 0);
     CHECK(has(doctor, "home:"));
     CHECK(has(doctor, "engines:"));
     for (const char *what : {"--downloads", "--cache", "--logs"}) {
-        auto clean = h.run(std::string("clean ") + what + " --yes");
+        auto clean = h.run(std::string("clean ") + what + " --yes --home " + quote(home2.string()));
         INFO(what << ": " << clean.out);
         CHECK(clean.code == 0);
     }
-    CHECK(h.run("clean").code != 0); // says what to clean
+    CHECK(h.run("clean --home " + quote(home2.string())).code != 0); // says what to clean
 }
 
 TEST_CASE("cli e2e: model commands that need no network", "[cli_e2e]") {

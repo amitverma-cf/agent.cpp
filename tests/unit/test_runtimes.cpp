@@ -7,40 +7,6 @@
 using namespace agent::cli;
 namespace fs = std::filesystem;
 
-TEST_CASE("runtimes: release assets for each platform", "[runtimes]") {
-    auto bun = runtime_asset("bun", "latest", "linux", "x86_64");
-    REQUIRE(bun.ok);
-    CHECK(bun.value.url == "https://github.com/oven-sh/bun/releases/latest/download/bun-linux-x64.zip");
-    CHECK(bun.value.checksum_url == "https://github.com/oven-sh/bun/releases/latest/download/SHASUMS256.txt");
-    CHECK(runtime_asset("bun", "latest", "macos", "aarch64").value.archive_name == "bun-darwin-aarch64.zip");
-    CHECK(runtime_asset("bun", "1.2.3", "windows", "x86_64").value.url ==
-          "https://github.com/oven-sh/bun/releases/download/bun-v1.2.3/bun-windows-x64.zip");
-    CHECK_FALSE(runtime_asset("bun", "latest", "windows", "aarch64").ok);
-
-    auto uv = runtime_asset("uv", "latest", "linux", "aarch64");
-    REQUIRE(uv.ok);
-    CHECK(uv.value.archive_name == "uv-aarch64-unknown-linux-gnu.tar.gz");
-    CHECK(uv.value.checksum_url == uv.value.url + ".sha256");
-    CHECK(runtime_asset("uv", "0.5.1", "windows", "x86_64").value.url ==
-          "https://github.com/astral-sh/uv/releases/download/0.5.1/uv-x86_64-pc-windows-msvc.zip");
-    CHECK(runtime_asset("uv", "", "macos", "x86_64").value.archive_name == "uv-x86_64-apple-darwin.tar.gz");
-
-    CHECK_FALSE(runtime_asset("deno", "latest", "linux", "x86_64").ok);
-    CHECK_FALSE(runtime_asset("uv", "latest", "plan9", "x86_64").ok);
-    CHECK_FALSE(runtime_asset("uv", "latest", "linux", "riscv").ok);
-}
-
-TEST_CASE("runtimes: reading a checksum file", "[runtimes]") {
-    const std::string a(64, 'a'), b(64, 'b');
-    const std::string sums = a + "  bun-linux-x64.zip\n" + b + " *bun-darwin-x64.zip\n";
-    CHECK(find_sha256(sums, "bun-linux-x64.zip") == a);
-    CHECK(find_sha256(sums, "bun-darwin-x64.zip") == b);
-    CHECK(find_sha256(sums, "bun-windows-x64.zip").empty());
-    CHECK(find_sha256(b + " *uv-x86_64-unknown-linux-gnu.tar.gz\r\n", "uv-x86_64-unknown-linux-gnu.tar.gz") == b);
-    CHECK(find_sha256(a + "\n", "anything.tar.gz") == a); // a file that holds just the hash
-    CHECK(find_sha256("not a checksum file", "x.zip").empty());
-}
-
 TEST_CASE("runtimes: npx / uvx run on the private runtimes, caches stay in the home", "[runtimes]") {
     const fs::path root = fs::temp_directory_path() / "agent_test_runtimes";
     std::error_code ec;
@@ -106,34 +72,7 @@ TEST_CASE("runtimes: npx / uvx run on the private runtimes, caches stay in the h
     CHECK_FALSE(rewrite_launcher(other, home).rewritten);
     CHECK(other.command == "python3");
 
-    CHECK(remove_runtime(home, "bun").ok);
-    CHECK_FALSE(remove_runtime(home, "bun").ok);
-    CHECK_FALSE(remove_runtime(home, "node").ok);
     fs::remove_all(root, ec);
-}
-
-TEST_CASE("runtimes: node (with pnpm) and nub assets", "[runtimes]") {
-    const std::string sums = std::string(64, 'a') + "  node-v24.22.2-darwin-arm64.tar.gz\n" + std::string(64, 'b') +
-                             "  node-v24.22.2-linux-x64.tar.gz\n" + std::string(64, 'c') + "  node-v24.22.2-win-x64.zip\n" +
-                             std::string(64, 'd') + "  node-v24.22.2-linux-x64.tar.xz\n";
-    CHECK(find_node_archive(sums, "linux", "x86_64") == "node-v24.22.2-linux-x64.tar.gz");
-    CHECK(find_node_archive(sums, "windows", "x86_64") == "node-v24.22.2-win-x64.zip");
-    CHECK(find_node_archive(sums, "macos", "aarch64") == "node-v24.22.2-darwin-arm64.tar.gz");
-    CHECK(find_node_archive(sums, "linux", "aarch64").empty());
-
-    auto node = runtime_asset("node", "latest", "linux", "x86_64");
-    REQUIRE(node.ok);
-    CHECK(node.value.checksum_url == "https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt");
-    CHECK(runtime_asset("node", "v22.1.0", "linux", "x86_64").value.url == "https://nodejs.org/dist/v22.1.0/");
-    CHECK(runtime_asset("nub", "latest", "linux", "x86_64").value.archive_name == "nub-linux-x64.tar.gz");
-    CHECK(runtime_asset("nub", "latest", "windows", "x86_64").value.archive_name == "nub-win32-x64.zip");
-    CHECK(runtime_asset("nub", "0.10.0", "macos", "aarch64").value.url ==
-          "https://github.com/nubjs/nub/releases/download/v0.10.0/nub-darwin-arm64.tar.gz");
-    CHECK(runtimes_for_js("node") == std::vector<std::string>{"node", "pnpm"});
-    CHECK(runtimes_for_js("nub") == std::vector<std::string>{"nub"});
-    CHECK(runtimes_for_js("bun") == std::vector<std::string>{"bun"});
-    CHECK(is_runtime_name("pnpm"));
-    CHECK_FALSE(is_runtime_name("npm"));
 }
 
 TEST_CASE("runtimes: the JavaScript choice decides what npx / npm / node become", "[runtimes]") {

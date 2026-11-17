@@ -73,8 +73,7 @@ int main(int argc, char **argv) {
     const char *env_config = std::getenv("AGENT_CONFIG_DIR");
     const char *env_home = std::getenv("AGENT_HOME");
     const bool explicit_config = cl.has("config-dir") || (env_config && *env_config);
-    const std::string home_root =
-        explicit_config ? std::string() : resolve_home_root(cl.get("home"), env_home ? env_home : "", home_pointer_path());
+    const std::string home_root = explicit_config ? std::string() : resolve_home_root(cl.get("home"), env_home ? env_home : "");
     if (!home_root.empty()) {
         ctx.home = home_layout(home_root);
         ctx.has_home = true;

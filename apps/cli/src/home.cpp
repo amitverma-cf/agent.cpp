@@ -5,21 +5,13 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <simdjson.h>
 #include <system_error>
 
 namespace agent::cli {
 
 namespace fs = std::filesystem;
 
-namespace {
-
-std::string env_value(const char *name) {
-    const char *v = std::getenv(name);
-    return v ? std::string(v) : std::string();
-}
-
-} // namespace
+namespace {} // namespace
 
 HomeLayout home_layout(std::string_view root) {
     const fs::path r{std::string(root)};
@@ -39,62 +31,20 @@ HomeLayout home_layout(std::string_view root) {
     return h;
 }
 
-std::string default_home_suggestion() {
-#if defined(_WIN32)
-    std::string base = env_value("USERPROFILE");
-#else
-    std::string base = env_value("HOME");
-#endif
-    if (base.empty()) base = fs::current_path().string();
-    return (fs::path(base) / std::string(kHomeFolderName)).string();
-}
-
 std::string install_root() {
     const std::string exe_dir = executable_dir();
     if (exe_dir.empty()) return {};
-    const fs::path app(exe_dir);
-    if (app.filename() != "app") return {};
+    const fs::path bin(exe_dir);
+    if (bin.filename() != "bin") return {};
     std::error_code ec;
-    const fs::path root = app.parent_path();
+    const fs::path root = bin.parent_path();
     return fs::is_regular_file(root / ".agent-root", ec) ? root.string() : std::string();
 }
 
-// With an install the pointer lives inside it, so the whole thing stays in one folder; otherwise in the platform config folder.
-std::string home_pointer_path() {
-    if (const std::string root = install_root(); !root.empty()) return (fs::path(root) / "home.json").string();
-    return (fs::path(default_config_dir()) / "home.json").string();
-}
-
-std::string resolve_home_root(std::string_view flag, std::string_view env_home, const std::string &pointer_path) {
+std::string resolve_home_root(std::string_view flag, std::string_view env_home) {
     if (!flag.empty()) return std::string(flag);
     if (!env_home.empty()) return std::string(env_home);
-    std::error_code ec;
-    if (pointer_path.empty() || !fs::is_regular_file(pointer_path, ec)) return install_root(); // no pointer: the install folder itself
-    std::ifstream in(pointer_path, std::ios::binary);
-    if (!in) return {};
-    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    simdjson::dom::parser parser;
-    simdjson::dom::element doc;
-    if (parser.parse(text).get(doc)) return install_root();
-    std::string_view home;
-    if (doc["home"].get(home)) return install_root();
-    return std::string(home);
-}
-
-Result<void> save_home_pointer(const std::string &pointer_path, std::string_view root) {
-    std::error_code ec;
-    const fs::path p(pointer_path);
-    if (p.has_parent_path()) fs::create_directories(p.parent_path(), ec);
-    const std::string tmp = pointer_path + ".tmp";
-    {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        if (!out) return fail(ErrorCode::FilesystemError, "cannot write " + tmp);
-        out << "{\"home\": \"" << json_escape(root) << "\"}\n";
-        if (!out.flush()) return fail(ErrorCode::FilesystemError, "failed writing " + tmp);
-    }
-    fs::rename(tmp, p, ec);
-    if (ec) return fail(ErrorCode::FilesystemError, "cannot replace " + pointer_path + ": " + ec.message());
-    return ok();
+    return install_root(); // started by its full path before AGENT_HOME reached this shell
 }
 
 Result<void> create_home_layout(const HomeLayout &home) {

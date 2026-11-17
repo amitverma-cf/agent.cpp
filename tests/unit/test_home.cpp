@@ -32,28 +32,12 @@ TEST_CASE("home: layout puts every area under one root", "[home]") {
     CHECK(h.runtimes == (root / "runtimes").string());
     CHECK(h.cache == (root / "cache").string());
     CHECK(h.workspaces == (root / "workspaces").string());
-    CHECK(fs::path(default_home_suggestion()).filename() == ".agent.cpp");
 }
 
-TEST_CASE("home: flag beats environment beats the pointer file", "[home]") {
-    const fs::path dir = temp_root("pointer");
-    const std::string pointer = (dir / "home.json").string();
-    CHECK(resolve_home_root("", "", pointer).empty()); // nothing configured yet
-
-    REQUIRE(agent::cli::save_home_pointer(pointer, "/from/pointer").ok);
-    CHECK(resolve_home_root("", "", pointer) == "/from/pointer");
-    CHECK(resolve_home_root("", "/from/env", pointer) == "/from/env");
-    CHECK(resolve_home_root("/from/flag", "/from/env", pointer) == "/from/flag");
-    fs::remove_all(dir);
-}
-
-TEST_CASE("home: the pointer file keeps backslashes and quotes in a path", "[home]") {
-    const fs::path dir = temp_root("escape");
-    const std::string pointer = (dir / "home.json").string();
-    const std::string path = R"(C:\Users\a "b"\.agent.cpp)";
-    REQUIRE(save_home_pointer(pointer, path).ok);
-    CHECK(resolve_home_root("", "", pointer) == path);
-    fs::remove_all(dir);
+TEST_CASE("home: the flag beats the environment, and a build tree has no home of its own", "[home]") {
+    CHECK((resolve_home_root("", "").empty() || !install_root().empty())); // nothing configured, nothing guessed
+    CHECK(resolve_home_root("", "/from/env") == "/from/env");
+    CHECK(resolve_home_root("/from/flag", "/from/env") == "/from/flag");
 }
 
 TEST_CASE("home: creating the layout makes every folder and is repeatable", "[home]") {

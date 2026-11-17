@@ -113,49 +113,15 @@ jobs:
       - name: Package
         shell: bash
         run: |
+          # The program (core) and one archive for each engine plugin: the installer script puts them together on the user's machine and
+          # adds the upstream runtimes it pins (scripts/components.tsv). A GPU build adds engines only.
           v="${{ steps.version.outputs.value }}"
-          name="agent-cpp-${v}-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.variant }}"
-          mkdir -p "dist/${name}/engines" assets
-          cp "build/agent${{ matrix.exe_ext }}" "dist/${name}/"
-          cp "build/agent-engine-host${{ matrix.exe_ext }}" "dist/${name}/" 2>/dev/null || true
-          for f in build/src/engines/*/agent-engine-*.${{ matrix.lib_ext }} build/agent-engine-*.${{ matrix.lib_ext }}; do
-            [ -f "$f" ] || continue
-            case "$f" in *mock*) continue ;; esac # test engines are not released
-            base="$(basename "$f" .${{ matrix.lib_ext }})"
-            dir="$(dirname "$f")"
-            # Runtime libraries the plugin loads from its own folder (libaudiocpp, ONNX Runtime, ...): shipped next to it.
-            libs=()
-            for l in "$dir"/*.${{ matrix.lib_ext }}*; do
-              [ -f "$l" ] || continue
-              case "$(basename "$l")" in agent-engine-*) continue ;; *mock*) continue ;; esac
-              libs+=("$l")
-            done
-            cp "$f" "dist/${name}/engines/"
-            [ ${#libs[@]} -gt 0 ] && cp "${libs[@]}" "dist/${name}/engines/"
-            if [ ${#libs[@]} -eq 0 ]; then
-              cp "$f" "assets/${base}-${{ matrix.os_name }}-${{ matrix.arch }}.${{ matrix.lib_ext }}"
-            else
-              # An engine with runtime libraries is one archive (plugin + libraries), for `agent engine pull`.
-              pkg="${base}-${{ matrix.os_name }}-${{ matrix.arch }}"
-              mkdir -p "stage/${pkg}"
-              cp "$f" "${libs[@]}" "stage/${pkg}/"
-              if [ "${{ matrix.os_name }}" = "windows" ]; then (cd stage && 7z a -tzip "../assets/${pkg}.zip" "${pkg}"); else tar -C stage -czf "assets/${pkg}.tar.gz" "${pkg}"; fi
-            fi
-          done
-          if [ "${{ matrix.os_name }}" = "windows" ]; then cp "$VCPKG_INSTALLATION_ROOT"/installed/${{ matrix.triplet }}/bin/{libssl-3-${{ matrix.dll }},libcrypto-3-${{ matrix.dll }}}.dll "dist/${name}/"; fi
-          cp LICENSE README.md "dist/${name}/"
-          # third-party licences of what is compiled in
-          mkdir -p "dist/${name}/licenses"
-          for l in simdjson cpp-httplib miniaudio llama.cpp sqlite-vec audio.cpp stable-diffusion.cpp trellis2cpp RTXUI; do
-            for f in vendor/$l/LICENSE vendor/$l/LICENSE.md vendor/$l/LICENSE.txt; do [ -f "$f" ] && cp "$f" "dist/${name}/licenses/$l.LICENSE" && break; done
-          done
-          if [ "${{ matrix.os_name }}" = "windows" ]; then
-            (cd dist && 7z a -tzip "../assets/${name}.zip" "${name}")
-          else
-            tar -C dist -czf "assets/${name}.tar.gz" "${name}"
-          fi
-          # A GPU build ships as its full archive only (its engine files carry the same names as the CPU build's).
-          if [ -n "${{ matrix.variant }}" ]; then find assets -type f ! -name "${name}.*" -delete; fi
+          extra=""
+          if [ "${{ matrix.os_name }}" = "windows" ]; then extra="--openssl-dir $VCPKG_INSTALLATION_ROOT/installed/${{ matrix.triplet }}/bin --openssl-suffix -${{ matrix.dll }}"; fi
+          if [ -n "${{ matrix.variant }}" ]; then extra="$extra --variant vulkan --no-core"; fi
+          bash scripts/package-release.sh --build-dir build --out-dir assets --tag "$v" --os ${{ matrix.os_name }} --arch ${{ matrix.arch }} \
+            --lib-ext ${{ matrix.lib_ext }} --exe-ext "${{ matrix.exe_ext }}" $extra
+          rm -f assets/SHA256SUMS
           ls -la assets
 
       - uses: actions/upload-artifact@v4
@@ -181,6 +147,13 @@ jobs:
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then v="${GITHUB_REF_NAME}"; else v="build-${{ github.run_number }}"; fi
           echo "value=${v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+      - name: The pinned list belongs to this release
+        if: github.ref_type == 'tag'
+        run: |
+          # scripts/components.tsv is written by scripts/pin-components.py --tag <tag> before the tag is made.
+          grep -qx "# tag ${{ steps.version.outputs.value }}" scripts/components.tsv || { echo "scripts/components.tsv is pinned for another tag: run scripts/pin-components.py --tag ${{ steps.version.outputs.value }}"; exit 1; }
 
       - name: Checksums and manifest
         working-directory: assets

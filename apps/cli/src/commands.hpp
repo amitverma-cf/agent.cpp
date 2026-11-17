@@ -54,18 +54,18 @@ bool ask_yes_no(std::string_view question);
 
 int report_error(const Error &e);
 
-int cmd_setup(const CommandLine &cl, Context &ctx); // script_cmd.cpp: runs scripts/setup.sh|ps1 from the repository
-int cmd_home(const CommandLine &cl, Context &ctx);  // script_cmd.cpp
-// Downloads scripts/<name>.sh (or .ps1 on Windows) from the repository and runs it; `detach`: start it and exit (an update on Windows).
-int run_remote_script(const std::string &name, const std::vector<std::string> &args, bool detach);
+int cmd_setup(const CommandLine &cl, Context &ctx); // script_cmd.cpp: hands over to the installed scripts/install.sh|ps1
+int cmd_home(const CommandLine &cl, Context &ctx);  // script_cmd.cpp: prints the folder everything is kept in
+// Hands over to <home>/scripts/install.sh|ps1 (see script_cmd.cpp). detach: on Windows the script continues in a window of its own.
+int run_install_script(const Context &ctx, const std::string &command, const std::vector<std::string> &args, bool detach);
+int add_components(const Context &ctx, const std::vector<std::string> &names, const CommandLine &cl);
+int remove_components(const Context &ctx, const std::vector<std::string> &names);
 int cmd_engine(const CommandLine &cl, Context &ctx);
 int cmd_model(const CommandLine &cl, Context &ctx);
 int cmd_chat(const CommandLine &cl, Context &ctx);
 int cmd_run(const CommandLine &cl, Context &ctx);
-int cmd_secret(const CommandLine &cl, Context &ctx); // secret_cmd.cpp
-int cmd_mcp(const CommandLine &cl, Context &ctx);    // mcp_cmd.cpp
-Result<void> pull_and_register_engine(Context &ctx, std::vector<EngineEntry> &engines, const std::string &name, std::string_view repo,
-                                      std::string_view tag);
+int cmd_secret(const CommandLine &cl, Context &ctx);   // secret_cmd.cpp
+int cmd_mcp(const CommandLine &cl, Context &ctx);      // mcp_cmd.cpp
 int cmd_runtime(const CommandLine &cl, Context &ctx);  // runtime_cmd.cpp
 int cmd_sandbox(const CommandLine &cl, Context &ctx);  // sandbox_cmd.cpp
 int cmd_schedule(const CommandLine &cl, Context &ctx); // schedule_cmd.cpp

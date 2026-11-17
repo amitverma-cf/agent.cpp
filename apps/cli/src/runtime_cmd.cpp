@@ -95,16 +95,7 @@ int cmd_runtime(const CommandLine &cl, Context &ctx) {
         std::vector<std::string> need;
         for (const std::string &n : runtimes_for_js(name))
             if (runtime_binary_path(ctx.home, n).empty()) need.push_back(n);
-        for (const std::string &n : need) {
-            std::fprintf(stderr, "downloading %s ...\n", n.c_str());
-            InstallProgress progress;
-            progress.on_progress = print_progress;
-            auto r = install_runtime(ctx.home, n, "latest", agent::hub::http_options_from_env(), progress);
-            std::fprintf(stderr, "\n");
-            if (!r.ok) return report_error(r.error);
-            std::printf("installed %s at %s\n", n.c_str(), r.value.c_str());
-        }
-        return 0;
+        return need.empty() ? 0 : add_components(ctx, need, cl);
     }
     if (name != "js" && !is_runtime_name(name)) {
         std::fprintf(stderr, "agent runtime: unknown runtime '%s' (bun, node, pnpm, nub, uv or js)\n", name.c_str());
@@ -120,23 +111,11 @@ int cmd_runtime(const CommandLine &cl, Context &ctx) {
         return 0;
     }
     if (sub == "rm") {
-        auto r = remove_runtime(ctx.home, name);
-        if (!r.ok) return report_error(r.error);
-        std::printf("removed %s\n", name.c_str());
-        return 0;
+        return remove_components(ctx, name == "js" ? runtimes_for_js(ctx.config.js_runtime) : std::vector<std::string>{name});
     }
     if (sub == "install") { // "js" = whatever the chosen JavaScript tooling needs
         const std::vector<std::string> names = name == "js" ? runtimes_for_js(ctx.config.js_runtime) : std::vector<std::string>{name};
-        for (const std::string &n : names) {
-            std::fprintf(stderr, "downloading %s %s ...\n", n.c_str(), std::string(cl.get("version", "latest")).c_str());
-            InstallProgress progress;
-            progress.on_progress = print_progress;
-            auto r = install_runtime(ctx.home, n, cl.get("version", "latest"), agent::hub::http_options_from_env(), progress);
-            std::fprintf(stderr, "\n");
-            if (!r.ok) return report_error(r.error);
-            std::printf("installed %s at %s\n", n.c_str(), r.value.c_str());
-        }
-        return 0;
+        return add_components(ctx, names, cl);
     }
     std::fprintf(stderr, "agent runtime: unknown subcommand '%s'\n", sub.c_str());
     return 2;

@@ -1,148 +1,505 @@
-# Installs the agent CLI on Windows:  irm https://agent.qozu.fyi/install.ps1 | iex
+# agent.cpp on Windows: installs, sets up, updates, extends and removes it. This one script does all of it; the program only hands over to it
+# (agent setup, agent update, agent uninstall, agent engine pull ...).
 #
-# Picks the release archive that fits this machine (x64 or arm64; the Vulkan build on x64 when a Vulkan driver is present), checks its
-# SHA-256 against the release's SHA256SUMS, unpacks it to %USERPROFILE%\.agent.cpp\app and adds that folder to your user PATH. Everything agent.cpp keeps lives under %USERPROFILE%\.agent.cpp.
-# It then runs the setup script (scripts/setup.ps1) and opens the chat (AGENT_NO_START=1 only installs). Run again, it updates: the same
-# version is left alone, a newer one replaces it in place (`agent update` does exactly this).
-# Environment: AGENT_VERSION (a tag such as v1.0.0; default: the latest release), AGENT_VARIANT (cpu or vulkan; default: detected),
-#              AGENT_REPO (default amitverma-cf/agent.cpp).
+#   irm https://agent.qozu.fyi/install.ps1 | iex                       install (asks where, once), then set up
+#   & ([scriptblock]::Create((irm https://agent.qozu.fyi/install.ps1))) add llama
+#
+#   install.ps1 [install]            a new install: the folder, the program, then setup
+#   install.ps1 setup                engines, runtimes and a model; can be run again at any time
+#   install.ps1 add NAME[,NAME]      add engines or runtimes (llama, sdcpp, audiocpp, onnx, trellis, bun, uv, node, pnpm, nub, ...)
+#   install.ps1 rm NAME[,NAME]       remove them
+#   install.ps1 ls                   what exists for this machine and what is installed
+#   install.ps1 update [--check]     move to the newest agent.cpp release and the components it pins
+#   install.ps1 uninstall            remove everything (--keep-data keeps models, notes and settings)
+#
+# One folder holds everything: bin\ (the program), engines\, runtimes\, models\, workspaces\, scripts\ (this file and components.tsv, of the
+# installed release), cache\. Its path is the user environment variable AGENT_HOME, which is also what the program reads; <folder>\bin is
+# on the user PATH. Nothing else is written outside the folder.
+#
+# Pinned: a release of agent.cpp lists the exact version of every component it works with (components.tsv). add, setup and rm use the list
+# of the installed release; only update reads a newer one. Without arguments (irm | iex) the options come from environment variables:
+# AGENT_CMD, AGENT_HOME, AGENT_VERSION (a tag), AGENT_BACKEND (cpu, vulkan, cuda12, cuda13, rocm), AGENT_YES, AGENT_ENGINES, AGENT_RUNTIMES,
+# AGENT_REPO, AGENT_SCRIPTS and AGENT_RELEASE (an address or folder to read instead of GitHub), AGENT_NO_ENV (leave the user environment alone).
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-# `agent update` starts this script and exits: Windows will not replace a program that is still running, so wait for it.
-if ($env:AGENT_WAIT_PID) { Wait-Process -Id ([int]$env:AGENT_WAIT_PID) -Timeout 30 -ErrorAction SilentlyContinue }
-
-# ---- output: turquoise accents, grey detail, pink for problems
 function Step($text) { Write-Host '  ' -NoNewline; Write-Host ([string][char]0x2713) -ForegroundColor Cyan -NoNewline; Write-Host " $text" }
 function Info($text) { Write-Host "  $([char]0x00B7) $text" -ForegroundColor DarkGray }
-function Fail($text) { Write-Host ''; Write-Host "  $([char]0x2717) $text" -ForegroundColor Magenta; Write-Host ''; throw $text }
+function Fail($text) { throw $text }
 
-Write-Host ''
-Write-Host '  agent.cpp' -ForegroundColor Cyan -NoNewline; Write-Host '  installer' -ForegroundColor DarkGray
-Write-Host "  $([string]([char]0x2500) * 28)" -ForegroundColor DarkGray
-Write-Host ''
-
-$tmp = $null
-try {
-    $repo = if ($env:AGENT_REPO) { $env:AGENT_REPO } else { 'amitverma-cf/agent.cpp' }
-    $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
-        'AMD64' { 'x86_64' }
-        'ARM64' { 'aarch64' }
-        default { Fail "Unsupported CPU: $($env:PROCESSOR_ARCHITECTURE). x64 and arm64 are released." }
+function Invoke-AgentInstaller([string[]] $Argv) {
+    $script:Repo = if ($env:AGENT_REPO) { $env:AGENT_REPO } else { 'amitverma-cf/agent.cpp' }
+    $cmd = if ($env:AGENT_CMD) { $env:AGENT_CMD } else { '' }
+    $yes = [bool]$env:AGENT_YES; $backend = $env:AGENT_BACKEND; $engines = $env:AGENT_ENGINES; $runtimes = $env:AGENT_RUNTIMES
+    $model = ''; $noModel = $false; $noEngines = $false; $noRuntimes = $false; $check = $false; $keepData = $false; $all = $false
+    $version = $env:AGENT_VERSION; $names = @()
+    $i = 0
+    while ($i -lt $Argv.Count) {
+        $a = $Argv[$i]
+        switch -Regex ($a) {
+            '^(--yes|-y)$' { $yes = $true; break }
+            '^--backend$' { $i++; $backend = $Argv[$i]; break }
+            '^--engines$' { $i++; $engines = $Argv[$i]; break }
+            '^--runtimes$' { $i++; $runtimes = $Argv[$i]; break }
+            '^--all$' { $all = $true; break }
+            '^--no-engines$' { $noEngines = $true; break }
+            '^--no-runtimes$' { $noRuntimes = $true; break }
+            '^--model$' { $i++; $model = $Argv[$i]; break }
+            '^--no-models?$' { $noModel = $true; break }
+            '^--check$' { $check = $true; break }
+            '^--keep-data$' { $keepData = $true; break }
+            '^--(version|tag)$' { $i++; $version = $Argv[$i]; break }
+            '^--home$' { $i++; $env:AGENT_HOME = $Argv[$i]; break }
+            '^-' { Fail "unknown option $a" }
+            default { if (-not $cmd) { $cmd = $a } else { $names += $a }; break }
+        }
+        $i++
     }
-    $variant = $env:AGENT_VARIANT
-    $detected = ''
-    if (-not $variant) {
-        $variant = 'cpu'
-        if ($arch -eq 'x86_64' -and (Test-Path "$env:SystemRoot\System32\vulkan-1.dll")) { $variant = 'vulkan'; $detected = ' (Vulkan driver found)' }
+    if (-not $cmd) { $cmd = 'install' }
+    $nameList = ($names -join ',').Trim(',')
+
+    # `agent update` and `agent uninstall` start this script and exit: Windows will not replace a running program, so wait for it.
+    if ($env:AGENT_WAIT_PID) { Wait-Process -Id ([int]$env:AGENT_WAIT_PID) -Timeout 30 -ErrorAction SilentlyContinue }
+
+    $ask = (-not $yes) -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
+    function Prompt([string]$question, [string]$default) {
+        $answer = Read-Host "  $question"
+        if ($answer) { $answer.Trim() } else { $default }
     }
-    if ($variant -notin 'cpu', 'vulkan') { Fail 'AGENT_VARIANT must be cpu or vulkan.' }
-
-    $base = if ($env:AGENT_VERSION) { "https://github.com/$repo/releases/download/$($env:AGENT_VERSION)" } else { "https://github.com/$repo/releases/latest/download" }
-    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("agent-install-" + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $tmp | Out-Null
-
-    # GitHub serves SHA256SUMS as application/octet-stream: Content is then bytes, not text.
-    $resp = Invoke-WebRequest -UseBasicParsing "$base/SHA256SUMS"
-    $text = if ($resp.Content -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($resp.Content) } else { [string]$resp.Content }
-    $sums = $text -split "`r?`n" | Where-Object { $_.Trim() }
-    function Pick($suffix) {
-        $sums | Where-Object { $_ -match " \*?agent-cpp-\S*-windows-$arch$suffix\.zip\s*$" } | Select-Object -First 1
+    function Confirm-Yes([string]$question) {
+        if ($yes) { return $true }
+        if (-not $ask) { return $false }
+        return (Prompt "$question [y/N]" 'n') -match '^(y|yes)$'
     }
-    $line = if ($variant -eq 'vulkan') { Pick '-vulkan' } else { Pick '' }
-    if (-not $line -and $variant -eq 'vulkan') { Info 'No GPU build in this release; using the CPU build'; $variant = 'cpu'; $detected = ''; $line = Pick '' }
-    if (-not $line) { Fail "This release has no Windows $arch archive." }
-    $parts = $line.Trim() -split '\s+', 2
-    $want = $parts[0].ToLower()
-    $name = $parts[1].TrimStart('*')
-    $version = if ($name -match '^agent-cpp-(v?\d[^-]*)-') { $Matches[1] } else { '' }
 
-    Step "Windows $arch  $([char]0x00B7)  $variant build$detected"
-    Step "Release $version"
-
-    $root = if ($env:AGENT_HOME) { $env:AGENT_HOME } else { Join-Path $env:USERPROFILE '.agent.cpp' }
-    $dest = Join-Path $root 'app'
-    $versionFile = Join-Path $dest '.version'
-    if ($env:AGENT_CHECK) { # agent update --check: only look
-        if ((Test-Path $versionFile) -and ((Get-Content $versionFile -Raw).Trim() -eq $name)) { Step "Up to date ($version)" } else { Step "An update is available: $version" }
-        return
+    # ---- this machine
+    $os = 'windows'
+    $arch = switch ($env:PROCESSOR_ARCHITEW6432 + $env:PROCESSOR_ARCHITECTURE) {
+        { $_ -match 'ARM64' } { 'aarch64' }
+        { $_ -match 'AMD64' } { 'x86_64' }
+        default { Fail "Unsupported CPU: $($env:PROCESSOR_ARCHITECTURE). x64 and arm64 are supported." }
     }
-    $upToDate = (-not $env:AGENT_FORCE) -and (Test-Path $versionFile) -and ((Get-Content $versionFile -Raw).Trim() -eq $name) -and (Test-Path (Join-Path $dest 'agent.exe'))
-    if ($upToDate) { Step 'Already installed and up to date' }
-    else {
+    function Get-Backends {
+        $list = @()
+        $smi = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
+        if ($smi -and $arch -eq 'x86_64') {
+            $text = (& $smi.Source 2>$null | Out-String)
+            if ($text -match 'CUDA Version:\s*(\d+)') { if ([int]$Matches[1] -ge 13) { $list += 'cuda13', 'cuda12' } else { $list += 'cuda12' } }
+        }
+        if (Test-Path "$env:SystemRoot\System32\vulkan-1.dll") { $list += 'vulkan' }
+        $list += 'cpu'
+        return $list
+    }
+    $backends = if ($backend) { @($backend, 'cpu') } else { Get-Backends }
 
-    # Download with a progress bar.
-    Write-Host "  $([char]0x2193) Downloading $name" -ForegroundColor Cyan
-    $zip = Join-Path $tmp $name
-    Add-Type -AssemblyName System.Net.Http
-    $client = New-Object System.Net.Http.HttpClient
-    $client.Timeout = [TimeSpan]::FromMinutes(30)
-    $r = $client.GetAsync("$base/$name", [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).Result
-    [void]$r.EnsureSuccessStatusCode()
-    $total = $r.Content.Headers.ContentLength
-    $in = $r.Content.ReadAsStreamAsync().Result
-    $out = [System.IO.File]::Create($zip)
-    $buf = New-Object byte[] 262144
-    $done = 0; $shown = -1
-    while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
-        $out.Write($buf, 0, $n); $done += $n
-        if ($total) {
-            $pct = [int](100 * $done / $total)
-            if ($pct -ne $shown) {
-                $shown = $pct
-                $filled = [int]($pct / 4)
-                Write-Host ("`r    [" + ('#' * $filled) + (' ' * (25 - $filled)) + "] $pct%  " + [math]::Round($done / 1MB, 1) + ' / ' + [math]::Round($total / 1MB, 1) + ' MB') -NoNewline -ForegroundColor DarkGray
+    $script:tmp = $null; $script:ROOT = $null; $script:BIN = $null
+    function Get-Source([string]$src, [string]$dst, [bool]$progress = $false) {
+        if ($src -match '^https?://') {
+            if ($progress) {
+                Add-Type -AssemblyName System.Net.Http
+                $client = New-Object System.Net.Http.HttpClient
+                $client.Timeout = [TimeSpan]::FromMinutes(60)
+                $r = $client.GetAsync($src, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).Result
+                [void]$r.EnsureSuccessStatusCode()
+                $total = $r.Content.Headers.ContentLength
+                $in = $r.Content.ReadAsStreamAsync().Result
+                $out = [System.IO.File]::Create($dst)
+                $buf = New-Object byte[] 262144
+                $done = 0; $shown = -1
+                while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+                    $out.Write($buf, 0, $n); $done += $n
+                    if ($total) {
+                        $pct = [int](100 * $done / $total)
+                        if ($pct -ne $shown) {
+                            $shown = $pct; $filled = [int]($pct / 4)
+                            Write-Host ("`r    [" + ('#' * $filled) + (' ' * (25 - $filled)) + "] $pct%  " + [math]::Round($done / 1MB, 1) + ' / ' + [math]::Round($total / 1MB, 1) + ' MB') -NoNewline -ForegroundColor DarkGray
+                        }
+                    }
+                }
+                $out.Dispose(); $in.Dispose(); $client.Dispose()
+                Write-Host ''
+            } else {
+                Invoke-WebRequest -UseBasicParsing -Uri $src -OutFile $dst
+            }
+        } else {
+            Copy-Item -LiteralPath ($src -replace '^file:///?', '') -Destination $dst -Force
+        }
+    }
+
+    # ---- the folder
+    function Resolve-Root {
+        $r = $env:AGENT_HOME
+        if (-not $r -and $cmd -eq 'install') {
+            $def = Join-Path $env:USERPROFILE '.agent.cpp'
+            if ($ask) {
+                Write-Host ''
+                Write-Host '  Where should agent.cpp keep everything?  The program, engines, models, memory and settings all go in this one folder.'
+                $r = Prompt "Folder [$def]:" $def
+            } else { $r = $def }
+        }
+        if (-not $r) { Fail 'AGENT_HOME is not set: agent.cpp is not installed here. Install it first: irm https://agent.qozu.fyi/install.ps1 | iex' }
+        $r = $r.Trim().Trim('"').Trim("'")
+        if ($r -eq '~') { $r = $env:USERPROFILE } elseif ($r.StartsWith('~\') -or $r.StartsWith('~/')) { $r = Join-Path $env:USERPROFILE $r.Substring(2) }
+        if (-not [System.IO.Path]::IsPathRooted($r) -or $r -notmatch '^([A-Za-z]:[\\/]|\\\\)') { Fail "The folder must be a full path such as C:\agent, not '$r'." }
+        $r = [System.IO.Path]::GetFullPath($r).TrimEnd('\')
+        if ($r.Length -ge 2 -and $r[1] -eq ':') { $r = $r.Substring(0, 1).ToUpper() + $r.Substring(1) } # c:\x and C:\x are one folder
+        if ($r -eq $env:USERPROFILE.TrimEnd('\') -or $r.Length -le 3) { Fail 'Choose a folder of its own, not your user folder or a drive.' }
+        if ((Test-Path -LiteralPath $r -PathType Leaf)) { Fail "$r is a file." }
+        if ($cmd -eq 'install' -and (Test-Path -LiteralPath $r) -and -not (Test-Path -LiteralPath (Join-Path $r '.agent-root')) -and (Get-ChildItem -LiteralPath $r -Force | Select-Object -First 1)) {
+            Fail "$r already has other files in it. Choose an empty folder or a new one."
+        }
+        New-Item -ItemType Directory -Path $r -Force | Out-Null
+        $script:ROOT = $r
+        $script:BIN = Join-Path $r 'bin'
+        $env:AGENT_HOME = $r
+    }
+
+    # The folder is remembered as the user environment variable AGENT_HOME, and <folder>\bin as a user PATH entry.
+    function Remove-Env([string]$oldBin) {
+        if ($env:AGENT_NO_ENV) { return }
+        $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+        if ($userPath) {
+            $kept = (($userPath -split ';') | Where-Object { $_ -and $_.TrimEnd('\') -ne $oldBin.TrimEnd('\') }) -join ';'
+            if ($kept -ne $userPath) { [Environment]::SetEnvironmentVariable('Path', $kept, 'User') }
+        }
+    }
+    function Set-Env {
+        if ($env:AGENT_NO_ENV) { Info 'AGENT_NO_ENV is set: the user environment is left alone'; return }
+        $old = [Environment]::GetEnvironmentVariable('AGENT_HOME', 'User')
+        if ($old -and $old.TrimEnd('\') -ne $ROOT) { Remove-Env (Join-Path $old 'bin') }
+        [Environment]::SetEnvironmentVariable('AGENT_HOME', $ROOT, 'User')
+        $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+        if (-not $userPath) { $userPath = '' }
+        if (($userPath -split ';') -notcontains $BIN) { [Environment]::SetEnvironmentVariable('Path', (($userPath.TrimEnd(';') + ';' + $BIN).TrimStart(';')), 'User') }
+        Step "AGENT_HOME is $ROOT, and $BIN is on PATH (open a new terminal)"
+    }
+
+    function New-Tmp {
+        $d = Join-Path $ROOT 'cache\tmp'
+        New-Item -ItemType Directory -Path $d -Force | Out-Null
+        $script:tmp = Join-Path $d ('install.' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $script:tmp -Force | Out-Null
+    }
+
+    # ---- the release and the list of components
+    function Get-ReleaseBase([string]$tag) {
+        if ($env:AGENT_RELEASE) { return $env:AGENT_RELEASE }
+        if ($tag) { return "https://github.com/$Repo/releases/download/$tag" }
+        return "https://github.com/$Repo/releases/latest/download"
+    }
+    function Get-LatestTag {
+        $r = Invoke-RestMethod -UseBasicParsing "https://api.github.com/repos/$Repo/releases/latest"
+        return $r.tag_name
+    }
+    # Columns (tab separated): kind name os arch backend version sha256 strip dest url. sha256 "@sums": the sum is in the release's SHA256SUMS.
+    $script:List = $null
+    function Read-List([string]$file) {
+        $script:ListFile = $file
+        $script:List = @(Get-Content -LiteralPath $file | Where-Object { $_ -and -not $_.StartsWith('#') } | ForEach-Object {
+            $f = $_ -split "`t"
+            [pscustomobject]@{ Kind = $f[0]; Name = $f[1]; Os = $f[2]; Arch = $f[3]; Backend = $f[4]; Version = $f[5]; Sha = $f[6]; Strip = $f[7]; Dest = $f[8]; Url = $f[9] }
+        })
+    }
+    function Get-ListTag { $m = Select-String -LiteralPath $script:ListFile -Pattern '^# tag (.+)$' | Select-Object -First 1; if ($m) { $m.Matches[0].Groups[1].Value.Trim() } else { '' } }
+    function Load-List {
+        $f = Join-Path $ROOT 'scripts\components.tsv'
+        if (Test-Path -LiteralPath $f) { Read-List $f; return }
+        if (-not $tmp) { New-Tmp }
+        $base = if ($env:AGENT_SCRIPTS) { $env:AGENT_SCRIPTS } else { "https://raw.githubusercontent.com/$Repo/$(if ($version) { $version } else { 'main' })/scripts" }
+        $dst = Join-Path $tmp 'components.tsv'
+        Get-Source "$base/components.tsv" $dst
+        Read-List $dst
+    }
+    function Get-Rows([string]$kind, [string]$name) { $script:List | Where-Object { $_.Kind -eq $kind -and $_.Name -eq $name -and $_.Os -eq $os -and $_.Arch -eq $arch } }
+    function Get-KindOf([string]$name) { $r = $script:List | Where-Object { $_.Name -eq $name } | Select-Object -First 1; if ($r) { $r.Kind } else { '' } }
+    function Pick-Backend([string]$kind, [string]$name) {
+        $rows = @(Get-Rows $kind $name)
+        if (-not $rows) { return '' }
+        $have = @($rows | ForEach-Object { $_.Backend } | Sort-Object -Unique)
+        if ($have.Count -eq 1 -and $have[0] -eq 'any') { return 'any' }
+        foreach ($b in $backends) { if ($have -contains $b) { return $b } }
+        return ''
+    }
+    function Get-Dir([string]$kind, [string]$name) {
+        switch ($kind) { 'engine' { Join-Path $ROOT "engines\$name" } 'runtime' { Join-Path $ROOT "runtimes\$name" } default { $BIN } }
+    }
+    $script:Sums = $null
+    function Get-Sum([string]$sha, [string]$file, [string]$rel) {
+        if ($sha -ne '@sums') { return $sha.ToLower() }
+        if (-not $script:Sums) {
+            $f = Join-Path $tmp 'SHA256SUMS'
+            Get-Source "$rel/SHA256SUMS" $f
+            $script:Sums = @(Get-Content -LiteralPath $f)
+        }
+        $line = $script:Sums | Where-Object { $_ -match "\s\*?$([regex]::Escape($file))\s*$" } | Select-Object -First 1
+        if (-not $line) { Fail "$file is not in SHA256SUMS." }
+        return ($line.Trim() -split '\s+')[0].ToLower()
+    }
+    function Expand-Component([string]$archive, [string]$dest, [string]$strip) {
+        $x = Join-Path $tmp ('x' + [guid]::NewGuid().ToString('N').Substring(0, 6))
+        New-Item -ItemType Directory -Path $x -Force | Out-Null
+        New-Item -ItemType Directory -Path $dest -Force | Out-Null
+        if ($archive -match '\.zip$') { Expand-Archive -LiteralPath $archive -DestinationPath $x -Force }
+        elseif ($archive -match '\.(tar\.gz|tgz)$') { & (Join-Path $env:SystemRoot 'System32\tar.exe') -xzf $archive -C $x; if ($LASTEXITCODE -ne 0) { Fail "Cannot unpack $(Split-Path $archive -Leaf)." } }
+        else { Fail "Unknown archive type: $archive" }
+        $src = $x
+        if ($strip -like 'find:*') {
+            $name = $strip.Substring(5)
+            $hit = Get-ChildItem -LiteralPath $x -Recurse -File -Depth 4 -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $hit) { Fail "$(Split-Path $archive -Leaf) does not contain $name." }
+            $src = $hit.DirectoryName
+        } else {
+            for ($k = 0; $k -lt [int]$strip; $k++) {
+                $children = @(Get-ChildItem -LiteralPath $src -Force)
+                if ($children.Count -ne 1 -or -not $children[0].PSIsContainer) { break }
+                $src = $children[0].FullName
+            }
+        }
+        Copy-Item -Path (Join-Path $src '*') -Destination $dest -Recurse -Force
+        Remove-Item -LiteralPath $x -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    function Install-Component([string]$kind, [string]$name, [string]$bk, [string]$rel, [string]$tag) {
+        $final = Get-Dir $kind $name
+        $stage = if ($kind -eq 'core') { Join-Path $ROOT 'bin.new' } else { "$final.new" }
+        if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+        New-Item -ItemType Directory -Path $stage -Force | Out-Null
+        $rows = @(Get-Rows $kind $name | Where-Object { $_.Backend -eq 'any' -or $_.Backend -eq $bk })
+        if (-not $rows) { Fail "$name has no build for $os $arch." }
+        $got = @()
+        foreach ($r in $rows) {
+            $url = $r.Url.Replace('@RELEASE@', $rel).Replace('@TAG@', $tag)
+            $file = $url.Substring($url.LastIndexOfAny(@('/', '\')) + 1)
+            Write-Host "  $([char]0x2193) $name  ($($r.Backend), $($r.Version))" -ForegroundColor Cyan
+            $local = Join-Path $tmp $file
+            try { Get-Source $url $local $true } catch { Fail "The download of $file failed: $url" }
+            $want = Get-Sum $r.Sha $file $rel
+            if ((Get-FileHash -Algorithm SHA256 -LiteralPath $local).Hash.ToLower() -ne $want) { Fail "SHA-256 mismatch for $file. Nothing was installed." }
+            $dd = if ($r.Dest -eq '.' -or $r.Dest -eq '-') { $stage } else { Join-Path $stage $r.Dest }
+            Expand-Component $local $dd $r.Strip
+            Remove-Item -LiteralPath $local -Force
+            $got += $r.Version
+        }
+        if ($kind -eq 'core') {
+            $old = Join-Path $ROOT 'bin.old'
+            if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Recurse -Force }
+            if (Test-Path -LiteralPath $BIN) { Move-Item -LiteralPath $BIN -Destination $old }
+            Move-Item -LiteralPath $stage -Destination $BIN
+            if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Recurse -Force -ErrorAction SilentlyContinue }
+        } else {
+            Set-Content -LiteralPath (Join-Path $stage '.pin') -Value @($bk, ($got -join ' ')) -Encoding ASCII
+            if (Test-Path -LiteralPath $final) { Remove-Item -LiteralPath $final -Recurse -Force }
+            New-Item -ItemType Directory -Path (Split-Path $final) -Force | Out-Null
+            Move-Item -LiteralPath $stage -Destination $final
+        }
+        Step "$name installed ($bk)"
+    }
+    function Get-Pinned([string]$kind, [string]$name) {
+        $p = Join-Path (Get-Dir $kind $name) '.pin'
+        if (Test-Path -LiteralPath $p) { $l = @(Get-Content -LiteralPath $p); return "$($l[0]) $($l[1])" }
+        return ''
+    }
+    function Get-Names([string]$kind) { @($script:List | Where-Object { $_.Kind -eq $kind -and $_.Os -eq $os -and $_.Arch -eq $arch } | ForEach-Object { $_.Name } | Sort-Object -Unique) }
+
+    function Add-Names([string]$list, [string]$rel, [string]$tag) {
+        if (-not $list) { return }
+        if (-not $tmp) { New-Tmp }
+        foreach ($n in ($list -split '[,\s]+' | Where-Object { $_ })) {
+            $k = Get-KindOf $n
+            if (-not $k -or $k -eq 'core') { Info "$n is not a component of this release (agent ls shows them)"; continue }
+            $b = Pick-Backend $k $n
+            if (-not $b) { Info "$n has no build for $os $arch yet"; continue }
+            Install-Component $k $n $b $rel $tag
+            if ($k -eq 'engine' -and (Test-Path -LiteralPath (Join-Path $BIN 'agent.exe'))) {
+                $doc = (& (Join-Path $BIN 'agent.exe') doctor 2>$null | Out-String)
+                if ($doc -match "(?m)^\s+$([regex]::Escape($n))\s+ok") { Step "$n loads" } else { Info "$n is installed but did not report ok in agent doctor" }
             }
         }
     }
-    $out.Dispose(); $in.Dispose(); $client.Dispose()
-    Write-Host ''
-    if ((Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower() -ne $want) { Fail "SHA-256 mismatch for $name. Nothing was installed." }
-    Step 'Checksum verified (SHA-256)'
 
-    $stage = Join-Path $tmp 'stage'
-    Expand-Archive -Path $zip -DestinationPath $stage
-    $inner = Get-ChildItem $stage | Select-Object -First 1
-    if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
-    New-Item -ItemType Directory -Path (Split-Path $dest) -Force | Out-Null
-    Move-Item $inner.FullName $dest
-    New-Item -ItemType File -Path (Join-Path $root '.agent-root') -Force | Out-Null
-    Step "Installed to $dest"
-    # An older install lived in %LOCALAPPDATA%\Programs\agent-cpp: one folder is enough now.
-    $old = Join-Path $env:LOCALAPPDATA 'Programs\agent-cpp'
-    if (Test-Path $old) { Remove-Item -Recurse -Force $old -ErrorAction SilentlyContinue }
-    Set-Content -Path $versionFile -Value $name -NoNewline
+    # ---------------------------------------------------------------------------------------------------------------- commands
+    function Do-Setup {
+        Resolve-Root; Load-List; if (-not $tmp) { New-Tmp }
+        $tag = Get-ListTag; $rel = Get-ReleaseBase $tag
+        Write-Host ''
+        Write-Host '  agent.cpp' -ForegroundColor Cyan -NoNewline; Write-Host '  setup' -ForegroundColor DarkGray
+        Write-Host "  $([string]([char]0x2500) * 28)" -ForegroundColor DarkGray
+        Write-Host ''
+        Step "Files are kept in $ROOT"
+        $avail = Get-Names 'engine'
+        $chosen = $engines
+        if ($all) { $chosen = $avail -join ',' }
+        if (-not $chosen -and -not $noEngines) {
+            if ($ask) {
+                Write-Host "  Engines available for this machine: $($avail -join ', ')"
+                $chosen = Prompt 'Install which? (names separated by commas, Enter for llama, all for every one):' 'llama'
+                if ($chosen -eq 'all') { $chosen = $avail -join ',' }
+            } else { $chosen = 'llama' }
+        }
+        if ($noEngines) { $chosen = '' }
+        Add-Names $chosen $rel $tag
 
-    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $userPath = (($userPath -split ';') | Where-Object { $_ -and $_ -ne (Join-Path $env:LOCALAPPDATA 'Programs\agent-cpp') }) -join ';'
-    if (($userPath -split ';') -notcontains $dest) {
-        [Environment]::SetEnvironmentVariable('Path', ($userPath.TrimEnd(';') + ';' + $dest), 'User')
-        Step 'Added to your PATH (open a new terminal to type just agent)'
+        $avail = Get-Names 'runtime'
+        $chosen = $runtimes
+        if (-not $chosen -and -not $noRuntimes) {
+            if ($ask) {
+                Write-Host "  Runtimes (for MCP servers and skills): $($avail -join ', ')"
+                $chosen = Prompt 'Install which? (Enter for bun,uv; none to skip):' 'bun,uv'
+                if ($chosen -eq 'none') { $chosen = '' }
+            } else { $chosen = 'bun,uv' }
+        }
+        if ($noRuntimes) { $chosen = '' }
+        Add-Names $chosen $rel $tag
+
+        $exe = Join-Path $BIN 'agent.exe'
+        if (-not $model -and -not $noModel -and $ask) { $model = Prompt 'Model to download now: a Hugging Face link, owner/repo, or a file on this computer (Enter to skip):' '' }
+        $model = $model.Trim().Trim('"').Trim("'")
+        if ($model) {
+            Write-Host "  $([char]0x2193) Adding $model" -ForegroundColor Cyan
+            & $exe model pull $model
+            if ($LASTEXITCODE -ne 0) { Fail 'The model could not be added.' }
+        }
+        $listed = if (Test-Path -LiteralPath $exe) { (& $exe model ls 2>$null | Out-String).Trim() } else { '' }
+        $haveModel = $listed -and $listed -notmatch '^no models'
+        Write-Host ''
+        if ($haveModel -and $ask) { Write-Host '  Done. Starting the chat ...'; Write-Host ''; & $exe }
+        elseif ($haveModel) { Write-Host '  Done. Run ' -NoNewline; Write-Host 'agent' -ForegroundColor Cyan -NoNewline; Write-Host ' to start the chat.' }
+        else { Write-Host '  Done. Add a model with ' -NoNewline; Write-Host 'agent model pull <Hugging Face link or file>' -ForegroundColor Cyan -NoNewline; Write-Host ', then run ' -NoNewline; Write-Host 'agent' -ForegroundColor Cyan }
+        Write-Host ''
     }
+
+    function Do-Install {
+        Resolve-Root
+        Write-Host ''
+        Write-Host '  agent.cpp' -ForegroundColor Cyan -NoNewline; Write-Host '  installer' -ForegroundColor DarkGray
+        Write-Host "  $([string]([char]0x2500) * 28)" -ForegroundColor DarkGray
+        Write-Host ''
+        New-Tmp
+        $tag = $version
+        if (-not $tag -and -not $env:AGENT_RELEASE) { $tag = Get-LatestTag }
+        if (-not $tag) { $tag = 'local' }
+        $rel = Get-ReleaseBase $tag
+        New-Item -ItemType Directory -Path (Join-Path $ROOT 'scripts') -Force | Out-Null
+        $sbase = if ($env:AGENT_SCRIPTS) { $env:AGENT_SCRIPTS } else { "https://raw.githubusercontent.com/$Repo/$tag/scripts" }
+        # The scripts and the list of components of this release are kept in the folder: every later command uses these, so what is
+        # installed stays pinned until update.
+        Get-Source "$sbase/components.tsv" (Join-Path $ROOT 'scripts\components.tsv')
+        Get-Source "$sbase/install.ps1" (Join-Path $ROOT 'scripts\install.ps1')
+        Read-List (Join-Path $ROOT 'scripts\components.tsv')
+        Step "$os $arch  $([char]0x00B7)  backends: $($backends -join ' ')"
+        Step "Release $(Get-ListTag)"
+        Install-Component 'core' 'agent' 'any' $rel $tag
+        New-Item -ItemType File -Path (Join-Path $ROOT '.agent-root') -Force | Out-Null
+        foreach ($d in 'engines', 'runtimes', 'models', 'workspaces', 'cache', 'logs', 'skills', 'mcp', 'plugins') { New-Item -ItemType Directory -Path (Join-Path $ROOT $d) -Force | Out-Null }
+        Set-Env
+        $env:Path = "$BIN;$env:Path"
+        if (-not $env:AGENT_NO_START) { Do-Setup } else { Write-Host ''; Write-Host '  Next: ' -NoNewline; Write-Host 'agent setup' -ForegroundColor Cyan; Write-Host '' }
     }
-} finally {
-    if ($tmp) { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
+
+    function Do-Add {
+        Resolve-Root; Load-List; if (-not $tmp) { New-Tmp }
+        $tag = Get-ListTag
+        if (-not $nameList) { Fail "Name what to add: $((Get-Names 'engine') -join ', '), $((Get-Names 'runtime') -join ', ')" }
+        Add-Names $nameList (Get-ReleaseBase $tag) $tag
+    }
+
+    function Do-Rm {
+        Resolve-Root; Load-List
+        if (-not $nameList) { Fail 'Name what to remove.' }
+        foreach ($n in ($nameList -split '[,\s]+' | Where-Object { $_ })) {
+            $k = Get-KindOf $n
+            $d = if ($k -and $k -ne 'core') { Get-Dir $k $n } else { '' }
+            if ($d -and (Test-Path -LiteralPath $d)) { Remove-Item -LiteralPath $d -Recurse -Force; Step "$n removed" } else { Info "$n is not installed" }
+        }
+    }
+
+    function Do-Ls {
+        Resolve-Root; Load-List
+        Write-Host ''
+        Write-Host "  agent.cpp $(Get-ListTag)  $([char]0x00B7)  $os $arch  $([char]0x00B7)  backends: $($backends -join ' ')"
+        Write-Host ''
+        foreach ($k in 'engine', 'runtime') {
+            foreach ($n in (Get-Names $k)) {
+                $p = Get-Pinned $k $n
+                if ($p) { Write-Host ('  {0,-10} {1,-9} installed  {2}' -f $n, $k, $p) }
+                else { Write-Host ('  {0,-10} {1,-9} available  ({2})' -f $n, $k, (Pick-Backend $k $n)) }
+            }
+        }
+        Write-Host ''
+    }
+
+    function Do-Update {
+        Resolve-Root
+        $f = Join-Path $ROOT 'scripts\components.tsv'
+        if (-not (Test-Path -LiteralPath $f)) { Fail "agent.cpp is not installed in $ROOT." }
+        Read-List $f; $have = Get-ListTag
+        New-Tmp
+        $tag = $version
+        if (-not $tag) { $tag = Get-LatestTag }
+        if ($tag -eq $have) { Step "Up to date ($have)"; return }
+        if ($check) { Step "An update is available: $have -> $tag"; return }
+        $rel = Get-ReleaseBase $tag
+        $sbase = if ($env:AGENT_SCRIPTS) { $env:AGENT_SCRIPTS } else { "https://raw.githubusercontent.com/$Repo/$tag/scripts" }
+        Get-Source "$sbase/components.tsv" (Join-Path $tmp 'new.tsv')
+        Get-Source "$sbase/install.ps1" (Join-Path $tmp 'new.ps1')
+        Step "Updating $have -> $tag"
+        Copy-Item -LiteralPath (Join-Path $tmp 'new.tsv') -Destination $f -Force
+        Read-List $f
+        Install-Component 'core' 'agent' 'any' $rel $tag
+        foreach ($k in 'engine', 'runtime') {
+            foreach ($n in (Get-Names $k)) {
+                if (-not (Get-Pinned $k $n)) { continue }
+                $b = Pick-Backend $k $n
+                if (-not $b) { Info "$n has no build in ${tag}: kept as it is"; continue }
+                Install-Component $k $n $b $rel $tag
+            }
+        }
+        Copy-Item -LiteralPath (Join-Path $tmp 'new.ps1') -Destination (Join-Path $ROOT 'scripts\install.ps1') -Force
+        Step "Now at $tag"
+    }
+
+    function Do-Uninstall {
+        Resolve-Root
+        Write-Host ''
+        Write-Host '  agent uninstall removes:'
+        if ($keepData) { Write-Host "    the program, engines, runtimes and caches in $ROOT"; Write-Host '    (models, workspaces, settings and notes stay)' }
+        else { Write-Host "    the whole folder $ROOT  (program, engines, runtimes, models, conversations, notes, logs)" }
+        Write-Host '    AGENT_HOME and the PATH entry in your user environment'
+        Write-Host ''
+        if (-not (Confirm-Yes 'This cannot be undone. Remove it?')) { Info 'Nothing was removed (--yes removes without asking)'; return }
+        Set-Location $env:USERPROFILE
+        if ($keepData) {
+            foreach ($d in 'bin', 'engines', 'runtimes', 'cache', 'scripts') { Remove-Item -LiteralPath (Join-Path $ROOT $d) -Recurse -Force -ErrorAction SilentlyContinue }
+        } else {
+            $script:tmp = $null
+            Remove-Item -LiteralPath $ROOT -Recurse -Force -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $ROOT) { Info "Some files in $ROOT are in use; delete the folder after closing programs that use it" }
+        }
+        Remove-Env $BIN
+        if (-not $env:AGENT_NO_ENV) { [Environment]::SetEnvironmentVariable('AGENT_HOME', $null, 'User') }
+        Step 'agent.cpp is removed'
+    }
+
+    try {
+        switch ($cmd) {
+            'install' { Do-Install }
+            'setup' { Do-Setup }
+            'add' { Do-Add }
+            { $_ -in 'rm', 'remove' } { Do-Rm }
+            { $_ -in 'ls', 'list' } { Do-Ls }
+            { $_ -in 'update', 'upgrade' } { Do-Update }
+            'uninstall' { Do-Uninstall }
+            default { Fail "unknown command '$cmd' (install, setup, add, rm, ls, update, uninstall)" }
+        }
+    } finally {
+        if ($tmp -and (Test-Path -LiteralPath $tmp)) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+    }
 }
 
-# Setup is its own script (scripts/setup.ps1), fetched from the repository so it can be improved without a new release. `agent update` sets
-# AGENT_NO_START: an update does not set anything up again. The PATH change only reaches new terminals, so the full path is used here.
-$env:Path += ";$dest"
-$exe = Join-Path $dest 'agent.exe'
-$scripts = if ($env:AGENT_SCRIPTS) { $env:AGENT_SCRIPTS } else { 'https://raw.githubusercontent.com/amitverma-cf/agent.cpp/main/scripts' }
-if (-not $env:AGENT_NO_START -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
-    $setupText = $null
-    try { $setupText = (Invoke-WebRequest -UseBasicParsing "$scripts/setup.ps1").Content } catch { }
-    if ($setupText -is [byte[]]) { $setupText = [System.Text.Encoding]::UTF8.GetString($setupText) }
-    if ($setupText) {
-        $env:AGENT_BIN = $exe
-        & ([scriptblock]::Create($setupText))
-    } else {
-        Info 'Could not fetch the setup script; run agent setup later'
-    }
-} else {
-    if (-not $upToDate) {
-        Write-Host ''
-        Write-Host '  Next: ' -NoNewline; Write-Host 'agent setup' -ForegroundColor Cyan
-        Write-Host ''
-    }
+try {
+    Invoke-AgentInstaller $args
+} catch {
+    Write-Host ''
+    Write-Host "  $([char]0x2717) $($_.Exception.Message)" -ForegroundColor Magenta
+    Write-Host ''
+    if ($PSCommandPath) { exit 1 }
 }

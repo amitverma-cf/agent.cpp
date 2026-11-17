@@ -2,9 +2,9 @@
 
 // Where agent.cpp keeps its files.
 //
-//   Global home  ".agent.cpp-workspace": everything shared by all projects, in one folder the user chose at
-//                setup. Its location is remembered in a small pointer file in the platform config folder
-//                (home.json); $AGENT_HOME and --home override it.
+//   Global home  everything agent.cpp keeps, in the one folder chosen when it was installed: the program (bin/), engines/,
+//                runtimes/, models/, workspaces/, scripts/, ... Its location is the environment variable AGENT_HOME, which the
+//                installer sets; --home overrides it for one run. Nothing else is written outside it.
 //   Project      ".agents/" in a project folder: that project's skills, MCP servers and private data.
 //                The nearest ancestor of the working directory that holds a ".agents" folder is the project.
 //
@@ -36,20 +36,13 @@ struct HomeLayout {
 
 HomeLayout home_layout(std::string_view root);
 
-// <user home>/.agent.cpp
-std::string default_home_suggestion();
-// <platform config folder>/home.json
-std::string home_pointer_path();
-
-// The folder the running program was installed into: <root>/app/agent with a ".agent-root" marker in <root>. The installer puts the
-// program, the engines, the models and every other file under that one root, so it is also the default home. Empty when the program
-// does not run from such an install (a build tree, a package manager).
+// The folder the running program was installed into: <root>/bin/agent with a ".agent-root" marker in <root>. Empty when the program
+// does not run from such an install (a build tree).
 std::string install_root();
 
-// The home to use: flag, then the AGENT_HOME value, then the one recorded in the pointer file. Empty when none.
-std::string resolve_home_root(std::string_view flag, std::string_view env_value, const std::string &pointer_path);
+// The home to use: the flag, then the AGENT_HOME value, then the install folder the program sits in. Empty when none.
+std::string resolve_home_root(std::string_view flag, std::string_view env_value);
 
-Result<void> save_home_pointer(const std::string &pointer_path, std::string_view root);
 Result<void> create_home_layout(const HomeLayout &home);
 
 // ---- The state of a workspace

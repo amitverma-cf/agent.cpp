@@ -49,12 +49,11 @@ struct CommandSpec {
 constexpr std::string_view kGlobalValue[] = {"config-dir", "home"};
 constexpr std::string_view kGlobalBool[] = {"help", "no-sandbox"};
 
-constexpr std::string_view kSetupValue[] = {"caps", "workspace", "models-dir", "engines-dir", "backend", "model", "js-runtime"};
-constexpr std::string_view kSetupBool[] = {"yes",         "no-models", "download-engines", "install-runtimes",
-                                           "reconfigure", "runtimes",  "no-runtimes",      "no-model"};
+constexpr std::string_view kSetupValue[] = {"engines", "runtimes", "backend", "model"};
+constexpr std::string_view kSetupBool[] = {"yes", "all", "no-engines", "no-runtimes", "no-model", "no-models"};
 
 constexpr SubSpec kEngineSubs[] = {{"ls", 0, 0}, {"add", 1, 1}, {"rm", 1, 1}, {"pull", 1, 1}};
-constexpr std::string_view kEngineValue[] = {"tag", "repo"};
+constexpr std::string_view kEngineValue[] = {"backend"};
 
 constexpr SubSpec kSecretSubs[] = {{"set", 1, 1}, {"ls", 0, 0}, {"rm", 1, 1}, {"bind", 2, 2}, {"unbind", 2, 2}};
 constexpr SubSpec kMcpSubs[] = {{"ls", 0, 0},    {"search", 1, 1}, {"add", 1, 1}, {"rm", 1, 1},
@@ -75,7 +74,7 @@ constexpr SubSpec kScheduleSubs[] = {{"ls", 0, 0}, {"add", 1, 64}, {"rm", 1, 1}}
 constexpr std::string_view kScheduleValue[] = {"every", "daily", "cron"};
 constexpr std::string_view kScheduleBool[] = {"yes"};
 constexpr SubSpec kRuntimeSubs[] = {{"ls", 0, 0}, {"install", 1, 1}, {"rm", 1, 1}, {"path", 1, 1}, {"use", 1, 1}};
-constexpr std::string_view kRuntimeValue[] = {"version"};
+constexpr std::string_view kRuntimeValue[] = {"backend"};
 constexpr std::string_view kCleanBool[] = {"downloads", "cache", "logs", "yes"};
 constexpr std::string_view kUpdateValue[] = {"repo", "tag"};
 constexpr std::string_view kUpdateBool[] = {"check", "yes", "allow-unsigned"};
@@ -305,13 +304,14 @@ std::string usage_all() {
            "memory)\n"
            "  secret set NAME            store a key in the OS credential store (typed without echo, or --stdin); never shown again\n"
            "  secret bind NAME CONSUMER  allow mcp:NAME / tool:NAME / group:NAME to use it (see `secret ls`); unbind, rm, ls too\n"
-           "  setup                      choose the global home, detect hardware, find engines, pick and smoke-test models\n"
-           "        [--home DIR] [--model LINK|FILE|owner/repo[:quant]]... [--no-models] [--reconfigure]\n"
-           "        [--yes] [--caps llama,audiocpp,sdcpp,onnx,trellis] [--workspace DIR] [--models-dir DIR]\n"
-           "        [--engines-dir DIR] [--backend cpu|cuda|vulkan] [--js-runtime bun|node|nub]\n"
-           "        [--download-engines] [--install-runtimes]\n"
+           "  setup                      engines, runtimes and a first model (the installer script, scripts/install.sh|ps1)\n"
+           "        [--yes] [--engines llama,onnx | --all | --no-engines] [--runtimes bun,uv | --no-runtimes]\n"
+           "        [--model LINK|FILE|owner/repo[:quant]] [--no-model] [--backend cpu|vulkan|cuda12|cuda13|rocm|metal]\n"
+           "  home                       the folder everything is kept in (the environment variable AGENT_HOME)\n"
+           "  update [--check]           move to the newest release and the components it pins (the installer script)\n"
+           "  uninstall [--keep-data] [--yes]   remove the program, engines and runtimes (and, without --keep-data, all data)\n"
            "  runtime ls|use|install|path|rm   the private JavaScript and Python runtimes (bun, node, pnpm, nub, uv) kept in the home\n"
-           "        runtime use bun|node|nub   choose the JavaScript tooling; runtime install NAME|js   download one\n"
+           "        runtime use bun|node|nub   choose the JavaScript tooling; runtime install NAME   add one (the installer script)\n"
            "  skill browse|search|add|ls|rm|on|off   skills: a built-in list or skills.sh (add owner/repo/skill [--yes]); a skill is text "
            "the model "
            "follows\n"
@@ -326,8 +326,8 @@ std::string usage_all() {
            "run_command|files|mcp:NAME]\n"
            "  engine ls                  list engines in engines.json\n"
            "  engine add <plugin>        validate an engine plugin and record it\n"
-           "  engine pull <name>         download a prebuilt engine from the GitHub release (--tag, --repo)\n"
-           "  engine rm <name>           forget an engine\n"
+           "  engine pull <name>         add an engine of the installed release (llama, audiocpp, sdcpp, onnx, trellis; --backend)\n"
+           "  engine rm <name>           remove an engine\n"
            "  model pull <spec>          a Hugging Face link (repo or file page), owner/repo[:file-or-QUANT], or a model file on this "
            "disk;\n"
            "                             the engine that runs it is detected and the files go in its folder (models/llama, sdcpp, ...)\n"

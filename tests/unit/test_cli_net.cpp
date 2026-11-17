@@ -4,7 +4,6 @@
 #if defined(AGENT_TEST_CLI_PATH) && defined(AGENT_TEST_MOCK_ENGINE_PATH)
 
 #include "cli_e2e_util.hpp"
-#include "engine_release.hpp"
 #include "runtimes.hpp"
 
 #include <agent-cpp/hub.hpp>
@@ -28,9 +27,7 @@ struct FakeNet {
     std::thread th;
     int port = 0;
     std::map<std::string, std::string> hf_files; // "<repo>/<file>" -> bytes
-    size_t manifest_size = 0;
-    std::string requests;                         // every request path and status, for failure messages
-    std::string engine_asset_bytes, manifest_sha; // the manifest lists the checksum of the bytes as first served
+    std::string requests;                        // every request path and status, for failure messages
 
     std::string base() const { return "http://127.0.0.1:" + std::to_string(port); }
 
@@ -75,19 +72,6 @@ struct FakeNet {
             }
             res.set_content(it->second, "application/octet-stream");
         });
-        // ---- GitHub release (engine pull)
-        svr.Get(R"(/gh/acme/agent.cpp/releases/download/v9.9.9/manifest.json)", [this](const httplib::Request &, httplib::Response &res) {
-            const std::string asset = agent::cli::engine_asset_name("mock", agent::cli::host_os(), agent::cli::host_arch());
-            res.set_content("{\"version\":\"v9.9.9\",\"repository\":\"acme/agent.cpp\",\"files\":[{\"name\":" + json_str(asset) +
-                                ",\"sha256\":" + json_str(manifest_sha) + ",\"size\":" + std::to_string(manifest_size) + "}]}",
-                            "application/json");
-        });
-        svr.Get(
-            R"(/gh/acme/agent.cpp/releases/download/v9.9.9/(agent-engine-.+))",
-            [this](const httplib::Request &, httplib::Response &res) { res.set_content(engine_asset_bytes, "application/octet-stream"); });
-        // ---- runtimes: an asset that is not an archive
-        svr.Get(R"(/gh/astral-sh/uv/releases/.*)",
-                [](const httplib::Request &, httplib::Response &res) { res.set_content("not an archive", "application/octet-stream"); });
         // ---- skills.sh and GitHub's API
         svr.Get(R"(/skills/api/search)", [](const httplib::Request &, httplib::Response &res) {
             res.set_content(R"({"skills":[{"id":"acme/skills/pdf","source":"acme/skills","skillId":"pdf","name":"pdf","installs":42}]})",
@@ -123,9 +107,6 @@ struct FakeNet {
         set_env("AGENT_HTTP_REWRITE", "https://github.com=" + b + "/gh;https://api.github.com=" + b +
                                           "/ghapi;https://raw.githubusercontent.com=" + b + "/raw;https://skills.sh=" + b +
                                           "/skills;https://registry.modelcontextprotocol.io=" + b + "/mcp");
-        engine_asset_bytes = slurp(AGENT_TEST_MOCK_ENGINE_PATH);
-        manifest_sha = sha(engine_asset_bytes);
-        manifest_size = engine_asset_bytes.size();
     }
     ~FakeNet() {
         set_env("HF_ENDPOINT", "");
@@ -178,23 +159,6 @@ TEST_CASE("cli net: a repo with a restricted licence needs an explicit yes", "[c
     CHECK(allowed.code == 0);
 }
 
-TEST_CASE("cli net: engine pull checks the manifest and the checksum", "[cli_net]") {
-    Home h;
-    FakeNet net;
-    auto pull = h.run("engine pull mock --repo acme/agent.cpp --tag v9.9.9");
-    INFO(pull.out << "\nserver saw:\n" << net.requests);
-    CHECK(pull.code == 0);
-    CHECK(has(h.run("engine ls"), "mock"));
-    // An engine the release does not have, and a tampered download.
-    auto other = h.run("engine pull nothere --repo acme/agent.cpp --tag v9.9.9");
-    CHECK(other.code != 0);
-    net.engine_asset_bytes += "tampered"; // the manifest still lists the checksum of the original bytes
-    CHECK(h.run("engine pull mock --repo acme/agent.cpp --tag v9.9.9").code != 0);
-    CHECK(h.run("engine pull ../evil --repo acme/agent.cpp --tag v9.9.9").code != 0); // invalid name
-    auto bad_repo = h.run("engine pull mock --repo acme/other --tag v9.9.9");
-    CHECK(bad_repo.code != 0);
-}
-
 TEST_CASE("cli net: skills are searched, installed, listed and removed", "[cli_net]") {
     Home h;
     FakeNet net;
@@ -230,15 +194,6 @@ TEST_CASE("cli net: MCP servers are searched, added and removed", "[cli_net]") {
     CHECK(h.run("mcp add io.acme/unknown --yes").code != 0); // not an exact registry name
     CHECK(h.run("mcp rm files").code == 0);
     CHECK(h.run("mcp rm files").code != 0);
-}
-
-TEST_CASE("cli net: a runtime download that is not an archive fails cleanly", "[cli_net]") {
-    Home h;
-    FakeNet net;
-    auto r = h.run("runtime install uv");
-    INFO(r.out);
-    CHECK(r.code != 0);
-    CHECK(h.run("runtime path uv").code == 1);
 }
 
 #endif

@@ -3,7 +3,6 @@
 #include "commands.hpp"
 
 #include "doctor.hpp"
-#include "engine_release.hpp"
 #include "home.hpp"
 #include "model_detect.hpp"
 #include "runtimes.hpp"
@@ -277,34 +276,6 @@ int cmd_init(const CommandLine &cl, Context &ctx) {
 
 // -------------------------- agent engine --------------------------
 
-namespace {
-
-bool print_engine_progress(uint64_t done, uint64_t total, void *) {
-    if (total) std::fprintf(stderr, "\r  %s of %s   ", format_bytes(done).c_str(), format_bytes(total).c_str());
-    return true;
-}
-
-} // namespace
-
-// Downloads the release build of `name` for this machine, checks it, and records it in `engines`.
-Result<void> pull_and_register_engine(Context &ctx, std::vector<EngineEntry> &engines, const std::string &name, std::string_view repo,
-                                      std::string_view tag) {
-    const std::string dir = ctx.has_home ? ctx.home.engines : (fs::path(ctx.config_dir) / "engines").string();
-    std::fprintf(stderr, "downloading the %s engine (%s) from github.com/%.*s ...\n", name.c_str(), std::string(tag).c_str(),
-                 static_cast<int>(repo.size()), repo.data());
-    auto plugin_path = pull_engine(dir, name, repo, tag, agent::hub::http_options_from_env(), print_engine_progress, nullptr);
-    std::fprintf(stderr, "\n");
-    if (!plugin_path.ok) return fail(plugin_path.error.code, plugin_path.error.message);
-    auto info = load_plugin_info(plugin_path.value);
-    if (!info.ok)
-        return fail(info.error.code, "downloaded " + plugin_path.value + ", but it does not load on this machine: " + info.error.message);
-    EngineEntry entry{info.value.name, plugin_path.value, info.value.version, caps_to_names(info.value.caps), "local"};
-    std::printf("engine:  %s %s (%s)\npath:    %s\n", entry.name.c_str(), entry.version.c_str(), join(entry.caps, ", ").c_str(),
-                entry.path.c_str());
-    upsert_engine(engines, std::move(entry));
-    return ok();
-}
-
 int cmd_engine(const CommandLine &cl, Context &ctx) {
     auto engines = load_engines(ctx.engines_path);
     if (!engines.ok) return report_error(engines.error);
@@ -338,17 +309,15 @@ int cmd_engine(const CommandLine &cl, Context &ctx) {
         return 0;
     }
 
-    if (cl.subcommand == "pull") {
-        const std::string name = cl.positionals[0];
-        if (auto r = pull_and_register_engine(ctx, engines.value, name, cl.get("repo", kDefaultReleaseRepo), cl.get("tag", "latest"));
-            !r.ok)
-            return report_error(r.error);
-        if (auto r = save_engines(ctx.engines_path, engines.value); !r.ok) return report_error(r.error);
-        return 0;
-    }
+    if (cl.subcommand == "pull") return add_components(ctx, {cl.positionals[0]}, cl); // the installer script downloads it
 
-    // rm
+    // rm: an engine the installer put in <home>/engines/NAME is removed with its files, anything else is only forgotten
     const std::string &name = cl.positionals[0];
+    if (ctx.has_home && std::filesystem::is_directory(std::filesystem::path(ctx.home.engines) / name)) {
+        remove_engine(engines.value, name);
+        save_engines(ctx.engines_path, engines.value);
+        return remove_components(ctx, {name});
+    }
     if (!remove_engine(engines.value, name))
         return report_error(make_error(ErrorCode::KeyNotFound, "no engine named '" + name + "' in " + ctx.engines_path));
     if (auto r = save_engines(ctx.engines_path, engines.value); !r.ok) return report_error(r.error);

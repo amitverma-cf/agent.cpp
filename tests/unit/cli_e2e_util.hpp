@@ -68,6 +68,8 @@ struct Home {
         // (run by setup) replaced the home pointer of the person running the tests with a folder this test deletes.
         // (An explicit AGENT_CONFIG_DIR would turn the home off, so the platform's own config folder is moved instead.)
         set_env("AGENT_CONFIG_DIR", "");
+        set_env("AGENT_NO_ENV",
+                "1"); // the installer script must not touch the shell profiles or the user environment of the person running the tests
 #ifdef _WIN32
         set_env("APPDATA", (root / "config").string());
 #else

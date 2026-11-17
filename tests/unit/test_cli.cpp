@@ -414,8 +414,7 @@ TEST_CASE("cli: the usage text names every command main() dispatches", "[cli]") 
         INFO(command);
         CHECK(usage.find(std::string("  ") + command) != std::string::npos);
     }
-    CHECK(usage.find("--download-engines") != std::string::npos);
-    CHECK(usage.find("--install-runtimes") != std::string::npos);
+    for (const char *command : {"update", "uninstall", "home"}) CHECK(usage.find(std::string("  ") + command) != std::string::npos);
 }
 
 TEST_CASE("the global no-sandbox flag turns the sandboxes off", "[cli]") {
