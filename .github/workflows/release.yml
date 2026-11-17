@@ -212,22 +212,25 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then v="${GITHUB_REF_NAME}"; else v="build-${{ github.run_number }}"; fi
           echo "value=${v}" >> "$GITHUB_OUTPUT"
           (cd assets && if command -v sha256sum >/dev/null; then sha256sum * > SHA256SUMS; else shasum -a 256 * > SHA256SUMS; fi)
+          # the list of the repository is pinned for another tag: for this test run it is the list of this build
+          mkdir testscripts && cp scripts/install.sh scripts/install.ps1 scripts/components.tsv testscripts/
+          sed -i "s/^# tag .*/# tag ${v}/" testscripts/components.tsv
       - name: Install test (Linux)
         if: matrix.os_name == 'linux'
         run: |
           ENGINES="$(echo '${{ matrix.engines }}' | tr ',' ' ')" RUNTIMES="$(echo '${{ matrix.runtimes }}' | tr ',' ' ')" \
-            bash tests/modular/run.sh "$PWD/assets" "${{ steps.version.outputs.value }}" | tee install-test.log
+            AGENT_SCRIPTS_DIR="$PWD/testscripts" bash tests/modular/run.sh "$PWD/assets" "${{ steps.version.outputs.value }}" | tee install-test.log
           ! grep -q '^FAIL' install-test.log
-          ENGINES=onnx bash tests/modular/engines.sh "$PWD/assets" "$PWD/scripts" "${{ steps.version.outputs.value }}" | tee engines-test.log
+          ENGINES=onnx bash tests/modular/engines.sh "$PWD/assets" "$PWD/testscripts" "${{ steps.version.outputs.value }}" | tee engines-test.log
           ! grep -q '^FAIL' engines-test.log
       - name: Install test (Windows)
         if: matrix.os_name == 'windows'
         shell: powershell
         run: |
-          $log = & powershell -NoProfile -ExecutionPolicy Bypass -File tests/modular/run.ps1 -Release "$PWD\assets" -Scripts "$PWD\scripts" -Tag "${{ steps.version.outputs.value }}" -Engines "${{ matrix.engines }}" -Runtimes "${{ matrix.runtimes }}" 2>&1
+          $log = & powershell -NoProfile -ExecutionPolicy Bypass -File tests/modular/run.ps1 -Release "$PWD\assets" -Scripts "$PWD	estscripts" -Tag "${{ steps.version.outputs.value }}" -Engines "${{ matrix.engines }}" -Runtimes "${{ matrix.runtimes }}" 2>&1
           $log | Out-String | Write-Host
           if ($log | Select-String -Pattern '^FAIL') { exit 1 }
           $env:AGENT_TEST_TAG = "${{ steps.version.outputs.value }}"
-          $log = & powershell -NoProfile -ExecutionPolicy Bypass -File tests/modular/engines.ps1 -Release "$PWD\assets" -Scripts "$PWD\scripts" -ChatModel none -Engines onnx 2>&1
+          $log = & powershell -NoProfile -ExecutionPolicy Bypass -File tests/modular/engines.ps1 -Release "$PWD\assets" -Scripts "$PWD	estscripts" -ChatModel none -Engines onnx 2>&1
           $log | Out-String | Write-Host
           if ($log | Select-String -Pattern '^FAIL') { exit 1 }
