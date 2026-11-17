@@ -133,9 +133,9 @@ jobs:
           if-no-files-found: error
 
   publish:
-    # A failing GPU build must not hold back the release: publish whatever was built.
-    if: ${{ !cancelled() && inputs.publish }}
-    needs: build
+    # Published only when every platform built and its installer test passed: a release is never missing a platform.
+    if: ${{ !cancelled() && inputs.publish && needs.build.result == 'success' && needs.install-test.result == 'success' }}
+    needs: [build, install-test]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/download-artifact@v4
@@ -182,7 +182,11 @@ jobs:
           tag_name: ${{ steps.version.outputs.value }}
           prerelease: ${{ github.ref_type != 'tag' }}
           generate_release_notes: true
-          files: assets/*
+          files: |
+            assets/*
+            scripts/install.sh
+            scripts/install.ps1
+            scripts/components.tsv
 
   install-test:
     # The installer script, on a clean machine of every kind, with the files this run just built and the real upstream downloads: install,
