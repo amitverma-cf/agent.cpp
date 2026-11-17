@@ -138,6 +138,8 @@ jobs:
     needs: [build, install-test]
     runs-on: ubuntu-22.04
     steps:
+      # The checkout comes first: it empties the workspace, and the downloaded files must not be in it yet.
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: assets
@@ -150,7 +152,6 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then v="${GITHUB_REF_NAME}"; else v="build-${{ github.run_number }}"; fi
           echo "value=${v}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
       - name: The pinned list belongs to this release
         if: github.ref_type == 'tag'
         run: |
