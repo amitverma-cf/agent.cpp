@@ -2,7 +2,7 @@
 
 ## Version
 
-The version is set once, in `project("agent.cpp" VERSION x.y.z)` in the top-level `CMakeLists.txt` (currently 1.2.1).
+The version is set once, in `project("agent.cpp" VERSION x.y.z)` in the top-level `CMakeLists.txt` (currently 1.2.2).
 `agent version`, the CMake package version (`agent-cppConfigVersion.cmake`) and the Linux tarball names all come from it.
 
 ## Which engines are built
@@ -13,9 +13,9 @@ Every engine is a plugin file, and each one has its own switch (`AGENT_ENGINE_<N
 |---|---|---|
 | `llama` | `ON` | Needs `vendor/llama.cpp`. |
 | `onnx` | `ON` | CMake downloads the pinned ONNX Runtime release at configure time. Use `-DAGENT_ENGINE_ONNX=OFF` to avoid that. |
-| `sdcpp` | `ON` when `vendor/stable-diffusion.cpp` is checked out | Its own nested ggml submodule is needed too. |
+| `sdcpp` | `ON` when `vendor/stable-diffusion.cpp` is checked out | Its header is used; with `AGENT_SDCPP_PREBUILT` the release library is linked, otherwise sd.cpp is compiled (its nested ggml submodule is needed too). |
 | `audiocpp` | `ON` when `vendor/audio.cpp` is checked out | |
-| `trellis` | `ON` when `vendor/trellis2cpp` is checked out | CPU only, no CUDA needed ([api/engines.md](api/engines.md#the-trellis-engine)); the coarse path takes about 6 minutes and 3.5 GiB. |
+| `trellis` | `ON` | A small plugin that runs the trellis.cpp release program `trellis-cli` ([api/engines.md](api/engines.md#the-trellis-engine)); nothing of trellis.cpp is compiled. |
 
 ### Plugins over an upstream release (what a release does)
 
@@ -36,9 +36,10 @@ cmake -S . -B build -DAGENT_LLAMA_PREBUILT=$PWD/build/upstream/llama -DAGENT_AUD
   `llama-server-impl.dll` does not export them. Only they are compiled, not llama.cpp.
 - `audiocpp`: only the C header `audiocpp.h` is used, which is the release's.
 - `onnx`: always linked against the official onnxruntime release (`AGENT_ORT_VERSION` in `cmake/onnxruntime_release.cmake`).
-- `sdcpp` and `trellis` have no upstream library to link (stable-diffusion.cpp publishes command-line programs, trellis2cpp nothing), so they
-  are compiled with their source by `.github/workflows/engines-extra.yml`, only when `vendor/` moves, and published under a release of their
-  own (`engine-sdcpp-<commit>`); the normal release does not build them.
+- `sdcpp`: the plugin uses stable-diffusion.cpp's C header, which must be at the pinned release tag (`master-1106-532d2c1`), and links the
+  release's `stable-diffusion` library.
+- `trellis`: trellis.cpp publishes programs and no library, so the plugin runs the release's `trellis-cli` (found next to the plugin) and
+  has nothing to link; the installer downloads the program for the machine's backend (Vulkan, CUDA, ROCm).
 - Where the upstream build needs a newer C library than the machine has (audio.cpp's Linux builds need glibc 2.43), the installer says so
   and installs nothing, instead of installing a plugin that cannot load (`needs` column of `components.tsv`).
 
@@ -287,19 +288,19 @@ Not done yet:
 ## Releases
 
 A release is a set of small files, not one archive: `agent-cpp-core-<tag>-<os>-<arch>` (the program) and one
-`agent-engine-<name>-<tag>-<os>-<arch>` for each of the thin plugins (llama, audiocpp, onnx), made by `scripts/package-release.sh`, plus `SHA256SUMS`. The upstream
-parts (llama.cpp, audio.cpp, onnxruntime, bun, uv, node, pnpm, nub) are not rebuilt or copied: the installer script downloads them from their own projects. stable-diffusion.cpp and TRELLIS.2 are built by `engines-extra.yml` and referenced from the same list.
+`agent-engine-<name>-<tag>-<os>-<arch>` for each of the thin plugins (llama, audiocpp, onnx, sdcpp, trellis), made by `scripts/package-release.sh`, plus `SHA256SUMS`. The upstream
+parts (llama.cpp, audio.cpp, stable-diffusion.cpp, trellis.cpp, onnxruntime, bun, uv, node, pnpm, nub) are not rebuilt or copied: the installer script downloads them from their own projects.
 `scripts/components.tsv` lists every component with its pinned version, per operating system, architecture and backend, and the SHA-256 of
 each file. It is written by
 
 ```sh
-python3 scripts/pin-components.py --tag v1.2.1 > scripts/components.tsv     # before the tag is made; the release workflow checks it
+python3 scripts/pin-components.py --tag v1.2.2 > scripts/components.tsv     # before the tag is made; the release workflow checks it
 ```
 
 Raising the pin of an upstream project means changing `PINS` in that script, running it, and testing `tests/modular` (the installer tests) on Linux
 and Windows. The workflow's `publish` job refuses a tag whose `components.tsv` was written for another tag.
 
-The git tag `v1.2.1` matches the version in `CMakeLists.txt`. The CI and release workflows in `.github/workflows/` are
+The git tag `v1.2.2` matches the version in `CMakeLists.txt`. The CI and release workflows in `.github/workflows/` are
 manual-dispatch only; nothing runs on a push. Build from source as described in [getting-started.md](getting-started.md#build),
 or use the Linux tarball script above, which is run by hand.
 

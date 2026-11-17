@@ -33,6 +33,8 @@ PINS = {
     "pnpm": "10",  # the newest 10.x
     "onnxruntime": "1.31.1",
     "audio.cpp": "v0.9.5",  # the release library; its header equals vendor/audio.cpp/include/audiocpp.h
+    "trellis.cpp": "v0.8.1",  # its release programs (trellis-cli and the ggml libraries); the plugin runs trellis-cli
+    "stable-diffusion.cpp": "master-1106-532d2c1",  # the release library; vendor/stable-diffusion.cpp must be at this tag (its header)
     "llama.cpp": "b12020",  # must be the tag vendor/llama.cpp is at: the llama plugin uses its common and server code
 }
 
@@ -40,9 +42,9 @@ OURS_ENGINES = {  # thin plugins built in every release, over an upstream librar
     "llama": ["any"],
     "audiocpp": ["any"],
     "onnx": ["any"],
+    "sdcpp": ["any"],
+    "trellis": ["any"],
 }
-# Engines with no upstream library: built by engines-extra.yml, only when vendor/<name> moves, and published under a release of their own.
-EXTRA_ENGINES = {"sdcpp": ("engine-sdcpp-%s", "stable-diffusion.cpp"), "trellis": ("engine-trellis-%s", "trellis2cpp")}
 PLATFORMS = [("linux", "x86_64"), ("linux", "aarch64"), ("windows", "x86_64"), ("windows", "aarch64"), ("macos", "aarch64"), ("macos", "x86_64")]
 
 
@@ -100,22 +102,6 @@ def main():
                 add("engine", eng, os_, arch, b, tag, "@sums", "0", ".",
                     "@RELEASE@/agent-engine-%s-@TAG@-%s-%s%s.%s" % (eng, os_, arch, suffix, ext(os_)))
 
-    # ---- sdcpp and trellis: the plugin built from the vendored source, published once by engines-extra.yml
-    import re as _re
-    for eng, (pattern, sub) in EXTRA_ENGINES.items():
-        sha7 = subprocess.run(["git", "ls-tree", "HEAD", "vendor/" + sub], capture_output=True, text=True).stdout.split()[2][:7]
-        rel = pattern % sha7
-        try:
-            assets = release_assets("amitverma-cf/agent.cpp", rel)
-        except Exception:
-            sys.stderr.write("warning: no release %s yet: %s is left out (run engines-extra.yml for it)\n" % (rel, eng))
-            continue
-        for (os_, arch) in PLATFORMS:
-            name = "agent-engine-%s-%s-%s-%s.%s" % (eng, sha7, os_, arch, ext(os_))
-            if name in assets:
-                sha, url = assets[name]
-                add("engine", eng, os_, arch, "cpu", sha7, sha, "0", ".", url)
-
     # ---- llama.cpp: the official release for each backend, next to our plugin (which is compiled against the same tag, not with it)
     tagl = PINS["llama.cpp"]
     assets = release_assets("ggml-org/llama.cpp", tagl)
@@ -160,6 +146,35 @@ def main():
                 sha, url = llama_assets[cudart[bk][os_]]
                 add("engine", "audiocpp", os_, arch, bk, tagl, sha, "1", ".", url, need)
 
+    # ---- stable-diffusion.cpp: its release library for each backend, next to our plugin (the plugin uses only the C header)
+    tag_s = PINS["stable-diffusion.cpp"]
+    sha7 = tag_s.rsplit("-", 1)[1]
+    assets = release_assets("leejet/stable-diffusion.cpp", tag_s)
+    sdlib = {"windows": "stable-diffusion.dll", "linux": "libstable-diffusion.so", "macos": "libstable-diffusion.dylib"}
+    # (os, arch, backend) -> (asset, needs): the Linux CPU and Vulkan builds were made on Ubuntu 26.04 (glibc 2.43), the ROCm one on 24.04 but also needs glibc 2.43 (checked)
+    sdbuilds = {("windows", "x86_64", "cpu"): ("win-cpu-x64", ""), ("windows", "x86_64", "vulkan"): ("win-vulkan-x64", ""),
+                ("windows", "x86_64", "cuda12"): ("win-cuda12-x64", ""), ("windows", "x86_64", "rocm"): ("win-rocm-10.1.0-x64", ""),
+                ("linux", "x86_64", "cpu"): ("Linux-Ubuntu-26.04-x86_64", "glibc>=2.43"),
+                ("linux", "x86_64", "vulkan"): ("Linux-Ubuntu-26.04-x86_64-vulkan", "glibc>=2.43"),
+                ("linux", "x86_64", "rocm"): ("Linux-Ubuntu-24.04-x86_64-rocm-10.1.0", "glibc>=2.43"),
+                ("macos", "aarch64", "metal"): ("Darwin-macOS-26.7.2-arm64", "")}
+    for (os_, arch, bk), (t_, need) in sdbuilds.items():
+        sha, url = assets["sd-master-%s-bin-%s.zip" % (sha7, t_)]
+        add("engine", "sdcpp", os_, arch, bk, tag_s, sha, "find:" + sdlib[os_], ".", url, need)
+        if bk == "cuda12":  # the CUDA runtime, published as a second file
+            sha, url = assets["cudart-sd-bin-win-cu12-x64.zip"]
+            add("engine", "sdcpp", os_, arch, bk, tag_s, sha, "0", ".", url)
+
+    # ---- trellis.cpp: its release program for each backend, next to our plugin (the plugin runs trellis-cli). The CUDA bundles carry the CUDA
+    # runtime; the Vulkan bundle also runs on the CPU (--gpu -1), which is the cpu backend.
+    tag_t = PINS["trellis.cpp"]
+    assets = release_assets("pwilkin/trellis.cpp", tag_t)
+    for os_ in ("linux", "windows"):
+        for bk, t_ in [("cpu", "vulkan"), ("vulkan", "vulkan"), ("cuda12", "cuda12"), ("cuda13", "cuda"), ("rocm", "rocm")]:
+            name = "trellis-%s-%s-x64.%s" % (t_, os_, ext(os_))
+            sha, url = assets[name]
+            add("engine", "trellis", os_, "x86_64", bk, tag_t, sha, "find:" + ("trellis-cli.exe" if os_ == "windows" else "trellis-cli"), ".", url)
+
     # ---- onnxruntime: the official library, next to our adapter
     v = PINS["onnxruntime"]
     assets = release_assets("microsoft/onnxruntime", "v" + v)
@@ -169,7 +184,14 @@ def main():
     for (os_, arch), t in ort.items():
         name = "onnxruntime-%s-%s.%s" % (t, v, "zip" if os_ == "windows" else "tgz")
         sha, url = assets[name]
-        add("engine", "onnx", os_, arch, "any", v, sha, "find:" + libname[os_], ".", url)
+        add("engine", "onnx", os_, arch, "cpu", v, sha, "find:" + libname[os_], ".", url)
+    # The CUDA builds (the CUDA provider next to the library). They need the CUDA runtime and cuDNN on the machine: upstream does not bundle them.
+    for (os_, t) in [("linux", "linux-x64"), ("windows", "win-x64")]:
+        for bk, cu in [("cuda12", "gpu_cuda12"), ("cuda13", "gpu_cuda13")]:
+            name = "onnxruntime-%s-%s-%s.%s" % (t, cu, v, "zip" if os_ == "windows" else "tgz")
+            if name in assets:
+                sha, url = assets[name]
+                add("engine", "onnx", os_, "x86_64", bk, v, sha, "find:" + libname[os_], ".", url)
 
     # ---- runtimes
     v = PINS["bun"]

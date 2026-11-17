@@ -5,7 +5,7 @@ if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
 endif()
 # The single version source: the CLI version string, the package config version and the release
 # tarball names all come from here.
-project("agent.cpp" VERSION 1.2.1 LANGUAGES C CXX)
+project("agent.cpp" VERSION 1.2.2 LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -253,21 +253,15 @@ endif()
 option(AGENT_ENGINE_LLAMA "Build the llama.cpp engine plugin (src/engines/llama)" ON)
 option(AGENT_ENGINE_API "Build the remote API engine plugin (src/engines/api; runs a bun child, no libraries)" ON)
 option(AGENT_ENGINE_ONNX "Build the ONNX Runtime engine plugin (src/engines/onnx; downloads ONNX Runtime at configure time)" ON)
-# Engines whose source is a git submodule are on by default when the submodule is checked out (git clone --recurse-submodules);
+# The stable-diffusion.cpp and audio.cpp engines are on by default when their submodule (the header, and the source for a source build) is checked out (git clone --recurse-submodules);
 # a plain clone builds without them and says so. Pass -DAGENT_ENGINE_<NAME>=ON to require one.
 set(_sdcpp_default OFF)
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/vendor/stable-diffusion.cpp/CMakeLists.txt AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/vendor/stable-diffusion.cpp/ggml/CMakeLists.txt)
     set(_sdcpp_default ON)
 endif()
 option(AGENT_ENGINE_SDCPP "Build the stable-diffusion.cpp image generation engine plugin (src/engines/sdcpp)" ${_sdcpp_default})
-# TRELLIS.2 needs a CUDA GPU: on by default only when a CUDA toolkit is found and the submodule is checked out.
-set(_trellis_default OFF)
-include(CheckLanguage)
-# TRELLIS.2 runs on the CPU (the plugin links ggml-cpu only; no CUDA is needed), so it is on whenever its sources are checked out.
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/vendor/trellis2cpp/ggml/CMakeLists.txt)
-    set(_trellis_default ON)
-endif()
-option(AGENT_ENGINE_TRELLIS "Build the TRELLIS.2 image-to-3D engine plugin (src/engines/trellis; CPU, no CUDA needed)" ${_trellis_default})
+# TRELLIS.2: a small plugin that runs the trellis.cpp release program (trellis-cli); nothing of trellis.cpp is compiled, so it is always on.
+option(AGENT_ENGINE_TRELLIS "Build the TRELLIS.2 image-to-3D engine plugin (src/engines/trellis; runs the trellis.cpp release program)" ON)
 # audio.cpp (Apache-2.0): TTS, ASR, VAD, diarization and more from one library; builds its own ggml, so off by default.
 set(_audiocpp_default OFF)
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/vendor/audio.cpp/CMakeLists.txt)
@@ -356,6 +350,7 @@ add_executable(test_agent
     tests/unit/test_mcp.cpp
     tests/unit/test_sandbox.cpp
     tests/unit/test_engine_sandbox.cpp
+    tests/unit/test_engines_together.cpp
     tests/unit/test_model_registry.cpp
     tests/integration/test_session.cpp
     tests/integration/test_turn.cpp
@@ -436,6 +431,10 @@ if(AGENT_ENGINE_TRELLIS)
     target_sources(test_agent PRIVATE tests/unit/test_engine_trellis.cpp)
     target_compile_definitions(test_agent PRIVATE AGENT_TEST_TRELLIS_ENGINE_PATH="$<TARGET_FILE:agent-engine-trellis>")
     add_dependencies(test_agent agent-engine-trellis)
+    # A stand-in for trellis-cli, so the plugin's process handling is tested without the weights.
+    add_executable(fake-trellis-cli tests/fake_trellis_cli.cpp)
+    target_compile_definitions(test_agent PRIVATE AGENT_TEST_FAKE_TRELLIS_CLI="$<TARGET_FILE:fake-trellis-cli>")
+    add_dependencies(test_agent fake-trellis-cli)
 endif()
 if(AGENT_ENGINE_AUDIOCPP)
     target_compile_definitions(test_agent PRIVATE AGENT_TEST_AUDIOCPP_ENGINE_PATH="$<TARGET_FILE:agent-engine-audiocpp>")

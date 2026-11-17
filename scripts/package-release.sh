@@ -67,7 +67,7 @@ cp "$build_dir/agent$exe_ext" "$core/"
 for f in "$build_dir"/agent-engine-api.$lib_ext "$build_dir"/src/engines/api/agent-engine-api.$lib_ext; do [ -f "$f" ] && cp "$f" "$core/" && break; done
 if [ "$os_name" = windows ] && [ -n "$ssl_dir" ]; then cp "$ssl_dir"/libssl-3$ssl_suffix.dll "$ssl_dir"/libcrypto-3$ssl_suffix.dll "$core/"; fi
 cp "$src_dir/LICENSE" "$src_dir/README.md" "$core/"
-for l in simdjson cpp-httplib miniaudio llama.cpp sqlite-vec audio.cpp stable-diffusion.cpp trellis2cpp RTXUI; do
+for l in simdjson cpp-httplib miniaudio llama.cpp sqlite-vec audio.cpp stable-diffusion.cpp RTXUI; do
     for f in "$src_dir/vendor/$l/LICENSE" "$src_dir/vendor/$l/LICENSE.md" "$src_dir/vendor/$l/LICENSE.txt"; do
         [ -f "$f" ] && cp "$f" "$core/licenses/$l.LICENSE" && break
     done

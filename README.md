@@ -37,7 +37,7 @@
 ## Highlights
 
 - **Local.** Prompts, files and voice recordings never leave the computer. Qwen, Llama, Gemma and any other GGUF model.
-- **Modular.** One folder holds everything. llama.cpp, audio.cpp and onnxruntime come from their own releases at pinned versions, with
+- **Modular.** One folder holds everything. llama.cpp, audio.cpp, stable-diffusion.cpp, onnxruntime and trellis.cpp come from their own releases at pinned versions, with
   SHA-256 checks, and the GPU backend (CUDA, ROCm, Vulkan, Metal) follows the machine.
 - **More than chat.** Speech in and out, image and video generation, image to 3D, MCP servers, skills, scheduled graphs.
 - **Safe by default.** Commands and file changes ask first and run in an OS sandbox.
@@ -76,12 +76,13 @@ The installer offers what exists for the machine and says why anything is missin
 | Engine | Linux x86_64 | Linux aarch64 | Windows x64 | Windows arm64 | macOS arm64 |
 |---|---|---|---|---|---|
 | llama (chat, embeddings, rerank, vision, decision models) | CPU, Vulkan, CUDA 12 / 13, ROCm | CPU, Vulkan, CUDA 13 | CPU, Vulkan, CUDA 12 / 13, ROCm | CPU, Vulkan, CUDA 13 | Metal |
-| onnx | yes | yes | yes | yes | yes |
+| onnx | CPU, CUDA 12 / 13 | CPU | CPU, CUDA 12 / 13 | CPU | CPU |
 | audiocpp (speech) | CPU, Vulkan, CUDA; glibc 2.43 or newer | no | CPU, Vulkan, CUDA | no | Metal |
-| sdcpp (images, video), trellis (3D) | CPU | CPU | CPU | no | no |
+| sdcpp (images, video) | CPU, Vulkan, ROCm; glibc 2.43 or newer | no | CPU, Vulkan, CUDA 12, ROCm | no | Metal |
+| trellis (image to 3D) | CPU, Vulkan, CUDA 12 / 13, ROCm | no | CPU, Vulkan, CUDA 12 / 13, ROCm | no | no |
 
-stable-diffusion.cpp and TRELLIS.2 publish no library, so agent.cpp builds those two plugins. Intel macOS has llama and audiocpp.
-Raspberry Pi and Android are not supported yet.
+Every engine library is the upstream project's own release (llama.cpp, audio.cpp, stable-diffusion.cpp, onnxruntime, trellis.cpp) at the
+version the release pins; agent.cpp adds a small plugin over each. Intel macOS has llama and audiocpp.
 
 ## Chat
 
@@ -134,7 +135,7 @@ int main() {
 }
 ```
 
-Engines run in the calling process by default; `"isolation": "process"` puts one in a sandboxed host. Start with the
+In the library, engines run in the calling process unless `Config::engine_isolation` says otherwise (the `agent` program runs llama, audiocpp and sdcpp each in its own sandboxed host process, because their ggml libraries clash in one). Start with the
 [library guide](docs/guides/getting-started-library.md). The API is documented under [docs/api.md](docs/api.md), and runnable programs
 are in [examples/](examples/README.md).
 

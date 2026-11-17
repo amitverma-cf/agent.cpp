@@ -1,6 +1,6 @@
 // agent-engine-onnx: generic ONNX Runtime graph runner (AGENT_CAP_GENERIC).
 //   - create(): config "model" = .onnx path; options "threads" (intra-op), "execution_provider"
-//     ("cpu" | "cuda"), "device_id" (cuda), "graph_optimization" ("disable" | "basic" | "extended" | "all")
+//     ("auto" | "cpu" | "cuda"; auto uses CUDA when this ONNX Runtime build has it), "device_id" (cuda), "graph_optimization" ("disable" | "basic" | "extended" | "all")
 //   - run(): every model input is fed from the last AGENT_PART_TENSOR part with the same name across
 //     the request messages; every model output comes back as an AGENT_PART_TENSOR part.
 // Uses the ORT C API only (the C++ API throws). OrtSession::Run is thread-safe and every call keeps
@@ -204,7 +204,7 @@ int32_t onnx_create(agent_str config_json, void **out_instance, char *err, size_
     const std::string model(model_sv);
 
     int64_t threads = 0, device_id = 0;
-    std::string ep = "cpu", opt_level = "all";
+    std::string ep = "auto", opt_level = "all";
     simdjson::ondemand::object options;
     if (!cfg["options"].get_object().get(options)) {
         double d = 0;
@@ -223,8 +223,8 @@ int32_t onnx_create(agent_str config_json, void **out_instance, char *err, size_
         std::snprintf(err, err_cap, "onnx: graph_optimization must be disable, basic, extended or all (got '%s')", opt_level.c_str());
         return AGENT_ERR_INVALID_CONFIG;
     }
-    if (ep != "cpu" && ep != "cuda") {
-        std::snprintf(err, err_cap, "onnx: execution_provider must be cpu or cuda (got '%s')", ep.c_str());
+    if (ep != "auto" && ep != "cpu" && ep != "cuda") {
+        std::snprintf(err, err_cap, "onnx: execution_provider must be auto, cpu or cuda (got '%s')", ep.c_str());
         return AGENT_ERR_INVALID_CONFIG;
     }
 
@@ -235,44 +235,65 @@ int32_t onnx_create(agent_str config_json, void **out_instance, char *err, size_
         return AGENT_ERR_INIT_FAILED;
     }
 
-    OrtSessionOptions *opts = nullptr;
-    std::string e = take(api->CreateSessionOptions(&opts));
-    if (e.empty() && threads > 0) e = take(api->SetIntraOpNumThreads(opts, static_cast<int>(threads)));
-    if (e.empty()) e = take(api->SetSessionGraphOptimizationLevel(opts, level));
-    if (!e.empty()) {
-        if (opts) api->ReleaseSessionOptions(opts);
-        std::snprintf(err, err_cap, "onnx: session options: %s", e.c_str());
-        return AGENT_ERR_INIT_FAILED;
-    }
-
-    if (ep == "cuda") {
-        // The CPU-only release builds still export this entry point; it fails when the CUDA EP
-        // (libonnxruntime_providers_cuda) is not part of the ORT build or cannot be loaded.
-        OrtCUDAProviderOptionsV2 *cuda = nullptr;
-        e = take(api->CreateCUDAProviderOptions(&cuda));
-        if (e.empty()) {
-            const std::string dev = std::to_string(device_id);
-            const char *keys[] = {"device_id"};
-            const char *vals[] = {dev.c_str()};
-            e = take(api->UpdateCUDAProviderOptions(cuda, keys, vals, 1));
+    // Session options, with the CUDA provider when asked: "auto" tries it and goes on without when this ONNX Runtime build has none
+    // (the CPU release builds still export the entry point; it fails when libonnxruntime_providers_cuda is missing or cannot be loaded).
+    auto make_options = [&](bool with_cuda, OrtSessionOptions *&out, std::string &why) {
+        out = nullptr;
+        why = take(api->CreateSessionOptions(&out));
+        if (why.empty() && threads > 0) why = take(api->SetIntraOpNumThreads(out, static_cast<int>(threads)));
+        if (why.empty()) why = take(api->SetSessionGraphOptimizationLevel(out, level));
+        if (why.empty() && with_cuda) {
+            OrtCUDAProviderOptionsV2 *cuda = nullptr;
+            why = take(api->CreateCUDAProviderOptions(&cuda));
+            if (why.empty()) {
+                const std::string dev = std::to_string(device_id);
+                const char *keys[] = {"device_id"};
+                const char *vals[] = {dev.c_str()};
+                why = take(api->UpdateCUDAProviderOptions(cuda, keys, vals, 1));
+            }
+            if (why.empty()) why = take(api->SessionOptionsAppendExecutionProvider_CUDA_V2(out, cuda));
+            if (cuda) api->ReleaseCUDAProviderOptions(cuda);
         }
-        if (e.empty()) e = take(api->SessionOptionsAppendExecutionProvider_CUDA_V2(opts, cuda));
-        if (cuda) api->ReleaseCUDAProviderOptions(cuda);
-        if (!e.empty()) {
-            api->ReleaseSessionOptions(opts);
+        if (!why.empty() && out) {
+            api->ReleaseSessionOptions(out);
+            out = nullptr;
+        }
+        return why.empty();
+    };
+
+    OrtSessionOptions *opts = nullptr;
+    std::string e;
+    bool cuda_in_use = ep != "cpu";
+    if (!make_options(cuda_in_use, opts, e)) {
+        if (ep == "cuda") {
             std::snprintf(err, err_cap, "onnx: execution_provider 'cuda' is not available in this ONNX Runtime build: %s", e.c_str());
             return AGENT_ERR_UNSUPPORTED;
+        }
+        cuda_in_use = false; // auto: CPU
+        if (!make_options(false, opts, e)) {
+            std::snprintf(err, err_cap, "onnx: session options: %s", e.c_str());
+            return AGENT_ERR_INIT_FAILED;
         }
     }
 
     auto inst = std::make_unique<OnnxInstance>();
+    auto create_session = [&](OrtSessionOptions *o) {
 #ifdef _WIN32
-    const std::wstring wpath(model.begin(), model.end());
-    e = take(api->CreateSession(env, wpath.c_str(), opts, &inst->session));
+        const std::wstring wpath(model.begin(), model.end());
+        return take(api->CreateSession(env, wpath.c_str(), o, &inst->session));
 #else
-    e = take(api->CreateSession(env, model.c_str(), opts, &inst->session));
+        return take(api->CreateSession(env, model.c_str(), o, &inst->session));
 #endif
+    };
+    e = create_session(opts);
     api->ReleaseSessionOptions(opts);
+    if (!e.empty() && cuda_in_use && ep == "auto") { // the CUDA provider is there but cannot run (no CUDA runtime or cuDNN): CPU
+        std::string why;
+        if (make_options(false, opts, why)) {
+            e = create_session(opts);
+            api->ReleaseSessionOptions(opts);
+        }
+    }
     if (!e.empty()) {
         std::snprintf(err, err_cap, "onnx: failed to load %s: %s", model.c_str(), e.c_str());
         return AGENT_ERR_MODEL_LOAD_FAILED;

@@ -1,9 +1,64 @@
-# agent-engine-sdcpp: links stable-diffusion.cpp (and the ggml it vendors) statically into one
-# self-contained plugin.
+# agent-engine-sdcpp: image and video generation through stable-diffusion.cpp's C API.
 #
-# stable-diffusion.cpp ships its own patched ggml whose CMake targets (ggml, ggml-base, ggml-cpu)
-# have the same names as llama.cpp's. Both cannot live in one CMake project, so sd.cpp is built as
-# a separate CMake project with ExternalProject and its static archives are linked in here.
+# AGENT_SDCPP_PREBUILT=<folder>  (what a release does) the plugin is compiled against the stable-diffusion.cpp release library
+#                                (stable-diffusion.dll / libstable-diffusion.so / .dylib, with the ggml libraries beside it) unpacked in
+#                                <folder>; stable-diffusion.cpp is not compiled. The header is the one in vendor/stable-diffusion.cpp,
+#                                which must be at the release's tag. `scripts/install.sh fetch sdcpp <folder>` downloads the release.
+#                                Empty: stable-diffusion.cpp is compiled from vendor/ and linked statically into the plugin.
+set(AGENT_SDCPP_PREBUILT "" CACHE PATH "Folder with a stable-diffusion.cpp release library to link instead of compiling stable-diffusion.cpp")
+if(AGENT_SDCPP_PREBUILT)
+    include(${PROJECT_SOURCE_DIR}/cmake/prebuilt_library.cmake)
+    agent_prebuilt_library(stable-diffusion "${AGENT_SDCPP_PREBUILT}")
+    # ggml itself, for loading its backends from the plugin's folder (see install_callbacks in sdcpp_engine.cpp). The macOS release has ggml
+    # built into the library, with no separate ggml files.
+    file(GLOB _ggml_files "${AGENT_SDCPP_PREBUILT}/libggml-base.*" "${AGENT_SDCPP_PREBUILT}/ggml-base.dll")
+    set(_sd_ggml "")
+    if(_ggml_files)
+        # their own target names: the llama plugin defines "ggml" and "ggml-base" for llama.cpp's libraries
+        agent_prebuilt_library(sd-ggml-base "${AGENT_SDCPP_PREBUILT}" OUTPUT_NAME ggml-base)
+        agent_prebuilt_library(sd-ggml "${AGENT_SDCPP_PREBUILT}" OUTPUT_NAME ggml)
+        target_link_libraries(sd-ggml INTERFACE sd-ggml-base)
+        set(_sd_ggml sd-ggml)
+    endif()
+    set(_sd ${PROJECT_SOURCE_DIR}/vendor/stable-diffusion.cpp)
+    add_library(agent-engine-sdcpp SHARED
+        sdcpp_engine.cpp
+        ${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader/simdjson.cpp
+    )
+    target_include_directories(agent-engine-sdcpp PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    target_include_directories(agent-engine-sdcpp SYSTEM PRIVATE ${_sd}/include ${_sd}/thirdparty ${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader)
+    target_compile_definitions(agent-engine-sdcpp PRIVATE SD_BUILD_SHARED_LIB)
+    if(_sd_ggml)
+        target_compile_definitions(agent-engine-sdcpp PRIVATE AGENT_SDCPP_LOAD_BACKENDS=1)
+    endif()
+    target_link_libraries(agent-engine-sdcpp PRIVATE stable-diffusion ${_sd_ggml} ${CMAKE_DL_LIBS})
+    set_target_properties(agent-engine-sdcpp PROPERTIES PREFIX "" CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+    set_source_files_properties(${PROJECT_SOURCE_DIR}/vendor/simdjson/singleheader/simdjson.cpp PROPERTIES COMPILE_OPTIONS "-w")
+    target_compile_options(agent-engine-sdcpp PRIVATE ${AGENT_WARNINGS})
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set_target_properties(agent-engine-sdcpp PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN" BUILD_WITH_INSTALL_RPATH ON)
+        target_link_options(agent-engine-sdcpp PRIVATE -Wl,--disable-new-dtags -Wl,--version-script=${PROJECT_SOURCE_DIR}/src/engines/common/exports.map)
+    elseif(APPLE)
+        set_target_properties(agent-engine-sdcpp PROPERTIES BUILD_RPATH "@loader_path" INSTALL_RPATH "@loader_path" BUILD_WITH_INSTALL_RPATH ON)
+        target_link_options(agent-engine-sdcpp PRIVATE -Wl,-exported_symbol,_agent_engine_get_v1)
+    endif()
+    if(WIN32)
+        file(GLOB _rt "${AGENT_SDCPP_PREBUILT}/*.dll")
+    else()
+        file(GLOB _rt "${AGENT_SDCPP_PREBUILT}/*.so*" "${AGENT_SDCPP_PREBUILT}/*.dylib")
+    endif()
+    foreach(_f ${_rt})
+        add_custom_command(TARGET agent-engine-sdcpp POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_f}" "$<TARGET_FILE_DIR:agent-engine-sdcpp>" VERBATIM)
+    endforeach()
+    agent_install_engine(agent-engine-sdcpp)
+    return()
+endif()
+
+# Source build: stable-diffusion.cpp's static libraries (and the ggml it vendors) linked into one self-contained plugin.
+#
+# stable-diffusion.cpp ships its own patched ggml whose CMake targets (ggml, ggml-base, ggml-cpu) have the same names as llama.cpp's.
+# Both cannot live in one CMake project, so sd.cpp is built as a separate CMake project with ExternalProject.
 include(ExternalProject)
 
 set(SDCPP_SOURCE_DIR ${PROJECT_SOURCE_DIR}/vendor/stable-diffusion.cpp)

@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <simdjson.h>
 #include <stable-diffusion.h>
@@ -28,6 +29,18 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#elif defined(AGENT_SDCPP_LOAD_BACKENDS)
+#include <dlfcn.h>
+#endif
+
+#ifdef AGENT_SDCPP_LOAD_BACKENDS
+extern "C" void ggml_backend_load_all_from_path(const char *dir_path); // from the release's libggml
+#endif
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_STATIC
@@ -54,8 +67,8 @@ struct GenSettings {
     float guidance = 3.5f;  // distilled guidance (FLUX)
     float strength = 0.75f; // img2img denoising strength
     int clip_skip = -1;
-    sample_method_t sampler = SAMPLE_METHOD_COUNT; // model default
-    scheduler_t scheduler = SCHEDULER_COUNT;       // model default
+    std::string sampler;   // empty = the model's default
+    std::string scheduler; // empty = the model's default
     bool vae_tiling = false;
     std::string negative_prompt;
     // VIDEO_GEN
@@ -104,21 +117,8 @@ bool apply_gen_settings(simdjson::ondemand::object &obj, GenSettings &g, std::st
     json_string(obj, "video_format", g.video_format);
     g.jpeg_quality = json_number<int>(obj, "jpeg_quality", g.jpeg_quality);
 
-    std::string name;
-    if (json_string(obj, "sampler", name) && !name.empty()) {
-        g.sampler = str_to_sample_method(name.c_str());
-        if (g.sampler == SAMPLE_METHOD_COUNT) {
-            error = "sdcpp: unknown sampler '" + name + "'";
-            return false;
-        }
-    }
-    if (json_string(obj, "scheduler", name) && !name.empty()) {
-        g.scheduler = str_to_scheduler(name.c_str());
-        if (g.scheduler == SCHEDULER_COUNT) {
-            error = "sdcpp: unknown scheduler '" + name + "'";
-            return false;
-        }
-    }
+    json_string(obj, "sampler", g.sampler);
+    json_string(obj, "scheduler", g.scheduler);
     if (g.width <= 0 || g.height <= 0 || g.width > 8192 || g.height > 8192) {
         error = "sdcpp: width/height must be in 1..8192";
         return false;
@@ -146,6 +146,56 @@ bool apply_gen_settings(simdjson::ondemand::object &obj, GenSettings &g, std::st
     return true;
 }
 
+// ------------------------------------------------------------------ sd.cpp options
+
+struct OptDeleter {
+    void operator()(sd_opt_t *o) const { sd_opt_free(o); }
+};
+using OptPtr = std::unique_ptr<sd_opt_t, OptDeleter>;
+
+struct ResultDeleter {
+    void operator()(sd_result_t *r) const { sd_result_free(r); }
+};
+using ResultPtr = std::unique_ptr<sd_result_t, ResultDeleter>;
+
+std::string last_error_text() {
+    const char *e = sd_get_last_error();
+    return e ? e : "";
+}
+
+bool opt_fail(const char *key, std::string &error) {
+    error = std::string("option ") + key + ": " + last_error_text();
+    return false;
+}
+bool set_str(sd_opt_t *o, const char *key, const std::string &v, std::string &error) {
+    return sd_opt_set_string(o, key, v.c_str()) == SD_STATUS_OK || opt_fail(key, error);
+}
+bool set_num(sd_opt_t *o, const char *key, int64_t v, std::string &error) {
+    return sd_opt_set_int(o, key, v) == SD_STATUS_OK || opt_fail(key, error);
+}
+bool set_real(sd_opt_t *o, const char *key, double v, std::string &error) {
+    return sd_opt_set_float(o, key, v) == SD_STATUS_OK || opt_fail(key, error);
+}
+bool set_flag(sd_opt_t *o, const char *key, bool v, std::string &error) {
+    return sd_opt_set_bool(o, key, v) == SD_STATUS_OK || opt_fail(key, error);
+}
+
+// A decoded 8-bit image: interleaved channels, rows top to bottom (what sd.cpp calls U8 [C,W,H]).
+struct Pixels {
+    int w = 0, h = 0, c = 0;
+    const uint8_t *data = nullptr;
+};
+
+Pixels pixels_of(const sd_tensor_t *t) {
+    Pixels p;
+    if (!t || sd_tensor_type(t) != SD_TENSOR_U8 || sd_tensor_rank(t) < 3) return p;
+    p.c = static_cast<int>(sd_tensor_dim(t, 0));
+    p.w = static_cast<int>(sd_tensor_dim(t, 1));
+    p.h = static_cast<int>(sd_tensor_dim(t, 2));
+    p.data = static_cast<const uint8_t *>(sd_tensor_data(t));
+    return p;
+}
+
 // ------------------------------------------------------------------ instance + global callbacks
 
 struct Instance {
@@ -164,7 +214,7 @@ struct Instance {
     std::string error;
 
     ~Instance() {
-        if (ctx) free_sd_ctx(ctx);
+        if (ctx) sd_ctx_free(ctx);
     }
 };
 
@@ -211,8 +261,32 @@ struct ActiveScope {
     ActiveScope &operator=(const ActiveScope &) = delete;
 };
 
+#ifdef AGENT_SDCPP_LOAD_BACKENDS
+// The stable-diffusion.cpp release library does not load ggml's backends (CPU variants, Vulkan, CUDA, ...) itself: its own program does.
+// They sit next to this plugin, so they are loaded from there before the first model.
+std::string plugin_folder() {
+#if defined(_WIN32)
+    HMODULE self = nullptr;
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(&plugin_folder), &self)) {
+        wchar_t buf[MAX_PATH * 4];
+        const DWORD n = GetModuleFileNameW(self, buf, static_cast<DWORD>(sizeof(buf) / sizeof(buf[0])));
+        if (n > 0 && n < sizeof(buf) / sizeof(buf[0])) return std::filesystem::path(std::wstring(buf, n)).parent_path().string();
+    }
+#else
+    Dl_info info;
+    if (dladdr(reinterpret_cast<void *>(&plugin_folder), &info) && info.dli_fname)
+        return std::filesystem::path(info.dli_fname).parent_path().string();
+#endif
+    return {};
+}
+#endif
+
 void install_callbacks() {
     std::call_once(g_callbacks_once, [] {
+#ifdef AGENT_SDCPP_LOAD_BACKENDS
+        if (const std::string folder = plugin_folder(); !folder.empty()) ggml_backend_load_all_from_path(folder.c_str());
+#endif
         sd_set_log_callback(on_sd_log, nullptr);
         sd_set_progress_callback(on_sd_progress, nullptr);
     });
@@ -275,45 +349,41 @@ int32_t sd_engine_create(agent_str config_json, void **out_instance, char *err, 
         }
     }
 
-    sd_ctx_params_t params;
-    sd_ctx_params_init(&params);
-    auto c_or_null = [](const std::string &s) { return s.empty() ? nullptr : s.c_str(); };
-    params.model_path = c_or_null(model);
-    params.diffusion_model_path = c_or_null(diffusion_model);
-    params.high_noise_diffusion_model_path = c_or_null(high_noise_diffusion_model);
-    params.vae_path = c_or_null(vae);
-    params.taesd_path = c_or_null(taesd);
-    params.clip_l_path = c_or_null(clip_l);
-    params.clip_g_path = c_or_null(clip_g);
-    params.t5xxl_path = c_or_null(t5xxl);
-    params.llm_path = c_or_null(llm);
-    if (threads > 0) params.n_threads = threads;
-    params.flash_attn = flash_attn;
-    params.diffusion_flash_attn = flash_attn;
-    params.eager_load = eager_load;
-    if (!prediction.empty()) {
-        params.prediction = str_to_prediction(prediction.c_str());
-        if (params.prediction == PREDICTION_COUNT) {
-            std::snprintf(err, err_cap, "sdcpp: unknown prediction '%s'", prediction.c_str());
-            return AGENT_ERR_INVALID_CONFIG;
-        }
+    OptPtr params(sd_ctx_opt_create());
+    std::string set_error;
+    if (!params) {
+        std::snprintf(err, err_cap, "sdcpp: out of memory");
+        return AGENT_ERR_MODEL_LOAD_FAILED;
+    }
+    auto set_path = [&](const char *key, const std::string &v) { return v.empty() || set_str(params.get(), key, v, set_error); };
+    if (!set_path("model_path", model) || !set_path("diffusion_model_path", diffusion_model) ||
+        !set_path("high_noise_diffusion_model_path", high_noise_diffusion_model) || !set_path("vae_path", vae) ||
+        !set_path("taesd_path", taesd) || !set_path("clip_l_path", clip_l) || !set_path("clip_g_path", clip_g) ||
+        !set_path("t5xxl_path", t5xxl) || !set_path("llm_path", llm) || !set_path("prediction", prediction) ||
+        (threads > 0 && !set_num(params.get(), "n_threads", threads, set_error)) ||
+        !set_flag(params.get(), "flash_attn", flash_attn, set_error) || !set_flag(params.get(), "diffusion_flash_attn", flash_attn, set_error) ||
+        !set_flag(params.get(), "eager_load", eager_load, set_error)) {
+        std::snprintf(err, err_cap, "sdcpp: %s", set_error.c_str());
+        return AGENT_ERR_INVALID_CONFIG;
     }
 
     Active active;
     active.verbose = verbose;
     sd_ctx_t *ctx = nullptr;
+    sd_status_t status = SD_STATUS_OK;
     {
         std::lock_guard<std::mutex> lock(g_sd_mu);
         ActiveScope scope(&active);
-        ctx = new_sd_ctx(&params);
+        status = sd_ctx_create(params.get(), &ctx);
     }
-    if (!ctx) {
-        std::snprintf(err, err_cap, "sdcpp: failed to load model%s%s", active.last_error.empty() ? "" : ": ", active.last_error.c_str());
+    if (status != SD_STATUS_OK || !ctx) {
+        const char *why = sd_get_last_error();
+        std::snprintf(err, err_cap, "sdcpp: failed to load model%s%s", (why && *why) ? ": " : "", (why && *why) ? why : active.last_error.c_str());
         return AGENT_ERR_MODEL_LOAD_FAILED;
     }
     const bool image = sd_ctx_supports_image_generation(ctx), video = sd_ctx_supports_video_generation(ctx);
     if (!image && !video) {
-        free_sd_ctx(ctx);
+        sd_ctx_free(ctx);
         std::snprintf(err, err_cap, "sdcpp: the loaded model supports neither image nor video generation");
         return AGENT_ERR_UNSUPPORTED;
     }
@@ -343,7 +413,18 @@ const agent_message *last_user_message(const agent_request *req) {
 }
 
 // Loads the init image for img2img as 8-bit RGB. The pixels are freed with stbi_image_free.
-bool load_init_image(const agent_message &m, sd_image_t &out, std::string &error) {
+struct StbImage {
+    int w = 0, h = 0;
+    stbi_uc *data = nullptr;
+    StbImage() = default;
+    StbImage(const StbImage &) = delete;
+    StbImage &operator=(const StbImage &) = delete;
+    ~StbImage() {
+        if (data) stbi_image_free(data);
+    }
+};
+
+bool load_init_image(const agent_message &m, StbImage &out, std::string &error) {
     const agent_part *src = nullptr;
     for (size_t p = 0; p < m.n_parts; ++p) {
         const agent_part &part = m.parts[p];
@@ -365,7 +446,9 @@ bool load_init_image(const agent_message &m, sd_image_t &out, std::string &error
         if (!pixels) error = "sdcpp: could not decode the input image bytes";
     }
     if (!pixels) return false;
-    out = sd_image_t{static_cast<uint32_t>(w), static_cast<uint32_t>(h), 3, pixels};
+    out.w = w;
+    out.h = h;
+    out.data = pixels;
     return true;
 }
 
@@ -410,18 +493,18 @@ void append_bytes(void *ctx, void *data, int size) {
 
 // A minimal AVI 1.0 file: one MJPEG video stream (every frame a JPEG keyframe) and an idx1 index,
 // which VLC, mpv, ffmpeg and Windows Media Player play.
-bool write_mjpeg_avi(const std::string &path, const sd_image_t *frames, int n, int fps, int quality, std::string &error) {
-    const uint32_t w = frames[0].width, h = frames[0].height;
+bool write_mjpeg_avi(const std::string &path, const std::vector<Pixels> &frames, int n, int fps, int quality, std::string &error) {
+    const uint32_t w = static_cast<uint32_t>(frames[0].w), h = static_cast<uint32_t>(frames[0].h);
     std::vector<std::vector<uint8_t>> jpegs(static_cast<size_t>(n));
     size_t largest = 0;
     for (int i = 0; i < n; ++i) {
-        const sd_image_t &f = frames[i];
-        if (!f.data || f.width != w || f.height != h) {
+        const Pixels &f = frames[static_cast<size_t>(i)];
+        if (!f.data || static_cast<uint32_t>(f.w) != w || static_cast<uint32_t>(f.h) != h) {
             error = "sdcpp: frame " + std::to_string(i) + " is missing or has a different size";
             return false;
         }
         if (!stbi_write_jpg_to_func(append_bytes, &jpegs[static_cast<size_t>(i)], static_cast<int>(w), static_cast<int>(h),
-                                    static_cast<int>(f.channel), f.data, quality)) {
+                                    f.c, f.data, quality)) {
             error = "sdcpp: JPEG encoding failed";
             return false;
         }
@@ -526,15 +609,6 @@ bool has_image_part(const agent_message &m) {
     return false;
 }
 
-void sample_params(const GenSettings &g, sd_sample_params_t &s) {
-    s.sample_steps = g.steps;
-    s.sample_method = g.sampler;
-    s.scheduler = g.scheduler;
-    s.guidance.txt_cfg = g.cfg_scale;
-    s.guidance.distilled_guidance = g.guidance;
-    s.flow_shift = g.flow_shift;
-}
-
 // Fills the response with one FILE part per inst->paths entry (all of type mime), then inst->text.
 void file_response(Instance *inst, const char *mime, agent_response *resp) {
     inst->parts.assign(inst->paths.size() + 1, agent_part{});
@@ -574,14 +648,14 @@ int32_t sd_engine_run(void *instance, const agent_request *req, agent_response *
     if (output_dir.empty()) return fail(inst, AGENT_ERR_INVALID_CONFIG, "sdcpp: request output_dir is required");
 
     GenSettings g = inst->defaults;
-    sd_image_t init_image{};
+    StbImage init_image;
     // IMAGE_EDIT needs an init image; VIDEO_GEN takes one if given (image-to-video models).
     if (req->task == AGENT_CAP_IMAGE_EDIT || (video && has_image_part(*user))) {
         std::string error;
         if (!load_init_image(*user, init_image, error)) return fail(inst, AGENT_ERR_INVALID_CONFIG, error);
         // Keep the input size (rounded down to a multiple of 8) unless params_json sets one.
-        g.width = std::max(8, static_cast<int>(init_image.width) / 8 * 8);
-        g.height = std::max(8, static_cast<int>(init_image.height) / 8 * 8);
+        g.width = std::max(8, init_image.w / 8 * 8);
+        g.height = std::max(8, init_image.h / 8 * 8);
     }
     if (req->params_json.size) {
         simdjson::ondemand::parser parser;
@@ -589,109 +663,101 @@ int32_t sd_engine_run(void *instance, const agent_request *req, agent_response *
         simdjson::ondemand::document doc;
         simdjson::ondemand::object params;
         std::string error;
-        if (parser.iterate(json).get(doc) || doc.get_object().get(params)) {
-            if (init_image.data) stbi_image_free(init_image.data);
+        if (parser.iterate(json).get(doc) || doc.get_object().get(params))
             return fail(inst, AGENT_ERR_PARSE, "sdcpp: params_json is not a JSON object");
-        }
-        if (!apply_gen_settings(params, g, error)) {
-            if (init_image.data) stbi_image_free(init_image.data);
-            return fail(inst, AGENT_ERR_INVALID_CONFIG, error);
-        }
+        if (!apply_gen_settings(params, g, error)) return fail(inst, AGENT_ERR_INVALID_CONFIG, error);
     }
 
-    sd_img_gen_params_t gen;
-    sd_vid_gen_params_t vid;
-    if (video) {
-        sd_vid_gen_params_init(&vid);
-        vid.prompt = prompt.c_str();
-        vid.negative_prompt = g.negative_prompt.c_str();
-        vid.clip_skip = g.clip_skip;
-        vid.width = g.width;
-        vid.height = g.height;
-        vid.seed = g.seed;
-        vid.strength = g.strength;
-        vid.init_image = init_image;
-        vid.video_frames = g.video_frames;
-        vid.fps = g.fps;
-        sample_params(g, vid.sample_params);
-        vid.vae_tiling_params.enabled = g.vae_tiling;
-    } else {
-        sd_img_gen_params_init(&gen);
-        gen.prompt = prompt.c_str();
-        gen.negative_prompt = g.negative_prompt.c_str();
-        gen.clip_skip = g.clip_skip;
-        gen.width = g.width;
-        gen.height = g.height;
-        gen.seed = g.seed;
-        gen.batch_count = 1;
-        gen.strength = g.strength;
-        gen.init_image = init_image;
-        sample_params(g, gen.sample_params);
-        gen.vae_tiling_params.enabled = g.vae_tiling;
+    OptPtr opt(video ? sd_vid_gen_opt_create() : sd_img_gen_opt_create());
+    if (!opt) return fail(inst, AGENT_ERR_DECODE_FAILED, "sdcpp: out of memory");
+    {
+        std::string error;
+        sd_opt_t *o = opt.get();
+        bool ok = set_str(o, "prompt", prompt, error) && set_str(o, "negative_prompt", g.negative_prompt, error) &&
+                  set_num(o, "width", g.width, error) && set_num(o, "height", g.height, error) && set_num(o, "seed", g.seed, error) &&
+                  set_num(o, "sample.steps", g.steps, error) && set_real(o, "sample.guidance.txt_cfg", g.cfg_scale, error) &&
+                  set_real(o, "sample.guidance.distilled_guidance", g.guidance, error) &&
+                  set_flag(o, "vae_tiling.enabled", g.vae_tiling, error);
+        if (ok && g.clip_skip > 0) ok = set_num(o, "clip_skip", g.clip_skip, error);
+        if (ok && !g.sampler.empty()) ok = set_str(o, "sample.method", g.sampler, error);
+        if (ok && !g.scheduler.empty()) ok = set_str(o, "sample.scheduler", g.scheduler, error);
+        if (ok && std::isfinite(g.flow_shift)) ok = set_real(o, "sample.flow_shift", g.flow_shift, error);
+        if (ok && init_image.data) {
+            ok = set_real(o, "strength", g.strength, error);
+            const int64_t shape[3] = {3, init_image.w, init_image.h};
+            const size_t bytes = static_cast<size_t>(init_image.w) * static_cast<size_t>(init_image.h) * 3;
+            sd_tensor_t *t = ok ? sd_tensor_create(SD_TENSOR_U8, 3, shape, init_image.data, bytes) : nullptr;
+            if (ok && !t) ok = opt_fail("init_image", error);
+            if (ok) {
+                ok = sd_opt_set_tensor(o, "init_image", t) == SD_STATUS_OK || opt_fail("init_image", error);
+                sd_tensor_free(t);
+            }
+        }
+        if (ok && video) ok = set_num(o, "video_frames", g.video_frames, error) && set_num(o, "fps", g.fps, error);
+        if (ok && !video) ok = set_num(o, "batch_count", 1, error);
+        if (!ok) return fail(inst, AGENT_ERR_INVALID_CONFIG, "sdcpp: " + error);
     }
 
     Active active;
     active.ctx = inst->ctx;
     active.req = req;
     active.verbose = inst->verbose;
-    sd_image_generation_result_t *result = nullptr;
-    sd_video_generation_result_t *vresult = nullptr;
-    bool ok = false;
+    sd_result_t *raw = nullptr;
+    sd_status_t status = SD_STATUS_OK;
     {
         std::lock_guard<std::mutex> lock(g_sd_mu);
         if (req->cancel && *req->cancel) {
             active.cancelled = true;
+            status = SD_STATUS_CANCELLED;
         } else {
             ActiveScope scope(&active);
-            ok = video ? generate_video(inst->ctx, &vid, &vresult) : generate_image(inst->ctx, &gen, &result);
+            status = video ? sd_generate_video(inst->ctx, opt.get(), &raw) : sd_generate_image(inst->ctx, opt.get(), &raw);
         }
     }
-    if (init_image.data) stbi_image_free(init_image.data);
+    ResultPtr result(raw);
+    const std::string why = last_error_text();
 
-    const bool cancelled = active.cancelled || (req->cancel && *req->cancel);
-    const bool produced = video ? (vresult && vresult->frame_count > 0 && vresult->frames && vresult->frames[0].data)
-                                : (result && result->count > 0 && result->items[0].image.data);
-    if (cancelled || !ok || !produced) {
-        if (result) free_sd_image_generation_result(result);
-        if (vresult) free_sd_video_generation_result(vresult);
-        if (cancelled) return fail(inst, AGENT_ERR_CANCELLED, "sdcpp: cancelled");
+    const bool cancelled = active.cancelled || status == SD_STATUS_CANCELLED || (req->cancel && *req->cancel);
+    const size_t count = result ? sd_result_get_image_count(result.get()) : 0;
+    if (cancelled) return fail(inst, AGENT_ERR_CANCELLED, "sdcpp: cancelled");
+    if (status != SD_STATUS_OK || count == 0)
         return fail(inst, AGENT_ERR_DECODE_FAILED,
                     std::string("sdcpp: ") + (video ? "video" : "image") + " generation failed" +
-                        (active.last_error.empty() ? std::string() : ": " + active.last_error));
-    }
+                        (!why.empty() ? ": " + why : (active.last_error.empty() ? std::string() : ": " + active.last_error)));
 
     std::error_code ec;
     std::filesystem::create_directories(output_dir, ec);
     if (!video) {
-        const sd_image_t &img = result->items[0].image;
+        const Pixels img = pixels_of(sd_result_get_image(result.get(), 0));
+        if (!img.data) return fail(inst, AGENT_ERR_DECODE_FAILED, "sdcpp: the result has no image");
         std::string path = unique_path(inst, output_dir, ".png");
-        const int w = static_cast<int>(img.width), h = static_cast<int>(img.height), c = static_cast<int>(img.channel);
-        const int written = stbi_write_png(path.c_str(), w, h, c, img.data, w * c);
-        free_sd_image_generation_result(result);
-        if (!written) return fail(inst, AGENT_ERR_FILESYSTEM, "sdcpp: could not write " + path);
+        if (!stbi_write_png(path.c_str(), img.w, img.h, img.c, img.data, img.w * img.c))
+            return fail(inst, AGENT_ERR_FILESYSTEM, "sdcpp: could not write " + path);
         inst->paths.push_back(std::move(path));
         inst->text = "generated image: " + inst->paths[0];
         file_response(inst, "image/png", resp);
         return AGENT_OK;
     }
 
-    const int n = vresult->frame_count;
-    const int fps = vresult->fps > 0 ? vresult->fps : g.fps;
-    const uint32_t width = vresult->frames[0].width, height = vresult->frames[0].height;
+    std::vector<Pixels> frames;
+    for (size_t i = 0; i < count; ++i) frames.push_back(pixels_of(sd_result_get_image(result.get(), i)));
+    const int n = static_cast<int>(count);
+    const int result_fps = sd_result_get_fps(result.get());
+    const int fps = result_fps > 0 ? result_fps : g.fps;
+    const int width = frames[0].w, height = frames[0].h;
     std::string error;
     if (g.video_format == "avi") {
         std::string path = unique_path(inst, output_dir, ".avi");
-        if (write_mjpeg_avi(path, vresult->frames, n, fps, g.jpeg_quality, error)) inst->paths.push_back(std::move(path));
+        if (write_mjpeg_avi(path, frames, n, fps, g.jpeg_quality, error)) inst->paths.push_back(std::move(path));
     } else {
         for (int i = 0; i < n && error.empty(); ++i) {
-            const sd_image_t &img = vresult->frames[i];
+            const Pixels &img = frames[static_cast<size_t>(i)];
             std::string path = unique_path(inst, output_dir, ".png");
-            const int w = static_cast<int>(img.width), h = static_cast<int>(img.height), c = static_cast<int>(img.channel);
-            if (!img.data || !stbi_write_png(path.c_str(), w, h, c, img.data, w * c)) error = "sdcpp: could not write " + path;
+            if (!img.data || !stbi_write_png(path.c_str(), img.w, img.h, img.c, img.data, img.w * img.c))
+                error = "sdcpp: could not write " + path;
             else inst->paths.push_back(std::move(path));
         }
     }
-    free_sd_video_generation_result(vresult);
     if (!error.empty()) {
         inst->paths.clear();
         return fail(inst, AGENT_ERR_FILESYSTEM, error);

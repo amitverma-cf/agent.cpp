@@ -368,8 +368,8 @@ std::string usage_all() {
            "global options: -h|--help, --no-sandbox (run engines, tools and commands without the OS sandbox), --home DIR (the global "
            "workspace: default $AGENT_HOME or the folder chosen at setup),\n"
            "                 --config-dir DIR (old layout: default $AGENT_CONFIG_DIR or the platform config dir)\n"
-           "engines run inside the agent process (models are shared and unloaded when memory is needed);\n"
-           "\"isolation\": \"process\" on an engine in engines.json runs it in a sandboxed agent-engine-host instead\n"
+           "llama, audiocpp and sdcpp run each in a sandboxed agent-engine-host process (their ggml libraries cannot share one);\n"
+           "\"isolation\": \"inprocess\" on an engine in engines.json, or --inprocess, runs it inside the agent process instead\n"
            "chat commands: /exit /clear /model [NAME] /image <path> [prompt] /open [n] /stats /help\n";
 }
 
@@ -753,8 +753,8 @@ bool remove_engine(std::vector<EngineEntry> &engines, std::string_view name) {
 }
 
 EngineIsolation cli_engine_isolation(bool inprocess_flag, std::string_view entry_isolation) {
-    // Engines run inside the program: one process, no copy of the data between two, and a model can be shared and unloaded by the model
-    // registry. An engine entry with "isolation": "process" in engines.json still gets its own sandboxed agent-engine-host.
+    // An engine entry with "isolation": "process" in engines.json gets its own sandboxed agent-engine-host; commands.cpp gives that default to the
+    // engines built on ggml (llama, audiocpp, sdcpp), whose libraries cannot share a process. Everything else runs inside the program.
     if (inprocess_flag || entry_isolation == "inprocess") return EngineIsolation::InProcess;
     return entry_isolation == "process" ? EngineIsolation::Process : EngineIsolation::InProcess;
 }

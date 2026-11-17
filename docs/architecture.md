@@ -209,7 +209,7 @@ tile state. `AGENT_GGML_AMX` is therefore off by default, and turning it on is o
 | `InProcess` | `dlopen`ed into the application; called directly. | About 0.7 us per turn (measured). | A crash, `abort()` or `exit()` in the engine ends the application. |
 | `Process` | `agent-engine-host <plugin>` loads it and serves the same ABI over pipes. Tensors and media of 64 KiB and more go through shared memory. | About 40 us per turn (measured), plus the engine's own time. | The call fails with `ErrorCode::EngineCrashed`; the next call restarts the host (limited by `engine_max_restarts`). |
 
-The library default is `InProcess`. The `agent` CLI uses `Process`. Under `Process`, the host runs inside an OS sandbox
+The library default is `InProcess`. The `agent` CLI uses `Process` for llama, audiocpp and sdcpp (their ggml libraries have the same file names, so one process cannot hold two of them) and `InProcess` for the others. Under `Process`, the host runs inside an OS sandbox
 (`Config::engine_sandbox`, on by default): the plugin, the model and the workspace are readable, only the artifacts folder,
 the workspace scratch folder and `/dev/shm` are writable, and there is no network and no `/tmp`. On Linux the sandbox uses
 Landlock and seccomp; on Windows it is partial. `engine_timeout_ms` is a per-request watchdog, and `engine_sandbox.memory_limit_bytes`

@@ -234,6 +234,12 @@ Result<LoadedEngine> load_engine_for(const Context &ctx, std::string_view engine
         loaded.value.isolation = entry->isolation;
         loaded.value.backend = entry->backend;
     }
+    // llama.cpp, audio.cpp and stable-diffusion.cpp each bring their own ggml, as shared libraries with the same file names, and one process
+    // keeps only one library of a name: the second engine would run on the first one's ggml and fail on a missing symbol. Each of them gets
+    // its own process (agent-engine-host) unless engines.json says otherwise.
+    if (loaded.value.isolation.empty() && (loaded.value.name == "llama" || loaded.value.name == "audiocpp" || loaded.value.name == "sdcpp") &&
+        engine_host_available())
+        loaded.value.isolation = "process";
     if (loaded.value.name == "api") {
         // The api engine starts a bun child and talks to the network, which the engine host's sandbox forbids; it holds no model and
         // no files, so it runs in this process (docs/guides/remote-models.md).

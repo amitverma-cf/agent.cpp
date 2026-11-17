@@ -528,7 +528,7 @@ is `$ORIGIN`, and the build copies the library into the plugin's output director
 | Option | Default | |
 |---|---|---|
 | `threads` | ORT default | intra-op threads |
-| `execution_provider` | `"cpu"` | `"cpu"` or `"cuda"`. `"cuda"` needs an ORT build with the CUDA EP; otherwise `create()` fails with a clear error |
+| `execution_provider` | `"auto"` | `"auto"`, `"cpu"` or `"cuda"`. `"auto"` uses CUDA when the installed ONNX Runtime is a CUDA build (and the CUDA runtime and cuDNN are on the machine) and the CPU otherwise; `"cuda"` fails with a clear error when it cannot |
 | `device_id` | `0` | CUDA device |
 | `graph_optimization` | `"all"` | `"disable"`, `"basic"`, `"extended"` or `"all"` |
 
@@ -561,18 +561,20 @@ IoBinding / device-resident outputs, and non-tensor (sequence/map) outputs.
 (`vendor/stable-diffusion.cpp`, pinned to a release tag) for image generation: SD 1.x/2.x/XL, SD3,
 FLUX, Qwen-Image, Z-Image and whatever else that sd.cpp release loads.
 
-It builds a second copy of ggml, so CMake turns it on only when the submodule is checked out. `-DAGENT_ENGINE_SDCPP=ON` or `OFF` overrides that:
+The plugin is thin: it is compiled against the stable-diffusion.cpp release library (`stable-diffusion.dll`, `libstable-diffusion.so`
+or `.dylib`, with its ggml libraries beside it) that the installer downloads for the machine's backend, so one plugin serves CPU, Vulkan,
+CUDA, ROCm and Metal builds. `vendor/stable-diffusion.cpp` supplies the C header and must be at the pinned release tag
+(`scripts/components.tsv`).
 
 ```sh
-git submodule update --init vendor/stable-diffusion.cpp
-git -C vendor/stable-diffusion.cpp submodule update --init --depth 1 ggml
-cmake -B build -G Ninja -DAGENT_ENGINE_SDCPP=ON [-DAGENT_SDCPP_BUILD_JOBS=4]
+scripts/install.sh fetch sdcpp build/upstream/sdcpp          # the pinned release, unpacked
+cmake -B build -G Ninja -DAGENT_ENGINE_SDCPP=ON -DAGENT_SDCPP_PREBUILT=$PWD/build/upstream/sdcpp
 ```
 
-sd.cpp's ggml uses the same CMake target names as llama.cpp's, so it is built as a nested CMake project
-(`ExternalProject`) and its static archives are linked into the plugin with hidden visibility (on Linux
-also `-Wl,--exclude-libs,ALL`). The llama and sdcpp plugins can be loaded into one process.
-`AGENT_SDCPP_BUILD_JOBS` caps the nested build's parallelism.
+Without `AGENT_SDCPP_PREBUILT` the plugin compiles stable-diffusion.cpp from `vendor/` as a nested CMake project and links it statically
+(its ggml has the same CMake target names as llama.cpp's; `AGENT_SDCPP_BUILD_JOBS` caps the nested build). The library API is
+stable-diffusion.cpp's options-and-tensors C API (`sd_ctx_opt_create`, `sd_opt_set_*`, `sd_generate_image`). Where the llama and sdcpp
+plugins both load ggml libraries of the same file name into one process (Windows), run one of them with `"isolation": "process"`.
 
 - Name `sdcpp`, caps `AGENT_CAP_IMAGE_GEN | AGENT_CAP_IMAGE_EDIT | AGENT_CAP_VIDEO_GEN`, flags `0`.
 - `IMAGE_GEN` (txt2img): the prompt is the text of the last user message.
@@ -601,7 +603,7 @@ also `-Wl,--exclude-libs,ALL`). The llama and sdcpp plugins can be loaded into o
 `negative_prompt`, `cfg_scale`, `guidance`, `sampler`, `scheduler`, `strength`, `clip_skip`,
 `vae_tiling`). Defaults: 512x512 (img2img: the input image size, rounded down to a multiple of 8), 20 steps, `cfg_scale` 7, random seed (`-1`), and the model's own
 default sampler and scheduler. Sampler and scheduler names are sd.cpp's (`euler`, `euler_a`, `lcm`, ...;
-`discrete`, `karras`, ...).
+`discrete`, `karras`, ...); sd.cpp rejects an unknown one when the request runs.
 
 Video keys in `params_json` (VIDEO_GEN): `video_frames` (default 17, from 1 to 1024), `fps` (default 16, from 1 to 240),
 `flow_shift` (default: the model's), `video_format` (`avi` or `png`) and `jpeg_quality` (default 90, from 1 to 100).
@@ -619,89 +621,44 @@ declared bit, `IMAGE_GEN`).
 
 ## The trellis engine
 
-`src/engines/trellis` (`agent-engine-trellis`) wraps [trellis2.cpp](https://github.com/localai-org/trellis2cpp)
-(`vendor/trellis2cpp`, MIT, pinned to commit `2f3e6e2` of its default `pbr-textures` branch; the repo has no
-tags) for [TRELLIS.2](https://github.com/microsoft/TRELLIS.2) image-to-3D. It goes through the port's
-flat C API (`trellis2_capi.h`), so none of the port's C++ crosses the plugin boundary.
-
-It builds a third copy of ggml (the port's own fork), so CMake turns it on only when a CUDA compiler is found and the
-submodule is checked out. `-DAGENT_ENGINE_TRELLIS=ON` or `OFF` overrides that:
-
-```sh
-git submodule update --init vendor/trellis2cpp
-git -C vendor/trellis2cpp submodule update --init --depth 1 ggml
-cmake -B build -G Ninja -DAGENT_ENGINE_TRELLIS=ON [-DAGENT_TRELLIS_BUILD_JOBS=4]
-```
-
-Like sdcpp it is a nested `ExternalProject` (target names clash with llama.cpp's ggml), linked statically
-with hidden visibility; on Linux `-Wl,--exclude-libs,ALL` plus a version script leave `agent_engine_get_v1`
-as the only exported symbol. The nested build is CPU-only (CGAL print remeshing and Metal are off).
-`AGENT_TRELLIS_BUILD_JOBS` caps its parallelism.
+`src/engines/trellis` (`agent-engine-trellis`) does [TRELLIS.2](https://github.com/microsoft/TRELLIS.2) image-to-3D through
+[trellis.cpp](https://github.com/pwilkin/trellis.cpp) (MIT). trellis.cpp publishes its CPU, Vulkan, CUDA and ROCm builds as programs
+(`trellis-cli`, `trellis-server`) and no library, so the plugin runs the release's `trellis-cli` once for each request and returns the GLB it
+writes. Nothing of trellis.cpp is compiled, nothing listens on a socket (`trellis-server` is not used), and the installer puts `trellis-cli`
+and its ggml libraries in the plugin's folder (`agent engine pull trellis`; `options.cli` or `$AGENT_TRELLIS_CLI` name another program).
 
 - Name `trellis`, caps `AGENT_CAP_MESH_GEN`, flags `0`.
-- `MESH_GEN`: the input is the last image `FILE` (or `BYTES`) part of the last user message (anything
-  stb_image decodes: PNG, JPEG, BMP, ...). No image fails with `AGENT_ERR_INVALID_CONFIG`; other tasks
-  with `AGENT_ERR_UNSUPPORTED`.
-- The mesh is written as `<output_dir>/trellis-<unix ms>-<n>.glb` and returned as a `FILE` part
-  (`model/gltf-binary`) followed by a text part `generated 3D model: <path> (<v> vertices, <t> triangles)`.
+- `MESH_GEN`: the input is the last image `FILE` (or `BYTES`, written next to the result for the run) part of the last user message. No
+  image fails with `AGENT_ERR_INVALID_CONFIG`; other tasks with `AGENT_ERR_UNSUPPORTED`.
+- The mesh is written as `<output_dir>/trellis-<unix ms>-<n>.glb` and returned as a `FILE` part (`model/gltf-binary`) followed by a text
+  part `generated 3D model: <path> (<n> KiB)`.
+- A failing program returns `AGENT_ERR_DECODE_FAILED` with its exit code and the end of what it printed. `cancel` ends the program and
+  returns `AGENT_ERR_CANCELLED`. Progress is a single `1/1` when the GLB is written.
 
-`create()` config: `model` is a directory with the GGUFs, found by their published names
-(`<name>_f16.gguf`, else `_f32.gguf`, else `.gguf`). Which files exist decides what the pipeline can do:
+`create()` config: `model` is the folder with the GGUF weights (what `trellis-cli --models` takes; the published set is
+[`ilintar/trellis2-gguf`](https://huggingface.co/ilintar/trellis2-gguf), about 16.5 GB, or its quantized variants). Options and
+`params_json` per request take the same keys:
 
-| Option (file) | Needed for | Source |
+| Key | Default | Meaning (trellis-cli flag) |
 |---|---|---|
-| `dino` (`dino_f16.gguf`, 0.6 GB) | always | [LocalAI-io/dinov3-vitl16-pretrain-lvd1689m-GGUF](https://huggingface.co/LocalAI-io/dinov3-vitl16-pretrain-lvd1689m-GGUF) (DINOv3 License) |
-| `ss_flow` (`ss_flow_f16.gguf`, 2.6 GB) | always | [LocalAI-io/TRELLIS.2-4B-GGUF](https://huggingface.co/LocalAI-io/TRELLIS.2-4B-GGUF) (MIT) |
-| `ss_dec` (`ss_dec_f16.gguf`, 0.15 GB) | always | [LocalAI-io/TRELLIS-image-large-GGUF](https://huggingface.co/LocalAI-io/TRELLIS-image-large-GGUF) (MIT) |
-| `slat_flow` + `shape_dec` (2.6 + 0.95 GB) | 512³ fine mesh | TRELLIS.2-4B-GGUF |
-| `slat_flow_1024` (2.6 GB) | 1024³ cascade | TRELLIS.2-4B-GGUF |
-| `shape_enc`, `tex_dec`, `tex_flow` (`tex_slat_flow_512`), `tex_flow_1024` | PBR vertex colours | TRELLIS.2-4B-GGUF |
+| `resolution` | `1024` | `512` (light path), `1024` (cascade) or `1536` (`--res`) |
+| `seed` | `-1` (random) | `--seed` |
+| `steps` | `0` = model default | flow sampler steps (`--steps`) |
+| `guidance`, `guidance_shape` | `-1` = 7.5 | sparse-structure and shape guidance (`--gss`, `--gsh`) |
+| `background` | `auto` | `auto`, `birefnet` or `threshold` (`--bg-removal`) |
+| `texture` | `true` | `false` writes geometry only (`--no-texture`) |
+| `xatlas` | `true` | `false` projects UVs from a box (`--box-uv`) |
+| `faces` | `0` = default | face budget of the decimated mesh (`--faces`) |
+| `texture_size`, `texture_resolution` | `0` = default | UV atlas size and PBR texture size in pixels (`--atlas`, `--tex-res`) |
+| `normal_map` | `false` | bake a normal map (`--normal-map`) |
+| `gpu` | `0` | GPU index; below 0 runs on the CPU (`--gpu`) |
+| `backend` | automatic | force a ggml backend by name (`--backend`) |
+| `threads` | all | CPU threads (`--threads`) |
 
-The three required files alone give the coarse path (64³ occupancy, marching cubes, untextured). Each
-option may also be set explicitly (relative paths resolve against `model`); `""` disables auto-discovery
-of that file, e.g. `"slat_flow_1024": ""` to skip loading the 1024 model. Missing files fail with
-`AGENT_ERR_MODEL_LOAD_FAILED`. There is no learned background-removal model: the port turns a
-border-connected near-white/near-black background into alpha (or uses the image's own alpha).
-
-Other options: `threads` (CPU threads; default all cores; applied through the port's
-`TRELLIS2_N_THREADS` environment variable while loading/generating) and the generation defaults below.
-`params_json` per request accepts the same generation keys:
-
-| Key | Default | Meaning |
-|---|---|---|
-| `seed` | `-1` (random) | sampler seed |
-| `steps` | `0` = 12 | flow sampler steps (all geometry stages) |
-| `guidance` | `-1` = 7.5 | classifier-free guidance strength |
-| `texture_steps` | `0` = 12 | texture flow steps |
-| `pipeline` | `auto` | `auto` (best loaded), `coarse`, `512`, `1024` |
-| `background` | `auto` | `auto`, `keep`, `black`, `white` |
-| `components` | `remove_tiny` | GLB component cleanup: `remove_tiny`, `largest`, `all` |
-| `texture_size` | `0` = 2048 | atlas size; only used when `T2GLB_XATLAS` is set (the default GLB uses vertex colours) |
-
-The port has no mesh simplification on its CPU export path, so there is no simplify-ratio option; the GLB
-keeps the generated polygon count.
-
-Progress goes to `on_progress(step, total)` for every flow-sampling step; the counter restarts per
-sampling phase (sparse structure, shape SLAT, HR SLAT, texture), and `1/1` is sent when the GLB is
-written. trellis2.cpp has no cancellation hook inside a generation: `cancel` is checked before starting
-and between generation and GLB export, then `run()` returns `AGENT_ERR_CANCELLED`.
-
-trellis2.cpp itself does not throw (only its optional CGAL path does, and that is compiled out), but it is
-C++ underneath: an out-of-memory `std::bad_alloc` inside it is not caught, and ggml asserts abort.
-CPU generation is slow: the 512/1024 paths run two or three 1.3B-parameter DiTs over thousands of
-tokens and the 1024³ decode needs ~14 GB of host RAM.
-
-Measured on 4 vCPUs and 8 GB RAM with the f16 files above (a 256x256 test picture, 6 sampler steps, 1 seed, CPU only):
-
-| Pipeline | Time | Peak RAM | Mesh |
-|---|---|---|---|
-| coarse (`ss_flow`, `ss_dec`) | 510 s | 3.4 GiB | 35,641 vertices, 71,260 triangles |
-| 512 fine, untextured (`+ slat_flow`, `shape_dec`) | 753 s | 7.4 GiB | 479,587 vertices, 963,750 triangles |
-
-The 512 path only just fits in 8 GB. The textured paths (another 2.4 GB flow model and a decoder) and the 1024 cascade need more
-RAM than that and were not run. The quantized TRELLIS.2 GGUFs on Hugging Face (`ilintar/trellis2-gguf`, `q4/` and `q8/`) do not
-load into the pinned trellis2.cpp (its DINO file has another architecture name and the flow models fail with "cond/flow channel
-mismatch"): they were converted for a different runtime. The converters in `vendor/trellis2cpp` write f32, f16 or bf16 only.
+The CUDA, ROCm and Vulkan builds use the card; the `cpu` backend of the installer is the Vulkan bundle run with `--gpu -1`. Generation
+needs a GPU for any practical speed: the 1024 cascade runs two or three 1.3B-parameter transformers over thousands of tokens. The tests
+run the plugin against a stand-in program (`tests/fake_trellis_cli.cpp`); with `AGENT_TEST_TRELLIS_MODEL_DIR`, `AGENT_TEST_TRELLIS_CLI`
+and `AGENT_TEST_TRELLIS_IMAGE` set they run the real one.
 
 ## The audiocpp engine
 

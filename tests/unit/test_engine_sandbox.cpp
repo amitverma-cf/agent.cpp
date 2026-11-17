@@ -362,26 +362,38 @@ TEST_CASE("sandboxed engine host: sdcpp generates an image", "[engine_sandbox][s
 
 #ifdef AGENT_TEST_TRELLIS_ENGINE_PATH
 
-TEST_CASE("sandboxed engine host: trellis loads and reports model errors", "[engine_sandbox][trellis]") {
-    // No weights needed: the host must start, load the plugin and see the model directory. A
-    // permission problem would surface as a different message (or a crash) instead of these.
+TEST_CASE("sandboxed engine host: trellis reports a missing program and runs the one it is given", "[engine_sandbox][trellis]") {
+    // The plugin runs trellis-cli as a child process, so the host's sandbox must let it start the program and write the GLB into
+    // workspace/artifacts. No weights are needed: the stand-in program (tests/fake_trellis_cli.cpp) takes the same flags.
     const std::string root = fresh_dir("trellis");
     const std::string models = root + "/models";
     fs::create_directories(models);
     Log log;
     auto cfg = sandboxed(AGENT_TEST_TRELLIS_ENGINE_PATH, models, root + "/ws", log);
-    auto empty = agent::init(cfg);
-    REQUIRE_FALSE(empty.ok);
-    CHECK(empty.error.code == agent::ErrorCode::ModelLoadFailed);
-    INFO(empty.error.message);
-    CHECK(empty.error.message.find("dino_f16.gguf") != std::string::npos);
-
-    for (const char *name : {"dino_f16.gguf", "ss_flow_f16.gguf", "ss_dec_f16.gguf"}) write_file(models + "/" + name, "this is not a gguf");
-    auto garbage = agent::init(cfg);
-    REQUIRE_FALSE(garbage.ok);
-    CHECK(garbage.error.code == agent::ErrorCode::ModelLoadFailed);
-    INFO(garbage.error.message);
-    CHECK(garbage.error.message.find("dino") != std::string::npos);
+    cfg.engine_options = R"({"cli":"/nonexistent/trellis-cli"})";
+    auto missing = agent::init(cfg);
+    REQUIRE_FALSE(missing.ok);
+    INFO(missing.error.message);
+    CHECK(missing.error.message.find("trellis-cli") != std::string::npos);
+#ifdef AGENT_TEST_FAKE_TRELLIS_CLI
+    const std::string cli = AGENT_TEST_FAKE_TRELLIS_CLI;
+    cfg.engine_options = "{\"cli\":\"" + cli + "\"}";
+    agent::Session session = open(cfg, log);
+    const std::string image = root + "/ws/in.png";
+    write_file(image, "png bytes");
+    agent::MessageView msg{.role = "user", .content = "make this a 3D model"};
+    const agent::MediaView media[] = {{image, "image/png"}};
+    msg.media = media;
+    agent::InferRequest req;
+    req.messages = std::span<const agent::MessageView>(&msg, 1);
+    auto mesh = agent::run_task(session, AGENT_CAP_MESH_GEN, req);
+    INFO(mesh.error.message);
+    REQUIRE(mesh.ok);
+    REQUIRE_FALSE(mesh.value.message.media.empty());
+    const std::string glb(mesh.value.message.media[0].path);
+    CHECK(glb.rfind(root + "/ws/artifacts/", 0) == 0);
+    CHECK(fs::file_size(glb) > 1024);
+#endif
     if (landlock()) CHECK(log.clean());
 }
 

@@ -16,7 +16,7 @@ and not supported.
 ## Install a release
 
 `curl -fsSL https://agent.qozu.fyi/install.sh | sh` (Linux) or `irm https://agent.qozu.fyi/install.ps1 | iex` (Windows PowerShell) installs the latest release; see the
-[README](../README.md#install). Set `AGENT_VERSION=v1.2.1` to install a given tag. The installer is the only thing that installs, changes or removes agent.cpp: `agent setup`, `agent update`, `agent uninstall`, `agent engine pull` and `agent runtime install` run its copy in `<home>/scripts/`.
+[README](../README.md#install). Set `AGENT_VERSION=v1.2.2` to install a given tag. The installer is the only thing that installs, changes or removes agent.cpp: `agent setup`, `agent update`, `agent uninstall`, `agent engine pull` and `agent runtime install` run its copy in `<home>/scripts/`.
 
 ## Build
 
@@ -119,7 +119,7 @@ Routing, parallel branches, loops, checkpoints and human-in-the-loop interrupts:
 | `AGENT_ENGINE_LLAMA` | `ON` | Build the llama.cpp engine plugin (`src/engines/llama`) |
 | `AGENT_LLAMA_UPSTREAM` | `ON` | Source builds only: link llama.cpp's scheduler (`tools/server`) in process for MTP, draft and native decision models. A prebuilt build always has it |
 | `AGENT_LLAMA_PREBUILT` | (empty) | Folder with an upstream llama.cpp release (`scripts/install.sh fetch llama DIR`): only the small plugin is compiled, against its libraries. What the release does; `vendor/llama.cpp` must be at the pinned tag |
-| `AGENT_AUDIOCPP_PREBUILT` | (empty) | Same for audio.cpp (`install.sh fetch audiocpp DIR`) |
+| `AGENT_AUDIOCPP_PREBUILT`, `AGENT_SDCPP_PREBUILT` | (empty) | Same for audio.cpp and stable-diffusion.cpp (`install.sh fetch audiocpp DIR`, `fetch sdcpp DIR`); `vendor/stable-diffusion.cpp` must be at the pinned tag |
 | `AGENT_ENGINE_API` | `ON` | Build the remote API engine plugin (runs a bun child) |
 | `AGENT_BUILD_TESTS` | `ON` (top level) | Build `test_agent`, the unit tests |
 | `AGENT_ENGINE_ONNX` | `ON` | Build the ONNX Runtime engine (`src/engines/onnx`). CMake downloads the pinned official ONNX Runtime release (`AGENT_ONNXRUNTIME_FETCH`); `-DONNXRUNTIME_ROOT=<dir>` uses a local copy |
@@ -127,8 +127,8 @@ Routing, parallel branches, loops, checkpoints and human-in-the-loop interrupts:
 | `AGENT_ENGINE_AUDIOCPP` | `ON` with its submodule | Build the audio.cpp speech engine (`src/engines/audiocpp`: TTS, ASR, VAD, diarization); needs the `vendor/audio.cpp` submodule |
 | `AGENT_AUDIOCPP_MODEL_SET` | `custom` | audio.cpp model families compiled in: `custom` builds the families in `AGENT_AUDIOCPP_MODELS`, `full` builds all of them |
 | `AGENT_AUDIOCPP_MODELS` | (list in `src/engines/audiocpp/CMakeLists.txt`) | Model families built when `AGENT_AUDIOCPP_MODEL_SET=custom` |
-| `AGENT_ENGINE_TRELLIS` | `ON` with its submodule | Build the TRELLIS.2 image-to-3D engine (`src/engines/trellis`); needs the `vendor/trellis2cpp` submodule |
-| `AGENT_TRELLIS_BUILD_JOBS`, `AGENT_AUDIOCPP_BUILD_JOBS` | (empty) | Parallel jobs for the nested build of the TRELLIS and audio.cpp engines; empty uses the build tool's default |
+| `AGENT_ENGINE_TRELLIS` | `ON` | Build the TRELLIS.2 plugin (`src/engines/trellis`), which runs the trellis.cpp release program `trellis-cli`; nothing of trellis.cpp is compiled |
+| `AGENT_AUDIOCPP_BUILD_JOBS`, `AGENT_SDCPP_BUILD_JOBS` | (empty) | Parallel jobs for the nested build of the audio.cpp and stable-diffusion.cpp engines (source builds); empty uses the build tool's default |
 | `AGENT_GGML_AMX` | `OFF` | Keep Intel AMX kernels in the engines' ggml; only safe when every engine runs out of process |
 | `BUILD_SHARED_LIBS` | `OFF` | Build `libagent`, `agent_store_sqlite` and `agent_hub` as shared libraries |
 | `AGENT_INSTALL` | `ON` (top level) | Generate install rules and the `agent-cpp` CMake package |

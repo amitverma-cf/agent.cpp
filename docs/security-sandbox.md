@@ -11,7 +11,7 @@ sandbox does. It is applied to three kinds of children:
 | `run_command` (default tool set) | `Config::tool_sandbox` | **on**: workspace read-write, system dirs read-only, `/tmp` read-write, network allowed |
 | MCP servers | `McpServerConfig::sandbox` (`"sandbox"` per server in [agent.json](api/agent-json.md#mcp_servers)) | **off** (opt-in per server) |
 
-Engines run in-process by default, in the library and in the `agent` CLI, and then are not sandboxed (they are the calling process). Isolation is opt-in: `"isolation": "process"` for an engine in `engines.json`, or `Config::engine_isolation`. Neither is anything of its own
+In the library an engine runs in-process by default and is then not sandboxed (it is the calling process); `"isolation": "process"` or `Config::engine_isolation` puts it in the host. The `agent` program runs llama, audiocpp and sdcpp each in a sandboxed host, because their ggml libraries (same file names) cannot share a process; `--inprocess` or `"isolation": "inprocess"` in `engines.json` turns it off.
 tools start.
 
 The sandbox is on by default. The `agent` CLI's global `--no-sandbox` flag runs engines, tools and commands

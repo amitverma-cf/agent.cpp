@@ -1,48 +1,62 @@
-// agent-engine-trellis: TRELLIS.2 image -> 3D (GLB) as an agent.cpp engine plugin.
+// agent-engine-trellis: TRELLIS.2 image -> 3D (GLB) as an agent.cpp engine plugin, over trellis.cpp (github.com/pwilkin/trellis.cpp).
 //
-// Wraps trellis2.cpp (vendor/trellis2cpp) through its flat C API (trellis2_capi.h), so no C++
-// exception or STL type of the port crosses into this plugin's code paths.
-//
-// One instance = one loaded t2_pipeline (DINOv3 encoder, sparse-structure flow + decoder, and
-// optionally the shape-SLAT flow(s) + shape decoder for the 512 / 1024 paths and the texture models
-// for PBR). AGENT_CAP_MESH_GEN takes the last image FILE (or BYTES) part of the last user message,
-// writes <output_dir>/trellis-<unix ms>-<n>.glb and returns it as a FILE part (model/gltf-binary)
-// plus a short text part.
-//
-// trellis2.cpp picks its CPU thread count from the TRELLIS2_N_THREADS environment variable when a
-// backend is created, so create()/run() hold g_t2_mu while they temporarily set it.
+// trellis.cpp publishes its CPU, Vulkan, CUDA and ROCm builds as programs (trellis-cli, trellis-server) and no library, so this plugin
+// runs the release's `trellis-cli` for each request: the installer puts the program and its ggml libraries next to the plugin, the
+// plugin builds the command line, waits for it and returns the GLB. Nothing listens on a socket (trellis-server is not used).
+//   - AGENT_CAP_MESH_GEN: the last image FILE (or BYTES) part of the last user message is the input; the result is
+//     <output_dir>/trellis-<unix ms>-<n>.glb as a FILE part (model/gltf-binary) plus a short text part.
+//   - config "model" is the folder with the GGUF weights (what `--models` takes); options and params_json set the generation keys.
+// Cancellation ends the child process.
 
 #include <agent-cpp/engine_abi.h>
 #include <chrono>
-#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
-#include <mutex>
-#include <random>
 #include <simdjson.h>
 #include <string>
 #include <string_view>
-#include <trellis2_capi.h>
+#include <vector>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <csignal>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 namespace {
+
+namespace fs = std::filesystem;
 
 std::string_view sv(agent_str s) { return s.data ? std::string_view(s.data, s.size) : std::string_view(); }
 agent_str to_c(const std::string &s) { return agent_str{s.data(), s.size()}; }
 
-// ------------------------------------------------------------------ generation settings
+// ------------------------------------------------------------------ settings
 
-// Defaults come from Config::engine_options at create(); agent_request::params_json overrides them
-// per call.
+// Defaults come from Config::engine_options at create(); agent_request::params_json overrides them per call.
 struct GenSettings {
-    int64_t seed = -1;      // -1 = random
-    int steps = 0;          // flow sampler steps; 0 = pipeline default (12)
-    float guidance = -1.0f; // CFG strength; < 0 = pipeline default (7.5)
-    int texture_steps = 0;  // texture flow steps; 0 = pipeline default (12)
-    int pipeline = T2_PIPE_AUTO;
-    int background = T2_BACKGROUND_AUTO;
-    int texture_size = 0;     // GLB atlas size (only with T2GLB_XATLAS); 0 = default (2048)
-    int component_filter = 0; // 0 remove tiny islands, 1 keep largest, 2 keep all
+    int64_t seed = -1;           // -1 = random
+    int resolution = 1024;       // 512 (light), 1024 (cascade, default), 1536
+    int steps = 0;               // flow sampler steps; 0 = the model's default
+    float guidance = -1.0f;      // sparse-structure guidance; < 0 = default (7.5)
+    float guidance_shape = -1.0f; // shape guidance; < 0 = default (7.5)
+    std::string background = "auto"; // "auto", "birefnet" or "threshold"
+    bool texture = true;         // false: geometry only
+    bool xatlas = true;          // false: box UV projection
+    int faces = 0;               // face budget of the decimated mesh; 0 = default
+    int atlas = 0;               // UV atlas size in px; 0 = default
+    int texture_resolution = 0;  // PBR texture resolution; 0 = automatic
+    bool normal_map = false;
+    int gpu = 0;                 // GPU index; < 0 runs on the CPU
+    std::string backend;         // force a ggml backend by name (Vulkan, CUDA, ...); empty = automatic
+    int threads = 0;             // CPU threads; 0 = all
 };
 
 template <typename T> T json_number(simdjson::ondemand::object &obj, const char *key, T fallback) {
@@ -58,138 +72,257 @@ bool json_string(simdjson::ondemand::object &obj, const char *key, std::string &
     return true;
 }
 
-// Applies the generation keys present in obj on top of g. Returns false (with error) on bad values.
+bool json_bool(simdjson::ondemand::object &obj, const char *key, bool fallback) {
+    bool b = false;
+    if (obj[key].get_bool().get(b)) return fallback;
+    return b;
+}
+
+// Applies the keys present in obj on top of g. Returns false (with error) on bad values.
 bool apply_gen_settings(simdjson::ondemand::object &obj, GenSettings &g, std::string &error) {
     int64_t seed = 0;
     if (!obj["seed"].get_int64().get(seed)) g.seed = seed;
+    g.resolution = json_number<int>(obj, "resolution", g.resolution);
     g.steps = json_number<int>(obj, "steps", g.steps);
     g.guidance = json_number<float>(obj, "guidance", g.guidance);
-    g.texture_steps = json_number<int>(obj, "texture_steps", g.texture_steps);
-    g.texture_size = json_number<int>(obj, "texture_size", g.texture_size);
+    g.guidance_shape = json_number<float>(obj, "guidance_shape", g.guidance_shape);
+    json_string(obj, "background", g.background);
+    g.texture = json_bool(obj, "texture", g.texture);
+    g.xatlas = json_bool(obj, "xatlas", g.xatlas);
+    g.faces = json_number<int>(obj, "faces", g.faces);
+    g.atlas = json_number<int>(obj, "texture_size", g.atlas);
+    g.texture_resolution = json_number<int>(obj, "texture_resolution", g.texture_resolution);
+    g.normal_map = json_bool(obj, "normal_map", g.normal_map);
+    g.gpu = json_number<int>(obj, "gpu", g.gpu);
+    json_string(obj, "backend", g.backend);
+    g.threads = json_number<int>(obj, "threads", g.threads);
 
-    std::string name;
-    if (json_string(obj, "pipeline", name)) {
-        if (name == "auto") g.pipeline = T2_PIPE_AUTO;
-        else if (name == "coarse") g.pipeline = T2_PIPE_COARSE;
-        else if (name == "512") g.pipeline = T2_PIPE_512;
-        else if (name == "1024") g.pipeline = T2_PIPE_1024;
-        else {
-            error = "trellis: pipeline must be auto, coarse, 512 or 1024 (got '" + name + "')";
-            return false;
-        }
+    if (g.resolution != 512 && g.resolution != 1024 && g.resolution != 1536) {
+        error = "trellis: resolution must be 512, 1024 or 1536";
+        return false;
     }
-    if (json_string(obj, "background", name)) {
-        if (name == "auto") g.background = T2_BACKGROUND_AUTO;
-        else if (name == "keep") g.background = T2_BACKGROUND_KEEP;
-        else if (name == "black") g.background = T2_BACKGROUND_BLACK;
-        else if (name == "white") g.background = T2_BACKGROUND_WHITE;
-        else {
-            error = "trellis: background must be auto, keep, black or white (got '" + name + "')";
-            return false;
-        }
-    }
-    if (json_string(obj, "components", name)) {
-        if (name == "remove_tiny") g.component_filter = 0;
-        else if (name == "largest") g.component_filter = 1;
-        else if (name == "all") g.component_filter = 2;
-        else {
-            error = "trellis: components must be remove_tiny, largest or all (got '" + name + "')";
-            return false;
-        }
+    if (g.background != "auto" && g.background != "birefnet" && g.background != "threshold") {
+        error = "trellis: background must be auto, birefnet or threshold (got '" + g.background + "')";
+        return false;
     }
     if (g.steps < 0 || g.steps > 1000) {
         error = "trellis: steps must be in 0..1000 (0 = model default)";
         return false;
     }
-    if (g.texture_steps < 0 || g.texture_steps > 1000) {
-        error = "trellis: texture_steps must be in 0..1000 (0 = model default)";
-        return false;
-    }
-    if (g.texture_size < 0 || g.texture_size > 8192) {
-        error = "trellis: texture_size must be in 0..8192 (0 = default)";
+    if (g.faces < 0 || g.atlas < 0 || g.atlas > 8192 || g.texture_resolution < 0 || g.threads < 0) {
+        error = "trellis: faces, texture_size, texture_resolution and threads must not be negative (texture_size at most 8192)";
         return false;
     }
     return true;
 }
 
-// ------------------------------------------------------------------ model files
+// ------------------------------------------------------------------ the trellis-cli program
 
-// The pipeline's GGUF slots, in t2_pipeline_load() order. `base` is the file name the published
-// GGUF repos use (LocalAI-io/TRELLIS.2-4B-GGUF etc.) without the "_f16.gguf" suffix.
-struct Slot {
-    const char *option;
-    const char *base;
-    bool required;
-};
-constexpr Slot kSlots[] = {
-    {"dino", "dino", true},
-    {"ss_flow", "ss_flow", true},
-    {"ss_dec", "ss_dec", true},
-    {"slat_flow", "slat_flow", false},
-    {"slat_flow_1024", "slat_flow_1024", false},
-    {"shape_dec", "shape_dec", false},
-    {"shape_enc", "shape_enc", false},
-    {"tex_dec", "tex_dec", false},
-    {"tex_flow", "tex_slat_flow_512", false},
-    {"tex_flow_1024", "tex_slat_flow_1024", false},
-};
-constexpr size_t kNumSlots = sizeof(kSlots) / sizeof(kSlots[0]);
+#if defined(_WIN32)
+constexpr const char *kCliName = "trellis-cli.exe";
+#else
+constexpr const char *kCliName = "trellis-cli";
+#endif
 
-bool is_file(const std::filesystem::path &p) {
-    std::error_code ec;
-    return std::filesystem::is_regular_file(p, ec);
-}
-
-// <dir>/<base>_f16.gguf, <base>_f32.gguf or <base>.gguf, whichever exists first.
-std::string discover(const std::filesystem::path &dir, const char *base) {
-    for (const char *suffix : {"_f16.gguf", "_f32.gguf", ".gguf"}) {
-        std::filesystem::path p = dir / (std::string(base) + suffix);
-        if (is_file(p)) return p.string();
+// The folder this plugin was loaded from: the installer puts trellis-cli and its libraries beside it.
+fs::path plugin_folder() {
+#if defined(_WIN32)
+    HMODULE self = nullptr;
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(&plugin_folder), &self)) {
+        wchar_t buf[MAX_PATH * 4];
+        const DWORD n = GetModuleFileNameW(self, buf, static_cast<DWORD>(sizeof(buf) / sizeof(buf[0])));
+        if (n > 0 && n < sizeof(buf) / sizeof(buf[0])) return fs::path(std::wstring(buf, n)).parent_path();
     }
+#else
+    Dl_info info;
+    if (dladdr(reinterpret_cast<void *>(&plugin_folder), &info) && info.dli_fname) return fs::path(info.dli_fname).parent_path();
+#endif
     return {};
 }
 
-void set_env(const char *name, const char *value) {
-#if defined(_WIN32)
-    _putenv_s(name, value ? value : "");
-#else
-    if (value) setenv(name, value, 1);
-    else unsetenv(name);
-#endif
+bool is_file(const fs::path &p) {
+    std::error_code ec;
+    return fs::is_regular_file(p, ec);
 }
 
-// Sets TRELLIS2_N_THREADS for the lifetime of the guard (g_t2_mu must be held), restoring the
-// previous value afterwards. threads <= 0 leaves the environment alone.
-struct ThreadsEnv {
-    explicit ThreadsEnv(int threads) {
-        if (threads <= 0) return;
-        active = true;
-        if (const char *old = std::getenv("TRELLIS2_N_THREADS")) {
-            had_old = true;
-            old_value = old;
-        }
-        set_env("TRELLIS2_N_THREADS", std::to_string(threads).c_str());
-    }
-    ~ThreadsEnv() {
-        if (!active) return;
-        set_env("TRELLIS2_N_THREADS", had_old ? old_value.c_str() : nullptr);
-    }
-    ThreadsEnv(const ThreadsEnv &) = delete;
-    ThreadsEnv &operator=(const ThreadsEnv &) = delete;
+std::string find_cli(const std::string &configured) {
+    if (!configured.empty()) return is_file(configured) ? configured : std::string();
+    if (const char *env = std::getenv("AGENT_TRELLIS_CLI"); env && *env) return is_file(env) ? std::string(env) : std::string();
+    const fs::path beside = plugin_folder() / kCliName;
+    return is_file(beside) ? beside.string() : std::string();
+}
 
-    bool active = false;
-    bool had_old = false;
-    std::string old_value;
+struct RunResult {
+    int exit_code = -1;
+    bool cancelled = false;
+    std::string tail; // the end of what the program printed, for an error message
 };
 
-std::mutex g_t2_mu;
+void keep_tail(std::string &tail, const char *data, size_t n) {
+    tail.append(data, n);
+    if (tail.size() > 4096) tail.erase(0, tail.size() - 4096);
+}
+
+bool is_cancelled(const agent_request *req) { return req->cancel && *req->cancel; }
+
+#if defined(_WIN32)
+
+std::wstring widen(const std::string &s) {
+    if (s.empty()) return {};
+    const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+    std::wstring w(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
+    return w;
+}
+
+// One argument as the Windows command line wants it (CommandLineToArgvW rules).
+void append_quoted(std::wstring &line, const std::wstring &arg) {
+    if (!line.empty()) line += L' ';
+    if (!arg.empty() && arg.find_first_of(L" \t\n\v\"") == std::wstring::npos) {
+        line += arg;
+        return;
+    }
+    line += L'"';
+    size_t backslashes = 0;
+    for (wchar_t c : arg) {
+        if (c == L'\\') {
+            ++backslashes;
+            continue;
+        }
+        if (c == L'"') line.append(backslashes * 2 + 1, L'\\');
+        else line.append(backslashes, L'\\');
+        backslashes = 0;
+        line += c;
+    }
+    line.append(backslashes * 2, L'\\');
+    line += L'"';
+}
+
+RunResult run_program(const std::string &exe, const std::vector<std::string> &args, const agent_request *req) {
+    RunResult r;
+    std::wstring line;
+    append_quoted(line, widen(exe));
+    for (const std::string &a : args) append_quoted(line, widen(a));
+
+    SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+    HANDLE read_end = nullptr, write_end = nullptr;
+    if (!CreatePipe(&read_end, &write_end, &sa, 0)) {
+        r.tail = "could not create a pipe";
+        return r;
+    }
+    SetHandleInformation(read_end, HANDLE_FLAG_INHERIT, 0);
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = write_end;
+    si.hStdError = write_end;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    PROCESS_INFORMATION pi{};
+    const std::wstring dir = widen(fs::path(exe).parent_path().string());
+    if (!CreateProcessW(nullptr, line.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, dir.empty() ? nullptr : dir.c_str(), &si, &pi)) {
+        r.tail = "could not start " + exe + " (error " + std::to_string(GetLastError()) + ")";
+        CloseHandle(read_end);
+        CloseHandle(write_end);
+        return r;
+    }
+    CloseHandle(write_end);
+    char buf[4096];
+    for (;;) {
+        DWORD avail = 0;
+        if (PeekNamedPipe(read_end, nullptr, 0, nullptr, &avail, nullptr) && avail > 0) {
+            DWORD got = 0;
+            if (ReadFile(read_end, buf, sizeof(buf), &got, nullptr) && got > 0) keep_tail(r.tail, buf, got);
+            continue;
+        }
+        if (is_cancelled(req)) {
+            TerminateProcess(pi.hProcess, 1);
+            r.cancelled = true;
+            break;
+        }
+        if (WaitForSingleObject(pi.hProcess, 100) == WAIT_OBJECT_0) {
+            while (PeekNamedPipe(read_end, nullptr, 0, nullptr, &avail, nullptr) && avail > 0) {
+                DWORD got = 0;
+                if (!ReadFile(read_end, buf, sizeof(buf), &got, nullptr) || got == 0) break;
+                keep_tail(r.tail, buf, got);
+            }
+            break;
+        }
+    }
+    DWORD code = 1;
+    WaitForSingleObject(pi.hProcess, 5000);
+    GetExitCodeProcess(pi.hProcess, &code);
+    r.exit_code = static_cast<int>(code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    CloseHandle(read_end);
+    return r;
+}
+
+#else
+
+RunResult run_program(const std::string &exe, const std::vector<std::string> &args, const agent_request *req) {
+    RunResult r;
+    int fds[2];
+    if (pipe(fds) != 0) {
+        r.tail = "could not create a pipe";
+        return r;
+    }
+    std::vector<std::string> argv_store;
+    argv_store.push_back(exe);
+    argv_store.insert(argv_store.end(), args.begin(), args.end());
+    std::vector<char *> argv;
+    for (std::string &a : argv_store) argv.push_back(a.data());
+    argv.push_back(nullptr);
+
+    const pid_t pid = fork();
+    if (pid < 0) {
+        r.tail = "could not start " + exe;
+        close(fds[0]);
+        close(fds[1]);
+        return r;
+    }
+    if (pid == 0) {
+        dup2(fds[1], STDOUT_FILENO);
+        dup2(fds[1], STDERR_FILENO);
+        close(fds[0]);
+        close(fds[1]);
+        const std::string dir = fs::path(exe).parent_path().string();
+        if (!dir.empty() && chdir(dir.c_str()) != 0) _exit(126);
+        execv(exe.c_str(), argv.data());
+        _exit(127);
+    }
+    close(fds[1]);
+    char buf[4096];
+    for (;;) {
+        if (is_cancelled(req)) {
+            kill(pid, SIGTERM);
+            r.cancelled = true;
+            break;
+        }
+        pollfd pfd{fds[0], POLLIN, 0};
+        const int rc = poll(&pfd, 1, 100);
+        if (rc > 0) {
+            const ssize_t n = read(fds[0], buf, sizeof(buf));
+            if (n > 0) keep_tail(r.tail, buf, static_cast<size_t>(n));
+            else if (n == 0) break; // the program closed its output: it is ending
+        }
+    }
+    close(fds[0]);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    r.exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    return r;
+}
+
+#endif
 
 // ------------------------------------------------------------------ instance
 
 struct Instance {
-    t2_pipeline *pipeline = nullptr;
+    std::string cli;
+    std::string models;
     GenSettings defaults;
-    int threads = 0;
     uint64_t counter = 0;
 
     // Response storage, valid until free_response() / the next run().
@@ -197,13 +330,7 @@ struct Instance {
     std::string text;
     agent_part parts[2]{};
     std::string error;
-
-    ~Instance() {
-        if (pipeline) t2_pipeline_free(pipeline);
-    }
 };
-
-// ------------------------------------------------------------------ ABI functions
 
 int32_t t2_engine_create(agent_str config_json, void **out_instance, char *err, size_t err_cap) {
     simdjson::ondemand::parser parser;
@@ -214,77 +341,36 @@ int32_t t2_engine_create(agent_str config_json, void **out_instance, char *err, 
         std::snprintf(err, err_cap, "trellis: invalid config JSON");
         return AGENT_ERR_INVALID_CONFIG;
     }
-
-    // "model" is the directory holding the GGUFs; options.<slot> overrides (or, with "", disables)
-    // individual files. Relative option paths are resolved against the model directory.
-    std::string model;
+    std::string model, cli;
     json_string(cfg, "model", model);
-    std::string paths[kNumSlots];
-    bool explicit_slot[kNumSlots] = {};
     GenSettings defaults;
-    int threads = 0;
     simdjson::ondemand::object options;
     if (!cfg["options"].get_object().get(options)) {
-        for (size_t i = 0; i < kNumSlots; ++i) explicit_slot[i] = json_string(options, kSlots[i].option, paths[i]);
-        threads = json_number<int>(options, "threads", 0);
+        json_string(options, "cli", cli);
         std::string error;
         if (!apply_gen_settings(options, defaults, error)) {
             std::snprintf(err, err_cap, "%s", error.c_str());
             return AGENT_ERR_INVALID_CONFIG;
         }
     }
-
-    const std::filesystem::path dir(model);
-    if (!model.empty()) {
-        std::error_code ec;
-        if (!std::filesystem::is_directory(dir, ec)) {
-            std::snprintf(err, err_cap, "trellis: model directory not found: %s", model.c_str());
-            return AGENT_ERR_MODEL_LOAD_FAILED;
-        }
+    if (model.empty()) {
+        std::snprintf(err, err_cap, "trellis: config.model (the folder with the TRELLIS.2 GGUF files) is required");
+        return AGENT_ERR_INVALID_CONFIG;
     }
-    for (size_t i = 0; i < kNumSlots; ++i) {
-        if (explicit_slot[i]) {
-            if (!paths[i].empty() && std::filesystem::path(paths[i]).is_relative() && !model.empty()) paths[i] = (dir / paths[i]).string();
-        } else if (!model.empty()) {
-            paths[i] = discover(dir, kSlots[i].base);
-        }
-        if (kSlots[i].required && paths[i].empty()) {
-            if (model.empty() && !explicit_slot[i]) {
-                std::snprintf(err, err_cap, "trellis: config.model (a directory with the TRELLIS.2 GGUFs) or options.%s is required",
-                              kSlots[i].option);
-                return AGENT_ERR_INVALID_CONFIG;
-            }
-            if (model.empty()) std::snprintf(err, err_cap, "trellis: options.%s is empty", kSlots[i].option);
-            else
-                std::snprintf(err, err_cap, "trellis: model file not found: %s",
-                              (dir / (std::string(kSlots[i].base) + "_f16.gguf")).string().c_str());
-            return AGENT_ERR_MODEL_LOAD_FAILED;
-        }
-        if (!paths[i].empty() && !is_file(paths[i])) {
-            std::snprintf(err, err_cap, "trellis: model file not found: %s", paths[i].c_str());
-            return AGENT_ERR_MODEL_LOAD_FAILED;
-        }
-    }
-
-    auto c_or_null = [](const std::string &s) { return s.empty() ? nullptr : s.c_str(); };
-    char load_err[512] = {0};
-    t2_pipeline *pipeline = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(g_t2_mu);
-        ThreadsEnv env(threads);
-        pipeline = t2_pipeline_load(c_or_null(paths[0]), c_or_null(paths[1]), c_or_null(paths[2]), c_or_null(paths[3]), c_or_null(paths[4]),
-                                    c_or_null(paths[5]), c_or_null(paths[6]), c_or_null(paths[7]), c_or_null(paths[8]), c_or_null(paths[9]),
-                                    0, load_err, static_cast<int>(sizeof(load_err)));
-    }
-    if (!pipeline) {
-        std::snprintf(err, err_cap, "trellis: failed to load the pipeline%s%s", load_err[0] ? ": " : "", load_err);
+    std::error_code ec;
+    if (!fs::is_directory(model, ec)) {
+        std::snprintf(err, err_cap, "trellis: model directory not found: %s", model.c_str());
         return AGENT_ERR_MODEL_LOAD_FAILED;
     }
-
+    const std::string program = find_cli(cli);
+    if (program.empty()) {
+        std::snprintf(err, err_cap, "trellis: %s not found next to the plugin (add the engine with `agent engine pull trellis`; options.cli or AGENT_TRELLIS_CLI name another)", kCliName);
+        return AGENT_ERR_INIT_FAILED;
+    }
     auto *inst = new Instance();
-    inst->pipeline = pipeline;
+    inst->cli = program;
+    inst->models = model;
     inst->defaults = defaults;
-    inst->threads = threads;
     *out_instance = inst;
     return AGENT_OK;
 }
@@ -313,41 +399,22 @@ const agent_part *last_image_part(const agent_message *m) {
     return src;
 }
 
-bool read_file(const std::string &path, std::string &out) {
-    std::FILE *f = std::fopen(path.c_str(), "rb");
-    if (!f) return false;
-    char buf[1 << 16];
-    size_t n = 0;
-    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
-    const bool ok = !std::ferror(f);
-    std::fclose(f);
-    return ok;
-}
-
-// <output_dir>/trellis-<unix ms>-<n>.glb, skipping names that already exist.
-std::string unique_glb_path(Instance *inst, const std::string &dir) {
+// <output_dir>/trellis-<unix ms>-<n><ext>, skipping names that already exist.
+std::string unique_path(Instance *inst, const std::string &dir, const char *stem, const char *ext) {
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    std::filesystem::path base(dir);
+    fs::path base(dir);
     for (;;) {
-        std::filesystem::path p = base / ("trellis-" + std::to_string(ms) + "-" + std::to_string(inst->counter++) + ".glb");
+        fs::path p = base / (std::string(stem) + std::to_string(ms) + "-" + std::to_string(inst->counter++) + ext);
         std::error_code ec;
-        if (!std::filesystem::exists(p, ec)) return p.string();
+        if (!fs::exists(p, ec)) return p.string();
     }
 }
 
-// Forwards the flow samplers' per-step progress (stages with a step count) to on_progress; the
-// counter restarts for every sampling phase (sparse structure, shape SLAT, HR SLAT, texture).
-struct ProgressCtx {
-    const agent_request *req;
-};
-
-void on_t2_progress(void *user, int /*stage*/, int step, int total) {
-    const agent_request *req = static_cast<ProgressCtx *>(user)->req;
-    if (req->on_progress && total > 0 && step >= 0)
-        req->on_progress(req->user_data, static_cast<uint64_t>(step), static_cast<uint64_t>(total));
+std::string number_text(float v) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%g", static_cast<double>(v));
+    return buf;
 }
-
-bool cancelled(const agent_request *req) { return req->cancel && *req->cancel; }
 
 int32_t t2_engine_run(void *instance, const agent_request *req, agent_response *resp) {
     auto *inst = static_cast<Instance *>(instance);
@@ -357,7 +424,6 @@ int32_t t2_engine_run(void *instance, const agent_request *req, agent_response *
 
     const agent_part *image = last_image_part(last_user_message(req));
     if (!image) return fail(inst, AGENT_ERR_INVALID_CONFIG, "trellis: MESH_GEN needs an image FILE or BYTES part in the last user message");
-
     const std::string output_dir(sv(req->output_dir));
     if (output_dir.empty()) return fail(inst, AGENT_ERR_INVALID_CONFIG, "trellis: request output_dir is required");
 
@@ -372,82 +438,66 @@ int32_t t2_engine_run(void *instance, const agent_request *req, agent_response *
         std::string error;
         if (!apply_gen_settings(params, g, error)) return fail(inst, AGENT_ERR_INVALID_CONFIG, error);
     }
-
-    std::string file_bytes;
-    const void *bytes = image->data;
-    size_t size = image->size;
-    if (image->kind == AGENT_PART_FILE) {
-        const std::string path(sv(image->path));
-        if (!read_file(path, file_bytes)) return fail(inst, AGENT_ERR_FILESYSTEM, "trellis: could not read image " + path);
-        bytes = file_bytes.data();
-        size = file_bytes.size();
-    }
-    if (!bytes || size == 0) return fail(inst, AGENT_ERR_INVALID_CONFIG, "trellis: the input image is empty");
-    if (size > static_cast<size_t>(INT_MAX)) return fail(inst, AGENT_ERR_INVALID_CONFIG, "trellis: the input image is too large");
-
-    uint64_t seed = 0;
-    if (g.seed < 0) {
-        std::random_device rd;
-        seed = (static_cast<uint64_t>(rd()) << 32) | rd();
-    } else {
-        seed = static_cast<uint64_t>(g.seed);
-    }
-
-    if (cancelled(req)) return fail(inst, AGENT_ERR_CANCELLED, "trellis: cancelled");
-
-    ProgressCtx progress{req};
-    char gen_err[512] = {0};
-    t2_mesh_result *mesh = nullptr;
-    uint8_t *glb = nullptr;
-    int glb_len = 0;
-    int n_verts = 0, n_tris = 0;
-    bool was_cancelled = false;
-    {
-        std::lock_guard<std::mutex> lock(g_t2_mu);
-        ThreadsEnv env(inst->threads);
-        // trellis2.cpp has no cancellation hook inside generation: the flag is honoured before
-        // starting, between generation and GLB export, and after export.
-        mesh = t2_generate(inst->pipeline, bytes, static_cast<int>(size), g.pipeline, g.background, seed, g.steps, g.guidance,
-                           g.texture_steps, on_t2_progress, &progress, nullptr, nullptr, gen_err, static_cast<int>(sizeof(gen_err)));
-        if (mesh && cancelled(req)) {
-            was_cancelled = true;
-        } else if (mesh) {
-            n_verts = t2_mesh_n_verts(mesh);
-            n_tris = t2_mesh_n_tris(mesh);
-            glb = t2_bake_glb(t2_mesh_verts(mesh), n_verts, t2_mesh_tris(mesh), n_tris, t2_mesh_pbr(mesh), g.texture_size,
-                              g.component_filter, &glb_len, gen_err, static_cast<int>(sizeof(gen_err)));
-        }
-    }
-    if (mesh) t2_mesh_free(mesh);
-    if (was_cancelled || (glb && cancelled(req))) {
-        if (glb) t2_free_buffer(glb);
-        return fail(inst, AGENT_ERR_CANCELLED, "trellis: cancelled");
-    }
-    if (!mesh) return fail(inst, AGENT_ERR_DECODE_FAILED, std::string("trellis: generation failed") + (gen_err[0] ? ": " : "") + gen_err);
-    if (!glb || glb_len <= 0) {
-        if (glb) t2_free_buffer(glb);
-        return fail(inst, AGENT_ERR_DECODE_FAILED, std::string("trellis: GLB export failed") + (gen_err[0] ? ": " : "") + gen_err);
-    }
+    if (is_cancelled(req)) return fail(inst, AGENT_ERR_CANCELLED, "trellis: cancelled");
 
     std::error_code ec;
-    std::filesystem::create_directories(output_dir, ec);
-    std::string path = unique_glb_path(inst, output_dir);
-    std::FILE *f = std::fopen(path.c_str(), "wb");
-    bool written = false;
-    if (f) {
-        written = std::fwrite(glb, 1, static_cast<size_t>(glb_len), f) == static_cast<size_t>(glb_len);
-        written = (std::fclose(f) == 0) && written;
+    fs::create_directories(output_dir, ec);
+
+    // The input: a FILE part is used where it is; BYTES are written next to the result for the length of the run.
+    std::string input;
+    bool temp_input = false;
+    if (image->kind == AGENT_PART_FILE) {
+        input = std::string(sv(image->path));
+        if (!is_file(input)) return fail(inst, AGENT_ERR_FILESYSTEM, "trellis: could not read image " + input);
+    } else {
+        if (!image->data || image->size == 0) return fail(inst, AGENT_ERR_INVALID_CONFIG, "trellis: the input image is empty");
+        input = unique_path(inst, output_dir, "trellis-input-", ".img");
+        std::FILE *f = std::fopen(input.c_str(), "wb");
+        const bool ok = f && std::fwrite(image->data, 1, image->size, f) == image->size;
+        if (f) std::fclose(f);
+        if (!ok) return fail(inst, AGENT_ERR_FILESYSTEM, "trellis: could not write " + input);
+        temp_input = true;
     }
-    t2_free_buffer(glb);
-    if (!written) {
-        std::filesystem::remove(path, ec);
-        return fail(inst, AGENT_ERR_FILESYSTEM, "trellis: could not write " + path);
+
+    const std::string output = unique_path(inst, output_dir, "trellis-", ".glb");
+    std::vector<std::string> args = {"--image", input, "--output", output, "--models", inst->models, "--res", std::to_string(g.resolution)};
+    auto add = [&](const char *flag, const std::string &value) {
+        args.push_back(flag);
+        args.push_back(value);
+    };
+    if (g.seed >= 0) add("--seed", std::to_string(g.seed));
+    if (g.steps > 0) add("--steps", std::to_string(g.steps));
+    if (g.guidance >= 0) add("--gss", number_text(g.guidance));
+    if (g.guidance_shape >= 0) add("--gsh", number_text(g.guidance_shape));
+    if (g.background != "auto") add("--bg-removal", g.background);
+    if (!g.texture) args.push_back("--no-texture");
+    if (!g.xatlas) args.push_back("--box-uv");
+    if (g.faces > 0) add("--faces", std::to_string(g.faces));
+    if (g.atlas > 0) add("--atlas", std::to_string(g.atlas));
+    if (g.texture_resolution > 0) add("--tex-res", std::to_string(g.texture_resolution));
+    if (g.normal_map) add("--normal-map", "on");
+    add("--gpu", std::to_string(g.gpu));
+    if (!g.backend.empty()) add("--backend", g.backend);
+    if (g.threads > 0) add("--threads", std::to_string(g.threads));
+
+    const RunResult run = run_program(inst->cli, args, req);
+    if (temp_input) fs::remove(input, ec);
+    if (run.cancelled || is_cancelled(req)) {
+        fs::remove(output, ec);
+        return fail(inst, AGENT_ERR_CANCELLED, "trellis: cancelled");
+    }
+    if (run.exit_code != 0 || !is_file(output)) {
+        fs::remove(output, ec);
+        std::string tail = run.tail;
+        while (!tail.empty() && (tail.back() == '\n' || tail.back() == '\r' || tail.back() == ' ')) tail.pop_back();
+        return fail(inst, AGENT_ERR_DECODE_FAILED,
+                    "trellis: generation failed (trellis-cli exit " + std::to_string(run.exit_code) + ")" + (tail.empty() ? "" : ": " + tail));
     }
     if (req->on_progress) req->on_progress(req->user_data, 1, 1);
 
-    inst->path = std::move(path);
-    inst->text =
-        "generated 3D model: " + inst->path + " (" + std::to_string(n_verts) + " vertices, " + std::to_string(n_tris) + " triangles)";
+    const uintmax_t bytes = fs::file_size(output, ec);
+    inst->path = output;
+    inst->text = "generated 3D model: " + inst->path + " (" + std::to_string(ec ? 0 : static_cast<unsigned long long>(bytes / 1024)) + " KiB)";
     inst->parts[0] = agent_part{};
     inst->parts[0].kind = AGENT_PART_FILE;
     inst->parts[0].path = to_c(inst->path);
@@ -478,9 +528,9 @@ const agent_engine_v1 kTrellisEngine = {
     AGENT_ENGINE_ABI_VERSION,
     sizeof(agent_engine_v1),
     "trellis",
-    "0.1",
+    "0.2",
     AGENT_CAP_MESH_GEN,
-    0, // t2_generate is not thread-safe per pipeline; the host serializes run()
+    0, // one program runs at a time on the card; the host serializes run()
     t2_engine_create,
     t2_engine_destroy,
     t2_engine_run,

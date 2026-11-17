@@ -17,9 +17,9 @@ on:
         type: boolean
         default: false
       engines:
-        description: "Engine plugins to build, comma separated: llama,onnx,audiocpp. They are thin: compiled against the upstream releases pinned in scripts/components.tsv (sdcpp and trellis have no upstream library: see engines-extra.yml)"
+        description: "Engine plugins to build, comma separated: llama,onnx,audiocpp,sdcpp,trellis. They are thin: compiled against the upstream releases pinned in scripts/components.tsv (trellis needs no library: it runs the release's trellis-cli)"
         type: string
-        default: "llama,onnx,audiocpp"
+        default: "llama,onnx,audiocpp,sdcpp,trellis"
 
 
 permissions:
@@ -86,8 +86,8 @@ jobs:
           # versions: only the plugins are built here, not those projects. A plugin whose upstream has no build for this system is skipped.
           export AGENT_LIST="$PWD/scripts/components.tsv" AGENT_BACKEND=cpu
           if [ "${{ matrix.os_name }}-${{ matrix.arch }}" = "macos-aarch64" ]; then export AGENT_BACKEND=metal; fi
-          eng=",${{ inputs.engines || 'llama,onnx,audiocpp' }},"
-          for e in llama audiocpp; do
+          eng=",${{ inputs.engines || 'llama,onnx,audiocpp,sdcpp,trellis' }},"
+          for e in llama audiocpp sdcpp; do
             case "$eng" in *",$e,"*) ;; *) continue ;; esac
             if [ "${{ matrix.os_name }}" = "windows" ]; then
               powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1 fetch "$e" "$PWD/build/upstream/$e" || { eng="$(echo "$eng" | sed "s/,$e,/,/")"; echo "::notice::$e has no upstream build for this system"; }
@@ -108,9 +108,10 @@ jobs:
           if [ "${{ matrix.os_name }}" = "macos" ]; then extra="-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR"; fi
           [ "$(on llama)" = ON ] && extra="$extra -DAGENT_LLAMA_PREBUILT=$PWD/build/upstream/llama"
           [ "$(on audiocpp)" = ON ] && extra="$extra -DAGENT_AUDIOCPP_PREBUILT=$PWD/build/upstream/audiocpp"
+          [ "$(on sdcpp)" = ON ] && extra="$extra -DAGENT_SDCPP_PREBUILT=$PWD/build/upstream/sdcpp"
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DAGENT_BUILD_CLI=ON -DAGENT_BUILD_EXAMPLES=OFF -DAGENT_ENGINE_LLAMA=$(on llama) -DAGENT_ENGINE_ONNX=$(on onnx) \
-            -DAGENT_ENGINE_AUDIOCPP=$(on audiocpp) -DAGENT_ENGINE_SDCPP=OFF -DAGENT_ENGINE_TRELLIS=OFF $extra
+            -DAGENT_ENGINE_AUDIOCPP=$(on audiocpp) -DAGENT_ENGINE_SDCPP=$(on sdcpp) -DAGENT_ENGINE_TRELLIS=$(on trellis) $extra
 
       - name: Build
         run: cmake --build build --config Release
@@ -131,7 +132,7 @@ jobs:
           v="${{ steps.version.outputs.value }}"
           extra=""
           if [ "${{ matrix.os_name }}" = "windows" ]; then extra="--openssl-dir $VCPKG_INSTALLATION_ROOT/installed/${{ matrix.triplet }}/bin --openssl-suffix -${{ matrix.dll }}"; fi
-          bash scripts/package-release.sh --build-dir build --out-dir assets --tag "$v" --os ${{ matrix.os_name }} --arch ${{ matrix.arch }} --plugin-only llama,audiocpp,onnx \
+          bash scripts/package-release.sh --build-dir build --out-dir assets --tag "$v" --os ${{ matrix.os_name }} --arch ${{ matrix.arch }} --plugin-only llama,audiocpp,onnx,sdcpp,trellis \
             --lib-ext ${{ matrix.lib_ext }} --exe-ext "${{ matrix.exe_ext }}" $extra
           rm -f assets/SHA256SUMS
           ls -la assets
@@ -210,11 +211,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: ubuntu-24.04,     os_name: linux,   arch: x86_64,  engines: "llama,onnx,audiocpp", runtimes: "bun,uv,node,pnpm,nub" }
+          - { runner: ubuntu-24.04,     os_name: linux,   arch: x86_64,  engines: "llama,onnx,audiocpp,sdcpp,trellis", runtimes: "bun,uv,node,pnpm,nub" }
           - { runner: ubuntu-24.04-arm, os_name: linux,   arch: aarch64, engines: "llama,onnx",          runtimes: "bun,uv,node,pnpm,nub" }
-          - { runner: windows-2022,     os_name: windows, arch: x86_64,  engines: "llama,onnx,audiocpp", runtimes: "bun,uv,node,pnpm,nub" }
+          - { runner: windows-2022,     os_name: windows, arch: x86_64,  engines: "llama,onnx,audiocpp,sdcpp,trellis", runtimes: "bun,uv,node,pnpm,nub" }
           - { runner: windows-11-arm,   os_name: windows, arch: aarch64, engines: "llama,onnx",          runtimes: "uv,node,pnpm,nub" }
-          - { runner: macos-15,         os_name: macos,   arch: aarch64, engines: "llama,onnx,audiocpp", runtimes: "bun,uv,node,pnpm,nub" }
+          - { runner: macos-15,         os_name: macos,   arch: aarch64, engines: "llama,onnx,audiocpp,sdcpp", runtimes: "bun,uv,node,pnpm,nub" }
           - { runner: macos-15-intel,   os_name: macos,   arch: x86_64,  engines: "llama,audiocpp",       runtimes: "bun,uv,node,pnpm,nub" }
     steps:
       - uses: actions/checkout@v4
