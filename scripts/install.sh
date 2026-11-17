@@ -573,7 +573,9 @@ do_fetch() {
         case "$st" in find:*) st=0 ;; esac # whole archive: the header folders are wanted too
         unpack "$TMP/$file" "$d" "$st"
         printf '  %s fetched %s (%s)\n' "$T$R" "$file" "$v"
+        : >"$TMP/fetched"
     done
+    [ -e "$TMP/fetched" ] || die "$n has no upstream part to fetch in scripts/components.tsv."
 }
 
 case "$cmd" in

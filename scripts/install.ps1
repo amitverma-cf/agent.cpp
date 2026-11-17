@@ -409,6 +409,7 @@ function Invoke-AgentInstaller([string[]] $Argv) {
         $b = Pick-Backend 'engine' $n
         if (-not $b) { Fail "$n has no build for $os $arch." }
         New-Item -ItemType Directory -Path $d -Force | Out-Null
+        $fetched = $false
         foreach ($r in (Get-Rows 'engine' $n | Where-Object { ($_.Backend -eq 'any' -or $_.Backend -eq $b) -and -not $_.Url.StartsWith('@RELEASE@') })) {
             $file = $r.Url.Substring($r.Url.LastIndexOf('/') + 1)
             $local = Join-Path $tmp $file
@@ -418,9 +419,11 @@ function Invoke-AgentInstaller([string[]] $Argv) {
             Expand-Component $local $d $st
             Remove-Item -LiteralPath $local -Force
             Step "fetched $file ($($r.Version))"
+            $fetched = $true
         }
         Remove-Item -LiteralPath $script:ROOT -Recurse -Force -ErrorAction SilentlyContinue
         $script:tmp = $null
+        if (-not $fetched) { Fail "$n has no upstream part to fetch in scripts/components.tsv." }
     }
 
     function Do-Add {
