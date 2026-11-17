@@ -1,22 +1,22 @@
-# agent.cpp components, pinned for release dev. Written by scripts/pin-components.py: do not edit by hand.
-# tag dev
+# agent.cpp components, pinned for release v1.2.0. Written by scripts/pin-components.py: do not edit by hand.
+# tag v1.2.0
 # kind	name	os	arch	backend	version	sha256	strip	dest	url
-core	agent	linux	x86_64	any	dev	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-linux-x86_64.tar.gz
-engine	llama	linux	x86_64	any	dev	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-linux-x86_64.tar.gz
-engine	audiocpp	linux	x86_64	any	dev	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-linux-x86_64.tar.gz
-engine	onnx	linux	x86_64	any	dev	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-linux-x86_64.tar.gz
-core	agent	linux	aarch64	any	dev	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-linux-aarch64.tar.gz
-engine	llama	linux	aarch64	any	dev	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-linux-aarch64.tar.gz
-engine	audiocpp	linux	aarch64	any	dev	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-linux-aarch64.tar.gz
-engine	onnx	linux	aarch64	any	dev	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-linux-aarch64.tar.gz
-core	agent	windows	x86_64	any	dev	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-windows-x86_64.zip
-engine	llama	windows	x86_64	any	dev	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-windows-x86_64.zip
-engine	audiocpp	windows	x86_64	any	dev	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-windows-x86_64.zip
-engine	onnx	windows	x86_64	any	dev	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-windows-x86_64.zip
-core	agent	windows	aarch64	any	dev	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-windows-aarch64.zip
-engine	llama	windows	aarch64	any	dev	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-windows-aarch64.zip
-engine	audiocpp	windows	aarch64	any	dev	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-windows-aarch64.zip
-engine	onnx	windows	aarch64	any	dev	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-windows-aarch64.zip
+core	agent	linux	x86_64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-linux-x86_64.tar.gz
+engine	llama	linux	x86_64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-linux-x86_64.tar.gz
+engine	audiocpp	linux	x86_64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-linux-x86_64.tar.gz
+engine	onnx	linux	x86_64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-linux-x86_64.tar.gz
+core	agent	linux	aarch64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-linux-aarch64.tar.gz
+engine	llama	linux	aarch64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-linux-aarch64.tar.gz
+engine	audiocpp	linux	aarch64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-linux-aarch64.tar.gz
+engine	onnx	linux	aarch64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-linux-aarch64.tar.gz
+core	agent	windows	x86_64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-windows-x86_64.zip
+engine	llama	windows	x86_64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-windows-x86_64.zip
+engine	audiocpp	windows	x86_64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-windows-x86_64.zip
+engine	onnx	windows	x86_64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-windows-x86_64.zip
+core	agent	windows	aarch64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-windows-aarch64.zip
+engine	llama	windows	aarch64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-windows-aarch64.zip
+engine	audiocpp	windows	aarch64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-windows-aarch64.zip
+engine	onnx	windows	aarch64	any	v1.2.0	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-windows-aarch64.zip
 engine	sdcpp	linux	x86_64	cpu	37bc88b	faf619ce21435677477eba61488ef45db0b9356baa567075d67d2542a77ff02a	0	.	https://github.com/amitverma-cf/agent.cpp/releases/download/engine-sdcpp-37bc88b/agent-engine-sdcpp-37bc88b-linux-x86_64.tar.gz
 engine	sdcpp	linux	aarch64	cpu	37bc88b	e91bff817a03ab41ad02776726ba8af458fa2874b6d1ea41aa59f07a72694e86	0	.	https://github.com/amitverma-cf/agent.cpp/releases/download/engine-sdcpp-37bc88b/agent-engine-sdcpp-37bc88b-linux-aarch64.tar.gz
 engine	sdcpp	windows	x86_64	cpu	37bc88b	70d70e04136f301d7c0d11182544cc01d4cd4de1044ee2ae0cddba8951ae1a92	0	.	https://github.com/amitverma-cf/agent.cpp/releases/download/engine-sdcpp-37bc88b/agent-engine-sdcpp-37bc88b-windows-x86_64.zip
