@@ -138,8 +138,7 @@ void tui_submit_later(std::string_view line);
 
 // The whole chat screen as plain text at a given terminal size, with the host as it is (for tests of the responsive layout).
 std::string render_chat_text(const TuiHost &host, int width, int height);
-// The same, after each string of `steps` was typed as a terminal sends it ("hello
-", "[B", "" for Ctrl+O), waiting for the
+// The same, after each string of `steps` was typed as a terminal sends it (text and Enter, an arrow key, Ctrl+O), waiting for the
 // answer each one started and for the messages queued behind it. For tests of what happens over time.
 std::string render_chat_session(const TuiHost &host, int width, int height, std::span<const std::string> steps);
 // The markdown renderer on its own, as plain text laid out for `width` columns (for tests).
