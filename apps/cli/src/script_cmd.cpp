@@ -125,7 +125,8 @@ int cmd_setup(const CommandLine &cl, Context &ctx) { return run_install_script(c
 
 int cmd_update(const CommandLine &cl, Context &ctx) {
     std::vector<std::string> args = forwarded_args(cl);
-    return run_install_script(ctx, "update", args, !cl.has("check"));
+    // The installer renames the running program aside instead of waiting for it to exit, so the update runs in this window.
+    return run_install_script(ctx, "update", args, false);
 }
 
 int cmd_uninstall(const CommandLine &cl, Context &ctx) { return run_install_script(ctx, "uninstall", forwarded_args(cl), true); }

@@ -1,5 +1,6 @@
 #include "cli_core.hpp"
 
+#include "model_detect.hpp"
 #include "speed.hpp"
 
 #include <agent-cpp/engine_abi.h>
@@ -989,8 +990,12 @@ Result<ModelRef> resolve_model(std::string_view spec, std::string_view default_m
     std::string_view want = trim(spec);
     if (want.empty()) want = trim(default_model);
     if (want.empty()) {
-        for (const auto &m : catalog)
-            if (engine_for_model(m.path) == "llama") return ok(m);
+        // The first model that can hold a conversation: a speech, image or embedding model in the same folder is not one.
+        for (const auto &m : catalog) {
+            if (engine_for_model(m.path) != "llama") continue;
+            const ModelKind kind = detect_model(m.path, "", std::filesystem::path(m.path).filename().string(), false);
+            if (kind.engine == "llama" && kind.task == "text_gen") return ok(m);
+        }
         return fail<ModelRef>(ErrorCode::InvalidConfig, "no model yet. Run `agent setup` (it suggests models that fit this machine and "
                                                         "downloads one), or `agent model pull <name>`, or pass --model PATH");
     }

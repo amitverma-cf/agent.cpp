@@ -330,6 +330,14 @@ install_component() { # kind name backend
         printf '%s\n' "$b $v $s $st $d $u"
     done >"$TMP/rows.$$"
     [ -s "$TMP/rows.$$" ] || die "$name has no build for $OS $ARCH."
+    # Already installed from these very rows (same backend, versions and checksums): nothing to download. AGENT_FORCE=1 downloads again.
+    want_ver="$(awk '{printf "%s ", $2}' "$TMP/rows.$$")"; want_sha="$(awk '{printf "%s ", $3}' "$TMP/rows.$$")"
+    if [ "$kind" != core ] && [ -z "${AGENT_FORCE:-}" ] && [ -r "$final/.pin" ] && [ "$(sed -n 1p "$final/.pin")" = "$bk" ] &&
+        [ "$(sed -n 2p "$final/.pin")" = "$want_ver" ] && [ "$(sed -n 3p "$final/.pin")" = "$want_sha" ]; then
+        rm -rf "$stage" "$TMP/rows.$$"
+        step "$name is up to date ($bk, $want_ver)"
+        return 0
+    fi
     while read -r b v s st d u; do
         url="$(printf '%s' "$u" | sed "s|@RELEASE@|$REL|; s|@TAG@|$TAG|g")"
         file="${url##*/}"
@@ -348,7 +356,7 @@ install_component() { # kind name backend
         mv "$stage" "$ROOT/bin"; rm -rf "$ROOT/bin.old"
         chmod +x "$ROOT/bin"/* 2>/dev/null || true
     else
-        printf '%s\n%s\n' "$bk" "$got" >"$stage/.pin"
+        printf '%s\n%s\n%s\n' "$bk" "$got" "$want_sha" >"$stage/.pin"
         rm -rf "$final"; mkdir -p "$(dirname "$final")"; mv "$stage" "$final"
         chmod +x "$final"/* 2>/dev/null || true
     fi

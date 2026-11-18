@@ -60,6 +60,7 @@ function Invoke-AgentInstaller([string[]] $Argv) {
 
     # `agent update` and `agent uninstall` start this script and exit: Windows will not replace a running program, so wait for it.
     if ($env:AGENT_WAIT_PID) { Wait-Process -Id ([int]$env:AGENT_WAIT_PID) -Timeout 30 -ErrorAction SilentlyContinue }
+    $ownWindow = [bool]$env:AGENT_WAIT_PID
 
     $ask = (-not $yes) -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
     function Prompt([string]$question, [string]$default) {
@@ -265,6 +266,20 @@ function Invoke-AgentInstaller([string[]] $Argv) {
         New-Item -ItemType Directory -Path $stage -Force | Out-Null
         $rows = @(Get-Rows $kind $name | Where-Object { $_.Backend -eq 'any' -or $_.Backend -eq $bk })
         if (-not $rows) { Fail "$name has no build for $os $arch." }
+        # Already installed from these very rows (same backend, versions and checksums): nothing to download. AGENT_FORCE=1 downloads again.
+        $wantVer = ($rows | ForEach-Object { $_.Version }) -join ' '
+        $wantSha = ($rows | ForEach-Object { $_.Sha }) -join ' '
+        if ($kind -ne 'core' -and -not $env:AGENT_FORCE) {
+            $pinFile = Join-Path $final '.pin'
+            if (Test-Path -LiteralPath $pinFile) {
+                $l = @(Get-Content -LiteralPath $pinFile)
+                if ($l.Count -ge 3 -and $l[0] -eq $bk -and $l[1] -eq $wantVer -and $l[2] -eq $wantSha) {
+                    Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+                    Step "$name is up to date ($bk, $wantVer)"
+                    return
+                }
+            }
+        }
         $got = @()
         foreach ($r in $rows) {
             $url = $r.Url.Replace('@RELEASE@', $rel).Replace('@TAG@', $tag)
@@ -280,13 +295,20 @@ function Invoke-AgentInstaller([string[]] $Argv) {
             $got += $r.Version
         }
         if ($kind -eq 'core') {
-            $old = Join-Path $ROOT 'bin.old'
-            if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Recurse -Force }
-            if (Test-Path -LiteralPath $BIN) { Move-Item -LiteralPath $BIN -Destination $old }
-            Move-Item -LiteralPath $stage -Destination $BIN
-            if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Recurse -Force -ErrorAction SilentlyContinue }
+            # The running agent.exe cannot be deleted or overwritten, but it can be renamed: each file is renamed to NAME.old and the new
+            # one put in its place, so `agent update` works from the program being replaced (the .old files go at the next update).
+            New-Item -ItemType Directory -Path $BIN -Force | Out-Null
+            Get-ChildItem -LiteralPath $BIN -Recurse -File -Filter '*.old' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+            foreach ($f in Get-ChildItem -LiteralPath $stage -Recurse -File) {
+                $dest = Join-Path $BIN $f.FullName.Substring($stage.Length).TrimStart('\', '/')
+                New-Item -ItemType Directory -Path (Split-Path $dest) -Force | Out-Null
+                if (Test-Path -LiteralPath $dest) { Move-Item -LiteralPath $dest -Destination "$dest.old" -Force }
+                Move-Item -LiteralPath $f.FullName -Destination $dest -Force
+            }
+            Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+            Get-ChildItem -LiteralPath $BIN -Recurse -File -Filter '*.old' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
         } else {
-            Set-Content -LiteralPath (Join-Path $stage '.pin') -Value @($bk, ($got -join ' ')) -Encoding ASCII
+            Set-Content -LiteralPath (Join-Path $stage '.pin') -Value @($bk, ($got -join ' '), $wantSha) -Encoding ASCII
             if (Test-Path -LiteralPath $final) { Remove-Item -LiteralPath $final -Recurse -Force }
             New-Item -ItemType Directory -Path (Split-Path $final) -Force | Out-Null
             Move-Item -LiteralPath $stage -Destination $final
@@ -523,6 +545,8 @@ function Invoke-AgentInstaller([string[]] $Argv) {
         }
     } finally {
         if ($tmp -and (Test-Path -LiteralPath $tmp)) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+        # A window opened just for this command would close before its output could be read.
+        if ($ownWindow) { try { Read-Host '  Press Enter to close this window' | Out-Null } catch {} }
     }
 }
 
