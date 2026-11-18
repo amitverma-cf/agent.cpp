@@ -82,7 +82,7 @@ The installer offers what exists for the machine and says why anything is missin
 | trellis (image to 3D) | CPU, Vulkan, CUDA 12 / 13, ROCm | no | CPU, Vulkan, CUDA 12 / 13, ROCm | no | no |
 
 Every engine library is the upstream project's own release (llama.cpp, audio.cpp, stable-diffusion.cpp, onnxruntime, trellis.cpp) at the
-version the release pins; agent.cpp adds a small plugin over each. Intel macOS has llama and audiocpp.
+version the release pins; agent.cpp adds a small plugin over each.
 
 ## Chat
 
