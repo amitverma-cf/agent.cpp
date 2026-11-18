@@ -5,7 +5,7 @@ if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
 endif()
 # The single version source: the CLI version string, the package config version and the release
 # tarball names all come from here.
-project("agent.cpp" VERSION 1.2.2 LANGUAGES C CXX)
+project("agent.cpp" VERSION 1.2.3 LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)

@@ -2,7 +2,7 @@
 
 ## Version
 
-The version is set once, in `project("agent.cpp" VERSION x.y.z)` in the top-level `CMakeLists.txt` (currently 1.2.2).
+The version is set once, in `project("agent.cpp" VERSION x.y.z)` in the top-level `CMakeLists.txt` (currently 1.2.3).
 `agent version`, the CMake package version (`agent-cppConfigVersion.cmake`) and the Linux tarball names all come from it.
 
 ## Which engines are built
@@ -246,11 +246,11 @@ engine plus a test harness that loads it in process and through the host. See [g
 This script makes a Linux-only tarball from a local build with llama.cpp compiled from source. Releases do not use it (see "Releases" below); it is run by hand.
 
 ```sh
-scripts/package.sh                                   # agent-1.2.2-linux-x64.tar.gz, llama engine, CPU
+scripts/package.sh                                   # agent-1.2.3-linux-x64.tar.gz, llama engine, CPU
 scripts/package.sh --engines llama,sdcpp
 scripts/package.sh --engines llama,onnx --onnxruntime-root ~/onnxruntime-linux-x64-1.23.2
 scripts/package.sh --engines llama,audiocpp
-scripts/package.sh --backend vulkan                  # agent-1.2.2-linux-x64-vulkan.tar.gz
+scripts/package.sh --backend vulkan                  # agent-1.2.3-linux-x64-vulkan.tar.gz
 ```
 
 The script configures a Release build (`build-package/` by default, `--build-dir` to change it), builds only the installed
@@ -294,13 +294,13 @@ parts (llama.cpp, audio.cpp, stable-diffusion.cpp, trellis.cpp, onnxruntime, bun
 each file. It is written by
 
 ```sh
-python3 scripts/pin-components.py --tag v1.2.2 > scripts/components.tsv     # before the tag is made; the release workflow checks it
+python3 scripts/pin-components.py --tag v1.2.3 > scripts/components.tsv     # before the tag is made; the release workflow checks it
 ```
 
 Raising the pin of an upstream project means changing `PINS` in that script, running it, and testing `tests/modular` (the installer tests) on Linux
 and Windows. The workflow's `publish` job refuses a tag whose `components.tsv` was written for another tag.
 
-The git tag `v1.2.2` matches the version in `CMakeLists.txt`. The CI and release workflows in `.github/workflows/` are
+The git tag `v1.2.3` matches the version in `CMakeLists.txt`. The CI and release workflows in `.github/workflows/` are
 manual-dispatch only; nothing runs on a push. Build from source as described in [getting-started.md](getting-started.md#build),
 or use the Linux tarball script above, which is run by hand.
 

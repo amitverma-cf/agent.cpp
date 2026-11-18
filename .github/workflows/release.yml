@@ -17,7 +17,7 @@ on:
         type: boolean
         default: false
       engines:
-        description: "Engine plugins to build, comma separated: llama,onnx,audiocpp,sdcpp,trellis. They are thin: compiled against the upstream releases pinned in scripts/components.tsv (trellis needs no library: it runs the release's trellis-cli). Empty: every engine the platform has"
+        description: "Engine plugins to build, comma separated: llama,audiocpp,sdcpp,trellis. They are thin: compiled against the upstream releases pinned in scripts/components.tsv (trellis needs no library: it runs the release's trellis-cli). Empty: every engine the platform has"
         type: string
         default: ""
 
@@ -37,7 +37,7 @@ jobs:
           - { runner: ubuntu-24.04-arm, os_name: linux,   arch: aarch64, lib_prefix: lib, lib_ext: so,    exe_ext: "",     ggml: "-DGGML_NATIVE=OFF" }
           - { runner: windows-2022,     os_name: windows, arch: x86_64,  lib_prefix: "",  lib_ext: dll,   exe_ext: ".exe", ggml: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON", triplet: x64-windows, dll: x64 }
           - { runner: windows-11-arm,   os_name: windows, arch: aarch64, lib_prefix: "",  lib_ext: dll,   exe_ext: ".exe", ggml: "-DGGML_NATIVE=ON", triplet: arm64-windows, dll: arm64 }
-          - { runner: macos-15,         os_name: macos,   arch: aarch64, lib_prefix: lib, lib_ext: dylib, exe_ext: "",     ggml: "", engines: "llama,onnx,audiocpp,sdcpp" }
+          - { runner: macos-15,         os_name: macos,   arch: aarch64, lib_prefix: lib, lib_ext: dylib, exe_ext: "",     ggml: "", engines: "llama,audiocpp,sdcpp" }
           - { runner: macos-15-intel,   os_name: macos,   arch: x86_64,  lib_prefix: lib, lib_ext: dylib, exe_ext: "",     ggml: "", engines: "llama,audiocpp" }
     steps:
       - uses: actions/checkout@v4
@@ -86,7 +86,7 @@ jobs:
           # versions: only the plugins are built here, not those projects. A plugin whose upstream has no build for this system is skipped.
           export AGENT_LIST="$PWD/scripts/components.tsv" AGENT_BACKEND=cpu
           if [ "${{ matrix.os_name }}-${{ matrix.arch }}" = "macos-aarch64" ]; then export AGENT_BACKEND=metal; fi
-          eng=",${{ inputs.engines || matrix.engines || 'llama,onnx,audiocpp,sdcpp,trellis' }},"
+          eng=",${{ inputs.engines || matrix.engines || 'llama,audiocpp,sdcpp,trellis' }},"
           for e in llama audiocpp sdcpp; do
             case "$eng" in *",$e,"*) ;; *) continue ;; esac
             if [ "${{ matrix.os_name }}" = "windows" ]; then
@@ -212,11 +212,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: ubuntu-24.04,     os_name: linux,   arch: x86_64,  engines: "llama,onnx,audiocpp,sdcpp,trellis", runtimes: "bun,uv,node,pnpm,nub" }
-          - { runner: ubuntu-24.04-arm, os_name: linux,   arch: aarch64, engines: "llama,onnx",          runtimes: "bun,uv,node,pnpm,nub" }
-          - { runner: windows-2022,     os_name: windows, arch: x86_64,  engines: "llama,onnx,audiocpp,sdcpp,trellis", runtimes: "bun,uv,node,pnpm,nub" }
-          - { runner: windows-11-arm,   os_name: windows, arch: aarch64, engines: "llama,onnx",          runtimes: "uv,node,pnpm,nub" }
-          - { runner: macos-15,         os_name: macos,   arch: aarch64, engines: "llama,onnx,audiocpp,sdcpp", runtimes: "bun,uv,node,pnpm,nub" }
+          - { runner: ubuntu-24.04,     os_name: linux,   arch: x86_64,  engines: "llama,audiocpp,sdcpp,trellis", runtimes: "bun,uv,node,pnpm,nub" }
+          - { runner: ubuntu-24.04-arm, os_name: linux,   arch: aarch64, engines: "llama",          runtimes: "bun,uv,node,pnpm,nub" }
+          - { runner: windows-2022,     os_name: windows, arch: x86_64,  engines: "llama,audiocpp,sdcpp,trellis", runtimes: "bun,uv,node,pnpm,nub" }
+          - { runner: windows-11-arm,   os_name: windows, arch: aarch64, engines: "llama",          runtimes: "uv,node,pnpm,nub" }
+          - { runner: macos-15,         os_name: macos,   arch: aarch64, engines: "llama,audiocpp,sdcpp", runtimes: "bun,uv,node,pnpm,nub" }
           - { runner: macos-15-intel,   os_name: macos,   arch: x86_64,  engines: "llama,audiocpp",       runtimes: "bun,uv,node,pnpm,nub" }
     steps:
       - uses: actions/checkout@v4

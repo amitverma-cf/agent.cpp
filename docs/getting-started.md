@@ -16,7 +16,7 @@ silicon and Intel) builds with Apple Clang and `brew install cmake ninja openssl
 ## Install a release
 
 `curl -fsSL https://agent.qozu.fyi/install.sh | sh` (Linux and macOS) or `irm https://agent.qozu.fyi/install.ps1 | iex` (Windows PowerShell) installs the latest release; see the
-[README](../README.md#install). Set `AGENT_VERSION=v1.2.2` to install a given tag. The installer is the only thing that installs, changes or removes agent.cpp: `agent setup`, `agent update`, `agent uninstall`, `agent engine pull` and `agent runtime install` run its copy in `<home>/scripts/`.
+[README](../README.md#install). Set `AGENT_VERSION=v1.2.3` to install a given tag. The installer is the only thing that installs, changes or removes agent.cpp: `agent setup`, `agent update`, `agent uninstall`, `agent engine pull` and `agent runtime install` run its copy in `<home>/scripts/`.
 
 ## Build
 

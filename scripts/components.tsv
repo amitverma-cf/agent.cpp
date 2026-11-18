@@ -1,32 +1,27 @@
-# agent.cpp components, pinned for release v1.2.2. Written by scripts/pin-components.py: do not edit by hand.
-# tag v1.2.2
+# agent.cpp components, pinned for release v1.2.3. Written by scripts/pin-components.py: do not edit by hand.
+# tag v1.2.3
 # kind	name	os	arch	backend	version	sha256	strip	dest	url
-core	agent	linux	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-linux-x86_64.tar.gz
-engine	llama	linux	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-linux-x86_64.tar.gz
-engine	audiocpp	linux	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-linux-x86_64.tar.gz
-engine	onnx	linux	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-linux-x86_64.tar.gz
-engine	sdcpp	linux	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-sdcpp-@TAG@-linux-x86_64.tar.gz
-engine	trellis	linux	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-trellis-@TAG@-linux-x86_64.tar.gz
-core	agent	linux	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-linux-aarch64.tar.gz
-engine	llama	linux	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-linux-aarch64.tar.gz
-engine	onnx	linux	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-linux-aarch64.tar.gz
-core	agent	windows	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-windows-x86_64.zip
-engine	llama	windows	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-windows-x86_64.zip
-engine	audiocpp	windows	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-windows-x86_64.zip
-engine	onnx	windows	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-windows-x86_64.zip
-engine	sdcpp	windows	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-sdcpp-@TAG@-windows-x86_64.zip
-engine	trellis	windows	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-trellis-@TAG@-windows-x86_64.zip
-core	agent	windows	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-windows-aarch64.zip
-engine	llama	windows	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-windows-aarch64.zip
-engine	onnx	windows	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-windows-aarch64.zip
-core	agent	macos	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-macos-aarch64.tar.gz
-engine	llama	macos	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-macos-aarch64.tar.gz
-engine	audiocpp	macos	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-macos-aarch64.tar.gz
-engine	onnx	macos	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-onnx-@TAG@-macos-aarch64.tar.gz
-engine	sdcpp	macos	aarch64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-sdcpp-@TAG@-macos-aarch64.tar.gz
-core	agent	macos	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-macos-x86_64.tar.gz
-engine	llama	macos	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-macos-x86_64.tar.gz
-engine	audiocpp	macos	x86_64	any	v1.2.2	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-macos-x86_64.tar.gz
+core	agent	linux	x86_64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-linux-x86_64.tar.gz
+engine	llama	linux	x86_64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-linux-x86_64.tar.gz
+engine	audiocpp	linux	x86_64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-linux-x86_64.tar.gz
+engine	sdcpp	linux	x86_64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-engine-sdcpp-@TAG@-linux-x86_64.tar.gz
+engine	trellis	linux	x86_64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-engine-trellis-@TAG@-linux-x86_64.tar.gz
+core	agent	linux	aarch64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-linux-aarch64.tar.gz
+engine	llama	linux	aarch64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-linux-aarch64.tar.gz
+core	agent	windows	x86_64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-windows-x86_64.zip
+engine	llama	windows	x86_64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-windows-x86_64.zip
+engine	audiocpp	windows	x86_64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-windows-x86_64.zip
+engine	sdcpp	windows	x86_64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-engine-sdcpp-@TAG@-windows-x86_64.zip
+engine	trellis	windows	x86_64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-engine-trellis-@TAG@-windows-x86_64.zip
+core	agent	windows	aarch64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-windows-aarch64.zip
+engine	llama	windows	aarch64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-windows-aarch64.zip
+core	agent	macos	aarch64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-macos-aarch64.tar.gz
+engine	llama	macos	aarch64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-macos-aarch64.tar.gz
+engine	audiocpp	macos	aarch64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-macos-aarch64.tar.gz
+engine	sdcpp	macos	aarch64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-engine-sdcpp-@TAG@-macos-aarch64.tar.gz
+core	agent	macos	x86_64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-cpp-core-@TAG@-macos-x86_64.tar.gz
+engine	llama	macos	x86_64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-engine-llama-@TAG@-macos-x86_64.tar.gz
+engine	audiocpp	macos	x86_64	any	v1.2.3	@sums	0	.	@RELEASE@/agent-engine-audiocpp-@TAG@-macos-x86_64.tar.gz
 engine	llama	linux	x86_64	cpu	b12020	1b69032f9ab60dc6aa909689fda941fa1b9162f6ab46b863582d5649d96ac6be	1	.	https://github.com/ggml-org/llama.cpp/releases/download/b12020/llama-b12020-bin-ubuntu-x64.tar.gz
 engine	llama	linux	x86_64	vulkan	b12020	8b7ec1fbef304ea4e024cf34f68ef1276556b38b666dc71b8af5de6e9d93b42c	1	.	https://github.com/ggml-org/llama.cpp/releases/download/b12020/llama-b12020-bin-ubuntu-vulkan-x64.tar.gz
 engine	llama	linux	x86_64	cuda12	b12020	0170c61c0ddf6208215a68b36f78f45b1641631317736c093f3faa40f05f8e85	1	.	https://github.com/ggml-org/llama.cpp/releases/download/b12020/llama-b12020-bin-ubuntu-cuda-12.8-x64.tar.gz
@@ -84,15 +79,6 @@ engine	trellis	windows	x86_64	vulkan	v0.8.1	d6c70678635f5367f9aa93261e9310e7c0c3
 engine	trellis	windows	x86_64	cuda12	v0.8.1	8b948b62fc857cab0e064d0962b9f7961a246620bddabbc8a0c00521db78dfb5	find:trellis-cli.exe	.	https://github.com/pwilkin/trellis.cpp/releases/download/v0.8.1/trellis-cuda12-windows-x64.zip
 engine	trellis	windows	x86_64	cuda13	v0.8.1	d2ea7b57174d3bff438064faf0b5fbcc55c29c31e6bba5f41030936fa366ed48	find:trellis-cli.exe	.	https://github.com/pwilkin/trellis.cpp/releases/download/v0.8.1/trellis-cuda-windows-x64.zip
 engine	trellis	windows	x86_64	rocm	v0.8.1	87c3b3eaf14f241fdccc4618430329dd5c74033de191ced189cd889d1288f145	find:trellis-cli.exe	.	https://github.com/pwilkin/trellis.cpp/releases/download/v0.8.1/trellis-rocm-windows-x64.zip
-engine	onnx	linux	x86_64	cpu	1.31.1	c849e36a1ef3e22d4ff217b9d1ce4a3cf5b9467b975610913ae959ad5b16bdc9	find:libonnxruntime.so.1	.	https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-linux-x64-1.31.1.tgz
-engine	onnx	linux	aarch64	cpu	1.31.1	5317505e2da99be65f8e2775ba3c2afd6d2961fd78aba1bd8f56159f48820c78	find:libonnxruntime.so.1	.	https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-linux-aarch64-1.31.1.tgz
-engine	onnx	windows	x86_64	cpu	1.31.1	5869e26bb25314375f2d5ef1877e3ea06b1543d6c710e6e4a1ec2f7177ab4b2c	find:onnxruntime.dll	.	https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-win-x64-1.31.1.zip
-engine	onnx	windows	aarch64	cpu	1.31.1	817f4129073f84f81cde3ff92b1a4e06d007691e7208deed08a8b6d6df143f7f	find:onnxruntime.dll	.	https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-win-arm64-1.31.1.zip
-engine	onnx	macos	aarch64	cpu	1.31.1	2e1344a1926ee50eb25b38153cb6992c3567515aef0e677a1a520a1798896d6f	find:libonnxruntime.dylib	.	https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-osx-arm64-1.31.1.tgz
-engine	onnx	linux	x86_64	cuda12	1.31.1	57cd51f677eca19a269cdba31b0c16c15d73a8feea41f170aa8b750447ab1f70	find:libonnxruntime.so.1	.	https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-linux-x64-gpu_cuda12-1.31.1.tgz
-engine	onnx	linux	x86_64	cuda13	1.31.1	b2146862e691f7e338f5aff9c7a9a5567c2ca57cf01442a1adb3a13bf62d9095	find:libonnxruntime.so.1	.	https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-linux-x64-gpu_cuda13-1.31.1.tgz
-engine	onnx	windows	x86_64	cuda12	1.31.1	5cbf65edc93dc7bb3296249b1b6e1b2228e575902af64d6163d0da2103cef9d5	find:onnxruntime.dll	.	https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-win-x64-gpu_cuda12-1.31.1.zip
-engine	onnx	windows	x86_64	cuda13	1.31.1	6c64508de9c04f9d938297287e9d81fa47a2fbbb30cc04e6fac0db88f6cb68c1	find:onnxruntime.dll	.	https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-win-x64-gpu_cuda13-1.31.1.zip
 runtime	bun	linux	x86_64	any	1.4.4	bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c	find:bun	.	https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64.zip
 runtime	bun	linux	aarch64	any	1.4.4	baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e	find:bun	.	https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-aarch64.zip
 runtime	bun	windows	x86_64	any	1.4.4	cd2c0fccc78f3ede1f50ca827a15f063eda13d4d150a3d0674f4f6e323d864a5	find:bun.exe	.	https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-windows-x64.zip

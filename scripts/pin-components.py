@@ -3,7 +3,7 @@
 
 A maintainer runs this when raising the pin of an upstream project or before tagging a release; the installer scripts only read the result.
 
-  python3 scripts/pin-components.py --tag v1.2.2 > scripts/components.tsv
+  python3 scripts/pin-components.py --tag v1.2.3 > scripts/components.tsv
 
 Columns (tab separated, "-" for none):
   kind  name  os  arch  backend  version  sha256  strip  dest  url  [needs]
@@ -88,7 +88,7 @@ def add(kind, name, os_, arch, backend, version, sha, strip, dest, url, needs=""
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tag", required=True, help="the agent.cpp release these pins belong to, e.g. v1.2.2")
+    ap.add_argument("--tag", required=True, help="the agent.cpp release these pins belong to, e.g. v1.2.3")
     tag = ap.parse_args().tag
 
     # ---- our own files: the program and the engine plugins
@@ -175,23 +175,32 @@ def main():
             sha, url = assets[name]
             add("engine", "trellis", os_, "x86_64", bk, tag_t, sha, "find:" + ("trellis-cli.exe" if os_ == "windows" else "trellis-cli"), ".", url)
 
-    # ---- onnxruntime: the official library, next to our adapter
-    v = PINS["onnxruntime"]
-    assets = release_assets("microsoft/onnxruntime", "v" + v)
-    ort = {("linux", "x86_64"): "linux-x64", ("linux", "aarch64"): "linux-aarch64", ("windows", "x86_64"): "win-x64", ("windows", "aarch64"): "win-arm64",
-           ("macos", "aarch64"): "osx-arm64"}  # onnxruntime publishes no Intel macOS build
-    libname = {"linux": "libonnxruntime.so.1", "windows": "onnxruntime.dll", "macos": "libonnxruntime.dylib"}
-    for (os_, arch), t in ort.items():
-        name = "onnxruntime-%s-%s.%s" % (t, v, "zip" if os_ == "windows" else "tgz")
-        sha, url = assets[name]
-        add("engine", "onnx", os_, arch, "cpu", v, sha, "find:" + libname[os_], ".", url)
-    # The CUDA builds (the CUDA provider next to the library). They need the CUDA runtime and cuDNN on the machine: upstream does not bundle them.
-    for (os_, t) in [("linux", "linux-x64"), ("windows", "win-x64")]:
-        for bk, cu in [("cuda12", "gpu_cuda12"), ("cuda13", "gpu_cuda13")]:
-            name = "onnxruntime-%s-%s-%s.%s" % (t, cu, v, "zip" if os_ == "windows" else "tgz")
-            if name in assets:
-                sha, url = assets[name]
-                add("engine", "onnx", os_, "x86_64", bk, v, sha, "find:" + libname[os_], ".", url)
+    # ---- onnxruntime: the official library, next to our adapter. When its release cannot be read (the microsoft/onnxruntime repository was
+    # unavailable on GitHub in November 2026) the engine is left out of this release instead of failing it.
+    try:
+        _ = release_assets("microsoft/onnxruntime", "v" + PINS["onnxruntime"])
+        onnx_available = True
+    except Exception as exc:  # noqa: BLE001
+        print("warning: onnxruntime release unavailable (%s): the onnx engine is not pinned" % exc, file=sys.stderr)
+        onnx_available = False
+    if onnx_available:
+        v = PINS["onnxruntime"]
+        assets = release_assets("microsoft/onnxruntime", "v" + v)
+        ort = {("linux", "x86_64"): "linux-x64", ("linux", "aarch64"): "linux-aarch64", ("windows", "x86_64"): "win-x64", ("windows", "aarch64"): "win-arm64",
+               ("macos", "aarch64"): "osx-arm64"}  # onnxruntime publishes no Intel macOS build
+        libname = {"linux": "libonnxruntime.so.1", "windows": "onnxruntime.dll", "macos": "libonnxruntime.dylib"}
+        for (os_, arch), t in ort.items():
+            name = "onnxruntime-%s-%s.%s" % (t, v, "zip" if os_ == "windows" else "tgz")
+            sha, url = assets[name]
+            add("engine", "onnx", os_, arch, "cpu", v, sha, "find:" + libname[os_], ".", url)
+        # The CUDA builds (the CUDA provider next to the library). They need the CUDA runtime and cuDNN on the machine: upstream does not bundle them.
+        for (os_, t) in [("linux", "linux-x64"), ("windows", "win-x64")]:
+            for bk, cu in [("cuda12", "gpu_cuda12"), ("cuda13", "gpu_cuda13")]:
+                name = "onnxruntime-%s-%s-%s.%s" % (t, cu, v, "zip" if os_ == "windows" else "tgz")
+                if name in assets:
+                    sha, url = assets[name]
+                    add("engine", "onnx", os_, "x86_64", bk, v, sha, "find:" + libname[os_], ".", url)
+
 
     # ---- runtimes
     v = PINS["bun"]
