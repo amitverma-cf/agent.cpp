@@ -133,7 +133,7 @@ function Invoke-AgentInstaller([string[]] $Argv) {
             $def = Join-Path $env:USERPROFILE '.agent.cpp'
             if ($ask) {
                 Write-Host ''
-                Write-Host '  Where should agent.cpp keep everything?  The program, engines, models, memory and settings all go in this one folder.'
+                Write-Host '  Where should agent.cpp keep everything?'
                 $r = Prompt "Folder [$def]:" $def
             } else { $r = $def }
         }
@@ -308,7 +308,7 @@ function Invoke-AgentInstaller([string[]] $Argv) {
             if (-not $k -or $k -eq 'core') { Info "$n is not a component of this release (agent ls shows them)"; continue }
             $b = Pick-Backend $k $n
             if (-not $b) { Info "$n has no build for $os $arch yet"; continue }
-            Install-Component $k $n $b $rel $tag
+            try { Install-Component $k $n $b $rel $tag } catch { Write-Host "  $([char]0x2717) $n skipped: $_" -ForegroundColor Red; continue }
             if ($k -eq 'engine' -and (Test-Path -LiteralPath (Join-Path $BIN 'agent.exe'))) {
                 $doc = (& (Join-Path $BIN 'agent.exe') doctor 2>$null | Out-String)
                 if ($doc -match "(?m)^\s+$([regex]::Escape($n))\s+ok") { Step "$n loads" } else { Info "$n is installed but did not report ok in agent doctor" }
@@ -330,8 +330,7 @@ function Invoke-AgentInstaller([string[]] $Argv) {
         if ($all) { $chosen = $avail -join ',' }
         if (-not $chosen -and -not $noEngines) {
             if ($ask) {
-                Write-Host "  Engines available for this machine: $($avail -join ', ')"
-                $chosen = Prompt 'Install which? (names separated by commas, Enter for llama, all for every one):' 'llama'
+                $chosen = Prompt "Install which? (all, $($avail -join ', ')):" 'llama'
                 if ($chosen -eq 'all') { $chosen = $avail -join ',' }
             } else { $chosen = 'llama' }
         }
@@ -342,16 +341,16 @@ function Invoke-AgentInstaller([string[]] $Argv) {
         $chosen = $runtimes
         if (-not $chosen -and -not $noRuntimes) {
             if ($ask) {
-                Write-Host "  Runtimes (for MCP servers and skills): $($avail -join ', ')"
-                $chosen = Prompt 'Install which? (Enter for bun,uv; none to skip):' 'bun,uv'
+                $chosen = Prompt "Runtimes? (all, none, $($avail -join ', ')):" 'bun,uv'
                 if ($chosen -eq 'none') { $chosen = '' }
+                if ($chosen -eq 'all') { $chosen = $avail -join ',' }
             } else { $chosen = 'bun,uv' }
         }
         if ($noRuntimes) { $chosen = '' }
         Add-Names $chosen $rel $tag
 
         $exe = Join-Path $BIN 'agent.exe'
-        if (-not $model -and -not $noModel -and $ask) { $model = Prompt 'Model to download now: a Hugging Face link, owner/repo, or a file on this computer (Enter to skip):' '' }
+        if (-not $model -and -not $noModel -and $ask) { $model = Prompt 'Model? (Hugging Face link, owner/repo or a file; Enter to skip):' '' }
         $model = $model.Trim().Trim('"').Trim("'")
         if ($model) {
             Write-Host "  $([char]0x2193) Adding $model" -ForegroundColor Cyan

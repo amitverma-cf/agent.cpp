@@ -152,7 +152,7 @@ resolve_root() {
     if [ -z "$ROOT" ] && [ "$cmd" = install ]; then
         def="$HOME/.agent.cpp"
         if [ -n "$ask" ]; then
-            printf '\n  %sWhere should agent.cpp keep everything?%s  The program, engines, models, memory and settings all go in this one folder.\n' "$B" "$R" >/dev/tty
+            printf '\n  %sWhere should agent.cpp keep everything?%s\n' "$B" "$R" >/dev/tty
             prompt "Folder [$def]:" "$def"
             ROOT="$answer"
         else
@@ -375,7 +375,7 @@ add_names() { # comma separated names
             if [ -n "$why" ]; then info "$n cannot run here: $why"; else info "$n has no build for $OS $ARCH yet"; fi
             continue
         fi
-        install_component "$k" "$n" "$b"
+        (install_component "$k" "$n" "$b") || { info "$n skipped"; continue; }
         if [ "$k" = engine ] && [ -x "$BIN/agent" ]; then
             if "$BIN/agent" doctor 2>/dev/null | grep -Eq "^ +$n +ok"; then step "$n loads"; else info "$n is installed but did not report ok in agent doctor"; fi
         fi
@@ -428,8 +428,7 @@ do_setup() {
     if [ -n "$all" ]; then chosen="$(printf '%s' "$avail" | tr -s ' ' ',' | sed 's/^,//; s/,$//')"; fi
     if [ -z "$chosen" ] && [ -z "$no_engines" ]; then
         if [ -n "$ask" ]; then
-            printf '  Engines available for this machine: %s\n' "$avail" >/dev/tty
-            prompt "Install which? (names separated by commas, Enter for llama, all for every one):" "llama"
+            prompt "Install which? (all, $(printf '%s' "$avail" | sed 's/ *$//; s/ /, /g')):" "llama"
             chosen="$answer"; [ "$chosen" != all ] || chosen="$(printf '%s' "$avail" | tr -s ' ' ',' | sed 's/^,//; s/,$//')"
         else chosen=llama; fi
     fi
@@ -441,9 +440,9 @@ do_setup() {
     chosen="$runtimes"
     if [ -z "$chosen" ] && [ -z "$no_runtimes" ]; then
         if [ -n "$ask" ]; then
-            printf '  Runtimes (for MCP servers and skills): %s\n' "$avail" >/dev/tty
-            prompt "Install which? (Enter for bun,uv; none to skip):" "bun,uv"
+            prompt "Runtimes? (all, none, $(printf '%s' "$avail" | sed 's/ *$//; s/ /, /g')):" "bun,uv"
             chosen="$answer"; [ "$chosen" != none ] || chosen=""
+            [ "$chosen" != all ] || chosen="$(printf '%s' "$avail" | tr -s ' ' ',' | sed 's/^,//; s/,$//')"
         else chosen="bun,uv"; fi
     fi
     [ -z "$no_runtimes" ] || chosen=""
@@ -451,7 +450,7 @@ do_setup() {
 
     # A model: a link or a file, not a list.
     if [ -z "$model" ] && [ -z "$no_model" ] && [ -n "$ask" ]; then
-        prompt "Model to download now: a Hugging Face link, owner/repo, or a file on this computer (Enter to skip):" ""
+        prompt "Model? (Hugging Face link, owner/repo or a file; Enter to skip):" ""
         model="$answer"
     fi
     model="$(printf '%s' "$model" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e "s/^[\"']//" -e "s/[\"']\$//")"
