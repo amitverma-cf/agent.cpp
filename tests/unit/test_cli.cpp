@@ -98,6 +98,12 @@ TEST_CASE("cli: config.json round trip", "[cli]") {
     c.max_tokens = 256;
     c.temperature = 0.25f;
     c.memory_budget_mb = 6144;
+    c.idle_unload_minutes = 3;
+    c.stt_model = "parakeet-tdt";
+    c.tts_model = "pocket-tts";
+    c.vad_model = "silero";
+    c.tts_voice = "alba";
+    c.image_model = "sdxs";
 
     auto back = config_from_json(config_to_json(c));
     REQUIRE(back.ok);
@@ -114,6 +120,12 @@ TEST_CASE("cli: config.json round trip", "[cli]") {
     CHECK(back.value.max_tokens == 256);
     CHECK(back.value.temperature == Catch::Approx(0.25f));
     CHECK(back.value.memory_budget_mb == 6144);
+    CHECK(back.value.idle_unload_minutes == 3);
+    CHECK(back.value.stt_model == "parakeet-tdt");
+    CHECK(back.value.tts_model == "pocket-tts");
+    CHECK(back.value.vad_model == "silero");
+    CHECK(back.value.tts_voice == "alba");
+    CHECK(back.value.image_model == "sdxs");
 
     // Unknown keys are ignored; missing keys keep their defaults.
     auto partial = config_from_json(R"({"workspace": "/w", "future_key": {"x": 1}, "temperature": 1})");
@@ -122,11 +134,14 @@ TEST_CASE("cli: config.json round trip", "[cli]") {
     CHECK(partial.value.context_window == 8192);
     CHECK(partial.value.temperature == Catch::Approx(1.0f));
     CHECK(partial.value.memory_budget_mb == 0);
+    CHECK(partial.value.idle_unload_minutes == 10); // an older config.json: ten minutes
+    CHECK(partial.value.stt_model.empty());
 
     CHECK_FALSE(config_from_json("[1,2]").ok);
     CHECK_FALSE(config_from_json("{\"context_window\": 0}").ok);
     CHECK_FALSE(config_from_json("not json").ok);
     CHECK_FALSE(config_from_json("{\"memory_budget_mb\": -1}").ok);
+    CHECK_FALSE(config_from_json("{\"idle_unload_minutes\": -1}").ok);
 }
 
 TEST_CASE("cli: config and engines files on disk", "[cli]") {

@@ -103,7 +103,13 @@ own Python) into `runtimes/`, checksummed; their caches are in `cache/` and the 
   "context_window": 4096,
   "max_tokens": 512,
   "temperature": 0.7,
-  "memory_budget_mb": 0
+  "memory_budget_mb": 0,
+  "idle_unload_minutes": 10,
+  "stt_model": "",
+  "tts_model": "",
+  "vad_model": "",
+  "tts_voice": "",
+  "image_model": ""
 }
 ```
 

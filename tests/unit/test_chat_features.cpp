@@ -197,6 +197,42 @@ TEST_CASE("MCP servers are added by name, package or address, switched and remov
     CHECK_FALSE(mcp_remove_named(ctx, ws, "time").ok);
 }
 
+TEST_CASE("an MCP server is added from the JSON block of its page", "[chat_features][mcp]") {
+    const std::string root = fresh("agent_mcp_json");
+    const Context ctx = make_context(root);
+    const std::string ws = root + "/ws";
+    fs::create_directories(ws);
+
+    // The README shape: a whole mcpServers object, with a key kept out of the file as a secret reference.
+    REQUIRE(mcp_add_json_text(ctx, ws,
+                              R"({"mcpServers":{"github":{"command":"npx","args":["-y","@modelcontextprotocol/server-github"],"env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"${secret:github}"}}}})")
+                .ok);
+    // One entry without a name: the name comes from the command.
+    REQUIRE(mcp_add_json_text(ctx, ws, R"({"command":"uvx","args":["mcp-server-time"]})").ok);
+    // One entry with a name, reached over HTTP with a header.
+    REQUIRE(mcp_add_json_text(ctx, ws, R"({"name":"docs","url":"https://example.com/mcp","headers":{"Authorization":"Bearer ${secret:docs}"}})").ok);
+    CHECK_FALSE(mcp_add_json_text(ctx, ws, "[1]").ok);
+    CHECK_FALSE(mcp_add_json_text(ctx, ws, R"({"args":["x"]})").ok); // no command and no address
+
+    std::vector<std::string> warnings;
+    const auto servers = collect_mcp_servers(ctx, warnings);
+    REQUIRE(servers.size() == 3);
+    const auto github = std::find_if(servers.begin(), servers.end(), [](const auto &s) { return s.name == "github"; });
+    REQUIRE(github != servers.end());
+    CHECK(github->args.back() == "@modelcontextprotocol/server-github");
+    CHECK(std::any_of(servers.begin(), servers.end(), [](const auto &s) { return s.name == "time"; }));
+    const auto docs = std::find_if(servers.begin(), servers.end(), [](const auto &s) { return s.name == "docs"; });
+    REQUIRE(docs != servers.end());
+    CHECK(docs->url == "https://example.com/mcp");
+}
+
+TEST_CASE("a skill is named by id, skills.sh address, npx line or GitHub folder", "[chat_features][skills]") {
+    CHECK(skill_id_from_text("anthropics/skills/pdf") == "anthropics/skills/pdf");
+    CHECK(skill_id_from_text("  https://skills.sh/anthropics/skills/pdf/ ") == "anthropics/skills/pdf");
+    CHECK(skill_id_from_text("npx skills add anthropics/skills --skill pdf") == "anthropics/skills/pdf");
+    CHECK(skill_id_from_text("https://github.com/anthropics/skills/tree/main/skills/pdf") == "anthropics/skills/pdf");
+}
+
 TEST_CASE("a project's .agents/mcp.json is found from the workspace", "[chat_features][mcp]") {
     const std::string root = fresh("agent_mcp_b");
     Context ctx = make_context(root);

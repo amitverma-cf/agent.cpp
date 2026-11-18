@@ -68,6 +68,8 @@ and follows it again. Select text with the mouse to copy it. The screen uses fou
 | `/image PATH [text]` | send an image or audio file with a message (the engine must accept media, e.g. llama with an `mmproj`) |
 | `/open [n]` | list files the model generated, or open the n-th |
 | `/stats` | token, tool-call and cache counters, loaded models |
+| `/models` | models in memory with size and idle time, and what the memory manager loaded or unloaded |
+| `/load MODEL`, `/unload MODEL` | load an installed model of any kind now (speech, image, embeddings), or free a loaded one |
 | `/clear` | forget the conversation (the system prompt stays) |
 | `/diff` | what the tools changed in files this session, as a unified diff |
 | `/undo` | put back the files of the last tool call (a file it created is removed) |

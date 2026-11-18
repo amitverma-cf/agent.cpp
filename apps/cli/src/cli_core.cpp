@@ -603,6 +603,12 @@ std::string config_to_json(const CliConfig &c) {
     out += "  \"max_tokens\": " + std::to_string(c.max_tokens) + ",\n";
     out += "  \"temperature\": " + std::string(temp) + ",\n";
     out += "  \"memory_budget_mb\": " + std::to_string(c.memory_budget_mb) + ",\n";
+    out += "  \"idle_unload_minutes\": " + std::to_string(c.idle_unload_minutes) + ",\n";
+    out += "  \"stt_model\": " + json_str(c.stt_model) + ",\n";
+    out += "  \"tts_model\": " + json_str(c.tts_model) + ",\n";
+    out += "  \"vad_model\": " + json_str(c.vad_model) + ",\n";
+    out += "  \"tts_voice\": " + json_str(c.tts_voice) + ",\n";
+    out += "  \"image_model\": " + json_str(c.image_model) + ",\n";
     out += "  \"js_runtime\": \"" + c.js_runtime + "\",\n";
     out += "  \"search_url\": " + json_str(c.search_url) + ",\n";
     out += std::string("  \"local_only\": ") + (c.local_only ? "true" : "false") + ",\n";
@@ -642,6 +648,13 @@ Result<CliConfig> config_from_json(std::string_view json) {
     c.temperature = static_cast<float>(get_num(doc, "temperature", c.temperature));
     c.memory_budget_mb = get_int(doc, "memory_budget_mb", 0);
     if (c.memory_budget_mb < 0) return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: memory_budget_mb must be >= 0");
+    c.idle_unload_minutes = static_cast<int>(get_int(doc, "idle_unload_minutes", 10));
+    if (c.idle_unload_minutes < 0) return fail<CliConfig>(ErrorCode::InvalidConfig, "config.json: idle_unload_minutes must be >= 0");
+    c.stt_model = get_str(doc, "stt_model");
+    c.tts_model = get_str(doc, "tts_model");
+    c.vad_model = get_str(doc, "vad_model");
+    c.tts_voice = get_str(doc, "tts_voice");
+    c.image_model = get_str(doc, "image_model");
     c.search_url = std::string(get_str(doc, "search_url"));
     if (bool local_only = false; !doc["local_only"].get(local_only)) c.local_only = local_only;
     c.kv_cache = get_str(doc, "kv_cache", "auto");

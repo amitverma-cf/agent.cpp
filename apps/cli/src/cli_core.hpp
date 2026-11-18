@@ -87,6 +87,11 @@ struct CliConfig {
     // RAM budget of the model registry behind `chat` /model switches and multi-model `run` graphs.
     // 0 = unlimited. Exceeding it evicts the least recently used idle model.
     int64_t memory_budget_mb = 0;
+    // A model nobody used for this many minutes gives its memory back (0 = never).
+    int idle_unload_minutes = 10;
+    // The models other than the chat model, by catalogue name; empty = the first installed one of that kind. The microphone of the chat uses
+    // stt_model, the voice assistant and /task use the others when no model is named.
+    std::string stt_model, tts_model, vad_model, tts_voice, image_model;
     // JavaScript tooling for MCP servers and skills, chosen in `agent setup`: "bun" (bun x / bun install), "node" (a private
     // Node.js with pnpm; npm is never used) or "nub" (the nub toolkit, a pnpm-compatible CLI over Node.js).
     std::string js_runtime = "bun";

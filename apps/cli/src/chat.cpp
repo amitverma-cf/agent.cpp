@@ -282,7 +282,8 @@ std::string system_prompt(const ChatState &st) {
         "(list_dir, then read what matches) before asking; ask only when nothing matches. For questions about earlier "
         "chats, check recall and the saved notes first. When the user asks to make answers faster, slower, more creative, steadier or "
         "longer, or asks about a small helper model or MTP, use the settings tool (action get first, then set); never claim a "
-        "speed feature the settings tool does not list.";
+        "speed feature the settings tool does not list. model_manage shows which models are in memory and loads or unloads them, "
+        "for example a speech or image model before it is needed.";
     const char *honesty =
         " After remember or forget, answer with one short sentence and do nothing else unless asked. To delete a note use forget, and say "
         "it was removed only when forget says so. For what was said in earlier chats call recall with the topic: it searches the notes "
@@ -430,13 +431,16 @@ PathGateDecision chat_path_gate(const PathAccessRequest &request, void *user_dat
     return PathGateDecision::AllowOnce;
 }
 
+bool model_manage_changes(std::string_view arguments);
+
 PermissionDecision check_tool(std::string_view name, std::string_view arguments, void *user_data) {
     auto *st = static_cast<ChatState *>(user_data);
     ensure_newline();
     if (g_acp) acp_tool_call(name, arguments);
     out("[tool] " + std::string(name) + " " + one_line(arguments, 300) + "\n");
     if (st->journal) st->journal->before_tool(name, arguments);
-    const bool changes_settings = name == "settings" && settings_call_changes(arguments);
+    const bool changes_settings =
+        (name == "settings" && settings_call_changes(arguments)) || (name == "model_manage" && model_manage_changes(arguments));
     if (st->mode == ChatMode::Plan && (tool_changes_things(name) || changes_settings)) {
         out("[plan mode] " + std::string(name) + " is not allowed; /mode ask or /mode auto lets the agent make changes\n");
         return PermissionDecision::Deny;
@@ -799,7 +803,8 @@ std::string run_agent_command(ChatState &st, std::vector<std::string> args, bool
     }
     if (st.ctx->has_home && !has("--home")) args.insert(args.end(), {"--home", st.ctx->home.root});
     if ((args[0] == "task" || args[0] == "run") && !has("--workspace")) args.insert(args.end(), {"--workspace", st.workspace});
-    prune_idle_models(st.registry, 10 * 60 * 1000); // models nobody used for ten minutes give their memory back
+    if (st.ctx->config.idle_unload_minutes > 0)
+        prune_idle_models(st.registry, static_cast<int64_t>(st.ctx->config.idle_unload_minutes) * 60 * 1000); // idle models give memory back
     if (args[0] == "task") {
         // An engine task runs inside the chat: the model is loaded through the registry on first use, shared with the next call, and
         // unloaded when the memory budget needs the room. No second program, no second copy of a model.
@@ -915,6 +920,171 @@ Result<std::string> agent_run_cb(std::string_view args, void *user) {
     if (failed) return fail<std::string>(ErrorCode::InvalidConfig, cut_text(text, 4000));
     return ok(std::move(text));
 }
+
+// ---- the models held in memory: /models, /load, /unload, Settings > Models in memory, and the model_manage tool of the agent
+
+struct ActivityLine {
+    int64_t at_ms = 0;
+    std::string text;
+};
+std::mutex g_activity_mu;
+std::deque<ActivityLine> g_activity;
+std::vector<std::string> g_seen_models; // the names loaded at the last look
+std::vector<std::string> g_explained;   // unloads already described (the user or the agent asked for them)
+
+int64_t wall_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+void push_activity_locked(std::string text) {
+    g_activity.push_back({wall_ms(), std::move(text)});
+    while (g_activity.size() > 40) g_activity.pop_front();
+}
+
+std::string mib_text(uint64_t bytes) {
+    char buf[32];
+    if (bytes >= (1ull << 30)) std::snprintf(buf, sizeof(buf), "%.1f GiB", static_cast<double>(bytes) / static_cast<double>(1ull << 30));
+    else std::snprintf(buf, sizeof(buf), "%.0f MiB", static_cast<double>(bytes) / static_cast<double>(1ull << 20));
+    return buf;
+}
+
+// "task:llama:/long/path/model.gguf" -> "task:llama:model.gguf"
+std::string short_model_name(const std::string &name) {
+    if (const size_t slash = name.find_last_of("/\\"); slash != std::string::npos) {
+        const size_t prefix = name.rfind(':', name.find_first_of("/\\"));
+        return (prefix == std::string::npos ? std::string() : name.substr(0, prefix + 1)) + name.substr(slash + 1);
+    }
+    return name;
+}
+
+std::string seconds_text(int64_t ms) {
+    char buf[24];
+    std::snprintf(buf, sizeof(buf), "%.1f s", static_cast<double>(ms) / 1000.0);
+    return buf;
+}
+
+std::string clock_text(int64_t ms) {
+    const std::time_t t = static_cast<std::time_t>(ms / 1000);
+    std::tm tmv{};
+#if defined(_WIN32)
+    localtime_s(&tmv, &t);
+#else
+    localtime_r(&t, &tmv);
+#endif
+    char buf[16];
+    std::strftime(buf, sizeof(buf), "%H:%M:%S", &tmv);
+    return buf;
+}
+
+// Called about once a second by the screen (and by /models): turns what the registry did on its own (a model loaded on first use, one
+// unloaded because it sat idle or because another needed the room) into lines of the activity list.
+void sample_activity(const ChatState &st) {
+    const auto now = loaded_models(st.registry);
+    std::lock_guard<std::mutex> lock(g_activity_mu);
+    std::vector<std::string> names;
+    for (const LoadedModelInfo &m : now) {
+        names.push_back(m.name);
+        if (std::find(g_seen_models.begin(), g_seen_models.end(), m.name) == g_seen_models.end())
+            push_activity_locked("loaded " + short_model_name(m.name) + " (~" + mib_text(m.ram_bytes + m.vram_bytes) + ", " +
+                                 seconds_text(m.load_time_ms) + ")");
+    }
+    for (const std::string &old : g_seen_models) {
+        if (std::find(names.begin(), names.end(), old) != names.end()) continue;
+        const auto at = std::find(g_explained.begin(), g_explained.end(), old);
+        if (at != g_explained.end()) g_explained.erase(at);
+        else push_activity_locked("unloaded " + short_model_name(old) + " automatically: idle for a while, or the room was needed");
+    }
+    g_seen_models = std::move(names);
+}
+
+void note_activity(std::string text, const std::string &explained_unload = {}) {
+    std::lock_guard<std::mutex> lock(g_activity_mu);
+    push_activity_locked(std::move(text));
+    if (!explained_unload.empty()) g_explained.push_back(explained_unload);
+}
+
+std::vector<ActivityLine> activity_lines() {
+    std::lock_guard<std::mutex> lock(g_activity_mu);
+    return {g_activity.begin(), g_activity.end()};
+}
+
+// A loaded model by the name the user typed: the exact name, the name without its folder, or a part of it that names one model only.
+std::string find_loaded_model(const ChatState &st, const std::string &want, std::string &problem) {
+    std::vector<std::string> hits;
+    for (const LoadedModelInfo &m : loaded_models(st.registry)) {
+        if (m.name == want || short_model_name(m.name) == want) return m.name;
+        if (!want.empty() && m.name.find(want) != std::string::npos) hits.push_back(m.name);
+    }
+    if (hits.size() == 1) return hits[0];
+    problem = hits.empty() ? "no loaded model is called '" + want + "' (/models lists them)"
+                           : "'" + want + "' matches " + std::to_string(hits.size()) + " loaded models; type more of the name";
+    return {};
+}
+
+// Loads an installed model of any kind (speech, images, embeddings, a second chat model) now and leaves it idle in memory; the
+// registry unloads it again after the idle time or when another model needs the room.
+std::string model_load_by_hand(ChatState &st, const std::string &name) {
+    if (name.empty()) return "give the name of an installed model (Settings > Models on disk)";
+    const auto begun = std::chrono::steady_clock::now();
+    auto lease = acquire_task_model(*st.ctx, st.registry, name, st.workspace);
+    if (!lease.ok) return "could not load " + name + ": " + lease.error.message;
+    const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begun).count();
+    return "loaded " + name + " (" + seconds_text(took) + "); it stays in memory until it sits idle for " +
+           std::to_string(st.ctx->config.idle_unload_minutes) + " min or the room is needed";
+}
+
+std::string model_unload_by_hand(ChatState &st, const std::string &want) {
+    std::string problem;
+    const std::string name = find_loaded_model(st, want, problem);
+    if (name.empty()) return problem;
+    if (name == st.model.name) return "that is the model of this chat; switch with /model NAME first";
+    if (auto r = unload_model(st.registry, name); !r.ok) return "could not unload " + short_model_name(name) + ": " + r.error.message;
+    note_activity("unloaded " + short_model_name(name) + " on request", name);
+    return "unloaded " + short_model_name(name);
+}
+
+std::string models_report(ChatState &st) {
+    sample_activity(st);
+    const ModelBudget budget = get_budget(st.registry);
+    const int64_t now = wall_ms();
+    std::string text = "Models in memory (budget " + (budget.ram_bytes ? mib_text(budget.ram_bytes) : std::string("unlimited")) +
+                       ", this program " + mib_text(process_rss_bytes()) + "; engines in their own process are not counted):\n";
+    const auto loaded = loaded_models(st.registry);
+    for (const LoadedModelInfo &m : loaded)
+        text += "  " + short_model_name(m.name) + "  ~" + mib_text(m.ram_bytes + m.vram_bytes) + (m.vram_bytes ? " (VRAM)" : "") + "  " +
+                (m.leases ? std::string("in use") : "idle " + std::to_string((now - m.last_used_ms) / 1000) + " s") + ", loaded in " +
+                seconds_text(m.load_time_ms) + "\n";
+    if (loaded.empty()) text += "  none\n";
+    text += "A model is loaded when it is first used and unloaded after " + std::to_string(st.ctx->config.idle_unload_minutes) +
+            " idle minutes; the longest idle one goes first when another needs the room.\n";
+    const auto lines = activity_lines();
+    if (!lines.empty()) {
+        text += "Recent:\n";
+        for (size_t i = lines.size() > 12 ? lines.size() - 12 : 0; i < lines.size(); ++i)
+            text += "  " + clock_text(lines[i].at_ms) + "  " + lines[i].text + "\n";
+    }
+    return text;
+}
+
+constexpr std::string_view kModelManageSchema =
+    R"json({"type":"object","properties":{"action":{"type":"string","enum":["list","load","unload"],"description":"list shows the models held in memory and what was loaded or unloaded lately; load brings an installed model into memory now; unload frees one"},"name":{"type":"string","description":"the model, with load (an installed model's name) or unload (a loaded one)"}},"required":["action"]})json";
+
+Result<std::string> model_manage_cb(std::string_view args, void *user) {
+    auto *st = static_cast<ChatState *>(user);
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded(args);
+    simdjson::dom::element doc;
+    std::string_view action, name;
+    if (parser.parse(padded).get(doc) || doc["action"].get(action))
+        return fail<std::string>(ErrorCode::InvalidConfig, "model_manage needs an action: list, load or unload");
+    if (doc["name"].get(name)) name = {};
+    if (action == "list") return ok(models_report(*st));
+    if (action == "load") return ok(model_load_by_hand(*st, std::string(name)));
+    if (action == "unload") return ok(model_unload_by_hand(*st, std::string(name)));
+    return fail<std::string>(ErrorCode::InvalidConfig, "action must be list, load or unload");
+}
+
+bool model_manage_changes(std::string_view arguments) { return arguments.find("\"list\"") == std::string_view::npos; }
 
 // ---- notes that outlive the conversation: remember / recall over the session's key-value memory
 
@@ -1486,6 +1656,13 @@ Result<void> open_session(ChatState &st) {
                                  .parameter_schema = kTimerSchema,
                                  .callback = timer_cb,
                                  .user_data = &st});
+        cfg.tools.push_back(Tool{.name = "model_manage",
+                                 .description = "Show which models are held in memory and what the memory manager loaded or unloaded "
+                                                "lately (list), bring an installed model such as a speech, image or embedding model into "
+                                                "memory (load), or free one (unload).",
+                                 .parameter_schema = kModelManageSchema,
+                                 .callback = model_manage_cb,
+                                 .user_data = &st});
         cfg.tools.push_back(Tool{.name = "skill_learn",
                                  .description = "Keep how a task was done as a skill for next time (name, description, steps), or repair "
                                                 "a skill whose steps failed (same name, new steps, and the lesson: what went wrong).",
@@ -1602,6 +1779,9 @@ void print_chat_help() {
          "/image <path> [text]  send an image (or audio) with an optional prompt\n"
          "/open [n]             list generated files, or open the n-th\n"
          "/stats                token and tool-call counters\n"
+         "/models               models in memory, and what the memory manager loaded or unloaded\n"
+         "/load MODEL           load an installed model now (speech, image, embeddings)\n"
+         "/unload MODEL         free a loaded model\n"
          "/diff                 what the tools changed in files this session\n"
          "/undo                 put back the files of the last tool call\n"
          "/compact              summarise the oldest messages to free context\n"
@@ -2165,6 +2345,18 @@ bool handle_line(ChatState &st, const std::string &line) {
                 }
                 words.push_back(w);
             }
+            if (!words.empty() && words[0] == "models") {
+                out(models_report(st));
+                return true;
+            }
+            if (!words.empty() && (words[0] == "load" || words[0] == "unload")) {
+                if (words.size() < 2) {
+                    out("usage: /" + words[0] + " MODEL  (/models shows what is in memory)\n");
+                    return true;
+                }
+                out((words[0] == "load" ? model_load_by_hand(st, words[1]) : model_unload_by_hand(st, words[1])) + "\n");
+                return true;
+            }
             if (!words.empty() && (words[0] == "task" || words[0] == "run")) {
                 if (words.size() < 2) {
                     out(words[0] == "task"
@@ -2461,7 +2653,17 @@ TuiTaskbar tui_taskbar(ChatState &st) {
     tb.ram_total_gb = g_stats.ram_total.load();
     tb.files_gb = g_stats.files.load();
     tb.engine = st.engine.name;
-    for (const LoadedModelInfo &m : loaded_models(st.registry)) tb.models.push_back(m.name);
+    {
+        // The memory manager's housekeeping, about every five seconds: idle models give their memory back.
+        static int64_t last_prune = 0;
+        const int64_t now = wall_ms();
+        if (st.ctx->config.idle_unload_minutes > 0 && now - last_prune > 5000) {
+            last_prune = now;
+            prune_idle_models(st.registry, static_cast<int64_t>(st.ctx->config.idle_unload_minutes) * 60 * 1000);
+        }
+        sample_activity(st);
+    }
+    for (const LoadedModelInfo &m : loaded_models(st.registry)) tb.models.push_back(short_model_name(m.name));
     if (tb.models.empty() && !st.model.name.empty()) tb.models.push_back(st.model.name);
     tb.mode = chat_mode_name(st.mode);
     tb.context_total = st.context_window;
@@ -2499,9 +2701,6 @@ struct MicState {
     std::vector<float> samples;
     std::atomic<bool> stop{false};
     std::thread thread;
-    Session asr;
-    bool asr_ready = false;
-    std::string asr_model;
 };
 MicState g_mic;
 
@@ -2532,39 +2731,22 @@ std::string tui_mic(ChatState &st, bool start) {
     }
     if (samples.size() < audio::kCaptureRate / 2) return "!Nothing was heard";
 
-    // The first installed model that recognises speech.
-    std::string model_path, model_name;
-    if (auto catalog = agent::hub::list_models(catalog_path(*st.ctx)); catalog.ok)
-        for (const auto &m : catalog.value) {
-            const ModelKind kind = detect_model(m.path, m.repo, m.file, false);
-            if (kind.engine == "audiocpp" && kind.task == "asr") {
-                model_path = m.path;
+    // The model chosen in Settings (Speech and other models), else the first installed one that recognises speech. It is loaded through
+    // the memory manager like any other model, so /models and Settings show it, and it is unloaded when it sits idle.
+    std::string model_name = st.ctx->config.stt_model;
+    if (model_name.empty())
+        for (const InstalledModel &m : installed_models(catalog_path(*st.ctx)))
+            if (m.engine == "audiocpp" && m.capability == "asr") {
                 model_name = m.name;
                 break;
             }
-        }
-    if (model_path.empty()) return "!No speech recognition model is installed: agent model pull <a speech model link>";
-    if (!g_mic.asr_ready || g_mic.asr_model != model_name) {
-        auto engine = load_engine_for(*st.ctx, "audiocpp", model_path);
-        if (!engine.ok) return "!" + engine.error.message;
-        auto options = audiocpp_asr_options(model_path);
-        if (!options.ok) return "!" + options.error.message;
-        Config cfg;
-        cfg.provider = AiProvider::Engine;
-        cfg.engine = engine.value.name;
-        cfg.engine_isolation = cli_engine_isolation(st.inprocess, engine.value.isolation);
-        cfg.engine_sandbox.gpu = cli_engine_gpu(engine.value.backend);
-        apply_sandbox_choice(cfg);
-        use_workspace(cfg, st.workspace);
-        cfg.engine_options = options.value;
-        cfg.auto_default_tools = false;
-        auto session = init(cfg);
-        if (!session.ok) return "!" + session.error.message;
-        g_mic.asr = std::move(session.value);
-        g_mic.asr_ready = true;
-        g_mic.asr_model = model_name;
-    }
-    g_mic.asr.arena.reset();
+    if (model_name.empty())
+        return "!No speech recognition model is installed: agent model pull <a speech model link>, then choose it in Settings";
+    auto lease = acquire_task_model(*st.ctx, st.registry, model_name, st.workspace);
+    if (!lease.ok) return "!The speech model " + model_name + " did not load: " + lease.error.message;
+    std::lock_guard<std::mutex> turn(*lease.value.turn_mutex);
+    Session &asr = *lease.value.session;
+    asr.arena.reset();
     const int64_t shape[] = {static_cast<int64_t>(samples.size())};
     const TensorView tensor{
         .name = "audio",
@@ -2574,8 +2756,8 @@ std::string tui_mic(ChatState &st, bool start) {
     const MessageView msg{.role = "user", .content = {}, .tensors = std::span<const TensorView>(&tensor, 1)};
     InferRequest req;
     req.messages = std::span<const MessageView>(&msg, 1);
-    req.cancel = g_mic.asr.cancel_flag.get();
-    auto r = infer(g_mic.asr, req);
+    req.cancel = asr.cancel_flag.get();
+    auto r = infer(asr, req);
     if (!r.ok) return "!" + r.error.message;
     std::string words(r.value.message.content);
     while (!words.empty() && (words.back() == '\n' || words.back() == ' ')) words.pop_back();
@@ -2651,7 +2833,7 @@ std::optional<std::string> browse_setting(ChatState &st, const std::string &key,
     if (!wants_network) return std::nullopt;
     if (local) return std::string("Local only is on (Settings, The web): nothing is downloaded or connected");
     if (key.rfind("skill.add.", 0) == 0 || key == "skill_id") {
-        const std::string id = key == "skill_id" ? value : key.substr(10);
+        const std::string id = key == "skill_id" ? skill_id_from_text(value) : key.substr(10);
         if (value == "not installed" || id.empty()) return std::string();
         return after(text(skill_install_id(*st.ctx, st.workspace, id)));
     }
@@ -2662,13 +2844,13 @@ std::optional<std::string> browse_setting(ChatState &st, const std::string &key,
         auto hits = parse_skill_search(body.value);
         if (!hits.ok) return hits.error.message;
         g_browse.skills = std::move(hits.value);
-        if (g_browse.skills.size() > 12) g_browse.skills.resize(12);
+        if (g_browse.skills.size() > 30) g_browse.skills.resize(30);
         return g_browse.skills.empty() ? "Nothing found for '" + value + "'"
                                        : std::to_string(g_browse.skills.size()) + " results are listed below";
     }
     if (key == "mcp_search") {
         if (value.empty()) return std::string();
-        auto body = agent::hub::http_get_text(mcp_search_url(value, 12), http);
+        auto body = agent::hub::http_get_text(mcp_search_url(value, 30), http);
         if (!body.ok) return "The search failed: " + body.error.message;
         auto hits = parse_mcp_search(body.value);
         if (!hits.ok) return hits.error.message;
@@ -2687,6 +2869,7 @@ std::optional<std::string> browse_setting(ChatState &st, const std::string &key,
     }
     if (key == "mcp_custom") {
         if (value.empty()) return std::string();
+        if (value.front() == '{') return after(text(mcp_add_json_text(*st.ctx, st.workspace, value)));
         auto spec = parse_mcp_spec(value);
         if (!spec.ok) return spec.error.message;
         return after(text(mcp_add_spec(*st.ctx, st.workspace, spec.value)));
@@ -2827,7 +3010,8 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
         }
         head("Find more");
         add("skill_search", "Search skills.sh", "", "Press Enter and type words, for example: commit messages. The results appear below");
-        add("skill_id", "Add by name", "", "Press Enter and type owner/repo/skill, for example anthropics/skills/pdf");
+        add("skill_id", "Add by name or link", "",
+            "Press Enter and type owner/repo/skill (anthropics/skills/pdf), a skills.sh address, or the npx skills add line from its page");
         if (!g_browse.skills.empty()) {
             head("Search results (Right installs)");
             for (const SkillHit &h : g_browse.skills)
@@ -2855,8 +3039,8 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
         }
         head("Add your own");
         add("mcp_custom", "Package, command or address", "",
-            "Press Enter and type, for example: @modelcontextprotocol/server-filesystem   or   uvx mcp-server-time   or   "
-            "https://example.com/mcp");
+            "Press Enter and type a package (@modelcontextprotocol/server-filesystem), a command (uvx mcp-server-time), an address "
+            "(https://example.com/mcp), or paste the JSON block from the server's page, with its env keys as ${secret:NAME}");
         add("mcp_search", "Search the official registry", "", "Press Enter and type words, for example: sqlite. The results appear below");
         if (!g_browse.mcp.empty()) {
             head("Search results (Right adds)");
@@ -2865,6 +3049,76 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
                 add("mcp.reg." + std::to_string(k), h.name, "not added", h.description.substr(0, 110), {"not added", "add"});
             }
         }
+    }
+
+    cat("Models in memory");
+    {
+        sample_activity(st);
+        const int64_t now = wall_ms();
+        std::map<std::string, std::string> path_of; // catalogue name -> file
+        if (catalog.ok)
+            for (const auto &m : catalog.value) path_of[m.name] = m.path;
+        head("Loaded now (Right frees one that is idle)");
+        const auto loaded = loaded_models(st.registry);
+        for (const LoadedModelInfo &m : loaded) {
+            const std::string state = m.leases ? "in use" : "idle " + std::to_string((now - m.last_used_ms) / 1000) + " s";
+            const std::string detail = "~" + mib_text(m.ram_bytes + m.vram_bytes) + (m.vram_bytes ? " VRAM" : " RAM") + ", loaded in " +
+                                       seconds_text(m.load_time_ms) + (m.name == st.model.name ? "  (the model of this chat)" : "");
+            if (m.name == st.model.name || m.leases) info(short_model_name(m.name), state, detail);
+            else add("mem.unload." + m.name, short_model_name(m.name), state, detail, {state, "unload"});
+        }
+        if (loaded.empty()) info("None", "", "A model is loaded when it is first used");
+        head("Load another now (Right loads it)");
+        for (const InstalledModel &m : installed_models(catalog_path(*st.ctx))) {
+            if (m.remote || m.name == st.model.name) continue;
+            const std::string key = "task:" + m.engine + ":" + path_of[m.name];
+            const bool have = std::any_of(loaded.begin(), loaded.end(), [&](const LoadedModelInfo &l) { return l.name == key; });
+            const std::string what = m.capability + " (" + m.engine + ")";
+            if (have) info(m.name, "loaded", what);
+            else add("mem.load." + m.name, m.name, "not loaded", what + "  Loading can take a few seconds", {"not loaded", "load"});
+        }
+        head("Rules of the memory manager");
+        add("memory_budget_mb", "Memory budget (MB)", std::to_string(c.memory_budget_mb),
+            "The loaded models share this much RAM; 0 is 85% of the installed memory. The longest idle model is freed first");
+        add("idle_unload_minutes", "Free a model after idle (minutes)", std::to_string(c.idle_unload_minutes),
+            "A model nobody used for this long gives its memory back; 0 keeps them until the room is needed");
+        head("What the manager did (newest last)");
+        const auto lines = activity_lines();
+        for (size_t i = lines.size() > 15 ? lines.size() - 15 : 0; i < lines.size(); ++i) info(clock_text(lines[i].at_ms), lines[i].text);
+        if (lines.empty()) info("Nothing yet", "", "Loads, unloads and evictions appear here as they happen");
+    }
+
+    cat("Speech and other models");
+    {
+        auto names_of = [&](std::initializer_list<const char *> kinds) {
+            std::vector<std::string> names{"auto"};
+            for (const InstalledModel &m : installed_models(catalog_path(*st.ctx)))
+                for (const char *k : kinds)
+                    if (m.capability == k) names.push_back(m.name);
+            return names;
+        };
+        auto pick = [&](const char *key, const char *label, std::initializer_list<const char *> kinds, const std::string &current,
+                        const char *hint) {
+            auto options = names_of(kinds);
+            std::string shown = current.empty() ? "auto" : current;
+            if (std::find(options.begin(), options.end(), shown) == options.end()) options.push_back(shown);
+            add(key, label, shown, options.size() == 1 ? std::string("None installed. ") + hint : std::string(hint), options);
+        };
+        head("Which model does what (auto: the first installed one)");
+        pick("stt_model", "Microphone (speech to text)", {"asr"}, c.stt_model,
+             "The model the microphone button turns your speech into text with (audio.cpp: agent model pull a speech model)");
+        pick("tts_model", "Speech (text to speech)", {"tts"}, c.tts_model, "Used by /task speech and the voice assistant");
+        pick("vad_model", "Voice activity", {"vad"}, c.vad_model, "Finds where speech starts and stops in the voice assistant");
+        pick("image_model", "Images and video", {"image", "video"}, c.image_model, "Used by /task image when no model is named");
+        add("tts_voice", "Voice", c.tts_voice, "The voice name of the speech model, for example alba. Empty: the model's default");
+        head("Installed by kind");
+        for (const char *kind : {"asr", "tts", "vad", "image", "video", "mesh", "embed", "rerank", "diarize", "ocr"}) {
+            std::string list;
+            for (const InstalledModel &m : installed_models(catalog_path(*st.ctx)))
+                if (m.capability == kind) list += (list.empty() ? "" : ", ") + m.name;
+            if (!list.empty()) info(kind, list);
+        }
+        info("Get more", "agent model pull", "A Hugging Face link, owner/repo or a file; the engine is found from the file");
     }
 
     cat("Engines and GPU");
@@ -3027,6 +3281,23 @@ std::string tui_set_setting(ChatState &st, const std::string &key, const std::st
         if (auto e = persist(); !e.empty()) return e;
         return reload();
     }
+    if (key.rfind("mem.unload.", 0) == 0) return value == "unload" ? model_unload_by_hand(st, key.substr(11)) : std::string();
+    if (key.rfind("mem.load.", 0) == 0) return value == "load" ? model_load_by_hand(st, key.substr(9)) : std::string();
+    if (key == "stt_model" || key == "tts_model" || key == "vad_model" || key == "image_model") {
+        std::string &slot = key == "stt_model" ? c.stt_model : key == "tts_model" ? c.tts_model : key == "vad_model" ? c.vad_model : c.image_model;
+        slot = value == "auto" ? std::string() : value;
+        return persist();
+    }
+    if (key == "tts_voice") {
+        c.tts_voice = value;
+        return persist();
+    }
+    if (key == "idle_unload_minutes") {
+        long v = 0;
+        if (auto e = whole(0, v); !e.empty()) return e;
+        c.idle_unload_minutes = static_cast<int>(v);
+        return persist();
+    }
     if (key == "memory_budget_mb") {
         long v = 0;
         if (auto e = whole(0, v); !e.empty()) return e;
@@ -3178,6 +3449,9 @@ int run_chat(ChatState &st, const CommandLine &cl, const std::string &engine_log
             {"/run", "run a graph file"},
             {"/open", "list or open generated files"},
             {"/stats", "token and tool-call counters"},
+            {"/models", "models in memory, and what was loaded or unloaded"},
+            {"/load", "load an installed model now (speech, image, embeddings)"},
+            {"/unload", "free a loaded model"},
             {"/diff", "what the tools changed in files"},
             {"/undo", "put back the last file change"},
             {"/compact", "summarise old messages"},

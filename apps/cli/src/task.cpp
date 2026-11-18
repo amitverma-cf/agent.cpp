@@ -4,6 +4,7 @@
 #include "commands.hpp"
 #include "crash_guard.hpp"
 #include "home.hpp"
+#include "model_detect.hpp"
 
 #include <agent-cpp/agent.hpp>
 #include <agent-cpp/engine_abi.h>
@@ -409,6 +410,12 @@ Result<ModelLease> acquire_task_model(Context &ctx, ModelRegistry &registry, std
         spec.config.engine_sandbox.gpu = cli_engine_gpu(engine.value.backend);
         apply_sandbox_choice(spec.config);
         spec.config.engine_options = catalog_engine_options(ctx, model.value.path, "");
+        // audio.cpp takes each file under the role it plays (asr, tts, vad, diarize), which the file itself says.
+        if (engine.value.name == "audiocpp") {
+            const ModelKind kind = detect_model(model.value.path, "", std::filesystem::path(model.value.path).filename().string(), false);
+            if (kind.task == "asr" || kind.task == "tts" || kind.task == "vad" || kind.task == "diarize")
+                spec.config.engine_options = with_role_model(spec.config.engine_options, kind.task, model.value.path);
+        }
         spec.config.model = model.value.path;
         spec.config.auto_default_tools = false;
         use_workspace(spec.config, workspace_dir(ctx, workspace));

@@ -44,6 +44,9 @@ std::vector<McpInstalled> list_mcp(const Context &ctx, const std::string &worksp
 // Each returns a sentence for the person (what happened and what to expect), or an error.
 Result<std::string> mcp_add_curated(const Context &ctx, const std::string &workspace, std::string_view id, std::string_view folder = {});
 Result<std::string> mcp_add_spec(const Context &ctx, const std::string &workspace, const McpSpec &spec);
+// Servers from JSON pasted out of a README: {"mcpServers": {"name": {...}}}, or one entry {"command": "npx", "args": [...], "env": {...}}
+// or {"url": "https://...", "headers": {...}} (named by "name", else from its command or address). Keys go in as ${secret:NAME}.
+Result<std::string> mcp_add_json_text(const Context &ctx, const std::string &workspace, std::string_view text);
 // A server from the official registry: `json` is a complete {"mcpServers": {...}} document (see mcp_entry_for).
 Result<std::string> mcp_add_entry_json(const Context &ctx, const std::string &workspace, std::string_view name, const std::string &json);
 Result<std::string> mcp_set_enabled(const Context &ctx, const std::string &workspace, std::string_view name, bool enabled);
@@ -68,6 +71,8 @@ std::vector<SkillInstalled> list_skills(const Context &ctx, const std::string &w
 
 // Installs from skills.sh (the repository is read from GitHub). `id` is owner/repo/skill. A skill is text; it is shown nothing here, the
 // caller has the user's go-ahead.
+// What a person pastes to name a skill, as owner/repo/skill: that, a skills.sh address, or the line `npx skills add owner/repo --skill name`.
+std::string skill_id_from_text(std::string_view text);
 Result<std::string> skill_install_id(const Context &ctx, const std::string &workspace, std::string_view id, bool project = false);
 Result<std::string> skill_set_enabled(const Context &ctx, const std::string &workspace, std::string_view name, bool enabled);
 Result<std::string> skill_remove_named(const Context &ctx, const std::string &workspace, std::string_view name);

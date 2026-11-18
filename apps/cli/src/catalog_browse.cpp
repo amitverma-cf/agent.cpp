@@ -8,6 +8,7 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <simdjson.h>
 
 namespace agent::cli {
 
@@ -192,6 +193,88 @@ Result<std::string> mcp_add_spec(const Context &ctx, const std::string &workspac
     if (!spec.url.empty()) body = "{\"url\": \"" + json_escape(spec.url) + "\"}";
     else body = "{\"command\": \"" + json_escape(spec.command) + "\", \"args\": " + json_list(spec.args) + "}";
     return write_server(ctx, workspace, spec.name, body, std::string(kStartNote));
+}
+
+Result<std::string> mcp_add_json_text(const Context &ctx, const std::string &workspace, std::string_view text) {
+    simdjson::dom::parser parser;
+    simdjson::padded_string padded(text);
+    simdjson::dom::element doc;
+    if (parser.parse(padded).get(doc) || !doc.is_object())
+        return fail<std::string>(ErrorCode::InvalidConfig, "that is not a JSON object; paste the server's block, for example {\"command\": \"npx\", \"args\": [...]}");
+    simdjson::dom::object servers;
+    if (doc["mcpServers"].get(servers) && doc["servers"].get(servers)) {
+        // One entry: the server itself.
+        std::string_view named;
+        std::string name = doc["name"].get(named) ? std::string() : std::string(named);
+        std::string body = "{";
+        bool first = true, has_target = false;
+        for (auto field : doc.get_object()) {
+            if (field.key == "name") continue;
+            has_target = has_target || field.key == "command" || field.key == "url";
+            body += std::string(first ? "" : ", ") + "\"" + json_escape(std::string(field.key)) + "\": " + simdjson::minify(field.value);
+            first = false;
+        }
+        body += "}";
+        if (!has_target) return fail<std::string>(ErrorCode::InvalidConfig, "the server needs a \"command\" or a \"url\"");
+        if (name.empty()) {
+            std::string_view url, command;
+            simdjson::dom::array args;
+            std::string line;
+            if (!doc["url"].get(url)) line = std::string(url);
+            else if (!doc["command"].get(command)) {
+                line = std::string(command);
+                if (!doc["args"].get(args))
+                    for (simdjson::dom::element a : args) {
+                        std::string_view v;
+                        if (!a.get(v)) line += " " + std::string(v);
+                    }
+            }
+            if (auto spec = parse_mcp_spec(line); spec.ok) name = spec.value.name;
+            if (name.empty()) name = "server";
+        }
+        return write_server(ctx, workspace, name, body, std::string(kStartNote));
+    }
+    std::string done;
+    for (auto field : servers) {
+        auto r = write_server(ctx, workspace, std::string(field.key), simdjson::minify(field.value), std::string(kStartNote));
+        if (!r.ok) return r;
+        done += (done.empty() ? "" : " ") + r.value;
+    }
+    if (done.empty()) return fail<std::string>(ErrorCode::InvalidConfig, "the JSON lists no server");
+    return ok(done);
+}
+
+std::string skill_id_from_text(std::string_view text) {
+    std::string t(text);
+    while (!t.empty() && (t.back() == ' ' || t.back() == '/' || t.back() == '\n')) t.pop_back();
+    while (!t.empty() && t.front() == ' ') t.erase(0, 1);
+    if (const size_t at = t.find("skills.sh/"); at != std::string::npos) return t.substr(at + 10);
+    if (const size_t at = t.find("skills add "); at != std::string::npos) {
+        std::string rest = t.substr(at + 11);
+        const size_t space = rest.find(' ');
+        const std::string repo = rest.substr(0, space);
+        if (const size_t flag = rest.find("--skill"); flag != std::string::npos) {
+            std::string name = rest.substr(flag + 7);
+            while (!name.empty() && name.front() == ' ') name.erase(0, 1);
+            name = name.substr(0, name.find(' '));
+            if (!name.empty()) return repo + "/" + name;
+        }
+        return repo;
+    }
+    if (const size_t at = t.find("github.com/"); at != std::string::npos) {
+        // https://github.com/owner/repo/tree/main/skills/name -> owner/repo/name
+        const std::string path = t.substr(at + 11);
+        std::vector<std::string> parts;
+        size_t from = 0;
+        while (from <= path.size()) {
+            const size_t slash = path.find('/', from);
+            parts.push_back(path.substr(from, slash == std::string::npos ? std::string::npos : slash - from));
+            if (slash == std::string::npos) break;
+            from = slash + 1;
+        }
+        if (parts.size() >= 2) return parts.size() >= 5 && parts[2] == "tree" ? parts[0] + "/" + parts[1] + "/" + parts.back() : parts[0] + "/" + parts[1];
+    }
+    return t;
 }
 
 std::vector<McpInstalled> list_mcp(const Context &ctx, const std::string &workspace) {
