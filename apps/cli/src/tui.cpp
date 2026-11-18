@@ -230,18 +230,19 @@ constexpr std::string_view kMarkdownCss = R"css(
 
 // One block of the conversation, as the template reads it.
 struct Icons {
-    const char *assistant, *error, *tool, *result, *current, *other, *project, *caret, *busy, *settings, *copy, *del, *mic, *back, *menu;
+    const char *assistant, *error, *tool, *result, *current, *other, *project, *caret, *busy, *settings, *copy, *del, *mic, *back, *menu,
+        *close;
 };
 
 // Unicode symbols every terminal font has; a Nerd Font (https://www.nerdfonts.com) gives richer glyphs: AGENT_ICONS=nerd.
 const Icons &icons() {
-    static const Icons unicode{"\xE2\x9C\xA6", "\xE2\x9C\x97", "\xE2\x9D\xAF", "\xE2\x86\xB3", "\xE2\x97\x8F",
-                               "\xE2\x97\x8B", "\xE2\x96\xB8", "\xE2\x9D\xAF", "\xC2\xB7",     "\xE2\x9C\xB1",
-                               "\xE2\xA7\x89", "\xE2\x9C\x95", "\xE2\x97\x89", "\xE2\x80\xB9", "\xE2\x98\xB0"};
-    static const Icons nerd{"\xEF\x80\x85", "\xEF\x80\x8D", "\xEF\x80\x93", "\xEF\x80\x8C", "\xEF\x84\x91",
-                            "\xEF\x84\x8C", "\xEF\x81\xBB", "\xEF\x84\x85", "\xC2\xB7",     "\xEF\x80\x93",
-                            "\xEF\x83\x85", "\xEF\x87\xB8", "\xEF\x84\xB0", "\xEF\x81\x93", "\xEF\x83\x89"};
-    static const Icons ascii{"*", "x", ">", "-", "*", "o", ">", ">", ".", "*", "c", "x", "o", "<", "="};
+    static const Icons unicode{"\xE2\x9C\xA6", "\xE2\x9C\x97", "\xE2\x9D\xAF", "\xE2\x86\xB3", "\xE2\x97\x8F", "\xE2\x97\x8B",
+                               "\xE2\x96\xB8", "\xE2\x9D\xAF", "\xC2\xB7",     "\xE2\x9C\xB1", "\xE2\xA7\x89", "\xF0\x9F\x97\x91",
+                               "\xE2\x97\x89", "\xE2\x80\xB9", "\xE2\x98\xB0", "\xE2\x9C\x95"};
+    static const Icons nerd{"\xEF\x80\x85", "\xEF\x80\x8D", "\xEF\x80\x93", "\xEF\x80\x8C", "\xEF\x84\x91", "\xEF\x84\x8C",
+                            "\xEF\x81\xBB", "\xEF\x84\x85", "\xC2\xB7",     "\xEF\x80\x93", "\xEF\x83\x85", "\xEF\x87\xB8",
+                            "\xEF\x84\xB0", "\xEF\x81\x93", "\xEF\x83\x89", "\xEF\x80\x8D"};
+    static const Icons ascii{"*", "x", ">", "-", "*", "o", ">", ">", ".", "*", "c", "del", "o", "<", "=", "x"};
     static const Icons &chosen = []() -> const Icons & {
         const char *want = std::getenv("AGENT_ICONS");
         if (want && std::string_view(want) == "nerd") return nerd;
@@ -552,6 +553,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         Bind(OpenSettings);
         Bind(ico_copy);
         Bind(ico_del);
+        Bind(ico_close);
         Bind(ico_mic);
         Bind(ico_back);
         Bind(ico_menu);
@@ -640,8 +642,9 @@ class ChatApp : public rtxui::Component<ChatApp> {
     }
 
     // ---- icons, the bottom bar, the hint line, dialogs
-    std::string ico_copy = icons().copy, ico_del = icons().del, ico_mic = std::string(icons().mic) + " mic", ico_back = icons().back,
-                ico_menu = icons().menu, ico_settings = icons().settings, mic_class = "mic", hint, hint_class = "hint";
+    std::string ico_copy = icons().copy, ico_del = icons().del, ico_close = icons().close, ico_mic = std::string(icons().mic) + " mic",
+                ico_back = icons().back, ico_menu = icons().menu, ico_settings = icons().settings, mic_class = "mic", hint,
+                hint_class = "hint";
     bool has_messages = false;
     std::string tb_cpu, tb_ram, tb_files, tb_engine, tb_models, tb_mode, tb_ctx;
     int delete_armed = -1;
@@ -854,7 +857,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         if (confirm_open) hint = "Enter or y confirms, Esc cancels";
         else if (asking) hint = "y allows once, A always allows this tool, n or Esc refuses and stops";
         else if (recording) hint = "Listening: click the microphone again to stop";
-        else if (busy) hint = "Esc or Ctrl+C stops the answer, a tool or /compact; the wheel or PageUp scrolls";
+        else if (busy) hint = "Enter queues your message  ·  Esc stops the answer";
         else if (!follow) hint = "End jumps to the newest message";
         else if (!input.empty() && input[0] == '/') hint = "Tab completes the command, Enter runs it";
         else if (!input.empty() && input[0] == '@') hint = "@path puts that file's text in your message, for example @src/main.cpp";
@@ -1338,9 +1341,10 @@ class ChatApp : public rtxui::Component<ChatApp> {
                 RefreshSessions();
                 Settle();
                 if (!again && g_screen) g_screen->Exit();
-                else if (!later.empty()) {
-                    const std::string next = later.front();
-                    later.pop_front();
+                else if (!later.empty() || !queued.empty()) {
+                    std::deque<std::string> &from = later.empty() ? queued : later;
+                    const std::string next = from.front();
+                    from.pop_front();
                     Emit(TuiKind::User, next);
                     Submit(next);
                 }
@@ -1359,6 +1363,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         Submit(line);
     }
     std::deque<std::string> later;
+    std::deque<std::string> queued; // messages typed while an answer was running: sent one by one when it ends; Esc forgets them
 
     // The palette is open while the user is typing a command name: the input starts with "/" and has no space yet.
     std::vector<size_t> PaletteMatches() const {
@@ -1568,6 +1573,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         }
         if (e == Event::CtrlC() || e == Event::Escape()) {
             if (busy) {
+                queued.clear();
                 if (host.cancel) host.cancel(host.user);
             } else if (e == Event::CtrlC()) {
                 // Typed text goes first (a second Ctrl+C quits), so a person who wants to wipe the line does not lose the chat.
@@ -1681,7 +1687,14 @@ class ChatApp : public rtxui::Component<ChatApp> {
                 Emit(TuiKind::User, line);
                 Submit(line);
             }
-            return true; // an answer is running: no second message yet
+            // An answer is running: the line waits its turn instead of being lost, and goes out when the answer is done.
+            const std::string waiting = input;
+            if (waiting.find_first_not_of(" 	") != std::string::npos && waiting[0] != '/') {
+                SetInput("");
+                queued.push_back(waiting);
+                Toast("Queued, sent after the answer");
+            }
+            return true;
         }
         return Component<ChatApp>::OnEvent(e); // the rest goes to the input
     }
@@ -1760,7 +1773,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
         </div>
       </div>
       <div if="{show_settings}" class="settings">
-        <div class="sethead"><span class="setback" onclick="SettingsBack">{ico_back}</span><span class="setname">Settings</span><span class="act" onclick="CloseSettings">{ico_del}</span></div>
+        <div class="sethead"><span class="setback" onclick="SettingsBack">{ico_back}</span><span class="setname">Settings</span><span class="act" onclick="CloseSettings">{ico_close}</span></div>
         <div class="{set_view}">
           <div class="setside"><for each="{cat_rows}" as="c"><div class="{c.cls}" onclick="PickCat({c.idx})">{c.text}</div></for></div>
           <div class="setmain">
@@ -1810,7 +1823,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .setname { flex-grow: 1; background-color: #000000; }
       .setback { display: none; padding-right: 2; }
       .setbody { display: flex; flex-direction: row; flex-grow: 1; flex-basis: 0; min-height: 0; }
-      .setside { width: 22; flex-shrink: 0; display: flex; flex-direction: column; border-right: solid; border-color: #4a4a4a; padding-right: 1; }
+      .setside { width: 26; flex-shrink: 0; display: flex; flex-direction: column; border-right: solid; border-color: #4a4a4a; padding-right: 1; }
       .setcat { color: #8a8a8a; padding-left: 1; white-space: nowrap; }
       .setcat.cur { color: #ffffff; font-weight: bold; }
       .setcat.focus { background-color: #40e0d0; color: #000000; }
@@ -1819,7 +1832,7 @@ class ChatApp : public rtxui::Component<ChatApp> {
       .setlist { flex-grow: 1; flex-basis: 0; min-height: 0; overflow-y: scroll; scrollbar-width: none; }
       .setgroup { color: #8a8a8a; margin-top: 1; }
       .setrow { display: flex; flex-direction: row; color: #ffffff; padding-left: 1; }
-      .setrow .slabel { width: 28; flex-shrink: 0; }
+      .setrow .slabel { width: 34; flex-shrink: 0; }
       .setrow .sval { flex-grow: 1; color: #40e0d0; white-space: nowrap; }
       .setrow.ro .sval { color: #8a8a8a; }
       .setrow.cur { background-color: #40e0d0; color: #000000; font-weight: bold; }
@@ -1927,6 +1940,10 @@ class ChatApp : public rtxui::Component<ChatApp> {
         .home .ttitle, .home .tdel { display: none; }
         .tb.files { display: none; }
       }
+      @media (max-width: 109) {
+        .setside { width: 22; }
+        .setrow .slabel { width: 28; }
+      }
       @media (max-width: 69) {
         .side.drawer { width: 100%; border-right: none; }
         .setback { display: inline; }
@@ -1942,6 +1959,9 @@ class ChatApp : public rtxui::Component<ChatApp> {
         .home .composer { width: 100%; padding-left: 1; padding-right: 1; }
         .tb.models, .tb.engine { display: none; }
         dialog::part(dialog-box) { min-width: 44; }
+      }
+      @media (max-width: 44) {
+        .mic { display: none; }
       }
       @media (max-width: 55) {
         .tl { display: none; }
@@ -1997,6 +2017,27 @@ std::string render_chat_text(const TuiHost &host, int width, int height) {
     auto app = rtxui::Ref<ChatApp>::New(host);
     rtxui::HeadlessScreen screen(app, width, height);
     return screen.Text();
+}
+
+std::string render_chat_session(const TuiHost &host, int width, int height, std::span<const std::string> steps) {
+    Sync sync;
+    g_sync = &sync;
+    auto app = rtxui::Ref<ChatApp>::New(host);
+    g_app = app.get();
+    std::string text;
+    {
+        rtxui::HeadlessScreen screen(app, width, height);
+        for (const std::string &step : steps) {
+            screen.Input(step);
+            // Whatever the keys started (an answer, the messages queued behind it) is finished before the next step.
+            screen.WaitUntil([&] { return !app->busy && app->queued.empty() && app->later.empty(); }, 10000);
+        }
+        text = screen.Text();
+    }
+    if (app->worker.joinable()) app->worker.join();
+    g_app = nullptr;
+    g_sync = nullptr;
+    return text;
 }
 
 std::string render_markdown_text(std::string_view markdown, int width) {

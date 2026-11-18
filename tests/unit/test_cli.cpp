@@ -1,11 +1,13 @@
 #include "cli_core.hpp"
 
 #include <catch_amalgamated.hpp>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace agent::cli;
@@ -808,4 +810,104 @@ TEST_CASE("cli: a mistyped command gets a suggestion", "[cli]") {
     CHECK(agent::cli::closest_command("modle") == "model");
     CHECK(agent::cli::closest_command("chta") == "chat");
     CHECK(agent::cli::closest_command("zzzzzz").empty());
+}
+
+namespace {
+bool fake_submit(void *, const std::string &line) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    tui_emit(TuiKind::Assistant, "echo: " + line);
+    return true;
+}
+std::vector<TuiSetting> fake_settings(void *) {
+    return {
+        {"Models in memory", "Loaded now", "info", "model", "in use", "", {}, false},
+        {"Other models", "Which model does what", "stt_model", "Microphone (speech to text)", "auto", "hint", {"auto", "parakeet"}, true}};
+}
+} // namespace
+
+TEST_CASE("tui: a message typed while an answer runs is queued and sent after it", "[cli][tui]") {
+    TuiHost host;
+    host.header = fake_header;
+    host.subtitle = fake_subtitle;
+    host.submit = fake_submit;
+    // "one" starts an answer; "two" and "three" are typed while it runs.
+    const std::vector<std::string> steps = {"one\rtwo\rthree\r"};
+    const std::string text = render_chat_session(host, 100, 30, steps);
+    if (std::getenv("AGENT_SHOW_MD")) std::puts(text.c_str());
+    const size_t two = text.find("echo: two");
+    const size_t three = text.find("echo: three");
+    REQUIRE(two != std::string::npos);
+    REQUIRE(three != std::string::npos);
+    CHECK(two < three);
+    CHECK(text.find("thinking") == std::string::npos); // finished, nothing left running
+}
+
+TEST_CASE("tui: delete and close have their own icons", "[cli][tui]") {
+    TuiHost host;
+    host.header = fake_header;
+    host.subtitle = fake_subtitle;
+    host.submit = fake_submit;
+    host.settings = fake_settings;
+    const std::vector<std::string> chat = {"hello\r"};
+    const std::string text = render_chat_session(host, 100, 30, chat);
+    CHECK(text.find("\xF0\x9F\x97\x91") != std::string::npos); // a wastebasket, for deleting a message or the conversation
+    CHECK(text.find("\xE2\x9C\x95") == std::string::npos);     // no cross that could read as close
+    const std::vector<std::string> settings = {"\x0f"};
+    const std::string screen = render_chat_session(host, 100, 30, settings);
+    CHECK(screen.find("\xE2\x9C\x95") != std::string::npos); // the settings screen closes with a cross
+    CHECK(screen.find("Other models") != std::string::npos);
+}
+
+TEST_CASE("tui: nothing is cut off or wider than the screen across sizes", "[cli][tui]") {
+    TuiHost host;
+    host.header = fake_header;
+    host.subtitle = fake_subtitle;
+    host.sessions = fake_sessions;
+    host.submit = fake_submit;
+    host.settings = fake_settings;
+    const std::string long_word(400, 'x');
+    for (const auto &size : std::vector<std::pair<int, int>>{{30, 10}, {44, 14}, {60, 20}, {80, 24}, {120, 40}, {240, 60}}) {
+        const std::vector<std::string> steps = {long_word + "\r", "plain words that wrap around the screen again and again\r", "/", "\x1b"};
+        const std::string text = render_chat_session(host, size.first, size.second, steps);
+        // The rows of the screen: none wider than the terminal (counting a wide glyph as two columns is the library's job; here the
+        // limit is bytes / 1 so a row of one-column glyphs is exact and a wider one is only ever shorter in characters).
+        size_t rows = 0;
+        size_t at = 0;
+        while (at < text.size()) {
+            const size_t end = text.find('\n', at);
+            const std::string row = text.substr(at, end == std::string::npos ? std::string::npos : end - at);
+            size_t glyphs = 0;
+            for (const unsigned char c : row) glyphs += (c & 0xC0) != 0x80;
+            CHECK(glyphs <= static_cast<size_t>(size.first));
+            ++rows;
+            if (end == std::string::npos) break;
+            at = end + 1;
+        }
+        CHECK(rows <= static_cast<size_t>(size.second));
+    }
+}
+
+TEST_CASE("tui: a long conversation of queued messages and many sessions stays usable", "[cli][tui][stress]") {
+    TuiHost host;
+    host.header = fake_header;
+    host.subtitle = fake_subtitle;
+    host.submit = [](void *, const std::string &line) {
+        tui_emit(TuiKind::Assistant, "echo: " + line);
+        return true;
+    };
+    host.sessions = [](void *) {
+        std::vector<TuiSession> list;
+        for (int i = 0; i < 300; ++i)
+            list.push_back({"c" + std::to_string(i), "Question number " + std::to_string(i), "/work/p" + std::to_string(i % 7), i, i == 0});
+        return list;
+    };
+    std::string typed;
+    for (int i = 0; i < 150; ++i) typed += "message " + std::to_string(i) + "\r";
+    const std::vector<std::string> steps = {typed, "\x1b[5~\x1b[5~\x1b[H\x1b[F", "\x0b", "\x1b[B\x1b[B\x1b[A", "\x1b"};
+    const auto begun = std::chrono::steady_clock::now();
+    const std::string text = render_chat_session(host, 100, 30, steps);
+    const auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - begun).count();
+    CHECK(seconds < 60.0);
+    CHECK(text.find("New chat") != std::string::npos);
+    CHECK(text.find("Question number") != std::string::npos);
 }

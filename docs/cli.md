@@ -251,6 +251,8 @@ is `--params '{"json": true}'` or `--params '{"grammar": "..."}'`.
   a shell command. A line under the input suggests the next useful key or command while typing.
 - **Bottom bar:** CPU use, RAM used and installed, the size of the files folder; and on the right the engine, the models held in RAM, the mode
   and the context used and available.
+- **While an answer runs:** Enter queues what you typed and sends it when the answer is done; Esc stops the answer and forgets the queue. The wastebasket deletes a message or the conversation (it asks first); the cross closes the Settings.
+- **Looking at the screen without a terminal:** `RTXUI_HEADLESS=120x40 agent chat ... < keys` draws the chat as text and prints it (keys are the bytes a terminal sends, for example `` for Ctrl+O), which is how the screens are checked.
 - **Shortcuts:** `?` on an empty input, or F1, lists every keyboard shortcut; the sidebar shows F1 under the Settings button. To change one, open the Settings, choose Shortcuts, press Enter on an action and then the wanted keys (F1 to F12, Ctrl+letter, Alt+letter or Ctrl+Alt+letter; a key that is already used is refused). The choices are kept in `config.json` under `shortcuts`, and "Put the defaults back" clears them. (A terminal cannot report the Alt key alone.) Ctrl+O opens the
   settings; there, the categories are on the left, and each setting changes with Left and Right or by typing a new value.
 

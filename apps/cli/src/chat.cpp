@@ -2191,8 +2191,10 @@ int cmd_chat(const CommandLine &cl, Context &ctx) {
     st.inprocess = cl.has("inprocess");
     st.interactive = stdin_is_tty();
 #if defined(AGENT_CLI_HAS_TUI)
-    st.use_tui = st.interactive && stream_is_tty(stdout) && !cl.has("plain") && !st.verbose && !cl.has("prompt") && !cl.has("jsonl") &&
-                 !cl.has("acp");
+    // RTXUI_HEADLESS=WxH draws the screen without a terminal and reads the keys from stdin (see vendor/RTXUI docs/guide/headless.md): for tests.
+    const bool headless = std::getenv("RTXUI_HEADLESS") != nullptr;
+    st.use_tui = (headless || (st.interactive && stream_is_tty(stdout))) && !cl.has("plain") && !st.verbose && !cl.has("prompt") &&
+                 !cl.has("jsonl") && !cl.has("acp");
 #endif
     {
         // Names and bindings of the secrets; a broken index only means that no server gets a key.
@@ -3039,10 +3041,10 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
             else add("mcp.add." + std::string(c.id), std::string(c.id), "not added", std::string(c.description), {"not added", "add"});
         }
         head("Add your own");
-        add("mcp_custom", "Package, command or address", "",
+        add("mcp_custom", "Package, command or JSON", "",
             "Press Enter and type a package (@modelcontextprotocol/server-filesystem), a command (uvx mcp-server-time), an address "
             "(https://example.com/mcp), or paste the JSON block from the server's page, with its env keys as ${secret:NAME}");
-        add("mcp_search", "Search the official registry", "", "Press Enter and type words, for example: sqlite. The results appear below");
+        add("mcp_search", "Search MCP registry", "", "Press Enter and type words, for example: sqlite. The results appear below");
         if (!g_browse.mcp.empty()) {
             head("Search results (Right adds)");
             for (size_t k = 0; k < g_browse.mcp.size(); ++k) {
@@ -3081,7 +3083,7 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
         head("Rules of the memory manager");
         add("memory_budget_mb", "Memory budget (MB)", std::to_string(c.memory_budget_mb),
             "The loaded models share this much RAM; 0 is 85% of the installed memory. The longest idle model is freed first");
-        add("idle_unload_minutes", "Free a model after idle (minutes)", std::to_string(c.idle_unload_minutes),
+        add("idle_unload_minutes", "Unload after idle (min)", std::to_string(c.idle_unload_minutes),
             "A model nobody used for this long gives its memory back; 0 keeps them until the room is needed");
         head("What the manager did (newest last)");
         const auto lines = activity_lines();
@@ -3089,7 +3091,7 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
         if (lines.empty()) info("Nothing yet", "", "Loads, unloads and evictions appear here as they happen");
     }
 
-    cat("Speech and other models");
+    cat("Other models");
     {
         auto names_of = [&](std::initializer_list<const char *> kinds) {
             std::vector<std::string> names{"auto"};
@@ -3112,7 +3114,10 @@ std::vector<TuiSetting> tui_settings(ChatState &st) {
         pick("vad_model", "Voice activity", {"vad"}, c.vad_model, "Finds where speech starts and stops in the voice assistant");
         pick("image_model", "Images and video", {"image", "video"}, c.image_model, "Used by /task image when no model is named");
         add("tts_voice", "Voice", c.tts_voice, "The voice name of the speech model, for example alba. Empty: the model's default");
-        head("Installed by kind");
+        bool any_speech_or_other = false;
+        for (const InstalledModel &m : installed_models(catalog_path(*st.ctx)))
+            any_speech_or_other = any_speech_or_other || (!can_chat(m) && !m.remote);
+        if (any_speech_or_other) head("Installed by kind");
         for (const char *kind : {"asr", "tts", "vad", "image", "video", "mesh", "embed", "rerank", "diarize", "ocr"}) {
             std::string list;
             for (const InstalledModel &m : installed_models(catalog_path(*st.ctx)))
