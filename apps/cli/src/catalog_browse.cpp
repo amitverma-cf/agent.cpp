@@ -200,7 +200,9 @@ Result<std::string> mcp_add_json_text(const Context &ctx, const std::string &wor
     simdjson::padded_string padded(text);
     simdjson::dom::element doc;
     if (parser.parse(padded).get(doc) || !doc.is_object())
-        return fail<std::string>(ErrorCode::InvalidConfig, "that is not a JSON object; paste the server's block, for example {\"command\": \"npx\", \"args\": [...]}");
+        return fail<std::string>(
+            ErrorCode::InvalidConfig,
+            "that is not a JSON object; paste the server's block, for example {\"command\": \"npx\", \"args\": [...]}");
     simdjson::dom::object servers;
     if (doc["mcpServers"].get(servers) && doc["servers"].get(servers)) {
         // One entry: the server itself.
@@ -272,7 +274,8 @@ std::string skill_id_from_text(std::string_view text) {
             if (slash == std::string::npos) break;
             from = slash + 1;
         }
-        if (parts.size() >= 2) return parts.size() >= 5 && parts[2] == "tree" ? parts[0] + "/" + parts[1] + "/" + parts.back() : parts[0] + "/" + parts[1];
+        if (parts.size() >= 2)
+            return parts.size() >= 5 && parts[2] == "tree" ? parts[0] + "/" + parts[1] + "/" + parts.back() : parts[0] + "/" + parts[1];
     }
     return t;
 }

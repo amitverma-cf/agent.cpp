@@ -204,13 +204,17 @@ TEST_CASE("an MCP server is added from the JSON block of its page", "[chat_featu
     fs::create_directories(ws);
 
     // The README shape: a whole mcpServers object, with a key kept out of the file as a secret reference.
-    REQUIRE(mcp_add_json_text(ctx, ws,
-                              R"({"mcpServers":{"github":{"command":"npx","args":["-y","@modelcontextprotocol/server-github"],"env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"${secret:github}"}}}})")
-                .ok);
+    REQUIRE(
+        mcp_add_json_text(
+            ctx, ws,
+            R"({"mcpServers":{"github":{"command":"npx","args":["-y","@modelcontextprotocol/server-github"],"env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"${secret:github}"}}}})")
+            .ok);
     // One entry without a name: the name comes from the command.
     REQUIRE(mcp_add_json_text(ctx, ws, R"({"command":"uvx","args":["mcp-server-time"]})").ok);
     // One entry with a name, reached over HTTP with a header.
-    REQUIRE(mcp_add_json_text(ctx, ws, R"({"name":"docs","url":"https://example.com/mcp","headers":{"Authorization":"Bearer ${secret:docs}"}})").ok);
+    REQUIRE(
+        mcp_add_json_text(ctx, ws, R"({"name":"docs","url":"https://example.com/mcp","headers":{"Authorization":"Bearer ${secret:docs}"}})")
+            .ok);
     CHECK_FALSE(mcp_add_json_text(ctx, ws, "[1]").ok);
     CHECK_FALSE(mcp_add_json_text(ctx, ws, R"({"args":["x"]})").ok); // no command and no address
 

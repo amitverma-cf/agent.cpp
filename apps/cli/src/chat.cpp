@@ -804,7 +804,8 @@ std::string run_agent_command(ChatState &st, std::vector<std::string> args, bool
     if (st.ctx->has_home && !has("--home")) args.insert(args.end(), {"--home", st.ctx->home.root});
     if ((args[0] == "task" || args[0] == "run") && !has("--workspace")) args.insert(args.end(), {"--workspace", st.workspace});
     if (st.ctx->config.idle_unload_minutes > 0)
-        prune_idle_models(st.registry, static_cast<int64_t>(st.ctx->config.idle_unload_minutes) * 60 * 1000); // idle models give memory back
+        prune_idle_models(st.registry,
+                          static_cast<int64_t>(st.ctx->config.idle_unload_minutes) * 60 * 1000); // idle models give memory back
     if (args[0] == "task") {
         // An engine task runs inside the chat: the model is loaded through the registry on first use, shared with the next call, and
         // unloaded when the memory budget needs the room. No second program, no second copy of a model.
@@ -3284,7 +3285,10 @@ std::string tui_set_setting(ChatState &st, const std::string &key, const std::st
     if (key.rfind("mem.unload.", 0) == 0) return value == "unload" ? model_unload_by_hand(st, key.substr(11)) : std::string();
     if (key.rfind("mem.load.", 0) == 0) return value == "load" ? model_load_by_hand(st, key.substr(9)) : std::string();
     if (key == "stt_model" || key == "tts_model" || key == "vad_model" || key == "image_model") {
-        std::string &slot = key == "stt_model" ? c.stt_model : key == "tts_model" ? c.tts_model : key == "vad_model" ? c.vad_model : c.image_model;
+        std::string &slot = key == "stt_model"   ? c.stt_model
+                            : key == "tts_model" ? c.tts_model
+                            : key == "vad_model" ? c.vad_model
+                                                 : c.image_model;
         slot = value == "auto" ? std::string() : value;
         return persist();
     }
