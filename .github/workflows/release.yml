@@ -250,6 +250,7 @@ jobs:
           $log = & powershell -NoProfile -ExecutionPolicy Bypass -File tests/modular/run.ps1 -Release "$PWD\assets" -Scripts "$PWD\testscripts" -Tag "${{ steps.version.outputs.value }}" -Engines "${{ matrix.engines }}" -Runtimes "${{ matrix.runtimes }}" 2>&1
           $log | Out-String | Write-Host
           if ($log | Select-String -Pattern '^FAIL') { exit 1 }
+          if (",${{ matrix.engines }}," -notlike '*,onnx,*') { Write-Host 'no onnxruntime build in this release: engine check skipped'; exit 0 }
           $env:AGENT_TEST_TAG = "${{ steps.version.outputs.value }}"
           $log = & powershell -NoProfile -ExecutionPolicy Bypass -File tests/modular/engines.ps1 -Release "$PWD\assets" -Scripts "$PWD\testscripts" -ChatModel none -Engines onnx 2>&1
           $log | Out-String | Write-Host
