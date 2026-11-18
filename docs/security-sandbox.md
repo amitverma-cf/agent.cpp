@@ -129,7 +129,9 @@ uses the `landlock_create_ruleset(..., LANDLOCK_CREATE_RULESET_VERSION)` syscall
 
 ## macOS
 
-macOS: not supported.
+The engine host and `run_command` apply a Seatbelt profile (`sandbox_init`) and rlimits. The profile is implemented but has only been
+exercised by the release's install tests, and the sandbox warns that it is untested. Treat it as weaker than the Linux sandbox and
+use a VM or container for untrusted work.
 
 ## Windows
 

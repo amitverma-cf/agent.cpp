@@ -11,7 +11,7 @@ Every engine is a plugin file, and each one has its own switch (`AGENT_ENGINE_<N
 
 | Engine | Default | Condition |
 |---|---|---|
-| `llama` | `ON` | Needs `vendor/llama.cpp`. |
+| `llama` | `ON` | Needs `vendor/llama.cpp` (its scheduler sources are compiled into the plugin). |
 | `onnx` | `ON` | CMake downloads the pinned ONNX Runtime release at configure time. Use `-DAGENT_ENGINE_ONNX=OFF` to avoid that. |
 | `sdcpp` | `ON` when `vendor/stable-diffusion.cpp` is checked out | Its header is used; with `AGENT_SDCPP_PREBUILT` the release library is linked, otherwise sd.cpp is compiled (its nested ggml submodule is needed too). |
 | `audiocpp` | `ON` when `vendor/audio.cpp` is checked out | |
@@ -246,11 +246,11 @@ engine plus a test harness that loads it in process and through the host. See [g
 This script makes a Linux-only tarball from a local build with llama.cpp compiled from source. Releases do not use it (see "Releases" below); it is run by hand.
 
 ```sh
-scripts/package.sh                                   # agent-1.2.1-linux-x64.tar.gz, llama engine, CPU
+scripts/package.sh                                   # agent-1.2.2-linux-x64.tar.gz, llama engine, CPU
 scripts/package.sh --engines llama,sdcpp
 scripts/package.sh --engines llama,onnx --onnxruntime-root ~/onnxruntime-linux-x64-1.23.2
 scripts/package.sh --engines llama,audiocpp
-scripts/package.sh --backend vulkan                  # agent-1.2.1-linux-x64-vulkan.tar.gz
+scripts/package.sh --backend vulkan                  # agent-1.2.2-linux-x64-vulkan.tar.gz
 ```
 
 The script configures a Release build (`build-package/` by default, `--build-dir` to change it), builds only the installed

@@ -82,6 +82,6 @@ hosted API when quality matters more than keeping data local, or when the machin
 
 - **Not a hosted API or a model server.** It does not serve HTTP, and it does not call hosted model APIs.
 - **Not a GUI.** The `agent` CLI is a terminal app. There is no graphical application.
-- **Linux and Windows 11 only.** macOS is not tested or supported, and no prebuilt archive exists for it. See [getting-started.md](getting-started.md).
+- **Linux, Windows 11 and macOS 14+.** Not Android, and Raspberry Pi is not a release target. See [getting-started.md](getting-started.md).
 - **Not measured against other tools.** [benchmarks.md](benchmarks.md) has numbers for agent.cpp on one shared VM,
   with notes on their limits. Run them on the target hardware before deciding.

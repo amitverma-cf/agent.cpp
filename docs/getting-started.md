@@ -10,12 +10,12 @@ Two ways in. **The `agent` command** is a ready-to-use terminal assistant: insta
 | CMake, build tool | CMake 3.21+, Ninja | CMake 3.21+, Ninja |
 | OpenSSL 3 | `libssl-dev` | `vcpkg install openssl:x64-windows` |
 
-OpenSSL is used for model downloads (`agent_hub`); without it (`-DAGENT_BUILD_HUB=OFF`) the CLI is not built. macOS is not tested
-and not supported.
+OpenSSL is used for model downloads (`agent_hub`); without it (`-DAGENT_BUILD_HUB=OFF`) the CLI is not built. macOS 14 or newer (Apple
+silicon and Intel) builds with Apple Clang and `brew install cmake ninja openssl@3`; releases include macOS archives.
 
 ## Install a release
 
-`curl -fsSL https://agent.qozu.fyi/install.sh | sh` (Linux) or `irm https://agent.qozu.fyi/install.ps1 | iex` (Windows PowerShell) installs the latest release; see the
+`curl -fsSL https://agent.qozu.fyi/install.sh | sh` (Linux and macOS) or `irm https://agent.qozu.fyi/install.ps1 | iex` (Windows PowerShell) installs the latest release; see the
 [README](../README.md#install). Set `AGENT_VERSION=v1.2.2` to install a given tag. The installer is the only thing that installs, changes or removes agent.cpp: `agent setup`, `agent update`, `agent uninstall`, `agent engine pull` and `agent runtime install` run its copy in `<home>/scripts/`.
 
 ## Build
@@ -32,8 +32,8 @@ On Windows, run the same from a "Developer PowerShell for VS 2022" and add
 `-DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows`.
 
 The build puts `agent`, `agent-engine-host` and the tests at the top of `build/`, and each engine plugin under
-`build/src/engines/<name>/`. Every engine is built by default (audio.cpp, stable-diffusion.cpp and TRELLIS.2 when their submodules are checked out, so clone with
-`--recurse-submodules`). Switch one off with `-DAGENT_ENGINE_<NAME>=OFF`. The full list of options is
+`build/src/engines/<name>/`. Every engine is built by default (llama.cpp, audio.cpp and stable-diffusion.cpp when their submodules are checked out, so clone with
+`--recurse-submodules`; trellis needs none). Switch one off with `-DAGENT_ENGINE_<NAME>=OFF`. The full list of options is
 [at the end of this page](#build-options).
 
 ## Use the command

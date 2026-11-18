@@ -12,7 +12,7 @@ larger parts are switches in CMake, and every engine is its own plugin that is b
 | llama.cpp engine | `AGENT_ENGINE_LLAMA` (ON) | text, vision, embeddings, rerank, decisions |
 | audio.cpp engine | `AGENT_ENGINE_AUDIOCPP` (ON) | speech recognition, synthesis, VAD, diarization |
 | stable-diffusion.cpp engine | `AGENT_ENGINE_SDCPP` (ON) | images and video |
-| TRELLIS.2 engine | `AGENT_ENGINE_TRELLIS` (ON when CUDA is found) | image to 3D |
+| trellis.cpp engine | `AGENT_ENGINE_TRELLIS` (ON) | image to 3D (runs the release's `trellis-cli`) |
 | ONNX Runtime engine | `AGENT_ENGINE_ONNX` (ON) | generic ONNX models |
 | `agent` command | `AGENT_BUILD_CLI` (ON) | the CLI (it needs every library part above) |
 

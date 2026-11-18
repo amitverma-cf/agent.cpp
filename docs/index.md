@@ -128,10 +128,10 @@ The complete table is in the [README](getting-started.md#build-options). The opt
 | `AGENT_BUILD_HUB` | `ON` | Build `agent_hub` (needs OpenSSL) |
 | `AGENT_CLI_TUI` | `ON` | Full-screen chat in the CLI (RTXUI, needs GCC 13+ / Clang 18+ / MSVC 2022) |
 | `AGENT_ENGINE_LLAMA` | `ON` | llama.cpp engine plugin |
-| `AGENT_ENGINE_ONNX` | `OFF` | ONNX Runtime engine plugin (needs `ONNXRUNTIME_ROOT`) |
-| `AGENT_ENGINE_SDCPP` | `OFF` | stable-diffusion.cpp engine plugin (images and video) |
-| `AGENT_ENGINE_AUDIOCPP` | `OFF` | audio.cpp speech engine plugin (TTS, ASR, VAD, diarization; needs `vendor/audio.cpp`) |
-| `AGENT_ENGINE_TRELLIS` | `OFF` | TRELLIS.2 image-to-3D engine plugin |
+| `AGENT_ENGINE_ONNX` | `ON` | ONNX Runtime engine plugin (downloads the pinned ONNX Runtime at configure time) |
+| `AGENT_ENGINE_SDCPP` | `ON` with its submodule | stable-diffusion.cpp engine plugin (images and video) |
+| `AGENT_ENGINE_AUDIOCPP` | `ON` with its submodule | audio.cpp speech engine plugin (TTS, ASR, VAD, diarization) |
+| `AGENT_ENGINE_TRELLIS` | `ON` | trellis.cpp image-to-3D plugin (runs the release's `trellis-cli`) |
 | `BUILD_SHARED_LIBS` | `OFF` | Shared `libagent`, `agent_store_sqlite` and `agent_hub` |
 | `AGENT_INSTALL` | `ON` (top level) | Install rules and the `agent-cpp` CMake package |
 | `AGENT_BUILD_EXAMPLES` | `ON` | Build `examples/` and their smoke tests |

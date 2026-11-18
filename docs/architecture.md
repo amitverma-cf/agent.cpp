@@ -185,12 +185,12 @@ an engine by name or by path:
 
 ### Why each engine is its own file
 
-Each engine carries its own copy of its inference library: llama.cpp and stable-diffusion.cpp each bring a ggml,
-TRELLIS.2 brings a ggml fork, ONNX Runtime is its own runtime, and audio.cpp builds its own ggml. These copies are not
-compatible with each other, and their symbols and CMake targets clash, so they cannot be linked into one executable.
-Keeping each engine in its own file, with hidden symbol visibility and one exported entry point, avoids the clash.
-Plugins can share a process when their symbols stay private (llama and sdcpp have been loaded together), but the design does
-not depend on it.
+Each engine carries its own copy of its inference library: llama.cpp, audio.cpp and stable-diffusion.cpp each bring a ggml
+(upstream releases, with the same file names), ONNX Runtime is its own runtime, and trellis.cpp is a separate program the
+plugin starts. The ggml copies are not compatible with each other, and one process keeps only one library per file name, so
+llama, audiocpp and sdcpp cannot share a process (audio.cpp fails with an undefined ggml symbol if llama loaded first).
+Keeping each engine in its own file, with one exported entry point, keeps the code apart, and the `agent` program runs
+those three in their own host processes.
 
 A separate file also gives two more things. A crash, `abort()` or out-of-memory kill in one engine does not have to take the
 application down (see process isolation below). And an engine can be left out of a build or a release without touching the

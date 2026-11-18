@@ -58,10 +58,10 @@ installed with the library is found automatically.
 | Engine | Constant | Roles | Needs |
 |---|---|---|---|
 | llama.cpp | `agent::engines::llama` | `model`, `mmproj` | built by default |
-| audio.cpp | `agent::engines::audiocpp` | `tts.model`, `asr.model`, `vad.model`, `diarize.model` | `-DAGENT_ENGINE_AUDIOCPP=ON` |
-| stable-diffusion.cpp | `agent::engines::sdcpp` | `model` (one-file checkpoints: SD 1.x, SDXL, SDXS) or `diffusion_model`, `llm`, `vae`, `clip_l`, `t5xxl` (split models: Flux, Wan), plus `vae` | `-DAGENT_ENGINE_SDCPP=ON` |
-| ONNX Runtime | `agent::engines::onnx` | `model` | `-DAGENT_ENGINE_ONNX=ON` |
-| TRELLIS.2 | `agent::engines::trellis` | model folder | `-DAGENT_ENGINE_TRELLIS=ON` |
+| audio.cpp | `agent::engines::audiocpp` | `tts.model`, `asr.model`, `vad.model`, `diarize.model` | built by default with its submodule |
+| stable-diffusion.cpp | `agent::engines::sdcpp` | `model` (one-file checkpoints: SD 1.x, SDXL, SDXS) or `diffusion_model`, `llm`, `vae`, `clip_l`, `t5xxl` (split models: Flux, Wan), plus `vae` | built by default with its submodule |
+| ONNX Runtime | `agent::engines::onnx` | `model` | built by default |
+| trellis.cpp (TRELLIS.2 models) | `agent::engines::trellis` | model folder | built by default |
 
 ```cpp
 // Speech recognition and synthesis in one session

@@ -3,7 +3,7 @@
 `#include <agent-cpp/agent.hpp>` · plugin authors: `#include <agent-cpp/engine_abi.h>`
 
 An **engine** is a shared library wrapping an inference project (llama.cpp, audio.cpp,
-stable-diffusion.cpp, TRELLIS.2, ...). The core loads engines at runtime, so nothing is
+stable-diffusion.cpp, trellis.cpp, ...). The core loads engines at runtime, so nothing is
 compiled in. Each plugin carries its own copy of ggml or ONNX Runtime.
 
 This page covers how to choose an engine, how the core finds and runs one, and the option reference for each shipped
